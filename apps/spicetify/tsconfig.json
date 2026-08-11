@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react",
+    "jsxFactory": "Spicetify.React.createElement",
+    "jsxFragmentFactory": "Spicetify.React.Fragment",
+    "noEmit": true
+  },
+  "include": ["src"]
+}

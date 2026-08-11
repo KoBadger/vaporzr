@@ -1,0 +1,28 @@
+{
+  "name": "@vaporzr/player",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "npm run build && electron .",
+    "start": "electron .",
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "main": "www/bundle/main.js",
+  "dependencies": {
+    "butterchurn": "^2.6.7",
+    "butterchurn-presets": "^2.4.7",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.16.0",
+    "@types/ws": "^8.5.12",
+    "electron": "^33.0.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0"
+  },
+  "allowScripts": {
+    "electron@*": true,
+    "esbuild@*": true
+  }
+}

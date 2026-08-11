@@ -1,0 +1,13 @@
+node_modules/
+dist/
+build/
+out/
+*.log
+.env
+.env.local
+apps/bot/data/*.json
+apps/player/www/bundle/
+apps/player/www/vendor/
+apps/spicetify/dist/
+.DS_Store
+Thumbs.db

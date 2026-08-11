@@ -1,0 +1,20 @@
+{
+  "name": "@vaporzr/spicetify-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "install-app": "node build.mjs && node install.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^20.16.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0"
+  },
+  "allowScripts": {
+    "esbuild@*": true
+  }
+}

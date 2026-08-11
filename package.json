@@ -1,0 +1,26 @@
+{
+  "name": "vaporzr",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Vaporzr - a Jockey/Luna-style shared Spotify playback bot with a Spicetify control panel and projectM/Milkdrop visuals",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:bot": "npm run dev -w @vaporzr/bot",
+    "dev:player": "npm run dev -w @vaporzr/player",
+    "build:bot": "npm run build -w @vaporzr/bot",
+    "build:player": "npm run build -w @vaporzr/player",
+    "build:spicetify": "npm run build -w @vaporzr/spicetify-app",
+    "build": "npm run build:bot && npm run build:player && npm run build:spicetify",
+    "typecheck": "npm run typecheck -w @vaporzr/shared && npm run typecheck -w @vaporzr/bot && npm run typecheck -w @vaporzr/player && npm run typecheck -w @vaporzr/spicetify-app",
+    "install:spicetify": "npm run install-app -w @vaporzr/spicetify-app"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "allowScripts": {
+    "electron@33.4.11": true
+  }
+}
