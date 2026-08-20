@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Vaporzr — Visualizer</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎧</text></svg>">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:#05060f;font-family:'Inter',system-ui,sans-serif;color:#c7d2fe}
+
+/* Background grid */
+body::before{content:'';position:absolute;inset:0;
+  background:linear-gradient(rgba(99,102,241,.03) 1px,transparent 1px),
+             linear-gradient(90deg,rgba(99,102,241,.03) 1px,transparent 1px);
+  background-size:40px 40px;pointer-events:none;z-index:0}
+
+/* Visualizer canvas/image */
+#viz{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#05060f;z-index:1}
+
+/* Top bar */
+#topbar{position:absolute;top:0;left:0;right:0;z-index:10;display:flex;align-items:center;justify-content:space-between;
+  padding:12px 20px;background:linear-gradient(180deg,rgba(5,6,15,.95) 0%,rgba(5,6,15,0) 100%)}
+#logo{display:flex;align-items:center;gap:10px}
+#logo-icon{width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#6366f1,#a855f7);
+  display:flex;align-items:center;justify-content:center;font-size:16px;box-shadow:0 0 20px rgba(99,102,241,.4)}
+#logo-text{font-weight:800;font-size:15px;letter-spacing:2px;
+  background:linear-gradient(135deg,#818cf8,#c084fc);-webkit-background-clip:text;background-clip:text;color:transparent}
+#logo-sub{font-size:9px;color:#6366f1;letter-spacing:3px;font-weight:600}
+#status-pill{display:flex;align-items:center;gap:6px;padding:4px 12px;border-radius:20px;
+  background:rgba(15,23,42,.8);border:1px solid #1e293b;font-size:11px;color:#94a3b8}
+#status-dot{width:6px;height:6px;border-radius:50%;background:#ef4444;transition:background .3s}
+#status-dot.on{background:#22c55e;box-shadow:0 0 8px rgba(34,197,94,.6)}
+
+/* Guild selector */
+#guild-bar{position:absolute;top:60px;left:20px;z-index:10;display:flex;gap:6px}
+.guild-btn{padding:5px 14px;border-radius:8px;border:1px solid #1e293b;background:rgba(15,23,42,.7);
+  color:#64748b;font-size:11px;font-weight:600;cursor:pointer;transition:all .2s;font-family:inherit}
+.guild-btn:hover{border-color:#334155;color:#94a3b8}
+.guild-btn.active{border-color:#6366f1;color:#c7d2fe;background:rgba(99,102,241,.15);
+  box-shadow:0 0 12px rgba(99,102,241,.2)}
+
+/* Bottom overlay */
+#overlay{position:absolute;bottom:0;left:0;right:0;z-index:10;padding:20px 24px 24px;
+  background:linear-gradient(transparent,rgba(5,6,15,.9));transition:opacity .4s}
+#overlay.hidden{opacity:0;pointer-events:none}
+#track-row{display:flex;align-items:center;gap:14px}
+#art{width:56px;height:56px;border-radius:8px;background:#1e293b;object-fit:cover;flex-shrink:0;
+  box-shadow:0 4px 20px rgba(0,0,0,.4)}
+#meta{flex:1;min-width:0}
+#title{font-weight:700;font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#artists{font-size:13px;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+#badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;letter-spacing:1px;
+  background:rgba(99,102,241,.2);color:#818cf8;margin-top:6px}
+
+/* FPS counter */
+#fps{position:absolute;top:60px;right:20px;z-index:10;padding:4px 10px;border-radius:6px;
+  background:rgba(15,23,42,.7);border:1px solid #1e293b;font-size:11px;color:#475569;pointer-events:none}
+
+/* Connecting overlay */
+#connecting{position:absolute;inset:0;z-index:20;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:16px;background:rgba(5,6,15,.95);transition:opacity .5s}
+#connecting.hidden{opacity:0;pointer-events:none}
+#connecting h2{font-size:20px;font-weight:700;
+  background:linear-gradient(135deg,#818cf8,#c084fc);-webkit-background-clip:text;background-clip:text;color:transparent}
+#connecting p{font-size:13px;color:#64748b;text-align:center;max-width:360px;line-height:1.5}
+.spinner{width:32px;height:32px;border:3px solid #1e293b;border-top-color:#6366f1;border-radius:50%;
+  animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+#connecting .hint{font-size:11px;color:#475569;margin-top:8px}
+</style>
+</head>
+<body>
+
+<div id="connecting">
+  <div class="spinner"></div>
+  <h2>VAPORZR</h2>
+  <p>Connecting to visualizer stream...</p>
+</div>
+
+<div id="no-frames" class="hidden" style="position:absolute;inset:0;z-index:15;display:none;flex-direction:column;
+  align-items:center;justify-content:center;gap:14px;background:rgba(5,6,15,.92)">
+  <div style="font-size:40px;opacity:.6">📡</div>
+  <h2 style="font-size:18px;font-weight:700;
+    background:linear-gradient(135deg,#818cf8,#c084fc);-webkit-background-clip:text;background-clip:text;color:transparent">
+    Waiting for visualizer...</h2>
+  <p style="font-size:13px;color:#64748b;text-align:center;max-width:400px;line-height:1.6">
+    The bot is requesting the player window to open.<br>
+    If it doesn't appear, run <code style="background:#1e293b;padding:2px 6px;border-radius:4px;color:#94a3b8">/screensaver</code> or <code style="background:#1e293b;padding:2px 6px;border-radius:4px;color:#94a3b8">V@sc</code> in Discord.
+  </p>
+  <div class="hint">Frames will appear automatically once the visualizer connects.</div>
+</div>
+
+<img id="viz" alt="">
+
+<div id="topbar">
+  <div id="logo">
+    <div id="logo-icon">🎧</div>
+    <div>
+      <div id="logo-text">VAPORZR</div>
+      <div id="logo-sub">VISUALIZER</div>
+    </div>
+  </div>
+  <div id="status-pill">
+    <span id="status-dot"></span>
+    <span id="status-text">Disconnected</span>
+  </div>
+</div>
+
+<div id="guild-bar"></div>
+<div id="fps"></div>
+
+<div id="overlay" class="hidden">
+  <div id="track-row">
+    <img id="art" src="" alt="">
+    <div id="meta">
+      <div id="title">Waiting for stream...</div>
+      <div id="artists"></div>
+      <div id="badge">LIVE</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var viz=document.getElementById('viz'),
+      art=document.getElementById('art'),
+      title=document.getElementById('title'),
+      artists=document.getElementById('artists'),
+      overlay=document.getElementById('overlay'),
+      statusDot=document.getElementById('status-dot'),
+      statusText=document.getElementById('status-text'),
+      connecting=document.getElementById('connecting'),
+      noFrames=document.getElementById('no-frames'),
+      guildBar=document.getElementById('guild-bar'),
+      fpsEl=document.getElementById('fps'),
+      ws=null,retryTimer=null,
+      connected=false,
+      frameCount=0,fpsTimer=null,
+      firstFrameAt=0,
+      noFramesTimer=null,
+      guilds=[],primaryGuildId=null;
+
+  function setConnected(c){
+    connected=c;
+    if(c){
+      statusDot.className='on';
+      statusText.textContent='Connected';
+      connecting.className='hidden';
+      noFramesTimer=setTimeout(function(){
+        if(!firstFrameAt){
+          noFrames.style.display='flex';
+          noFrames.className='';
+        }
+      },5000);
+    }else{
+      statusDot.className='';
+      statusText.textContent='Disconnected';
+      connecting.className='';
+      noFrames.style.display='none';
+      noFrames.className='hidden';
+      firstFrameAt=0;
+    }
+  }
+
+  function connect(){
+    if(ws){ws.onclose=null;ws.close()}
+    var loc=window.location;
+    var wsUrl='ws://'+loc.hostname+':'+(loc.port||'4876')+'/ws';
+    try{ws=new WebSocket(wsUrl)}catch(e){scheduleReconnect();return}
+    ws.onopen=function(){
+      ws.send(JSON.stringify({type:'hello',role:'panel',name:'web-viz-'+Math.random().toString(36).slice(2,6)}));
+      ws.send(JSON.stringify({type:'panel:subscribe',channels:['state','queue','visuals']}));
+      ws.send(JSON.stringify({type:'cmd',command:'openVisuals'}));
+      ws.send(JSON.stringify({type:'state:request'}));
+      setConnected(true);
+    };
+    ws.onmessage=function(ev){
+      var msg;try{msg=JSON.parse(ev.data)}catch(e){return}
+      switch(msg.type){
+        case 'snapshot':
+          if(msg.guilds){guilds=msg.guilds;primaryGuildId=msg.primaryGuildId||null;renderGuilds()}
+          if(msg.state)showState(msg.state);
+          break;
+        case 'state:update':
+          showState(msg.state);
+          break;
+        case 'visuals:frame':
+          if(!firstFrameAt){firstFrameAt=Date.now();noFrames.style.display='none';noFrames.className='hidden'}
+          viz.src=msg.data;
+          frameCount++;
+          break;
+        case 'guilds:list':
+          if(msg.guilds){guilds=msg.guilds;renderGuilds()}
+          break;
+      }
+    };
+    ws.onclose=function(){setConnected(false);scheduleReconnect()};
+    ws.onerror=function(){ws.close()};
+  }
+
+  function showState(st){
+    if(st&&st.track){
+      overlay.className='';
+      title.textContent=st.track.name||'Playing';
+      artists.textContent=(st.track.artists||[]).join(', ');
+      if(st.track.image)art.src=st.track.image;else art.src='';
+    }else{
+      overlay.className='hidden';
+    }
+  }
+
+  function renderGuilds(){
+    guildBar.innerHTML='';
+    guilds.forEach(function(g){
+      var b=document.createElement('button');
+      b.className='guild-btn'+(g.id===primaryGuildId?' active':'');
+      b.textContent=g.name||g.id;
+      b.onclick=function(){switchGuild(g.id)};
+      guildBar.appendChild(b);
+    });
+  }
+
+  function switchGuild(gid){
+    if(ws&&ws.readyState===WebSocket.OPEN){
+      ws.send(JSON.stringify({type:'cmd',command:'switchGuild',guildId:gid}));
+      ws.send(JSON.stringify({type:'panel:subscribe',channels:['state','queue','visuals'],guildId:gid}));
+      primaryGuildId=gid;
+      renderGuilds();
+    }
+  }
+
+  function scheduleReconnect(){
+    if(retryTimer)return;
+    retryTimer=setTimeout(function(){retryTimer=null;connect()},3000);
+  }
+
+  fpsTimer=setInterval(function(){
+    if(frameCount>0)fpsEl.textContent=Math.round(frameCount*2)+' fps';
+    else fpsEl.textContent='';
+    frameCount=0;
+  },500);
+
+  connect();
+})();
+</script>
+</body>
+</html>

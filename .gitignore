@@ -1,13 +1,48 @@
+# Dependencies
 node_modules/
+
+# Build output
 dist/
 build/
 out/
-*.log
-.env
-.env.local
-apps/bot/data/*.json
 apps/player/www/bundle/
 apps/player/www/vendor/
 apps/spicetify/dist/
+
+# Vendor binaries (download separately)
+vendor/electron-ecs/
+vendor/yt-dlp/
+vendor/librespot/
+
+# Environment & secrets
+.env
+.env.local
+.env.production
+
+# Bot runtime data (queues, librespot cache, tokens)
+apps/bot/data/
+
+# Logs
+*.log
+*.log.err
+*.pid
+
+# Scratch / backup files
+*.sav
+*.tmp
+
+# OS
 .DS_Store
 Thumbs.db
+
+# Misc
+bot.bat
+bot.ps1
+start-bot.bat
+start_bot.cmd
+stop-bot.bat
+deps.txt
+tree.txt
+viz.txt
+viz2.txt
+viz3.txt

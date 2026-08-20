@@ -1,5 +1,21 @@
 export type PermissionLevel = 'user' | 'mod' | 'admin';
 
+export type MediaSource = 'spotify' | 'youtube' | 'local' | 'suno' | 'soundcloud';
+
+/** A named visual mood that re-skins the bot, player overlay, and panel. */
+export interface VaporzrTheme {
+  id: string;
+  name: string;
+  /** Primary accent hex. */
+  accent: string;
+  /** Secondary accent hex. */
+  accent2: string;
+  /** Glow color (css color) used to tint the visualizer. */
+  glow: string;
+  /** Discord embed color. */
+  embedColor: number;
+}
+
 export interface TrackInfo {
   uri: string;
   name: string;
@@ -7,6 +23,10 @@ export interface TrackInfo {
   album: string;
   durationMs: number;
   image?: string;
+  source?: MediaSource;
+  streamUrl?: string;
+  /** Absolute path for locally-uploaded files (source: 'local'). */
+  filePath?: string;
   addedBy: string;
   addedById?: string;
   addedAt: number;
@@ -22,6 +42,7 @@ export interface PlaybackState {
   volume: number;
   shuffle: boolean;
   repeat: boolean;
+  source?: MediaSource;
   updatedAt: number;
 }
 
@@ -46,13 +67,13 @@ export const emptyState = (): PlaybackState => ({
   playing: false,
   positionMs: 0,
   durationMs: 0,
-  volume: 100,
+  volume: 50,
   shuffle: false,
   repeat: false,
   updatedAt: 0,
 });
 
-export type ClientRole = 'player' | 'panel' | 'visualizer';
+export type ClientRole = 'panel' | 'visualizer';
 
 export type CommandName =
   | 'play'
@@ -67,7 +88,14 @@ export type CommandName =
   | 'repeat'
   | 'remove'
   | 'clear'
-  | 'playAt';
+  | 'playAt'
+  | 'prime'
+  | 'preload'
+  | 'stop'
+  | 'sfx'
+  | 'dj'
+  | 'openVisuals'
+  | 'switchGuild';
 
 export interface CommandMessage {
   type: 'cmd';
@@ -79,26 +107,50 @@ export interface CommandMessage {
   repeat?: boolean;
   index?: number;
   requester?: string;
+  source?: MediaSource;
+  streamUrl?: string;
+  title?: string;
+  image?: string;
+  /** Sound effect id for command: 'sfx'. */
+  sfxId?: string;
+  /** DJ soundboard enabled state for command: 'dj'. */
+  djEnabled?: boolean;
+  /** Guild to switch to for command: 'switchGuild'. */
+  guildId?: string;
 }
 
 export type InboundMessage =
-  | { type: 'hello'; role: ClientRole; name?: string }
+  | { type: 'hello'; role: ClientRole; name?: string; guildId?: string }
   | { type: 'player:ready'; deviceId?: string; deviceName?: string }
   | { type: 'player:state'; state: PlaybackState }
   | { type: 'player:error'; message: string }
-  | { type: 'visuals:frame'; data: string }
+  | { type: 'visuals:frame'; data: string; guildId?: string }
   | { type: 'visuals:toggle'; enabled: boolean }
+  | { type: 'audio:chunk'; data: string }
+  | { type: 'audio:pcm'; guildId: string; data: string }
+  | { type: 'visuals:sensitivity'; multiplier: number }
   | { type: 'state:request' }
-  | { type: 'panel:subscribe'; channels: Array<'state' | 'queue' | 'visuals'> }
+  | { type: 'panel:subscribe'; channels: Array<'state' | 'queue' | 'visuals'>; guildId?: string }
+  /** Base64-encoded WebM clip captured by a visualizer window (/burst). */
+  | { type: 'burst:data'; data: string }
   | CommandMessage;
 
 export type OutboundMessage =
-  | { type: 'snapshot'; state: PlaybackState; queue: QueueSnapshot; permissions?: PermissionSnapshot }
-  | { type: 'state:update'; state: PlaybackState }
+  | { type: 'snapshot'; state: PlaybackState; queue: QueueSnapshot; permissions?: PermissionSnapshot; voice?: { joined: boolean; channelId?: string }; theme?: VaporzrTheme; djEnabled?: boolean; primaryGuildId?: string; guilds?: Array<{ id: string; name: string }>; sensitivity?: number }
+  | { type: 'state:update'; state: PlaybackState; guildId?: string }
   | { type: 'queue:update'; queue: QueueSnapshot }
   | { type: 'perm:update'; permissions: PermissionSnapshot }
-  | { type: 'visuals:frame'; data: string }
+  | { type: 'dj:update'; enabled: boolean }
+  | { type: 'visuals:frame'; data: string; guildId?: string }
   | { type: 'visuals:enabled'; enabled: boolean }
+  | { type: 'visuals:sensitivity'; multiplier: number }
+  | { type: 'audio:forward'; enabled: boolean }
+  | { type: 'audio:pcm'; guildId: string; data: string }
+  | { type: 'guilds:list'; guilds: Array<{ id: string; name: string }> }
+  | { type: 'voice:update'; joined: boolean; channelId?: string }
+  | { type: 'theme'; theme: VaporzrTheme }
+  /** Asks a visualizer window to capture a short clip and return burst:data. */
+  | { type: 'burst:start'; durationMs?: number }
   | { type: 'ready'; ok: boolean }
   | { type: 'error'; message: string }
   | CommandMessage;

@@ -23,7 +23,6 @@ async function main() {
 
   await build({
     entryPoints: {
-      player: path.join(src, 'renderer', 'player.ts'),
       visualizer: path.join(src, 'renderer', 'visualizer.ts'),
     },
     bundle: true,

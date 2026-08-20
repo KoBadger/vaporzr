@@ -22,12 +22,15 @@ const manifest = {
 fs.mkdirSync(dist, { recursive: true });
 fs.writeFileSync(path.join(dist, 'manifest.json'), JSON.stringify(manifest, null, 2));
 fs.copyFileSync(path.join(src, 'styles.css'), path.join(dist, 'style.css'));
+fs.copyFileSync(path.join(src, 'logo.png'), path.join(dist, 'logo.png'));
+fs.copyFileSync(path.join(src, 'artwork.jpg'), path.join(dist, 'artwork.jpg'));
 
 await build({
   entryPoints: [path.join(src, 'index.tsx')],
   bundle: true,
   platform: 'browser',
   format: 'iife',
+  globalName: 'vaporzr',
   target: 'chrome120',
   jsx: 'transform',
   jsxFactory: 'Spicetify.React.createElement',
@@ -35,6 +38,7 @@ await build({
   define: { 'process.env.NODE_ENV': '"production"' },
   external: [],
   outfile: path.join(dist, 'index.js'),
+  footer: { js: 'const render = () => vaporzr.default();' },
   logLevel: 'info',
 });
 

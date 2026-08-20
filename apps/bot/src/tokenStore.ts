@@ -22,11 +22,4 @@ export const tokenStore = {
     fs.mkdirSync(config.dataDir, { recursive: true });
     fs.writeFileSync(tokensPath(), JSON.stringify(tokens, null, 2), 'utf8');
   },
-  clear(): void {
-    try {
-      fs.rmSync(tokensPath(), { force: true });
-    } catch {
-      /* ignore */
-    }
-  },
 };

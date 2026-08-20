@@ -1,13 +1,18 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
 import { buildAuthorizeUrl, exchangeCode, getAccessToken, SpotifyError } from './spotify.js';
 import { tokenStore } from './tokenStore.js';
 import { Bridge } from './bridge.js';
-import { QueueManager } from './queue.js';
+import { SessionManager } from './session.js';
 import { PermissionsManager } from './permissions.js';
 
-export function startServer(queue: QueueManager, perms: PermissionsManager): Bridge {
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+export function startServer(sessions: SessionManager, perms: PermissionsManager): Bridge {
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', `http://localhost:${config.port}`);
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -23,10 +28,10 @@ export function startServer(queue: QueueManager, perms: PermissionsManager): Bri
     void handleRoute(url, res);
   });
 
-  const bridge = new Bridge(queue, perms, server);
+  const bridge = new Bridge(sessions, perms, server);
 
-  server.listen(config.port, '127.0.0.1', () => {
-    console.log(`[vaporzr] control server on http://localhost:${config.port}`);
+  server.listen(config.port, '0.0.0.0', () => {
+    console.log(`[vaporzr] control server on http://0.0.0.0:${config.port}`);
   });
 
   return bridge;
@@ -43,6 +48,7 @@ async function handleRoute(url: URL, res: http.ServerResponse): Promise<void> {
           <p>${tokenStore.load() ? 'Spotify account linked.' : 'Spotify not linked.'}</p>
           <p><a href="/login">Link Spotify account</a></p>
           <p>Player status: <span id="s">checking…</span></p>
+          <p><a href="/panel">Open the control panel →</a></p>
           <script>
             try {
               fetch('/api/token').then(r => r.json()).then(d => {
@@ -63,6 +69,13 @@ async function handleRoute(url: URL, res: http.ServerResponse): Promise<void> {
 
       case '/callback': {
         const code = url.searchParams.get('code');
+        const err = url.searchParams.get('error');
+        console.log(`[vaporzr] oauth callback: code=${code ? 'present' : 'MISSING'} error=${err ?? 'none'} state=${url.searchParams.get('state') ?? 'none'}`);
+        if (err) {
+          res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end(html(`<h1 style="font-family:sans-serif">Authorization failed (${err}). Close this tab and try /login again.</h1>`));
+          return;
+        }
         if (!code) throw new SpotifyError('Missing code.');
         await exchangeCode(code);
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -82,9 +95,57 @@ async function handleRoute(url: URL, res: http.ServerResponse): Promise<void> {
         break;
       }
 
-      case '/api/state': {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, player: false }));
+      case '/panel':
+      case '/panel.html': {
+        try {
+          const file = fs.readFileSync(path.join(__dirname, '..', 'public', 'panel.html'), 'utf8');
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end(file);
+        } catch {
+          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('Panel not found.');
+        }
+        break;
+      }
+
+      case '/viz':
+      case '/viz.html': {
+        try {
+          const file = fs.readFileSync(path.join(__dirname, '..', 'public', 'viz.html'), 'utf8');
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end(file);
+        } catch {
+          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('Visualizer not found.');
+        }
+        break;
+      }
+
+      case '/privacy':
+      case '/privacy.html': {
+        try {
+          const file = fs.readFileSync(path.join(__dirname, '..', 'public', 'privacy.html'), 'utf8');
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end(file);
+        } catch {
+          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('Privacy policy not found.');
+        }
+        break;
+      }
+
+      case '/tos':
+      case '/terms':
+      case '/terms.html':
+      case '/tos.html': {
+        try {
+          const file = fs.readFileSync(path.join(__dirname, '..', 'public', 'tos.html'), 'utf8');
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end(file);
+        } catch {
+          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('Terms of service not found.');
+        }
         break;
       }
 

@@ -1,0 +1,11 @@
+node_modules
+**/node_modules
+.git
+apps/bot/data
+apps/player/dist
+apps/player/www
+apps/spicetify/www
+**/.env
+vendor
+Dockerfile
+.dockerignore

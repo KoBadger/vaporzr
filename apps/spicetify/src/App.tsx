@@ -1,6 +1,5 @@
 import { BridgeClient } from './bridge';
 import type { TrackInfo } from '@vaporzr/shared';
-import { VZ_SYMBOL_HTML } from './symbol';
 
 const { useState, useEffect, useRef } = Spicetify.React;
 
@@ -150,7 +149,7 @@ function Queue({ bridge }: { bridge: BridgeClient }) {
 function Visuals({ bridge }: { bridge: BridgeClient }) {
   const [enabled, setEnabled] = useState(true);
   const [frame, setFrame] = useState<string | null>(null);
-  const [preview, setPreview] = useState(false);
+  const [preview, setPreview] = useState(true);
 
   useEffect(() => {
     bridge.onVisuals = (f) => {
@@ -208,10 +207,11 @@ export default function App() {
   return (
     <div className={`vz-root${connected ? '' : ' vz-offline'}`}>
       <div className="vz-grid" />
+      <div className="vz-artwork" />
       <div className="vz-content">
         <header className="vz-header">
           <div className="vz-logo">
-            <span className="vz-logo-mark" dangerouslySetInnerHTML={{ __html: VZ_SYMBOL_HTML }} />
+            <img className="vz-logo-img" src="./logo.png" alt="Vaporzr" />
             <div>
               <div className="vz-logo-text">VAPORZR</div>
               <div className="vz-logo-sub">SHARED PLAYBACK CONTROL</div>

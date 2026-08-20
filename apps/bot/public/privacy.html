@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vaporzr — Privacy Policy</title>
+<style>
+  body { font-family: system-ui, -apple-system, sans-serif; background: #0b1026; color: #c7d2fe; max-width: 720px; margin: 3rem auto; padding: 0 1.5rem; line-height: 1.7; }
+  h1 { background: linear-gradient(90deg, #60a5fa, #a78bfa); -webkit-background-clip: text; background-clip: text; color: transparent; font-size: 1.8rem; }
+  h2 { color: #93c5fd; font-size: 1.15rem; margin-top: 2rem; }
+  a { color: #7dd3fc; }
+  code { background: #1e293b; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.9rem; }
+  .muted { color: #64748b; font-size: 0.85rem; }
+</style>
+</head>
+<body>
+<h1>Privacy Policy</h1>
+<p class="muted">Last updated: August 19, 2026</p>
+
+<p>Vaporzr ("the Bot") is a Discord music bot. This Privacy Policy explains what data the Bot processes, how it is used, and your rights.</p>
+
+<h2>Data We Process</h2>
+<ul>
+  <li><strong>Discord identifiers</strong> — User IDs and guild (server) IDs are used to manage permissions, queues, and per-server settings.</li>
+  <li><strong>Voice channel membership</strong> — The Bot reads voice state events to join/leave channels when instructed.</li>
+  <li><strong>Spotify credentials</strong> — If you link a Spotify account via the Bot's web panel, an OAuth access token and refresh token are stored locally on the host machine to enable playback. These tokens are never shared with third parties.</li>
+  <li><strong>Queue data</strong> — Track names, artists, and playback state are stored locally per guild to survive restarts.</li>
+</ul>
+
+<h2>How We Use Data</h2>
+<ul>
+  <li>All data is processed solely to provide the Bot's music playback and visualizer features.</li>
+  <li>No data is sold, shared with third parties, or used for advertising or analytics.</li>
+  <li>No personal data is transmitted outside of Discord's APIs and the user-authorized Spotify API.</li>
+</ul>
+
+<h2>Data Storage</h2>
+<ul>
+  <li>All persistent data (queues, settings, Spotify tokens) is stored as local files on the machine running the Bot.</li>
+  <li>No data is sent to external databases, cloud storage, or analytics services.</li>
+  <li>Server operators are responsible for the security and lifecycle of data on their host machine.</li>
+</ul>
+
+<h2>Third-Party Services</h2>
+<ul>
+  <li><strong>Discord</strong> — The Bot operates through Discord's official API and is subject to <a href="https://discord.com/privacy">Discord's Privacy Policy</a>.</li>
+  <li><strong>Spotify</strong> — If linked, the Bot communicates with Spotify's API for playback. Subject to <a href="https://www.spotify.com/us/legal/privacy-policy/">Spotify's Privacy Policy</a>.</li>
+  <li><strong>YouTube</strong> — Track metadata and streams may be resolved via YouTube. Subject to <a href="https://policies.google.com/privacy">Google's Privacy Policy</a>.</li>
+</ul>
+
+<h2>Data Retention</h2>
+<p>Queue data is retained until the queue is cleared or the Bot's data directory is manually deleted. Spotify tokens are retained until unlinked. No data is retained indefinitely by design.</p>
+
+<h2>Children's Privacy</h2>
+<p>The Bot is not directed at children under 13 (or the applicable age in your jurisdiction). We do not knowingly collect data from children.</p>
+
+<h2>Changes to This Policy</h2>
+<p>We may update this Privacy Policy from time to time. Changes will be posted at this URL. Continued use of the Bot after changes constitutes acceptance of the updated policy.</p>
+
+<h2>Contact</h2>
+<p>For questions about this Privacy Policy, open an issue at <a href="https://github.com/anomalyco/opencode/issues">our GitHub repository</a>.</p>
+</body>
+</html>

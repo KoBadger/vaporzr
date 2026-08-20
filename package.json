@@ -21,6 +21,8 @@
     "node": ">=20"
   },
   "allowScripts": {
-    "electron@33.4.11": true
+    "electron@33.4.11": true,
+    "ffmpeg-static@*": true,
+    "esbuild@*": true
   }
 }

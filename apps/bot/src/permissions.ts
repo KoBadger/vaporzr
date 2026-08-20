@@ -11,15 +11,29 @@ interface GuildConfig {
 
 const DEFAULT_COMMAND_LEVELS: Record<string, PermissionLevel> = {
   play: 'user',
+  insert: 'user',
+  yt: 'user',
   queue: 'user',
   nowplaying: 'user',
   volume: 'user',
   pause: 'user',
   resume: 'user',
-  skip: 'mod',
-  remove: 'mod',
-  clear: 'mod',
-  shuffle: 'mod',
+  previous: 'user',
+  join: 'user',
+  leave: 'user',
+  panel: 'user',
+  player: 'admin',
+  screensaver: 'admin',
+  theme: 'user',
+  wave: 'user',
+  burst: 'user',
+  wav: 'user',
+  skip: 'user',
+  remove: 'user',
+  clear: 'user',
+  shuffle: 'user',
+  dj: 'mod',
+  sfx: 'user',
   perms: 'admin',
 };
 
@@ -31,6 +45,18 @@ function defaultGuildConfig(): GuildConfig {
 
 export class PermissionsManager {
   private cache = new Map<string, GuildConfig>();
+  /** Runtime owner id, auto-detected from the Discord application owner. */
+  private ownerOverride: string | null = null;
+
+  /** Pin the owner at runtime (used when OWNER_ID is not set in .env). */
+  setOwner(userId: string | null): void {
+    this.ownerOverride = userId;
+  }
+
+  /** True once an owner is known (from OWNER_ID or auto-detection). */
+  get hasOwner(): boolean {
+    return Boolean(this.ownerOverride ?? config.ownerId);
+  }
 
   private fileFor(guildId: string): string {
     return path.join(config.dataDir, 'guilds', `${guildId}.json`);
@@ -71,12 +97,6 @@ export class PermissionsManager {
     this.save(guildId);
   }
 
-  resetCommandLevel(guildId: string, command: string): void {
-    const cfg = this.load(guildId);
-    delete cfg.commandLevels[command];
-    this.save(guildId);
-  }
-
   addRole(guildId: string, level: PermissionLevel, roleId: string): void {
     const cfg = this.load(guildId);
     if (!cfg.roles[level].includes(roleId)) {
@@ -110,6 +130,12 @@ export class PermissionsManager {
     const required = this.requiredLevel(command, guild.id);
     const level = this.getLevel(guild, member);
     return LEVEL_RANK[level] >= LEVEL_RANK[required];
+  }
+
+  /** True for the bot owner (OWNER_ID or auto-detected app owner). Returns false if unknown. */
+  isOwner(userId: string): boolean {
+    const owner = this.ownerOverride ?? config.ownerId;
+    return Boolean(owner) && userId === owner;
   }
 
   snapshot(guildId: string) {

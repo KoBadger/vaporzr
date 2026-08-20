@@ -7,12 +7,280 @@
   html, body { margin: 0; height: 100%; background: #05060f; overflow: hidden; }
   #viz { width: 100%; height: 100%; display: block; }
   #status { position: fixed; bottom: 12px; left: 12px; color: rgba(200,220,255,.6);
-    font-family: monospace; font-size: 11px; text-shadow: 0 0 6px rgba(120,160,255,.6); }
+    font-family: monospace; font-size: 11px; text-shadow: 0 0 6px rgba(120,160,255,.6);
+    transition: opacity .25s; }
+
+  /* ---- Window chrome (frameless title strip) ---- */
+  #chrome-bar {
+    position: fixed; top: 0; left: 0; right: 0; height: 30px; z-index: 18;
+    display: flex; align-items: center; justify-content: flex-end; gap: 4px;
+    padding: 0 6px; box-sizing: border-box;
+    pointer-events: none; /* transparent to clicks; only the buttons below are interactive */
+    background: linear-gradient(180deg, rgba(10,15,30,.55), rgba(10,15,30,0));
+    transition: opacity .25s;
+  }
+  .win-btn {
+    pointer-events: auto;
+    border: none; background: transparent; color: #94a3b8; cursor: pointer;
+    width: 30px; height: 30px; font-size: 14px; line-height: 1; border-radius: 7px;
+    display: flex; align-items: center; justify-content: center;
+    transition: background .15s, color .15s;
+  }
+  .win-btn:hover { background: rgba(255,255,255,.1); color: #e2e8f0; }
+  #win-close:hover { background: rgba(248,113,113,.25); color: #fecaca; }
+
+  /* Chrome auto-hide: fade out the PIP title bar, controls, status, and the
+     window strip when the mouse is idle; mouse motion brings them back. */
+  body.chrome-hidden #pip-head,
+  body.chrome-hidden #controls,
+  body.chrome-hidden #controls-toggle,
+  body.chrome-hidden #status,
+  body.chrome-hidden #chrome-bar {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  #pip {
+    position: fixed; top: 48px; right: 16px; width: 340px; z-index: 10;
+    border-radius: 12px; overflow: hidden;
+    background: rgba(10, 15, 30, .55);
+    border: 1px solid rgba(140, 160, 255, .35);
+    box-shadow: 0 8px 40px rgba(0, 0, 0, .6), 0 0 24px rgba(96, 165, 250, .25);
+    backdrop-filter: blur(14px);
+    font-family: system-ui, sans-serif;
+  }
+  #pip.hidden { display: none; }
+  #pip-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 8px 6px 12px;
+    background: linear-gradient(90deg, rgba(96,165,250,.25), rgba(167,139,250,.25));
+    border-bottom: 1px solid rgba(140,160,255,.2);
+    transition: opacity .25s;
+  }
+  #pip-title {
+    flex: 1; color: #e2e8f0; font-size: 12px; font-weight: 600;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #pip-close {
+    border: none; background: transparent; color: #94a3b8; cursor: pointer;
+    font-size: 16px; line-height: 1; padding: 2px 6px; border-radius: 6px;
+  }
+  #pip-close:hover { color: #fda4af; background: rgba(255,255,255,.08); }
+  #pip-body { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #000; }
+  #pip-video, #pip-video-b, #pip-art { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: none; }
+  #pip-video.visible, #pip-video-b.visible, #pip-art.visible { display: block; }
+  #pip-badge {
+    position: absolute; top: 6px; left: 6px; font-size: 10px; letter-spacing: 1px;
+    color: #c7d2fe; background: rgba(10,15,30,.6); border: 1px solid rgba(140,160,255,.3);
+    border-radius: 999px; padding: 2px 8px; backdrop-filter: blur(6px);
+  }
+
+  /* ---- Controls overlay (Steam Project M style) ---- */
+  #controls-toggle {
+    position: fixed; bottom: 14px; right: 14px; z-index: 20;
+    width: 34px; height: 34px; border-radius: 10px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(10,15,30,.55); border: 1px solid rgba(140,160,255,.35);
+    color: #c7d2fe; font-size: 15px; backdrop-filter: blur(10px);
+    transition: background .15s, transform .15s, opacity .25s;
+  }
+  #controls-toggle:hover { background: rgba(96,165,250,.3); transform: scale(1.06); }
+  #controls-toggle.on { color: #93c5fd; }
+
+  #controls {
+    position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: 18px; z-index: 20; display: none;
+    width: min(680px, calc(100vw - 40px));
+    padding: 10px 14px 12px;
+    border-radius: 14px;
+    background: rgba(10,15,30,.6);
+    border: 1px solid rgba(140,160,255,.35);
+    box-shadow: 0 8px 40px rgba(0,0,0,.6), 0 0 24px rgba(96,165,250,.2);
+    backdrop-filter: blur(14px);
+    font-family: system-ui, sans-serif;
+    user-select: none;
+    transition: opacity .25s;
+  }
+  #controls.visible { display: block; }
+
+  #ctrl-track {
+    display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px;
+    color: #e2e8f0; font-size: 12px; font-weight: 600;
+    white-space: nowrap; overflow: hidden;
+  }
+  #ctrl-title { overflow: hidden; text-overflow: ellipsis; }
+  #ctrl-meta { color: #94a3b8; font-weight: 400; font-size: 11px; }
+
+  #ctrl-progress { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  #ctrl-progress input[type=range] { flex: 1; }
+  #ctrl-time { color: #94a3b8; font-size: 10px; font-variant-numeric: tabular-nums; min-width: 84px; text-align: right; }
+
+  #ctrl-buttons { display: flex; align-items: center; gap: 6px; }
+  .ctrl-btn {
+    border: none; cursor: pointer; border-radius: 8px;
+    background: rgba(148,163,184,.12); color: #e2e8f0;
+    width: 32px; height: 32px; font-size: 14px; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+    transition: background .15s, transform .15s;
+  }
+  .ctrl-btn:hover { background: rgba(148,163,184,.28); transform: scale(1.05); }
+  .ctrl-btn.primary { width: 40px; height: 40px; font-size: 16px; background: rgba(96,165,250,.3); }
+  .ctrl-btn.primary:hover { background: rgba(96,165,250,.5); }
+  .ctrl-btn.active { color: #93c5fd; background: rgba(96,165,250,.25); box-shadow: inset 0 0 0 1px rgba(147,197,253,.5); }
+  .ctrl-btn.disabled { opacity: .35; pointer-events: none; }
+  #ctrl-spacer { flex: 1; }
+  #ctrl-volume { display: flex; align-items: center; gap: 6px; color: #94a3b8; font-size: 13px; }
+  #ctrl-volume input[type=range] { width: 90px; }
+
+  input[type=range] {
+    -webkit-appearance: none; height: 4px; border-radius: 2px;
+    background: rgba(148,163,184,.3); outline: none; cursor: pointer;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%;
+    background: #93c5fd; border: none; box-shadow: 0 0 8px rgba(147,197,253,.6);
+  }
+  #ctrl-hint {
+    margin-top: 6px; color: rgba(148,163,184,.6); font-size: 9px; letter-spacing: .3px;
+  }
+
+  /* ---- DJ soundboard row ---- */
+  #ctrl-sfx {
+    display: flex; align-items: center; gap: 6px; margin-top: 8px;
+    padding-top: 8px; border-top: 1px solid rgba(140,160,255,.15);
+  }
+  #ctrl-sfx-label {
+    color: rgba(148,163,184,.7); font-size: 10px; font-weight: 600;
+    letter-spacing: 1px; margin-right: 4px;
+  }
+  #ctrl-sfx .ctrl-btn { width: 30px; height: 30px; font-size: 13px; }
+  #btn-dj-toggle { font-size: 14px; }
+
+  /* ---- Theme (set live from the bot via the bridge) ---- */
+  :root {
+    --vz-accent: #6a5cff;
+    --vz-accent2: #00f0ff;
+    --vz-glow: rgba(106, 92, 255, 0.45);
+  }
+  #status { text-shadow: 0 0 6px var(--vz-glow); }
+  .ctrl-btn.primary { background: color-mix(in srgb, var(--vz-accent) 35%, transparent); }
+  .ctrl-btn.primary:hover { background: color-mix(in srgb, var(--vz-accent) 60%, transparent); }
+  input[type=range]::-webkit-slider-thumb { background: var(--vz-accent); box-shadow: 0 0 8px var(--vz-glow); }
+  #controls-toggle.on { color: var(--vz-accent2); }
+  #controls-toggle { border-color: color-mix(in srgb, var(--vz-accent) 35%, transparent); }
+  #pip-head { background: linear-gradient(90deg, color-mix(in srgb, var(--vz-accent2) 28%, transparent), color-mix(in srgb, var(--vz-accent) 28%, transparent)); }
+  #pip { border-color: color-mix(in srgb, var(--vz-accent) 35%, transparent); box-shadow: 0 8px 40px rgba(0,0,0,.6), 0 0 24px var(--vz-glow); }
+  #pip-badge { border-color: color-mix(in srgb, var(--vz-accent2) 30%, transparent); }
+  #controls { border-color: color-mix(in srgb, var(--vz-accent) 35%, transparent); box-shadow: 0 8px 40px rgba(0,0,0,.6), 0 0 24px var(--vz-glow); }
+
+  /* ---- Theme tint (glow layer over the visuals) ---- */
+  #theme-tint {
+    position: fixed; inset: 0; z-index: 1; pointer-events: none;
+    background: radial-gradient(ellipse at 30% 25%, var(--vz-glow), transparent 65%);
+    mix-blend-mode: screen; opacity: .55; transition: opacity .8s;
+  }
+
+  #win-pass { display: none; }
+
+  /* ---- Overlay mode (transparent, click-through) ---- */
+  body.overlay { background: transparent; }
+  body.overlay #chrome-bar, body.overlay #controls-toggle, body.overlay #controls,
+  body.overlay #pip, body.overlay #status { display: none; }
+  body.overlay #theme-tint { opacity: 1; }
+  /* Unlocked (interactive) state: show chrome so it can be dragged/closed. */
+  body.overlay.interactive #chrome-bar { display: flex; -webkit-app-region: drag; }
+  body.overlay.interactive #status { display: block; }
+  body.overlay.interactive #controls-toggle { display: flex; }
+  body.overlay.interactive #controls { display: block; }
+  body.overlay.interactive .win-btn { -webkit-app-region: no-drag; }
+  body.overlay #win-pass { display: flex; }
+  body.overlay #win-hide { display: flex; }
+  /* Fade the whole overlay away when nothing has played for a while. */
+  body.overlay-idle #viz { opacity: 0; }
+  body.overlay-idle #theme-tint { opacity: 0; }
+  #viz { transition: opacity .8s ease; }
+
+  /* ---- Idle backdrop (ambient video + logo when nothing is playing) ---- */
+  #idle-video {
+    position: fixed; inset: 0; z-index: 2; width: 100%; height: 100%;
+    object-fit: cover; opacity: 0; pointer-events: none;
+    transition: opacity .8s ease; background: #000;
+  }
+  #idle-logo {
+    position: fixed; left: 50%; bottom: 8%; z-index: 3;
+    transform: translateX(-50%); opacity: 0; pointer-events: none;
+    transition: opacity .8s ease;
+  }
+  #idle-logo img { height: 72px; width: auto; filter: drop-shadow(0 0 18px var(--vz-glow)); }
+  body.idle #idle-video { opacity: 1; }
+  body.idle #idle-logo { opacity: .9; }
+  /* The small overlay goes fully dormant when idle; the screensaver keeps the video. */
+  body.overlay:not(.screensaver).overlay-idle #idle-video,
+  body.overlay:not(.screensaver).overlay-idle #idle-logo { opacity: 0; }
 </style>
 </head>
-<body>
+<body class="idle">
   <canvas id="viz"></canvas>
+  <div id="theme-tint"></div>
+
+  <video id="idle-video" src="./idle.mp4" muted loop autoplay playsinline preload="auto" aria-hidden="true"></video>
+  <div id="idle-logo"><img src="./logo.png" alt="Vaporzr" aria-hidden="true" /></div>
+
+  <div id="chrome-bar">
+    <button class="win-btn" id="win-pass" title="Lock click-through (Ctrl+Shift+V)">🧷</button>
+    <button class="win-btn" id="win-hide" title="Hide overlay (Ctrl+Shift+O)">🙈</button>
+    <button class="win-btn" id="win-min" title="Minimize">–</button>
+    <button class="win-btn" id="win-close" title="Close">×</button>
+  </div>
+
+  <div id="pip" class="hidden">
+    <div id="pip-head">
+      <span id="pip-title"></span>
+      <button id="pip-close" title="Close">×</button>
+    </div>
+    <div id="pip-body">
+      <video id="pip-video" autoplay playsinline></video>
+      <video id="pip-video-b" autoplay playsinline></video>
+      <img id="pip-art" alt="" />
+      <span id="pip-badge">▶️ YOUTUBE</span>
+    </div>
+  </div>
+
   <div id="status">starting…</div>
+
+  <div id="controls" class="visible">
+    <div id="ctrl-track">
+      <span id="ctrl-title">Nothing playing</span>
+      <span id="ctrl-meta"></span>
+    </div>
+    <div id="ctrl-progress">
+      <input id="ctrl-seek" type="range" min="0" max="1000" value="0" step="1" />
+      <span id="ctrl-time">0:00 / 0:00</span>
+    </div>
+    <div id="ctrl-buttons">
+      <button class="ctrl-btn" id="btn-prev" title="Previous (Alt+←)">⏮</button>
+      <button class="ctrl-btn primary" id="btn-play" title="Play/Pause (Space)">▶</button>
+      <button class="ctrl-btn" id="btn-next" title="Next (Alt+→)">⏭</button>
+      <button class="ctrl-btn" id="btn-shuffle" title="Shuffle (S)">🔀</button>
+      <span id="ctrl-spacer"></span>
+      <button class="ctrl-btn" id="btn-preset" title="Cycle visualizer preset (P)">✨</button>
+      <span id="ctrl-volume"><span>🔉</span><input id="ctrl-vol" type="range" min="0" max="100" value="50" step="1" /></span>
+    </div>
+    <div id="ctrl-sfx">
+      <button class="ctrl-btn" id="btn-dj-toggle" title="DJ soundboard OFF — click to enable">🎚</button>
+      <button class="ctrl-btn" id="btn-sfx-airhorn" title="Air horn">📣</button>
+      <button class="ctrl-btn" id="btn-sfx-drop" title="Drop">💥</button>
+      <button class="ctrl-btn" id="btn-sfx-riser" title="Riser">📈</button>
+      <button class="ctrl-btn" id="btn-sfx-reverse" title="Reverse">↩️</button>
+      <button class="ctrl-btn" id="btn-sfx-boom" title="Boom">💣</button>
+      <button class="ctrl-btn" id="btn-sfx-zap" title="Zap">⚡</button>
+      <button class="ctrl-btn" id="btn-sfx-applause" title="Applause">👏</button>
+      <button class="ctrl-btn" id="btn-sfx-countdown" title="Countdown">🔟</button>
+    </div>
+    <div id="ctrl-hint">Space play/pause · S shuffle · P preset · ↑↓ volume · ←→ seek · Esc hide · H chrome</div>
+  </div>
+  <button id="controls-toggle" title="Toggle controls (C)">🎛</button>
+
   <script src="./bundle/renderer/visualizer.js"></script>
 </body>
 </html>

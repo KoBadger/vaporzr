@@ -1,15 +1,15 @@
 :root {
-  --vz-bg-0: #04060f;
+  --vz-bg-0: #080b1d;
   --vz-bg-1: #0a1128;
   --vz-bg-2: #101a3a;
-  --vz-blue: #00d4ff;
-  --vz-cyan: #7ff7ff;
-  --vz-purple: #8a6cff;
+  --vz-blue: #00f0ff;
+  --vz-cyan: #1ed6ff;
+  --vz-purple: #6a5cff;
   --vz-pink: #ff71ce;
   --vz-text: #cfe8ff;
   --vz-text-dim: #6c87b3;
-  --vz-border: rgba(0, 212, 255, 0.25);
-  --vz-glow: 0 0 18px rgba(0, 212, 255, 0.35);
+  --vz-border: rgba(0, 240, 255, 0.25);
+  --vz-glow: 0 0 18px rgba(106, 92, 255, 0.35);
 }
 
 .vaporzr-top-btn {
@@ -67,6 +67,19 @@
   -webkit-mask-image: linear-gradient(180deg, transparent 0%, black 22%, black 100%);
 }
 
+/* Ambient artwork (bottom-fading backdrop behind the content). */
+.vz-artwork {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: url('./artwork.jpg') center 78% / cover no-repeat;
+  opacity: 0.4;
+  filter: saturate(0.85);
+  mask-image: linear-gradient(180deg, transparent 55%, black 92%);
+  -webkit-mask-image: linear-gradient(180deg, transparent 55%, black 92%);
+}
+
 .vz-root::before {
   content: '';
   position: fixed;
@@ -82,6 +95,7 @@
 
 .vz-content {
   position: relative;
+  z-index: 1;
   max-width: 960px;
   margin: 0 auto;
 }
@@ -101,22 +115,11 @@
   gap: 14px;
 }
 
-.vz-logo-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 52px;
-  height: 52px;
-  color: #fff;
-  border-radius: 12px;
-  background: linear-gradient(135deg, var(--vz-blue), var(--vz-purple));
-  box-shadow: var(--vz-glow);
-}
-
-.vz-logo-mark svg {
-  width: 34px;
-  height: 34px;
-  filter: drop-shadow(0 0 5px rgba(0, 229, 255, 0.8));
+.vz-logo-img {
+  height: 46px;
+  width: auto;
+  border-radius: 8px;
+  filter: drop-shadow(0 0 12px var(--vz-glow));
 }
 
 .vz-logo-text {

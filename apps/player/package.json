@@ -17,7 +17,7 @@
   "devDependencies": {
     "@types/node": "^20.16.0",
     "@types/ws": "^8.5.12",
-    "electron": "^33.0.0",
+    "electron": "file:../../vendor/electron-ecs",
     "esbuild": "^0.24.0",
     "typescript": "^5.6.0"
   },

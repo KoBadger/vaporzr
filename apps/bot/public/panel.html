@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Vaporzr Panel</title>
+<style>
+  :root {
+    --accent: #6a5cff; --accent2: #00f0ff;
+    --bg: #0b1026; --panel: rgba(16,22,46,.8); --line: rgba(140,160,255,.28);
+    --text: #e2e8f0; --muted: #94a3b8;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 28px 16px; }
+  main { max-width: 760px; margin: 0 auto; display: grid; gap: 14px; }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    padding: 14px 16px; box-shadow: 0 8px 40px rgba(0,0,0,.45), 0 0 24px color-mix(in srgb, var(--accent) 18%, transparent);
+    backdrop-filter: blur(14px);
+  }
+  h1 { margin: 0; font-size: 15px; letter-spacing: 1px;
+    background: linear-gradient(90deg, var(--accent2), var(--accent)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .sub { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+  button {
+    border: 1px solid var(--line); background: rgba(148,163,184,.12); color: var(--text);
+    border-radius: 8px; cursor: pointer; height: 34px; min-width: 34px; padding: 0 10px; font-size: 13px;
+    transition: background .15s, transform .12s, opacity .15s;
+  }
+  button:hover { background: rgba(148,163,184,.28); transform: scale(1.04); }
+  button.primary { background: color-mix(in srgb, var(--accent) 32%, transparent); min-width: 44px; }
+  button.primary:hover { background: color-mix(in srgb, var(--accent) 55%, transparent); }
+  button.active { color: var(--accent2); background: rgba(0,240,255,.14); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent2) 45%, transparent); }
+  button.disabled { opacity: .35; pointer-events: none; }
+  button.danger:hover { background: rgba(248,113,113,.3); color: #fecaca; }
+  #sfx-row button { font-size: 16px; padding: 0 8px; }
+
+  #track { display: flex; gap: 12px; align-items: center; }
+  #art { width: 64px; height: 64px; border-radius: 10px; object-fit: cover; background: #1e293b; flex-shrink: 0; }
+  #track-name { font-size: 15px; font-weight: 700; }
+  #track-meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  #progress { width: 100%; margin-top: 10px; accent-color: var(--accent); }
+  #time { font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; }
+
+  #queue { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; max-height: 320px; overflow-y: auto; }
+  #queue li { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; background: rgba(148,163,184,.06); }
+  #queue li.current { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent2) 50%, transparent); }
+  #queue .qi { width: 20px; color: var(--muted); font-size: 11px; flex-shrink: 0; text-align: right; }
+  #queue .qn { flex: 1; min-width: 0; }
+  #queue .qn b { font-size: 12px; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #queue .qn span { font-size: 11px; color: var(--muted); }
+  #queue button { height: 26px; min-width: 26px; font-size: 12px; padding: 0 6px; }
+  #empty { color: var(--muted); font-size: 12px; }
+
+  .meta { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; flex-wrap: wrap; }
+  .badge { padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); }
+  #dj-badge.on { color: #86efac; border-color: rgba(134,239,172,.4); }
+  input[type=range] { accent-color: var(--accent); }
+  #vol-wrap { display: flex; align-items: center; gap: 6px; margin-left: auto; color: var(--muted); font-size: 12px; }
+  #vol { width: 120px; }
+  a { color: var(--accent2); }
+</style>
+</head>
+<body>
+<main>
+  <div class="card">
+    <div class="row">
+      <h1>VAPORZR</h1>
+      <div class="meta">
+        <span class="badge" id="voice">🔇 not streaming</span>
+        <span class="badge" id="dj-badge">🎛 DJ off</span>
+      </div>
+      <div style="flex:1"></div>
+      <button id="dj-toggle" title="Toggle DJ soundboard">🎛</button>
+    </div>
+    <div class="sub">control panel · localhost · reconnect is automatic</div>
+  </div>
+
+  <div class="card">
+    <div id="track">
+      <img id="art" alt="" />
+      <div style="flex:1; min-width:0">
+        <div id="track-name">Nothing playing</div>
+        <div id="track-meta"></div>
+      </div>
+      <div class="row">
+        <button id="btn-prev" title="Previous">⏮</button>
+        <button id="btn-play" class="primary" title="Play/Pause">▶</button>
+        <button id="btn-next" title="Next">⏭</button>
+        <button id="btn-shuffle" title="Shuffle">🔀</button>
+      </div>
+    </div>
+    <input id="progress" type="range" min="0" max="1000" value="0" step="1" />
+    <div id="time"><span id="t-now">0:00</span><span id="t-dur">0:00</span></div>
+    <div class="row" style="margin-top:8px">
+      <button id="btn-clear" class="danger" title="Stop and clear queue">🗑 Clear</button>
+      <div id="vol-wrap">🔉<input id="vol" type="range" min="0" max="100" value="50" step="1" />🔊</div>
+    </div>
+  </div>
+
+  <div class="card" id="sfx-card">
+    <div class="row" style="justify-content:space-between">
+      <span style="font-weight:600; font-size:12px; letter-spacing:1px; color:var(--muted)">SOUNDBOARD</span>
+      <span style="font-size:11px; color:var(--muted)" id="sfx-status">DJ off — sounds muted</span>
+    </div>
+    <div class="row" id="sfx-row" style="margin-top:10px">
+      <button data-sfx="airhorn" title="Air horn">📣</button>
+      <button data-sfx="drop" title="Drop">💥</button>
+      <button data-sfx="riser" title="Riser">📈</button>
+      <button data-sfx="reverse" title="Reverse">↩️</button>
+      <button data-sfx="boom" title="Boom">💣</button>
+      <button data-sfx="zap" title="Zap">⚡</button>
+      <button data-sfx="applause" title="Applause">👏</button>
+      <button data-sfx="countdown" title="Countdown">🔟</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <span style="font-weight:600; font-size:12px; letter-spacing:1px; color:var(--muted)">QUEUE</span>
+      <span style="font-size:11px; color:var(--muted)" id="queue-count">0 tracks</span>
+    </div>
+    <ul id="queue"><li id="empty">Nothing queued.</li></ul>
+  </div>
+</main>
+
+<script>
+(function () {
+  var port = Number(new URLSearchParams(location.search).get('port') || '4876');
+  var ws = null;
+  var state = null;
+  var queue = [];
+  var djEnabled = false;
+  var $ = function (id) { return document.getElementById(id); };
+  var el = {};
+  ['voice','dj-badge','dj-toggle','sfx-status','track-name','track-meta','art','btn-play','btn-shuffle','btn-prev','btn-next','btn-clear','progress','t-now','t-dur','vol','queue','queue-count','empty'].forEach(function (id) { el[id] = $(id); });
+
+  function send(msg) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg)); }
+  function cmd(command, extra) { send(Object.assign({ type: 'cmd', command: command }, extra || {})); }
+  function fmt(ms) { if (!ms || !isFinite(ms)) return '0:00'; var s = Math.floor(ms / 1000); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
+
+  function render() {
+    if (state) {
+      var t = state.track;
+      el['track-name'].textContent = t ? t.name : 'Nothing playing';
+      el['track-meta'].textContent = t ? (t.artists ? t.artists.join(', ') : '') + (t.album ? ' — ' + t.album : '') : '';
+      el.art.src = (t && t.image) ? t.image : '';
+      el['btn-play'].textContent = state.playing ? '⏸' : '▶';
+      el['btn-shuffle'].classList.toggle('active', !!state.shuffle);
+      el.vol.value = state.volume != null ? state.volume : 50;
+      var dur = state.durationMs || (t && t.durationMs) || 0;
+      var max = Math.max(1, Math.round(dur / 1000));
+      if (!el.progress.matches(':active')) {
+        var pos = state.positionMs || 0;
+        if (state.playing) pos += Math.max(0, Date.now() - (state.updatedAt || Date.now()));
+        el.progress.value = String(Math.min(max, Math.round(pos / 1000)));
+      }
+      el.progress.max = String(max);
+      el['t-now'].textContent = fmt(Number(el.progress.value) * 1000);
+      el['t-dur'].textContent = fmt(dur);
+    }
+    renderQueue();
+    renderDj();
+  }
+
+  function renderQueue() {
+    el['queue-count'].textContent = queue.length + ' track' + (queue.length === 1 ? '' : 's');
+    el.queue.innerHTML = '';
+    if (!queue.length) {
+      var li = document.createElement('li'); li.id = 'empty'; li.textContent = 'Nothing queued.'; el.queue.appendChild(li);
+      return;
+    }
+    queue.forEach(function (t, i) {
+      var li = document.createElement('li');
+      if (state && state.track && state.track.uri === t.uri) li.classList.add('current');
+      var n = document.createElement('span'); n.className = 'qi'; n.textContent = String(i + 1);
+      var d = document.createElement('div'); d.className = 'qn';
+      var b = document.createElement('b'); b.textContent = t.name; d.appendChild(b);
+      var s = document.createElement('span'); s.textContent = (t.artists || []).join(', '); d.appendChild(s);
+      var go = document.createElement('button'); go.textContent = '▶'; go.title = 'Play now'; go.onclick = function () { cmd('playAt', { index: i }); };
+      var rm = document.createElement('button'); rm.textContent = '✕'; rm.title = 'Remove'; rm.className = 'danger'; rm.onclick = function () { cmd('remove', { index: i }); };
+      li.appendChild(n); li.appendChild(d); li.appendChild(go); li.appendChild(rm);
+      el.queue.appendChild(li);
+    });
+  }
+
+  function renderDj() {
+    el['dj-toggle'].classList.toggle('active', djEnabled);
+    el['dj-badge'].textContent = '🎛 DJ ' + (djEnabled ? 'on' : 'off');
+    el['dj-badge'].classList.toggle('on', djEnabled);
+    el['sfx-status'].textContent = djEnabled ? 'Ready — pick a sound' : 'DJ off — sounds muted';
+    document.querySelectorAll('#sfx-row button').forEach(function (btn) { btn.classList.toggle('disabled', !djEnabled); });
+  }
+
+  function connect() {
+    try { ws = new WebSocket('ws://127.0.0.1:' + port + '/ws'); } catch (e) { return setTimeout(connect, 3000); }
+    ws.onopen = function () { send({ type: 'hello', role: 'panel', name: 'browser-panel' }); send({ type: 'state:request' }); };
+    ws.onmessage = function (ev) {
+      var msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
+      if (msg.type === 'snapshot') { state = msg.state; queue = (msg.queue && msg.queue.tracks) || []; if (msg.djEnabled != null) djEnabled = msg.djEnabled; render(); }
+      else if (msg.type === 'state:update') { state = msg.state; render(); }
+      else if (msg.type === 'queue:update') { queue = (msg.queue && msg.queue.tracks) || []; render(); }
+      else if (msg.type === 'voice:update') { el.voice.textContent = msg.joined ? '🔊 streaming' : '🔇 not streaming'; }
+      else if (msg.type === 'dj:update') { djEnabled = msg.enabled; renderDj(); }
+      else if (msg.type === 'theme') { applyTheme(msg.theme); }
+    };
+    ws.onclose = function () { setTimeout(connect, 3000); };
+    ws.onerror = function () { try { ws.close(); } catch (e) {} };
+  }
+
+  function applyTheme(theme) {
+    if (!theme) return;
+    var r = document.documentElement.style;
+    r.setProperty('--accent', theme.accent);
+    r.setProperty('--accent2', theme.accent2);
+  }
+
+  el['btn-play'].onclick = function () { cmd('toggle'); };
+  el['btn-prev'].onclick = function () { cmd('previous'); };
+  el['btn-next'].onclick = function () { cmd('next'); };
+  el['btn-shuffle'].onclick = function () { cmd('shuffle', { shuffle: !(state && state.shuffle) }); };
+  el['btn-clear'].onclick = function () { cmd('clear'); };
+  el['dj-toggle'].onclick = function () { cmd('dj', { djEnabled: !djEnabled }); };
+  el.progress.onchange = function () { cmd('seek', { positionMs: Number(el.progress.value) * 1000 }); };
+  el.vol.oninput = function () { if (state) cmd('volume', { volume: Number(el.vol.value) }); };
+  document.querySelectorAll('#sfx-row button').forEach(function (btn) {
+    btn.onclick = function () { cmd('sfx', { sfxId: btn.dataset.sfx }); };
+  });
+
+  setInterval(render, 1000);
+  connect();
+})();
+</script>
+</body>
+</html>

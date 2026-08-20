@@ -1,8 +1,8 @@
-import type { InboundMessage, OutboundMessage } from '@vaporzr/shared';
+import type { ClientRole, InboundMessage, OutboundMessage } from '@vaporzr/shared';
 
 export interface WsClientOptions {
   port: number;
-  role: 'player' | 'panel' | 'visualizer';
+  role: ClientRole;
   name?: string;
   onMessage: (msg: OutboundMessage) => void;
   onOpen?: () => void;

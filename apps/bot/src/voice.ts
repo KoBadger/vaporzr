@@ -1,0 +1,512 @@
+import {
+  AudioPlayer,
+  AudioPlayerStatus,
+  createAudioPlayer,
+  createAudioResource,
+  joinVoiceChannel,
+  NoSubscriberBehavior,
+  StreamType,
+  VoiceConnection,
+  VoiceConnectionStatus,
+  type AudioResource,
+  type DiscordGatewayAdapterCreator,
+} from '@discordjs/voice';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { Transform } from 'node:stream';
+import { config } from './config.js';
+
+/**
+ * googlevideo rejects ffmpeg's default UA with an empty response (no frames),
+ * so we must present a browser-like one when pulling YouTube stream URLs.
+ * ffmpeg-static's build has no `-user_agent` option, so we send the header
+ * via `-headers` (supported everywhere). Local files get no UA options at all.
+ */
+const STREAM_USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
+
+/**
+ * Joins a Discord voice channel and streams raw PCM (48 kHz, stereo, Int16)
+ * forwarded from the local loopback capture. The bot shows up as a normal
+ * VC member and is the audio source for everyone in the channel.
+ */
+export class VoiceManager {
+  private connection: VoiceConnection | null = null;
+  private player: AudioPlayer | null = null;
+  private stream: Transform | null = null;
+  private resource: AudioResource | null = null;
+  private ffmpeg: ChildProcess | null = null;
+  /** Remaining 48 kHz stereo Int16 PCM of a sound effect to mix over the music. */
+  private sfxBuffer: Buffer | null = null;
+  /** Bumped whenever a stream is replaced so stale ffmpeg onEnd callbacks no-op. */
+  private streamToken = 0;
+  private streamStartTime = 0;
+  private pausedPositionMs = 0;
+  private channelId: string | null = null;
+  private paused = false;
+  private idleTimer: NodeJS.Timeout | null = null;
+  private watchdog: NodeJS.Timeout | null = null;
+  private lastChunkAt = 0;
+  private chunksSinceLog = 0;
+  private bytesSinceLog = 0;
+  /** True while the playback feed is expected to push PCM (arm/disarm from playback.ts). */
+  private expectingPcm = false;
+  /** Optional tap on every PCM chunk (for the spectrum analyzer). */
+  private pcmTap: ((data: Buffer) => void) | null = null;
+  /** Called when the active stream's write buffer drains (resume a paused source). */
+  private onStreamDrain: (() => void) | null = null;
+  /** Called after repeated stall warnings to try un-sticking the feed chain. */
+  private onStallRecovery: (() => void) | null = null;
+  private stallWarnings = 0;
+  /** Loudness applied to every new audio resource (0–100). */
+  private volumePercent = 100;
+
+  /** Auto-leave after this long with nothing playing. */
+  static readonly IDLE_LEAVE_MS = 30 * 60 * 1000;
+  /** ~1 second of 48 kHz stereo s16 PCM so bursts don't cause stutter. */
+  static readonly STREAM_HIGH_WATER_MARK = 192_000;
+
+  constructor(
+    private onVoiceChange?: (joined: boolean, channelId: string | null) => void,
+  ) {}
+
+  setPcmTap(cb: ((data: Buffer) => void) | null): void {
+    this.pcmTap = cb;
+  }
+
+  /** Re-point the join/leave notification (the bridge wires the primary session). */
+  setOnVoiceChange(cb: (joined: boolean, channelId: string | null) => void): void {
+    this.onVoiceChange = cb;
+  }
+
+  isJoined(): boolean {
+    return this.connection !== null && this.connection.state.status !== VoiceConnectionStatus.Destroyed;
+  }
+
+  getChannelId(): string | null {
+    return this.channelId;
+  }
+
+  /**
+   * True while a live raw PCM feed stream is active (Spotify via librespot).
+   * Server-side ffmpeg streams have this.ffmpeg set, so they return false.
+   */
+  isRawFeedActive(): boolean {
+    return (
+      this.ffmpeg === null &&
+      this.stream !== null &&
+      !this.stream.destroyed &&
+      !this.stream.writableEnded &&
+      this.stream.writable
+    );
+  }
+
+  private clearIdleTimer(): void {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
+  }
+
+  /** Start the auto-leave countdown; call this whenever playback goes idle. */
+  private armIdleLeave(): void {
+    this.clearIdleTimer();
+    if (!this.isJoined()) return;
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = null;
+      if (this.isJoined()) {
+        console.log('[voice] no audio for 30 minutes — leaving automatically');
+        this.leave();
+      }
+    }, VoiceManager.IDLE_LEAVE_MS);
+  }
+
+  /** Cancel the idle auto-leave (e.g. while waiting out a Spotify rate-limit window). */
+  cancelIdleLeave(): void {
+    this.clearIdleTimer();
+  }
+
+  async join(guildId: string, channelId: string, adapterCreator: DiscordGatewayAdapterCreator): Promise<boolean> {
+    this.leave();
+    const connect = (): VoiceConnection => {
+      const connection = joinVoiceChannel({ channelId, guildId, adapterCreator, selfDeaf: true });
+      this.connection = connection;
+      this.channelId = channelId;
+      return connection;
+    };
+    const waitForReady = (connection: VoiceConnection): Promise<void> =>
+      new Promise((resolve, reject) => {
+        // Discord's voice gateway can be slow when the machine's DNS/network is
+        // flaky, so give it a generous window and retry once below.
+        const timer = setTimeout(() => reject(new Error('Timed out joining the voice channel.')), 20_000);
+        connection.once(VoiceConnectionStatus.Ready, () => {
+          clearTimeout(timer);
+          resolve();
+        });
+        connection.once(VoiceConnectionStatus.Disconnected, () => {
+          clearTimeout(timer);
+          reject(new Error('Voice connection disconnected.'));
+        });
+      });
+
+    let connection = connect();
+    const attempts = 2;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await waitForReady(connection);
+        break;
+      } catch (err) {
+        if (attempt >= attempts) {
+          this.leave();
+          throw err;
+        }
+        console.warn(`[voice] join attempt ${attempt} failed (${err instanceof Error ? err.message : err}) — retrying`);
+        try {
+          connection.destroy();
+        } catch {
+          /* ignore */
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        connection = connect();
+      }
+    }
+
+    this.player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Pause } });
+    connection.subscribe(this.player);
+    this.player.on('error', (e) => {
+      console.error('[voice] player error:', e.message);
+      this.stopStream();
+    });
+    this.player.on('stateChange', (oldState, newState) => {
+      // Only clear our stream/resource pointers when the resource that actually
+      // ended is the one we started (a stale Idle from a stopped resource must
+      // not clobber the pointers of a newer stream).
+      if (newState.status === AudioPlayerStatus.Idle) {
+        const endedResource = (oldState as { resource?: AudioResource | undefined }).resource;
+        if (endedResource === this.resource) {
+          this.stream = null;
+          this.resource = null;
+        }
+      }
+    });
+
+    this.onVoiceChange?.(true, channelId);
+    console.log(`[voice] joined voice channel ${channelId}`);
+    this.armIdleLeave();
+    this.startWatchdog();
+    return true;
+  }
+
+  private startWatchdog(): void {
+    this.clearWatchdog();
+    this.watchdog = setInterval(() => {
+      if (!this.isJoined()) return;
+      if (this.chunksSinceLog > 0) {
+        const mb = (this.bytesSinceLog / (1024 * 1024)).toFixed(2);
+        console.log(
+          `[voice] streaming OK — ${this.chunksSinceLog} chunks / ${mb} MB since last report`,
+        );
+        this.chunksSinceLog = 0;
+        this.bytesSinceLog = 0;
+        this.lastChunkAt = Date.now();
+        this.stallWarnings = 0;
+      } else if (this.ffmpeg) {
+        // Server-side stream: silence is normal between tracks; don't warn.
+      } else if (this.expectingPcm && Date.now() - this.lastChunkAt > 8000) {
+        console.warn(
+          '[voice] WARNING: expected audio but no chunks received in 8s — stream may be stalled',
+        );
+        this.lastChunkAt = Date.now();
+        this.stallWarnings++;
+        if (this.stallWarnings >= 3) {
+          this.stallWarnings = 0;
+          this.onStallRecovery?.();
+        }
+      }
+    }, 5000);
+  }
+
+  private clearWatchdog(): void {
+    if (this.watchdog) {
+      clearInterval(this.watchdog);
+      this.watchdog = null;
+    }
+  }
+
+  /** Arm/disarm the "audio expected" watchdog, set by the playback feed. */
+  setExpectingPcm(expected: boolean): void {
+    this.expectingPcm = expected;
+    if (expected) this.lastChunkAt = Date.now();
+    this.stallWarnings = 0;
+  }
+
+  leave(): void {
+    this.clearIdleTimer();
+    this.clearWatchdog();
+    this.stopStream();
+    this.onVoiceChange?.(false, null);
+    if (this.player) {
+      this.player.stop();
+      this.player = null;
+    }
+    if (this.connection) {
+      try {
+        this.connection.destroy();
+      } catch {
+        /* already destroyed */
+      }
+      this.connection = null;
+    }
+    this.channelId = null;
+    console.log('[voice] left voice channel');
+  }
+
+  /** Create a fresh streaming resource. Safe to call repeatedly. */
+  startStream(): void {
+    if (!this.player) return;
+    this.clearIdleTimer();
+    this.stopStream();
+    const stream = this.makeMixStream();
+    this.stream = stream;
+    this.streamStartTime = Date.now();
+    this.pausedPositionMs = 0;
+    const resource = createAudioResource(stream, { inputType: StreamType.Raw, inlineVolume: true });
+    this.resource = resource;
+    this.applyVolumeToResource();
+    this.player.play(resource);
+    this.paused = false;
+  }
+
+  /** Set the callback fired when the active stream can accept more PCM again. */
+  setStreamDrain(cb: (() => void) | null): void {
+    this.onStreamDrain = cb;
+  }
+
+  /** Set the callback fired after repeated "audio expected but none received" warnings. */
+  setStallRecovery(cb: (() => void) | null): void {
+    this.onStallRecovery = cb;
+  }
+
+  /** Mix a short sound effect (48 kHz stereo Int16 PCM) over the current audio. */
+  queueSfxPcm(data: Buffer): void {
+    if (!this.player) return;
+    this.sfxBuffer = data;
+  }
+
+  /** Sum two Int16 PCM chunks sample-by-sample (clamped), consuming the SFX tail. */
+  private mixSfx(chunk: Buffer): Buffer {
+    const sfx = this.sfxBuffer;
+    if (!sfx || sfx.length === 0) {
+      this.sfxBuffer = null;
+      return chunk;
+    }
+    const out = Buffer.allocUnsafe(chunk.length);
+    const mixSamples = Math.floor(Math.min(chunk.length, sfx.length) / 2);
+    for (let i = 0; i < mixSamples; i++) {
+      const a = chunk.readInt16LE(i * 2);
+      const b = sfx.readInt16LE(i * 2);
+      out.writeInt16LE(Math.max(-32768, Math.min(32767, a + b)), i * 2);
+    }
+    if (mixSamples * 2 < chunk.length) chunk.copy(out, mixSamples * 2, mixSamples * 2);
+    this.sfxBuffer = sfx.length > mixSamples * 2 ? sfx.subarray(mixSamples * 2) : null;
+    return out;
+  }
+
+  /** The audio pipeline: mixes sound effects in, then taps the analyzer, then feeds the player. */
+  private makeMixStream(): Transform {
+    const stream = new Transform({
+      highWaterMark: VoiceManager.STREAM_HIGH_WATER_MARK,
+      transform: (chunk, _enc, cb) => {
+        if (stream.writableEnded || stream.destroyed) return;
+        const out = this.mixSfx(chunk as Buffer);
+        this.pcmTap?.(out);
+        cb(null, out);
+      },
+    });
+    stream.on('drain', () => {
+      this.onStreamDrain?.();
+    });
+    // A late chunk from a killed ffmpeg can still race a just-ended stream.
+    // Swallow it instead of letting an unhandled 'error' take the process down.
+    stream.on('error', (err) => {
+      if (err && !(err as NodeJS.ErrnoException).code?.startsWith('ERR_STREAM_WRITE_AFTER_END')) {
+        console.warn(`[voice] mix stream error: ${err instanceof Error ? err.message : err}`);
+      }
+    });
+    return stream;
+  }
+
+  /**
+   * Stream a URL (yt-dlp direct link) into the VC via ffmpeg → 48 kHz stereo PCM.
+   *
+   * googlevideo intermittently answers 403 for signed stream URLs (YouTube's
+   * anti-scraping throttle). When `refreshUrl` is provided the stream is
+   * transparently re-resolved and retried a bounded number of times, so a
+   * flaky 403 doesn't kill the track.
+   */
+  playFfmpegUrl(
+    url: string,
+    opts: {
+      seekMs?: number;
+      volume?: number;
+      onEnd?: () => void;
+      retries?: number;
+      refreshUrl?: () => Promise<string>;
+    } = {},
+  ): void {
+    if (!this.player) {
+      console.warn('[voice] not in a voice channel — cannot stream');
+      return;
+    }
+    this.clearIdleTimer();
+    this.stopStream();
+    const token = this.streamToken;
+    const startedAt = Date.now();
+    const args = ['-hide_banner', '-loglevel', 'error'];
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      args.push('-headers', `User-Agent: ${STREAM_USER_AGENT}\r\n`);
+    }
+    if (opts.seekMs) args.push('-ss', String(opts.seekMs / 1000));
+    args.push('-i', url, '-vn', '-ac', '2', '-ar', '48000');
+    args.push('-f', 's16le', 'pipe:1');
+
+    const proc = spawn(config.ffmpegPath, args, { windowsHide: true });
+    this.ffmpeg = proc;
+    this.streamStartTime = Date.now();
+    this.pausedPositionMs = opts.seekMs ?? 0;
+    const stream = this.makeMixStream();
+    this.stream = stream;
+    proc.stdout.on('data', (d) => {
+      this.chunksSinceLog++;
+      this.bytesSinceLog += d.length;
+    });
+    // Surface ffmpeg's own errors (connection refused, 403, bad URL, …) — they
+    // were previously swallowed and every stream looked like a generic "cut short".
+    proc.stderr.on('data', (d) => {
+      const line = d.toString().trim();
+      if (line) console.warn(`[voice] ffmpeg: ${line.slice(0, 400)}`);
+    });
+    proc.stdout.pipe(stream);
+    const resource = createAudioResource(stream, { inputType: StreamType.Raw, inlineVolume: true });
+    this.resource = resource;
+    if (opts.volume !== undefined) this.volumePercent = opts.volume;
+    this.applyVolumeToResource();
+    this.player.play(resource);
+    this.paused = false;
+    proc.on('exit', (code, signal) => {
+      if (token !== this.streamToken) return;
+      if (code !== 0) {
+        console.warn(`[voice] ffmpeg exited with code ${code}${signal ? ` (${signal})` : ''} — stream cut short`);
+        const ranForMs = Date.now() - startedAt;
+        const attemptsLeft = (opts.retries ?? 0) - 1;
+        if (opts.refreshUrl && attemptsLeft >= 0 && ranForMs < 8000) {
+          console.warn(
+            `[voice] stream failed after ${ranForMs}ms — refreshing URL and retrying (${attemptsLeft} retries left)`,
+          );
+          this.ffmpeg = null;
+          setTimeout(() => {
+            opts.refreshUrl!()
+              .then((newUrl) => {
+                this.playFfmpegUrl(newUrl, { ...opts, retries: attemptsLeft });
+              })
+              .catch((err) => {
+                const msg = err instanceof Error ? err.message : String(err);
+                console.warn(`[voice] could not refresh stream URL: ${msg}`);
+                this.ffmpeg = null;
+                if (opts.onEnd) opts.onEnd();
+              });
+          }, 1500);
+          return;
+        }
+      }
+      this.ffmpeg = null;
+      if (opts.onEnd) opts.onEnd();
+    });
+    proc.on('error', (err) => {
+      console.warn(`[voice] ffmpeg failed to start: ${err.message}`);
+      if (token !== this.streamToken) return;
+      this.ffmpeg = null;
+      if (opts.onEnd) opts.onEnd();
+    });
+  }
+
+  /** Set the loudness of the active server-side stream (0–100). */
+  setVolume(volumePercent: number): void {
+    const v = Math.max(0, Math.min(100, volumePercent));
+    this.volumePercent = v;
+    this.resource?.volume?.setVolume(v / 100);
+  }
+
+  private applyVolumeToResource(): void {
+    this.resource?.volume?.setVolume(this.volumePercent / 100);
+  }
+
+  /** Playback position (ms) of the ffmpeg-backed stream, or 0 for raw feeds. */
+  getPositionMs(): number {
+    if (!this.ffmpeg) return 0;
+    const elapsed = this.streamStartTime > 0 ? Date.now() - this.streamStartTime : 0;
+    return Math.max(0, this.pausedPositionMs + elapsed);
+  }
+
+  stopStream(): void {
+    this.streamToken++;
+    if (this.ffmpeg) {
+      // Detach ffmpeg's stdout before killing it. Otherwise its pipe can keep
+      // writing into the stream we're about to end, which surfaces as a
+      // "write after end" AudioPlayer error (seen when DJ buttons fired during
+      // a track transition / stop).
+      try {
+        this.ffmpeg.stdout?.destroy();
+      } catch {
+        /* ignore */
+      }
+      try {
+        this.ffmpeg.kill();
+      } catch {
+        /* ignore */
+      }
+      this.ffmpeg = null;
+    }
+    if (this.stream) {
+      try {
+        this.stream.end();
+      } catch {
+        /* already ended */
+      }
+      this.stream = null;
+    }
+    this.resource = null;
+    if (this.player && this.player.state.status !== AudioPlayerStatus.Idle) {
+      this.player.stop();
+    }
+    this.armIdleLeave();
+  }
+
+  /** Write a raw PCM chunk (48 kHz stereo Int16) into the active stream. Returns false when full. */
+  feedPcm(data: Buffer): boolean {
+    if (!this.stream || this.paused) return true;
+    if (!this.stream.writableEnded && this.stream.writable) {
+      const ok = this.stream.write(data);
+      this.chunksSinceLog++;
+      this.bytesSinceLog += data.length;
+      return ok;
+    }
+    return true;
+  }
+
+  pause(): void {
+    if (this.ffmpeg && this.streamStartTime > 0) {
+      this.pausedPositionMs += Date.now() - this.streamStartTime;
+      this.streamStartTime = 0;
+    }
+    this.paused = true;
+    this.player?.pause();
+    this.armIdleLeave();
+  }
+
+  resume(): void {
+    if (this.ffmpeg) this.streamStartTime = Date.now();
+    this.paused = false;
+    this.clearIdleTimer();
+    this.player?.unpause();
+  }
+}
