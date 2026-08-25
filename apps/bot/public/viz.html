@@ -25,6 +25,7 @@ body::before{content:'';position:absolute;inset:0;
 /* Visual layers — priority set in JS:
    #viz img (desktop player frames) > #bc (MilkDrop) > #canvas (bars) */
 #bc{position:absolute;inset:0;width:100%;height:100%;z-index:1;display:none}
+body.calm #bc{filter:brightness(.75) saturate(.85)}
 #canvas{position:absolute;inset:0;width:100%;height:100%;z-index:2}
 #viz{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#05060f;z-index:3;display:none}
 
@@ -162,7 +163,8 @@ body::before{content:'';position:absolute;inset:0;
 <div id="dock">
   <button class="dock-btn" id="btn-prev" title="Previous preset">⏮</button>
   <button class="dock-btn" id="btn-next" title="Next preset">⏭</button>
-  <button class="dock-btn" id="btn-lock" title="Lock current preset">🔓</button>
+  <button class="dock-btn" id="btn-calm" data-tip="Calm mode — gentler brightness, stricter flash guard" title="">🌙</button>
+  <button class="dock-btn" id="btn-lock" data-tip="Lock current preset">🔓</button>
   <div class="dock-sep"></div>
   <div id="swatches" title="Theme"></div>
   <div class="dock-sep"></div>
@@ -188,6 +190,9 @@ body::before{content:'';position:absolute;inset:0;
 
 <script src="/vendor/butterchurn.min.js"></script>
 <script src="/vendor/butterchurnPresets.min.js"></script>
+<script src="/vendor/butterchurnPresetsExtra.min.js"></script>
+<script src="/vendor/butterchurnPresetsExtra2.min.js"></script>
+<script src="/vendor/butterchurnPresetsMD1.min.js"></script>
 <script>
 (function(){
   var $=function(id){return document.getElementById(id)},
@@ -311,6 +316,41 @@ body::before{content:'';position:absolute;inset:0;
   var actx=null,analyser=null,gainNode=null,nextAt=0,
       bcViz=null,presetNames=[],presetIdx=-1,presetLocked=false,cycleTimer=null;
 
+  /* Merged preset pool: base + Extra + Extra2 + MD1 packs (~1700 presets). */
+  var presetPool={};
+  function allPresets(){
+    [window.butterchurnPresets,window.butterchurnPresetsExtra,window.butterchurnPresetsExtra2,window.butterchurnPresetsMD1]
+      .forEach(function(P){
+        if(P&&typeof P.getPresets==='function'){try{Object.assign(presetPool,P.getPresets())}catch(e){}}
+      });
+    return presetPool;
+  }
+  /* Strobe blacklist (session+local): presets that flash hard get skipped. */
+  var strobeBL=[];
+  try{strobeBL=JSON.parse(localStorage.getItem('vzStrobeBL')||'[]')}catch(e){strobeBL=[]}
+  function blacklistPreset(name){
+    if(!name||strobeBL.indexOf(name)>=0)return;
+    strobeBL.push(name);
+    try{localStorage.setItem('vzStrobeBL',JSON.stringify(strobeBL.slice(-300)))}catch(e){}
+  }
+  function pickIndex(start,dir){
+    var n=presetNames.length;
+    for(var k=0;k<n;k++){
+      var i=((start+dir*k)%n+n)%n;
+      if(strobeBL.indexOf(presetNames[i])<0)return i;
+    }
+    return start;
+  }
+
+  /* Calm mode: gentler brightness/saturation + stricter strobe guard. */
+  var calm=false;
+  try{calm=localStorage.getItem('vzCalm')==='1'}catch(e){}
+  function applyCalm(){
+    document.body.classList.toggle('calm',calm);
+    var b=document.getElementById('btn-calm');
+    if(b){b.classList.toggle('active',calm);b.textContent=calm?'🌙':'🌙';}
+  }
+
   /** Resolve the UMD export shape: some builds nest createVisualizer under .default. */
   var BC_LIB=null;
   function bcLib(){
@@ -387,10 +427,10 @@ body::before{content:'';position:absolute;inset:0;
         textureRatio:1
       });
       bcViz.connectAudio(analyser);
-      presetNames=Object.keys(butterchurnPresets.getPresets());
+      presetNames=Object.keys(allPresets()).sort().filter(function(n){return strobeBL.indexOf(n)<0});
       loadPreset(Math.floor(Math.random()*presetNames.length),0.1);
       cycleTimer=setInterval(function(){
-        if(!presetLocked&&document.visibilityState==='visible')loadPreset(presetIdx+1,2.5);
+        if(!presetLocked&&document.visibilityState==='visible')loadPreset(pickIndex(presetIdx+1,1),2.5);
       },42000);
       showPresetName();
     }catch(e){
@@ -401,7 +441,7 @@ body::before{content:'';position:absolute;inset:0;
   function loadPreset(i,blend){
     if(!bcViz||!presetNames.length)return;
     presetIdx=((i%presetNames.length)+presetNames.length)%presetNames.length;
-    try{bcViz.loadPreset(butterchurnPresets.getPresets()[presetNames[presetIdx]],blend||2)}catch(e){}
+    try{bcViz.loadPreset(allPresets()[presetNames[presetIdx]],blend||2)}catch(e){}
     showPresetName();
   }
   function showPresetName(){
@@ -411,8 +451,18 @@ body::before{content:'';position:absolute;inset:0;
     clearTimeout(showPresetName.t);
     showPresetName.t=setTimeout(function(){presetNameEl.style.opacity='0'},3500);
   }
-  $('btn-next').onclick=function(){loadPreset(presetIdx+1,1.2)};
-  $('btn-prev').onclick=function(){loadPreset(presetIdx-1,1.2)};
+  $('btn-calm').onclick=function(){
+    calm=!calm;
+    try{localStorage.setItem('vzCalm',calm?'1':'0')}catch(e){}
+    applyCalm();
+    showPresetName();
+    presetNameEl.textContent=(calm?'🌙 Calm on — ':'🌙 Calm off — ')+(presetNames[presetIdx]||'');
+    clearTimeout(showPresetName.t);
+    presetNameEl.style.opacity='1';
+    showPresetName.t=setTimeout(function(){presetNameEl.style.opacity='0'},3000);
+  };
+  $('btn-next').onclick=function(){loadPreset(pickIndex(presetIdx+1,1),1.2)};
+  $('btn-prev').onclick=function(){loadPreset(pickIndex(presetIdx-1,-1),1.2)};
   $('btn-lock').onclick=function(){
     presetLocked=!presetLocked;
     this.textContent=presetLocked?'🔒':'🔓';
@@ -579,6 +629,61 @@ body::before{content:'';position:absolute;inset:0;
   }
   function frameModeActive(){return Date.now()-(lastFrameAt||0)<4000}
 
+  /* ---------- motion & strobe watchdog ---------- */
+  /* Samples a 48x27 thumbnail 2.5x/sec: near-zero frame motion skips "still"
+     presets; rapid full-frame luminance swings (strobe) blacklist the preset.
+     Calm mode tightens the strobe trigger. Always on — safety first. */
+  var thumb=document.createElement('canvas');thumb.width=48;thumb.height=27;
+  var tctx=thumb.getContext('2d',{willReadFrequently:true});
+  var prevLuma=null,prevMean=null,stillCount=0,strobeHits=0,lastStrobeAt=0;
+  setInterval(function(){
+    if(!bcViz||!actx||bcBroken)return;
+    if(bcCanvas.style.display==='none')return;
+    try{
+      tctx.drawImage(bcCanvas,0,0,48,27);
+      var d=tctx.getImageData(0,0,48,27).data;
+      var n=d.length/4,sum=0,diff=0;
+      for(var i=0,j=0;i<d.length;i+=4,j++){
+        var l=d[i]*0.299+d[i+1]*0.587+d[i+2]*0.114;
+        sum+=l;
+        if(prevLuma)diff+=Math.abs(l-prevLuma[j]);
+      }
+      var mean=sum/n,motion=prevLuma?diff/n:255;
+      var now=Date.now();
+      var audioActive=now-lastBarAt<5000;
+      // Still-preset skip: nothing moving while music plays.
+      if(audioActive){
+        if(motion<1.6){stillCount++;}else{stillCount=0;}
+        if(stillCount>=3&&!presetLocked){
+          stillCount=0;
+          loadPreset(pickIndex(presetIdx+1,1),1.5);
+          return;
+        }
+      }else stillCount=0;
+      // Strobe guard: big luminance jumps in quick succession.
+      if(prevMean!==null){
+        var swing=Math.abs(mean-prevMean);
+        var refractory=now-lastStrobeAt>250;
+        if(swing>48&&refractory){
+          strobeHits++;lastStrobeAt=now;
+        }else if(now-lastStrobeAt>2500){
+          strobeHits=Math.max(0,strobeHits-1);
+        }
+        var limit=calm?2:4;
+        var instant=calm&&swing>70;
+        if((strobeHits>=limit||instant)&&!presetLocked){
+          blacklistPreset(presetNames[presetIdx]);
+          strobeHits=0;
+          loadPreset(pickIndex(presetIdx+1,1),1.5);
+          return;
+        }
+      }
+      prevLuma=new Float32Array(n);
+      for(var q=0;q<n;q++)prevLuma[q]=d[q*4]*0.299+d[q*4+1]*0.587+d[q*4+2]*0.114;
+      prevMean=mean;
+    }catch(e){}
+  },400);
+
   function showState(st){
     if(st&&st.track){
       overlay.className='';
@@ -627,6 +732,7 @@ body::before{content:'';position:absolute;inset:0;
   },500);
 
   applyTheme(THEMES[0]);
+  applyCalm();
   resize();
   draw();
   pokeDock();

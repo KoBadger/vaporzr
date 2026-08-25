@@ -109,6 +109,16 @@ const COMMANDS = [
       .setDescription('Web panel/visualizer access links (trusted users)')
       .addSubcommand((sc) => sc.setName('give').setDescription('Get your pre-authorized panel + visualizer links'))
       .addSubcommand((sc) => sc.setName('rotate').setDescription('Owner: issue a new key — all old links stop working')),
+    new SlashCommandBuilder()
+      .setName('nickname')
+      .setDescription('🥚 Rename me in THIS server (unlocked by key activation)')
+      .addSubcommand((sc) =>
+        sc
+          .setName('set')
+          .setDescription('Set my server nickname (max 2 words, ends in -rzr / -orzr / -porzr)')
+          .addStringOption((o) => o.setName('name').setDescription('e.g. Neon-rzr, Bass Drop-orzr, Vapor-porzr').setRequired(true).setMaxLength(100)),
+      )
+      .addSubcommand((sc) => sc.setName('clear').setDescription('Reset my server nickname')),
   new SlashCommandBuilder()
     .setName('screensaver')
     .setDescription('Fullscreen the visualizer like a milkdrop screensaver on this machine'),
@@ -221,6 +231,7 @@ export class DiscordBot {
   private rest: REST;
   /** guildId -> panel message location. */
   private panels = new Map<string, { channelId: string; messageId: string }>();
+  private npMessages = new Map<string, { channelId: string; messageId: string }>();
   private panelRefreshQueued = false;
   /** Beat-reactive presence equalizer state. */
   private presenceTimer: NodeJS.Timeout | null = null;
@@ -298,6 +309,7 @@ export class DiscordBot {
       void this.registerCommands();
       void this.ensurePanelEmojis();
       void this.syncBotAvatar();
+      void this.loadKeyedGuilds();
     });
     this.client.on('interactionCreate', (i) => void this.onInteraction(i));
     this.client.on('messageCreate', (m) => void this.handleMessageCommand(m));
@@ -626,24 +638,28 @@ export class DiscordBot {
         break;
 
       case 'nowplaying': {
-        const st = s.queue.getState();
-        if (!st.track) {
-          await interaction.reply('Nothing is playing.');
+        if (!interaction.inGuild()) {
+          await interaction.reply({ content: 'Must be used inside a server.', ephemeral: true });
           return;
         }
-        const pos = st.positionMs;
-        const dur = st.durationMs || st.track.durationMs;
-        const pct = dur ? Math.round((pos / dur) * 10) : 0;
-        const bar = '▰'.repeat(pct) + '▱'.repeat(10 - pct);
-        await interaction.reply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle(`${srcEmoji(st.track.source)} ${st.track.name}`)
-              .setDescription(`by ${st.track.artists.join(', ')} · ${st.playing ? '▶' : '⏸'} ${bar} ${fmtMs(pos)} / ${fmtMs(dur)}`)
-              .setThumbnail(st.track.image ?? '')
-              .setColor(this.themeColor()),
-          ],
-        });
+        const guildId = interaction.guildId!;
+        const existing = this.npMessages.get(guildId);
+        if (existing) {
+          const ok = await this.editNp(existing.channelId, existing.messageId, guildId);
+          if (ok) {
+            await interaction.reply({ content: '🔴 Live now-playing message refreshed above.', ephemeral: true });
+            break;
+          }
+          this.npMessages.delete(guildId);
+        }
+        const channel = interaction.channel;
+        if (!channel || !('send' in channel)) {
+          await interaction.reply({ content: 'Cannot post here.', ephemeral: true });
+          break;
+        }
+        const msg = await channel.send({ embeds: [this.npPayload(s)] });
+        this.npMessages.set(guildId, { channelId: interaction.channelId, messageId: msg.id });
+        await interaction.reply({ content: '🔴 Live now-playing message posted above — it updates itself.', ephemeral: true });
         break;
       }
 
@@ -739,6 +755,7 @@ export class DiscordBot {
         }
         const pl = vizTunnel.panelLink();
         const vl = vizTunnel.vizLink();
+        if (interaction.guildId) await this.markKeyedGuild(interaction.guildId);
         await interaction.reply({
           embeds: [
             new EmbedBuilder()
@@ -746,7 +763,8 @@ export class DiscordBot {
               .setDescription(
                 `Pre-authorized for you — opens once, then that device is remembered.\n\n` +
                   `🎛️ **Control panel:** <${pl.url}?key=${config.shareKey}>\n` +
-                  `🌈 **Visualizer:** <${vl.url}?key=${config.shareKey}>`,
+                  `🌈 **Visualizer:** <${vl.url}?key=${config.shareKey}>` +
+                  `\n\n🥚 *Psst… this server can now rename me — try* \`/nickname set\``,
               )
               .setColor(this.themeColor())
               .setFooter({ text: 'Keep these links private — anyone holding them gets in' }),
@@ -1108,24 +1126,18 @@ export class DiscordBot {
 
         case 'np':
         case 'nowplaying': {
-          const st = s.queue.getState();
-          if (!st.track) {
-            await message.reply('Nothing is playing.');
-            break;
+          if (!message.inGuild()) return void (await message.reply('Must be used inside a server.'));
+          const guildId = message.guildId!;
+          const existing = this.npMessages.get(guildId);
+          if (existing) {
+            const ok = await this.editNp(existing.channelId, existing.messageId, guildId);
+            if (ok) return void (await message.reply('🔴 Live now-playing message refreshed above.'));
+            this.npMessages.delete(guildId);
           }
-          const pos = st.positionMs;
-          const dur = st.durationMs || st.track.durationMs;
-          const pct = dur ? Math.round((pos / dur) * 10) : 0;
-          const bar = '▰'.repeat(pct) + '▱'.repeat(10 - pct);
-          await message.reply({
-            embeds: [
-              new EmbedBuilder()
-                .setTitle(`${srcEmoji(st.track.source)} ${st.track.name}`)
-                .setDescription(`by ${st.track.artists.join(', ')} · ${st.playing ? '▶' : '⏸'} ${bar} ${fmtMs(pos)} / ${fmtMs(dur)}`)
-                .setThumbnail(st.track.image ?? '')
-                .setColor(this.themeColor()),
-            ],
-          });
+          if (!('send' in message.channel)) return void (await message.reply('Cannot post here.'));
+          const sent = await message.channel.send({ embeds: [this.npPayload(s)] });
+          this.npMessages.set(guildId, { channelId: message.channelId, messageId: sent.id });
+          await message.reply('🔴 Live now-playing message posted above — it updates itself.');
           break;
         }
 
@@ -1309,12 +1321,14 @@ export class DiscordBot {
                 .setDescription(
                   `Pre-authorized — opens once, then that device is remembered.\n\n` +
                     `🎛️ **Control panel:** <${kpl.url}?key=${config.shareKey}>\n` +
-                    `🌈 **Visualizer:** <${kvl.url}?key=${config.shareKey}>`,
+                    `🌈 **Visualizer:** <${kvl.url}?key=${config.shareKey}>` +
+                    `\n\n🥚 *Psst… this server can now rename me — try* \`V@nick Neon-rzr\``,
                 )
                 .setColor(this.themeColor())
                 .setFooter({ text: 'Keep these links private — anyone holding them gets in' }),
             ],
           });
+          if (message.guildId) await this.markKeyedGuild(message.guildId);
           break;
         }
 
@@ -1707,6 +1721,12 @@ export class DiscordBot {
         this.panels.delete(guildId);
       }
     }
+    // Live "PLAYING NOW" messages ride the same refresh cycle.
+    for (const [guildId, np] of this.npMessages) {
+      if (!(await this.editNp(np.channelId, np.messageId, guildId))) {
+        this.npMessages.delete(guildId);
+      }
+    }
   }
 
   private async editPanel(channelId: string, messageId: string, guildId: string): Promise<boolean> {
@@ -1721,7 +1741,96 @@ export class DiscordBot {
     }
   }
 
+  private async editNp(channelId: string, messageId: string, guildId: string): Promise<boolean> {
+    try {
+      const channel = await this.client.channels.fetch(channelId);
+      if (!channel?.isTextBased()) return false;
+      const msg = await channel.messages.fetch(messageId);
+      await msg.edit({ embeds: [this.npPayload(this.sessionFor(guildId))] });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Compact, self-updating "PLAYING NOW" embed for the dedicated /nowplaying message. */
+  private npPayload(s: Session): EmbedBuilder {
+    const st = s.queue.getState();
+    const track = st.track;
+    const dur = st.durationMs || track?.durationMs || 0;
+    const livePos = st.positionMs + (st.playing ? Math.max(0, Date.now() - (st.updatedAt || Date.now())) : 0);
+    const pos = dur > 0 ? Math.min(livePos, dur) : st.positionMs;
+    const slots = 16;
+    const filled = dur ? Math.min(slots, Math.max(0, Math.round((pos / dur) * slots))) : 0;
+    const bar = '━'.repeat(filled) + (filled < slots ? '⬤' : '━') + '─'.repeat(Math.max(0, slots - filled - 1));
+    const statusIcon = st.playing ? '▶️' : '⏸';
+    const embed = new EmbedBuilder()
+      .setColor(this.themeColor())
+      .setTimestamp();
+    if (this.client.user) {
+      embed.setAuthor({ name: st.playing ? 'PLAYING NOW' : 'PAUSED', iconURL: this.client.user.displayAvatarURL() });
+    }
+    if (track) {
+      const snap = s.queue.getSnapshot();
+      const idx = snap.tracks.findIndex((x) => x.current) + 1;
+      const upNext = snap.tracks.find((x, i) => i > snap.tracks.findIndex((y) => y.current));
+      embed
+        .setTitle(`${srcEmoji(track.source)} ${track.name}`)
+        .setDescription(
+          `${(track.artists ?? []).join(', ')}\n\n\`${bar}\`\n${statusIcon} \`${fmtMs(pos)} / ${fmtMs(dur)}\`` +
+            (upNext ? `\n\n⏭️ **Up next:** ${upNext.name}` : ''),
+        );
+      if (track.image) embed.setThumbnail(track.image);
+      embed.addFields([{ name: '📜 Queue', value: `${snap.tracks.length}${idx ? ` · #${idx} now` : ''}`, inline: true }]);
+    } else {
+      embed.setTitle('Nothing playing').setDescription('Queue something with /play — this message updates itself.');
+    }
+    embed.setFooter({ text: `${this.client.user?.username ?? 'Vaporzr'} · this message updates itself` });
+    return embed;
+  }
+
   private panelEmojis = new Map<string, { id: string; name: string }>();
+
+  // ---- 🥚 nickname easter egg: unlocked per-guild by key activation ----
+  private keyedGuilds = new Set<string>();
+  private keyedGuildsLoaded = false;
+
+  private async loadKeyedGuilds(): Promise<void> {
+    if (this.keyedGuildsLoaded) return;
+    try {
+      const raw = await fs.readFile(path.join(config.dataDir, 'keyed-guilds.json'), 'utf8');
+      const arr = JSON.parse(raw) as string[];
+      if (Array.isArray(arr)) arr.forEach((g) => this.keyedGuilds.add(String(g)));
+    } catch {
+      /* none yet */
+    }
+    this.keyedGuildsLoaded = true;
+  }
+
+  private async markKeyedGuild(guildId: string): Promise<void> {
+    await this.loadKeyedGuilds();
+    if (this.keyedGuilds.has(guildId)) return;
+    this.keyedGuilds.add(guildId);
+    await fs.mkdir(config.dataDir, { recursive: true });
+    await fs.writeFile(
+      path.join(config.dataDir, 'keyed-guilds.json'),
+      JSON.stringify([...this.keyedGuilds], null, 2),
+      'utf8',
+    );
+  }
+
+  /** Validate the easter-egg nickname: 1-2 words, ends in -rzr / -orzr / -porzr. */
+  private validateVzName(raw: string): { ok: true; name: string } | { ok: false; reason: string } {
+    const name = raw.trim().replace(/\s+/g, ' ');
+    if (!name) return { ok: false, reason: 'Give me a name!' };
+    if (name.length > 32) return { ok: false, reason: 'Max 32 characters (Discord nickname limit).' };
+    if (name.split(' ').length > 2) return { ok: false, reason: 'Max 2 words.' };
+    const lower = name.toLowerCase();
+    if (!['-rzr', '-orzr', '-porzr'].some((sfx) => lower.endsWith(sfx))) {
+      return { ok: false, reason: 'Must end with `-rzr`, `-orzr`, or `-porzr`.' };
+    }
+    return { ok: true, name };
+  }
 
   /** Bump when panel icon art changes — stale uploaded emojis get replaced. */
   private static readonly PANEL_ICON_VERSION = 2;
