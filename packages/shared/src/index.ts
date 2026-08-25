@@ -1,6 +1,6 @@
 export type PermissionLevel = 'user' | 'mod' | 'admin';
 
-export type MediaSource = 'spotify' | 'youtube' | 'local' | 'suno' | 'soundcloud';
+export type MediaSource = 'spotify' | 'youtube' | 'local' | 'suno' | 'soundcloud' | 'apple';
 
 /** A named visual mood that re-skins the bot, player overlay, and panel. */
 export interface VaporzrTheme {

@@ -4,6 +4,7 @@ import { QueueManager } from './queue.js';
 import { resolveYoutubeVideo, searchAndResolveYoutube, type ResolvedVideo } from './youtube.js';
 import { resolveSuno } from './suno.js';
 import { resolveSoundcloudVideo, soundcloudUriToUrl } from './soundcloud.js';
+import { resolveApplePlayback } from './apple.js';
 import { dj, sfxById, type SfxSound } from './soundboard.js';
 import type { VoiceManager } from './voice.js';
 import { librespotDeviceId, type LibrespotManager } from './librespot.js';
@@ -147,7 +148,7 @@ export class PlaybackController {
     const snapshot = this.queue.getSnapshot();
     const nextTrack = snapshot.tracks[snapshot.currentIndex + 1];
     if (!nextTrack) return;
-    const nextIsYt = nextTrack.source === 'youtube' || nextTrack.source === 'suno' || nextTrack.source === 'soundcloud';
+    const nextIsYt = nextTrack.source === 'youtube' || nextTrack.source === 'suno' || nextTrack.source === 'soundcloud' || nextTrack.source === 'apple';
     const nextIsSpotifyFallback = nextTrack.source === 'spotify' && !this.librespot?.isRunning();
     if (!nextIsYt && !nextIsSpotifyFallback) return;
     const remaining = Math.max(0, durationMs - positionMs);
@@ -165,7 +166,7 @@ export class PlaybackController {
       if (track.source === 'youtube') {
         const video = await resolveYoutubeVideo(track.uri.replace('youtube:video:', ''));
         this.streamCache.set(track.uri, video);
-      } else if (track.source === 'spotify') {
+      } else if (track.source === 'spotify' || track.source === 'apple') {
         const query = `${track.name} ${(track.artists ?? []).join(' ')}`.trim();
         const video = await searchAndResolveYoutube(query, {
           name: track.name,
@@ -215,7 +216,7 @@ export class PlaybackController {
   /** True while audio is coming through the bot's own ffmpeg stream. */
   private usingServerStream(): boolean {
     const src = this.currentSource();
-    return src === 'youtube' || src === 'local' || src === 'suno' || src === 'soundcloud' || this.spotifyFallback;
+    return src === 'youtube' || src === 'local' || src === 'suno' || src === 'soundcloud' || src === 'apple' || this.spotifyFallback;
   }
 
   /** Advance to the next track once a server-side stream naturally ends. */
@@ -263,11 +264,16 @@ export class PlaybackController {
       return;
     }
 
+    if (current.source === 'apple') {
+      await this.playApple(current);
+      return;
+    }
+
     // Spotify: prefer the bot's own librespot device. If it's unavailable,
     // fall back to YouTube.
     this.spotifyFallback = false;
     this.stopPositionTracker();
-    if (this.lastSource === 'youtube' || this.lastSource === 'local' || this.lastSource === 'suno' || this.lastSource === 'soundcloud' || this.spotifyFallback) {
+    if (this.lastSource === 'youtube' || this.lastSource === 'local' || this.lastSource === 'suno' || this.lastSource === 'soundcloud' || this.lastSource === 'apple' || this.spotifyFallback) {
       this.sendVisualizer({ type: 'cmd', command: 'stop' });
     }
     const device = await this.resolveSpotifyDevice();
@@ -541,6 +547,41 @@ export class PlaybackController {
       durationMs,
       positionMs: 0,
       source: 'soundcloud',
+    });
+    this.voice.playFfmpegUrl(video.streamUrl!, {
+      volume: this.queue.getState().volume,
+      onEnd: this.serverStreamOnEnd(),
+    });
+    this.scheduleEnd(durationMs, 0);
+    this.schedulePreload(durationMs, 0);
+    this.startPositionTracker();
+    this.sendVisualizer({ type: 'cmd', command: 'stop' });
+  }
+
+  /** Apple Music tracks carry metadata only — play the YouTube match. */
+  private async playApple(current: TrackInfo): Promise<void> {
+    let video = this.streamCache.get(current.uri);
+    if (!video) {
+      const match = await resolveApplePlayback(current);
+      if (!match) {
+        throw new Error(`No playable match found for Apple Music track "${current.name}".`);
+      }
+      video = match;
+      this.streamCache.set(current.uri, video);
+    }
+    this.spotifyFallback = false;
+    this.stopSpotifyFeed();
+    this.stopSpotifyProgress();
+    if (this.spotifyDeviceId) void spotifyPause(this.spotifyDeviceId).catch(() => {});
+    const durationMs = video.durationMs || current.durationMs;
+    this.currentUri = current.uri;
+    this.currentVideo = video;
+    this.queue.setState({
+      playing: true,
+      track: { ...current, name: video.name, artists: video.artists, durationMs },
+      durationMs,
+      positionMs: 0,
+      source: 'apple',
     });
     this.voice.playFfmpegUrl(video.streamUrl!, {
       volume: this.queue.getState().volume,

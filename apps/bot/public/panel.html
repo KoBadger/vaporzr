@@ -395,7 +395,7 @@ kbd{display:inline-block;padding:2px 7px;border-radius:6px;border:1px solid var(
       el.vol.value=state.volume!=null?state.volume:50;
       if(t&&t.source){
         el['src-badge'].style.display='inline-block';
-        el['src-badge'].textContent=t.source==='youtube'?'▶ YOUTUBE':t.source==='soundcloud'?'☁ SOUNDCLOUD':'♪ SPOTIFY';
+        el['src-badge'].textContent=t.source==='youtube'?'▶ YOUTUBE':t.source==='soundcloud'?'☁ SOUNDCLOUD':t.source==='apple'?' APPLE MUSIC':'♪ SPOTIFY';
       } else el['src-badge'].style.display='none';
       var dur=state.durationMs||(t&&t.durationMs)||0;
       var max=Math.max(1,Math.round(dur/1000));

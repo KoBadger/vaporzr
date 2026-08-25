@@ -37,6 +37,7 @@ import {
   YoutubeError,
 } from './youtube.js';
 import { isSunoUrl, resolveSuno } from './suno.js';
+import { isAppleMusicUrl, resolveAppleMusicUrl } from './apple.js';
 import {
   isSoundcloudSetUrl,
   isSoundcloudUrl,
@@ -2394,6 +2395,7 @@ function srcEmoji(source: string | undefined): string {
   if (source === 'local') return '📂';
   if (source === 'suno') return '✨';
   if (source === 'soundcloud') return '🎧';
+  if (source === 'apple') return '🍎';
   return '🎵';
 }
 
@@ -2406,6 +2408,9 @@ async function resolvePlayInput(query: string): Promise<ResolvedTrack[]> {
   }
   if (isSunoUrl(query)) {
     return [await resolveSuno(query)];
+  }
+  if (isAppleMusicUrl(query)) {
+    return resolveAppleMusicUrl(query);
   }
   if (isSoundcloudSetUrl(query)) {
     return resolveSoundcloudSet(query);
