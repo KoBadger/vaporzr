@@ -42,7 +42,6 @@ export class Bridge {
   private theme: VaporzrTheme = DEFAULT_THEME;
   private sensitivity = 1.0;
   onBurstData: ((data: string) => void) | null = null;
-  onVisualsRequested: (() => void) | null = null;
   librespot: LibrespotManager;
 
   constructor(
@@ -244,6 +243,10 @@ export class Bridge {
 
   private handlePanelMessage(socket: WebSocket, msg: InboundMessage): void {
     switch (msg.type) {
+      case 'burst:data':
+        // Web visualizers (panel role) capture their own canvas clips.
+        this.onBurstData?.(msg.data);
+        break;
       case 'panel:subscribe': {
         const client = this.clientOf(socket);
         if (client) {
@@ -340,10 +343,6 @@ export class Bridge {
           this.playback.setDjEnabled(this.primaryGuildId, msg.djEnabled);
           this.notifyDj();
         }
-        break;
-      case 'openVisuals':
-        console.log('[bridge] openVisuals requested');
-        this.onVisualsRequested?.();
         break;
       case 'switchGuild':
         if (msg.guildId) {
@@ -480,6 +479,12 @@ export class Bridge {
 
   hasVisualizers(): boolean {
     return this.visualizers.size > 0;
+  }
+
+  /** True when anything can produce a burst: a desktop visualizer or a web viewer. */
+  hasBurstSources(): boolean {
+    if (this.visualizers.size > 0) return true;
+    return [...this.panels].some((p) => p.subscribedVisuals);
   }
 
   requestBurst(durationMs = 3000): void {

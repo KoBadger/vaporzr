@@ -66,4 +66,4 @@ export const config = {
   playerDir: process.env.PLAYER_DIR ?? path.join(__dirname, '..', '..', 'player'),
   electronPath:
     process.env.ELECTRON_PATH ?? path.join(__dirname, '..', '..', '..', 'node_modules', 'electron', 'dist', 'electron.exe'),
-} as const;
+};

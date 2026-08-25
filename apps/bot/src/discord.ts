@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -103,7 +103,12 @@ const COMMANDS = [
     .setName('shuffle')
     .setDescription('Toggle shuffle')
     .addBooleanOption((o) => o.setName('enabled').setDescription('On or off').setRequired(true)),
-  new SlashCommandBuilder().setName('panel').setDescription('Post (or refresh) the live control panel with buttons'),
+    new SlashCommandBuilder().setName('panel').setDescription('Post (or refresh) the live control panel with buttons'),
+    new SlashCommandBuilder()
+      .setName('key')
+      .setDescription('Web panel/visualizer access links (trusted users)')
+      .addSubcommand((sc) => sc.setName('give').setDescription('Get your pre-authorized panel + visualizer links'))
+      .addSubcommand((sc) => sc.setName('rotate').setDescription('Owner: issue a new key — all old links stop working')),
   new SlashCommandBuilder()
     .setName('screensaver')
     .setDescription('Fullscreen the visualizer like a milkdrop screensaver on this machine'),
@@ -258,12 +263,6 @@ export class DiscordBot {
         },
       });
     });
-    // Panels (e.g. the Spicetify projectM preview) need a visualizer window to
-    // stream frames from; open one on demand when they subscribe without one.
-    bridge.onVisualsRequested = () => {
-      console.log('[discord] opening player window for visuals');
-      void this.openPlayerWindow();
-    };
   }
 
   /** Resolve the isolated playback session for a guild (DMs share one session). */
@@ -540,11 +539,14 @@ export class DiscordBot {
         break;
       }
 
-      case 'skip':
+      case 'skip': {
         if (!this.requireLevel('skip', interaction)) return this.deny(interaction);
         s.playback.next();
-        await interaction.reply('⏭️ Skipping…');
+        const np = this.nowPlayingEmbed(s, '⏭️ Skipped');
+        if (np) await interaction.reply({ embeds: [np] });
+        else await interaction.reply('⏭️ Skipped — queue ended');
         break;
+      }
 
       case 'pause':
         if (!this.requireLevel('pause', interaction)) return this.deny(interaction);
@@ -685,15 +687,72 @@ export class DiscordBot {
       }
 
       case 'screensaver': {
-        if (!this.requireWindowOwner(interaction.user.id, interaction.guild, interaction.member)) return this.deny(interaction);
-        this.openOverlayWindow(true);
-        await interaction.reply('🎬 Screensaver mode — fullscreen visuals until playback stops.');
+        // Desktop screensaver retired — the web visualizer is the fullscreen
+        // experience now (tap ⛶ there).
+        const vl = vizTunnel.vizLink();
+        await interaction.reply({
+          content: `🎬 Fullscreen visuals live in the browser now:\n${vl.url}\n\nOpen it and tap ⛶ (or F) for fullscreen.`,
+          ephemeral: true,
+        });
         break;
       }
 
       case 'viz': {
         const admin = this.isAdminMember(interaction.user.id, interaction.guild, interaction.member);
         await interaction.reply({ embeds: [this.vizEmbed(admin)], ephemeral: true });
+        break;
+      }
+
+      case 'key': {
+        const sub = interaction.options.getSubcommand();
+        if (sub === 'rotate') {
+          if (!this.perms.isOwner(interaction.user.id)) return this.deny(interaction);
+          const newKey = randomBytes(12).toString('base64url');
+          config.shareKey = newKey; // live immediately
+          try {
+            const envPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.env');
+            let env = '';
+            try {
+              env = await fs.readFile(envPath, 'utf8');
+            } catch {
+              /* new file */
+            }
+            if (/^SHARE_KEY=.*$/m.test(env)) env = env.replace(/^SHARE_KEY=.*$/m, `SHARE_KEY=${newKey}`);
+            else env += (env.endsWith('\n') ? '' : '\n') + `SHARE_KEY=${newKey}\n`;
+            await fs.writeFile(envPath, env, 'utf8');
+          } catch (err) {
+            console.warn(`[discord] could not persist SHARE_KEY: ${err instanceof Error ? err.message : err}`);
+          }
+          const pl = vizTunnel.panelLink();
+          const linkLine = pl.secure ? `${pl.url}?key=${newKey}` : `(links appear once PUBLIC_BASE_URL or a tunnel is up)`;
+          await interaction.reply({
+            content: `🔑 New key issued — all previous links and remembered devices are dead.\n${linkLine}`,
+            ephemeral: true,
+          });
+          break;
+        }
+        // give
+        if (!this.requireLevel('panel', interaction)) return this.deny(interaction);
+        if (!config.shareKey) {
+          await interaction.reply({ content: 'No share key is configured — the web panel is open access.', ephemeral: true });
+          break;
+        }
+        const pl = vizTunnel.panelLink();
+        const vl = vizTunnel.vizLink();
+        await interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle('🔑 Web access links')
+              .setDescription(
+                `Pre-authorized for you — opens once, then that device is remembered.\n\n` +
+                  `🎛️ **Control panel:** <${pl.url}?key=${config.shareKey}>\n` +
+                  `🌈 **Visualizer:** <${vl.url}?key=${config.shareKey}>`,
+              )
+              .setColor(this.themeColor())
+              .setFooter({ text: 'Keep these links private — anyone holding them gets in' }),
+          ],
+          ephemeral: true,
+        });
         break;
       }
 
@@ -911,7 +970,7 @@ export class DiscordBot {
       j: 'join', join: 'join',
       l: 'leave', leave: 'leave',
       wav: 'wav', file: 'wav',
-      pan: 'panel', panel: 'panel',
+      pan: 'panel', panel: 'panel', key: 'key',
       sc: 'screensaver', screensaver: 'screensaver',
       th: 'theme', theme: 'theme',
       wave: 'wave',
@@ -970,7 +1029,9 @@ export class DiscordBot {
         case 'skip': {
           if (!canUse('skip')) return void (await deny());
           s.playback.next();
-          await message.reply('⏭️ Skipping…');
+          const np = this.nowPlayingEmbed(s, '⏭️ Skipped');
+          if (np) await message.reply({ embeds: [np] });
+          else await message.reply('⏭️ Skipped — queue ended');
           break;
         }
 
@@ -1209,11 +1270,58 @@ export class DiscordBot {
           break;
         }
 
+        case 'key': {
+          const wantsRotate = (message.content.trim().split(/\s+/)[2] ?? '') === 'rotate';
+          if (wantsRotate) {
+            if (!this.perms.isOwner(message.author.id)) return void (await deny());
+            const newKey = randomBytes(12).toString('base64url');
+            config.shareKey = newKey; // live immediately
+            try {
+              const envPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.env');
+              let env = '';
+              try {
+                env = await fs.readFile(envPath, 'utf8');
+              } catch {
+                /* new file */
+              }
+              if (/^SHARE_KEY=.*$/m.test(env)) env = env.replace(/^SHARE_KEY=.*$/m, `SHARE_KEY=${newKey}`);
+              else env += (env.endsWith('\n') ? '' : '\n') + `SHARE_KEY=${newKey}\n`;
+              await fs.writeFile(envPath, env, 'utf8');
+            } catch (err) {
+              console.warn(`[discord] could not persist SHARE_KEY: ${err instanceof Error ? err.message : err}`);
+            }
+            const pl = vizTunnel.panelLink();
+            const linkLine = pl.secure ? `${pl.url}?key=${newKey}` : `(links appear once PUBLIC_BASE_URL or a tunnel is up)`;
+            await message.reply(`🔑 New key issued — all previous links and remembered devices are dead.\n${linkLine}`);
+            break;
+          }
+          if (!canUse('panel')) return void (await deny());
+          if (!config.shareKey) {
+            await message.reply('No share key is configured — the web panel is open access.');
+            break;
+          }
+          const kpl = vizTunnel.panelLink();
+          const kvl = vizTunnel.vizLink();
+          await message.reply({
+            embeds: [
+              new EmbedBuilder()
+                .setTitle('🔑 Web access links')
+                .setDescription(
+                  `Pre-authorized — opens once, then that device is remembered.\n\n` +
+                    `🎛️ **Control panel:** <${kpl.url}?key=${config.shareKey}>\n` +
+                    `🌈 **Visualizer:** <${kvl.url}?key=${config.shareKey}>`,
+                )
+                .setColor(this.themeColor())
+                .setFooter({ text: 'Keep these links private — anyone holding them gets in' }),
+            ],
+          });
+          break;
+        }
+
         case 'sc':
         case 'screensaver': {
-          if (!canWindow()) return void (await deny());
-          this.openOverlayWindow(true);
-          await message.reply('🎬 Screensaver mode — fullscreen visuals until playback stops.');
+          const svl = vizTunnel.vizLink();
+          await message.reply(`🎬 Fullscreen visuals live in the browser now:\n${svl.url}\n\nOpen it and tap ⛶ (or F) for fullscreen.`);
           break;
         }
 
@@ -1274,9 +1382,8 @@ export class DiscordBot {
 
         case 'player':
         case 'open': {
-          if (!canWindow()) return void (await deny());
-          await this.openPlayerWindow();
-          await message.reply('🚀 Opening the Vaporzr player window…');
+          const vl = vizTunnel.vizLink();
+          await message.reply(`🚀 The player lives in your browser now:\n${vl.url}\n\nTap ⛶ there for fullscreen.`);
           break;
         }
 
@@ -1465,20 +1572,6 @@ export class DiscordBot {
     }, 1500);
     t.unref?.();
     this.autoResumeTimers.set(key, t);
-  }
-
-  /** Launch the local Vaporzr player window (Electron). */
-  private async openPlayerWindow(): Promise<void> {
-    const child = spawn(config.electronPath, [config.playerDir], {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: false,
-      env: { ...process.env, VAPORZR_OVERLAY: '0', VAPORZR_SCREENSAVER: '0' },
-    });
-    child.on('error', (err) => {
-      console.warn(`[discord] could not open player window: ${err.message}`);
-    });
-    child.unref();
   }
 
   private async insertToQueue(interaction: ChatInputCommandInteraction, tracks: ResolvedTrack[]): Promise<void> {
@@ -1724,6 +1817,24 @@ export class DiscordBot {
     return e ? { id: e.id, name: e.name } : { name: fallback };
   }
 
+  /** "NOW PLAYING" confirmation after a track change (skip/previous). */
+  private nowPlayingEmbed(s: Session, action: string): EmbedBuilder | null {
+    const st = s.queue.getState();
+    const t = st.track;
+    if (!t) return null;
+    const dur = st.durationMs || t.durationMs || 0;
+    const slots = 16;
+    const bar = '⬤' + '─'.repeat(slots - 1);
+    const embed = new EmbedBuilder()
+      .setColor(this.themeColor())
+      .setAuthor({ name: 'NOW PLAYING', iconURL: this.client.user?.displayAvatarURL() })
+      .setTitle(`${srcEmoji(t.source)} ${t.name}`)
+      .setDescription(`${(t.artists ?? []).join(', ')}\n\n\`${bar}\`\n▶️ \`0:00 / ${fmtMs(dur)}\``)
+      .setFooter({ text: `${action} · this panel updates itself` });
+    if (t.image) embed.setThumbnail(t.image);
+    return embed;
+  }
+
   private panelPayload(s: Session): { embeds: EmbedBuilder[]; components: ActionRowBuilder<ButtonBuilder>[] } {
     const st = s.queue.getState();
     const track = st.track;
@@ -1845,35 +1956,56 @@ export class DiscordBot {
     const st = s.queue.getState();
 
     switch (action) {
-      case 'prev':
+      case 'prev': {
         s.playback.previous();
+        const np = this.nowPlayingEmbed(s, '⏮️ Previous');
+        if (np) void interaction.followUp({ embeds: [np], ephemeral: true }).catch(() => {});
         break;
+      }
       case 'toggle':
         s.playback.toggle();
         break;
-      case 'next':
+      case 'next': {
         s.playback.next();
+        const np = this.nowPlayingEmbed(s, '⏭️ Skipped');
+        if (np) void interaction.followUp({ embeds: [np], ephemeral: true }).catch(() => {});
         break;
-      case 'shuffle':
+      }
+      case 'shuffle': {
         s.playback.shuffle(!st.shuffle);
+        void interaction
+          .followUp({ content: st.shuffle ? '🔀 Shuffle off' : '🔀 Shuffle on', ephemeral: true })
+          .catch(() => {});
         break;
-      case 'repeat':
+      }
+      case 'repeat': {
         s.playback.setRepeat(!st.repeat);
+        void interaction
+          .followUp({ content: st.repeat ? '🔁 Repeat off' : '🔁 Repeat on — track replays at its end', ephemeral: true })
+          .catch(() => {});
         break;
+      }
       case 'back10':
       case 'fwd10': {
         const pos = st.positionMs + (st.playing ? Math.max(0, Date.now() - (st.updatedAt || Date.now())) : 0);
         const dur = st.durationMs || st.track?.durationMs || 0;
         const target = Math.max(0, pos + (action === 'back10' ? -10000 : 10000));
         s.playback.seek(dur > 0 ? Math.min(target, dur - 500) : target);
+        void interaction
+          .followUp({
+            content: `${action === 'back10' ? '⏪' : '⏩'} ${fmtMs(Math.max(0, target))}${dur ? ` / ${fmtMs(dur)}` : ''}`,
+            ephemeral: true,
+          })
+          .catch(() => {});
         break;
       }
       case 'vol-down':
-        s.playback.volume(Math.max(0, st.volume - 10));
+      case 'vol-up': {
+        const v = action === 'vol-down' ? Math.max(0, st.volume - 10) : Math.min(100, st.volume + 10);
+        s.playback.volume(v);
+        void interaction.followUp({ content: `🔊 Volume ${v}%`, ephemeral: true }).catch(() => {});
         break;
-      case 'vol-up':
-        s.playback.volume(Math.min(100, st.volume + 10));
-        break;
+      }
       case 'stop':
         s.playback.stopAll();
         s.queue.clear();
@@ -1963,7 +2095,7 @@ export class DiscordBot {
         },
         {
           name: '🎨 Visuals',
-          value: '`/panel` — control panel · `/screensaver` — fullscreen visuals · `/theme` — color moods · `/wave` — waveform snapshot · `/burst` — animated clip · `/sensitivity` — beat reactivity',
+          value: '`/panel` — control panel · `/viz` — browser visualizer (MilkDrop) · `/theme` — color moods · `/wave` — waveform snapshot · `/burst` — animated clip · `/sensitivity` — beat reactivity',
         },
         {
           name: '🎛️ DJ',
@@ -1975,7 +2107,7 @@ export class DiscordBot {
         },
         {
           name: '⌨️ Quick (prefix)',
-          value: '`V@p` play · `V@i` insert · `V@s` skip · `V@t` toggle · `V@sh` shuffle · `V@v` volume · `V@q` queue · `V@np` now playing · `V@c` clear · `V@rem` remove · `V@j` join · `V@l` leave · `V@wav` play file · `V@pan` panel · `V@sc` screensaver · `V@th` theme · `V@sens` sensitivity · `V@dj` dj · `V@sfx` effect · `V@player` open player · `V@viz` visualizer · `V@invite` invite · `V@help` this',
+          value: '`V@p` play · `V@i` insert · `V@s` skip · `V@t` toggle · `V@sh` shuffle · `V@v` volume · `V@q` queue · `V@np` now playing · `V@c` clear · `V@rem` remove · `V@j` join · `V@l` leave · `V@wav` play file · `V@pan` panel · `V@viz` visualizer · `V@th` theme · `V@sens` sensitivity · `V@dj` dj · `V@sfx` effect · `V@key` access links · `V@invite` invite · `V@help` this',
         },
       )
       .setFooter({ text: 'Try /play with a song name or a Spotify/YouTube link' });
@@ -2017,20 +2149,6 @@ export class DiscordBot {
     return embed;
   }
 
-  /** Launch the Vaporzr overlay (transparent, always-on-top, click-through). */
-  private openOverlayWindow(screensaver: boolean): void {
-    const child = spawn(config.electronPath, [config.playerDir], {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: false,
-      env: { ...process.env, VAPORZR_OVERLAY: '1', VAPORZR_SCREENSAVER: screensaver ? '1' : '0' },
-    });
-    child.on('error', (err) => {
-      console.warn(`[discord] could not open overlay window: ${err.message}`);
-    });
-    child.unref();
-  }
-
   /** Beat-reactive presence: an equalizer built from the live PCM tap. */
   private startPresenceTicker(): void {
     if (this.presenceTimer) return;
@@ -2062,8 +2180,8 @@ export class DiscordBot {
 
   /** Capture a short WebM clip from a visualizer window, then post it as a GIF. */
   private async handleBurst(interaction: ChatInputCommandInteraction): Promise<void> {
-    if (!this.bridge.hasVisualizers()) {
-      await interaction.editReply('The visualizer isn\'t running. Open the player window (V@player) first.');
+    if (!this.bridge.hasBurstSources()) {
+      await interaction.editReply('No visualizer viewer found. Open the web visualizer first (`/viz`), then run `/burst` again.');
       return;
     }
     await new Promise((r) => setTimeout(r, 250));

@@ -276,8 +276,8 @@ kbd{display:inline-block;padding:2px 7px;border-radius:6px;border:1px solid var(
         <span id="sens-val">1.00×</span>
       </div>
       <div class="viz-links">
-        <a class="viz-link" id="link-viz" href="/viz" target="_blank">🌈 Web visualizer</a>
-        <button id="btn-screensaver" data-tip="Fullscreen visuals on the bot host machine">🖥️ Screensaver</button>
+        <a class="viz-link" id="link-viz" href="/viz" target="_blank">🌈 Visualizer</a>
+        <a class="viz-link" id="link-viz-fs" href="/viz" target="_blank">🖥️ Fullscreen mode</a>
       </div>
     </div>
   </div>
@@ -304,7 +304,7 @@ kbd{display:inline-block;padding:2px 7px;border-radius:6px;border:1px solid var(
   ['voice','dj-badge','dj-toggle','sfx-status','track-name','track-meta','src-badge','art',
    'btn-play','btn-shuffle','btn-repeat','btn-prev','btn-next','btn-clear','progress','t-now','t-dur','vol',
    'queue','queue-count','queue-total','btn-jump','empty','search','btn-q-add','btn-q-play',
-   'swatches','sens','sens-val','link-viz','btn-screensaver','guilds','toasts',
+   'swatches','sens','sens-val','link-viz','guilds','toasts',
    'conn-dot','conn-text'].forEach(function (id) { el[id] = $(id); });
 
   var ws = null, state = null, queue = [], djEnabled = false, connected = false;
@@ -574,10 +574,6 @@ kbd{display:inline-block;padding:2px 7px;border-radius:6px;border:1px solid var(
   el['btn-jump'].onclick=function(){
     var row=document.querySelector('#queue li.current');
     if(row)row.scrollIntoView({behavior:'smooth',block:'center'});
-  };
-  el['btn-screensaver'].onclick=function(){
-    cmd('openVisuals');
-    toast('info','Screensaver requested on the host machine');
   };
   el.progress.onchange=function(){cmd('seek',{positionMs:Number(el.progress.value)*1000})};
   el.vol.oninput=function(){if(state)cmd('volume',{volume:Number(el.vol.value)})};

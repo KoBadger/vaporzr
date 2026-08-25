@@ -291,6 +291,9 @@ body::before{content:'';position:absolute;inset:0;
         case 'guilds:list':
           if(msg.guilds){guilds=msg.guilds;renderGuilds()}
           break;
+        case 'burst:start':
+          recordBurst(Math.min(6000,msg.durationMs||3000));
+          break;
       }
     };
     ws.onclose=function(){setConnected(false);scheduleReconnect()};
@@ -531,6 +534,51 @@ body::before{content:'';position:absolute;inset:0;
   }
 
   /* ---------- track / guild UI ---------- */
+  /* ---------- web-native burst: record the active visual canvas ---------- */
+  var burstBusy=false;
+  function recordBurst(durationMs){
+    if(burstBusy||typeof MediaRecorder==='undefined')return;
+    var src=(!frameModeActive()&&bcViz)?bcCanvas:barsCanvas;
+    if(!src.width||!src.height)return;
+    burstBusy=true;
+    try{
+      // Downscale to 640 wide so the clip stays small enough for chat.
+      var off=document.createElement('canvas');
+      off.width=640;off.height=Math.round(640*src.height/src.width)||360;
+      var octx=off.getContext('2d');
+      var draw=function(){octx.drawImage(src,0,0,off.width,off.height)};
+      draw();
+      var pump=setInterval(draw,33);
+      var mime='';
+      var candidates=['video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm','video/mp4'];
+      for(var i=0;i<candidates.length;i++){if(MediaRecorder.isTypeSupported(candidates[i])){mime=candidates[i];break}}
+      var stream=off.captureStream(30);
+      var rec=new MediaRecorder(stream,mime?{mimeType:mime,videoBitsPerSecond:2500000}:undefined);
+      var chunks=[];
+      rec.ondataavailable=function(e){if(e.data&&e.data.size)chunks.push(e.data)};
+      rec.onstop=function(){
+        clearInterval(pump);
+        burstBusy=false;
+        var blob=new Blob(chunks,{type:mime||'video/webm'});
+        var reader=new FileReader();
+        reader.onload=function(){
+          var dataUrl=String(reader.result||'');
+          var b64=dataUrl.slice(dataUrl.indexOf(',')+1);
+          if(ws&&ws.readyState===WebSocket.OPEN&&b64){
+            ws.send(JSON.stringify({type:'burst:data',data:b64}));
+          }
+        };
+        reader.readAsDataURL(blob);
+      };
+      rec.start();
+      setTimeout(function(){try{rec.stop()}catch(e){}},durationMs);
+    }catch(e){
+      burstBusy=false;
+      console.error('[viz] burst capture failed:',e);
+    }
+  }
+  function frameModeActive(){return Date.now()-(lastFrameAt||0)<4000}
+
   function showState(st){
     if(st&&st.track){
       overlay.className='';
