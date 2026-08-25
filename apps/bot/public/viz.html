@@ -4,71 +4,116 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Vaporzr — Visualizer</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎧</text></svg>">
+<link rel="icon" type="image/png" href="/favicon.png">
+<meta name="theme-color" content="#6a5cff">
+<meta property="og:title" content="Vaporzr — Live Visualizer">
+<meta property="og:description" content="Real-time MilkDrop visuals, synced to the bot's playback. Tap in and vibe.">
+<meta property="og:image" content="{{ORIGIN}}/logo.png">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary">
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+:root{--acc:#6a5cff;--acc2:#00f0ff}
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{width:100%;height:100%;overflow:hidden;background:#05060f;font-family:'Inter',system-ui,sans-serif;color:#c7d2fe}
 
-/* Background grid */
 body::before{content:'';position:absolute;inset:0;
   background:linear-gradient(rgba(99,102,241,.03) 1px,transparent 1px),
              linear-gradient(90deg,rgba(99,102,241,.03) 1px,transparent 1px);
   background-size:40px 40px;pointer-events:none;z-index:0}
 
-/* Visualizer canvas/image */
-#viz{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#05060f;z-index:1}
+/* Visual layers — priority set in JS:
+   #viz img (desktop player frames) > #bc (MilkDrop) > #canvas (bars) */
+#bc{position:absolute;inset:0;width:100%;height:100%;z-index:1;display:none}
+#canvas{position:absolute;inset:0;width:100%;height:100%;z-index:2}
+#viz{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#05060f;z-index:3;display:none}
 
-/* Top bar */
 #topbar{position:absolute;top:0;left:0;right:0;z-index:10;display:flex;align-items:center;justify-content:space-between;
   padding:12px 20px;background:linear-gradient(180deg,rgba(5,6,15,.95) 0%,rgba(5,6,15,0) 100%)}
 #logo{display:flex;align-items:center;gap:10px}
-#logo-icon{width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#6366f1,#a855f7);
-  display:flex;align-items:center;justify-content:center;font-size:16px;box-shadow:0 0 20px rgba(99,102,241,.4)}
+#logo-icon{width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,var(--acc),var(--acc2));
+  display:flex;align-items:center;justify-content:center;font-size:16px;box-shadow:0 0 20px var(--glow,rgba(99,102,241,.4))}
 #logo-text{font-weight:800;font-size:15px;letter-spacing:2px;
-  background:linear-gradient(135deg,#818cf8,#c084fc);-webkit-background-clip:text;background-clip:text;color:transparent}
-#logo-sub{font-size:9px;color:#6366f1;letter-spacing:3px;font-weight:600}
+  background:linear-gradient(135deg,var(--acc2),var(--acc));-webkit-background-clip:text;background-clip:text;color:transparent}
+#logo-sub{font-size:9px;color:var(--acc);letter-spacing:3px;font-weight:600}
 #status-pill{display:flex;align-items:center;gap:6px;padding:4px 12px;border-radius:20px;
   background:rgba(15,23,42,.8);border:1px solid #1e293b;font-size:11px;color:#94a3b8}
 #status-dot{width:6px;height:6px;border-radius:50%;background:#ef4444;transition:background .3s}
 #status-dot.on{background:#22c55e;box-shadow:0 0 8px rgba(34,197,94,.6)}
 
-/* Guild selector */
-#guild-bar{position:absolute;top:60px;left:20px;z-index:10;display:flex;gap:6px}
+#guild-bar{position:absolute;top:60px;left:20px;z-index:10;display:flex;gap:6px;flex-wrap:wrap;max-width:70%}
 .guild-btn{padding:5px 14px;border-radius:8px;border:1px solid #1e293b;background:rgba(15,23,42,.7);
   color:#64748b;font-size:11px;font-weight:600;cursor:pointer;transition:all .2s;font-family:inherit}
 .guild-btn:hover{border-color:#334155;color:#94a3b8}
-.guild-btn.active{border-color:#6366f1;color:#c7d2fe;background:rgba(99,102,241,.15);
-  box-shadow:0 0 12px rgba(99,102,241,.2)}
+.guild-btn.active{border-color:var(--acc);color:#c7d2fe;background:color-mix(in srgb,var(--acc) 15%,transparent);
+  box-shadow:0 0 12px var(--glow,rgba(99,102,241,.2))}
 
-/* Bottom overlay */
-#overlay{position:absolute;bottom:0;left:0;right:0;z-index:10;padding:20px 24px 24px;
+#overlay{position:absolute;bottom:0;left:0;right:0;z-index:10;padding:20px 24px 88px;
   background:linear-gradient(transparent,rgba(5,6,15,.9));transition:opacity .4s}
 #overlay.hidden{opacity:0;pointer-events:none}
 #track-row{display:flex;align-items:center;gap:14px}
 #art{width:56px;height:56px;border-radius:8px;background:#1e293b;object-fit:cover;flex-shrink:0;
   box-shadow:0 4px 20px rgba(0,0,0,.4)}
-#meta{flex:1;min-width:0}
 #title{font-weight:700;font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #artists{font-size:13px;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
 #badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;letter-spacing:1px;
-  background:rgba(99,102,241,.2);color:#818cf8;margin-top:6px}
+  background:color-mix(in srgb,var(--acc) 20%,transparent);color:var(--acc);margin-top:6px}
+#meta{flex:1;min-width:0}
 
-/* FPS counter */
 #fps{position:absolute;top:60px;right:20px;z-index:10;padding:4px 10px;border-radius:6px;
   background:rgba(15,23,42,.7);border:1px solid #1e293b;font-size:11px;color:#475569;pointer-events:none}
 
-/* Connecting overlay */
+/* Unlock pill */
+#unlock{position:absolute;bottom:96px;right:24px;z-index:12;display:none;align-items:center;gap:7px;
+  padding:9px 16px;border-radius:22px;cursor:pointer;user-select:none;
+  background:rgba(15,23,42,.85);border:1px solid var(--acc);font-size:12px;font-weight:600;color:#e2e8f0;
+  box-shadow:0 0 18px var(--glow,rgba(99,102,241,.35));animation:pulse 2s infinite}
+@keyframes pulse{50%{box-shadow:0 0 28px var(--glow,rgba(99,102,241,.55))}}
+#preset-name{position:absolute;bottom:96px;left:24px;z-index:11;font-size:11px;color:#64748b;
+  max-width:40%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0;transition:opacity .5s}
+
+/* Control dock */
+#dock{position:absolute;bottom:16px;left:50%;transform:translateX(-50%) translateY(80px);z-index:14;
+  display:flex;align-items:center;gap:14px;padding:10px 18px;border-radius:18px;
+  background:rgba(10,12,26,.82);border:1px solid #1e293b;backdrop-filter:blur(14px);
+  transition:transform .35s cubic-bezier(.2,.9,.3,1.2),opacity .35s;opacity:0}
+#dock.show{transform:translateX(-50%) translateY(0);opacity:1}
+.dock-btn{width:34px;height:34px;border-radius:10px;border:1px solid #262f45;background:rgba(30,41,59,.6);
+  color:#c7d2fe;font-size:15px;cursor:pointer;display:flex;align-items:center;justify-content:center;
+  transition:all .15s;font-family:inherit}
+.dock-btn:hover{border-color:var(--acc);background:color-mix(in srgb,var(--acc) 18%,transparent)}
+.dock-btn.active{border-color:var(--acc2);color:var(--acc2)}
+.dock-sep{width:1px;height:24px;background:#262f45}
+#swatches{display:flex;gap:6px;align-items:center}
+.swatch{width:18px;height:18px;border-radius:50%;cursor:pointer;border:2px solid transparent;transition:all .15s}
+.swatch:hover{transform:scale(1.15)}
+.swatch.active{border-color:#fff;box-shadow:0 0 8px var(--glow,rgba(99,102,241,.5))}
+.sens-wrap{display:flex;align-items:center;gap:8px}
+.sens-wrap label{font-size:10px;font-weight:700;letter-spacing:1px;color:#64748b}
+#sens{-webkit-appearance:none;appearance:none;width:92px;height:4px;border-radius:2px;background:#262f45;outline:none}
+#sens::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:13px;height:13px;border-radius:50%;
+  background:linear-gradient(135deg,var(--acc),var(--acc2));cursor:pointer;box-shadow:0 0 8px var(--glow,rgba(99,102,241,.5))}
+#sens::-moz-range-thumb{width:13px;height:13px;border:none;border-radius:50%;
+  background:linear-gradient(135deg,var(--acc),var(--acc2));cursor:pointer}
+#sens-val{font-size:11px;color:#94a3b8;width:36px;text-align:right;font-variant-numeric:tabular-nums}
+
+/* Connecting / waiting overlays */
 #connecting{position:absolute;inset:0;z-index:20;display:flex;flex-direction:column;
   align-items:center;justify-content:center;gap:16px;background:rgba(5,6,15,.95);transition:opacity .5s}
 #connecting.hidden{opacity:0;pointer-events:none}
 #connecting h2{font-size:20px;font-weight:700;
-  background:linear-gradient(135deg,#818cf8,#c084fc);-webkit-background-clip:text;background-clip:text;color:transparent}
+  background:linear-gradient(135deg,var(--acc2),var(--acc));-webkit-background-clip:text;background-clip:text;color:transparent}
 #connecting p{font-size:13px;color:#64748b;text-align:center;max-width:360px;line-height:1.5}
-.spinner{width:32px;height:32px;border:3px solid #1e293b;border-top-color:#6366f1;border-radius:50%;
+.spinner{width:32px;height:32px;border:3px solid #1e293b;border-top-color:var(--acc);border-radius:50%;
   animation:spin 1s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 #connecting .hint{font-size:11px;color:#475569;margin-top:8px}
+#trust{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:12px;margin-top:10px;
+  background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.25);font-size:10px;color:#4ade80;font-weight:600}
+
+#no-frames{position:absolute;inset:0;z-index:15;display:none;flex-direction:column;
+  align-items:center;justify-content:center;gap:14px;background:rgba(5,6,15,.72)}
+#no-frames.hidden{display:none!important}
 </style>
 </head>
 <body>
@@ -76,22 +121,23 @@ body::before{content:'';position:absolute;inset:0;
 <div id="connecting">
   <div class="spinner"></div>
   <h2>VAPORZR</h2>
-  <p>Connecting to visualizer stream...</p>
+  <p>Starting your live visualizer…</p>
+  <div class="hint">Encrypted connection straight from your bot.<br>Nothing to install — visuals begin automatically with playback.</div>
+  <div id="trust">🔒 <span id="trust-text">SECURE</span></div>
 </div>
 
-<div id="no-frames" class="hidden" style="position:absolute;inset:0;z-index:15;display:none;flex-direction:column;
-  align-items:center;justify-content:center;gap:14px;background:rgba(5,6,15,.92)">
-  <div style="font-size:40px;opacity:.6">📡</div>
+<div id="no-frames" class="hidden">
+  <div style="font-size:40px;opacity:.6">🎶</div>
   <h2 style="font-size:18px;font-weight:700;
     background:linear-gradient(135deg,#818cf8,#c084fc);-webkit-background-clip:text;background-clip:text;color:transparent">
-    Waiting for visualizer...</h2>
+    Ready when the music is</h2>
   <p style="font-size:13px;color:#64748b;text-align:center;max-width:400px;line-height:1.6">
-    The bot is requesting the player window to open.<br>
-    If it doesn't appear, run <code style="background:#1e293b;padding:2px 6px;border-radius:4px;color:#94a3b8">/screensaver</code> or <code style="background:#1e293b;padding:2px 6px;border-radius:4px;color:#94a3b8">V@sc</code> in Discord.
-  </p>
-  <div class="hint">Frames will appear automatically once the visualizer connects.</div>
+    This visualizer reacts automatically the moment playback starts.<br>
+    Hover anywhere to reveal the controls — presets, themes, reactivity.</p>
 </div>
 
+<canvas id="bc"></canvas>
+<canvas id="canvas"></canvas>
 <img id="viz" alt="">
 
 <div id="topbar">
@@ -110,6 +156,24 @@ body::before{content:'';position:absolute;inset:0;
 
 <div id="guild-bar"></div>
 <div id="fps"></div>
+<div id="preset-name"></div>
+<div id="unlock">🔊 <span>Tap for MilkDrop mode</span></div>
+
+<div id="dock">
+  <button class="dock-btn" id="btn-prev" title="Previous preset">⏮</button>
+  <button class="dock-btn" id="btn-next" title="Next preset">⏭</button>
+  <button class="dock-btn" id="btn-lock" title="Lock current preset">🔓</button>
+  <div class="dock-sep"></div>
+  <div id="swatches" title="Theme"></div>
+  <div class="dock-sep"></div>
+  <div class="sens-wrap">
+    <label>REACTIVITY</label>
+    <input type="range" id="sens" min="50" max="150" value="100">
+    <span id="sens-val">1.00×</span>
+  </div>
+  <div class="dock-sep"></div>
+  <button class="dock-btn" id="btn-fs" title="Fullscreen">⛶</button>
+</div>
 
 <div id="overlay" class="hidden">
   <div id="track-row">
@@ -122,59 +186,72 @@ body::before{content:'';position:absolute;inset:0;
   </div>
 </div>
 
+<script src="/vendor/butterchurn.min.js"></script>
+<script src="/vendor/butterchurnPresets.min.js"></script>
 <script>
 (function(){
-  var viz=document.getElementById('viz'),
-      art=document.getElementById('art'),
-      title=document.getElementById('title'),
-      artists=document.getElementById('artists'),
-      overlay=document.getElementById('overlay'),
-      statusDot=document.getElementById('status-dot'),
-      statusText=document.getElementById('status-text'),
-      connecting=document.getElementById('connecting'),
-      noFrames=document.getElementById('no-frames'),
-      guildBar=document.getElementById('guild-bar'),
-      fpsEl=document.getElementById('fps'),
-      ws=null,retryTimer=null,
-      connected=false,
-      frameCount=0,fpsTimer=null,
-      firstFrameAt=0,
-      noFramesTimer=null,
+  var $=function(id){return document.getElementById(id)},
+      bcCanvas=$('bc'),barsCanvas=$('canvas'),ctx=barsCanvas.getContext('2d'),
+      viz=$('viz'),art=$('art'),title=$('title'),artists=$('artists'),
+      overlay=$('overlay'),statusDot=$('status-dot'),statusText=$('status-text'),
+      connecting=$('connecting'),noFrames=$('no-frames'),
+      guildBar=$('guild-bar'),fpsEl=$('fps'),trustText=$('trust-text'),
+      unlockPill=$('unlock'),presetNameEl=$('preset-name'),
+      dock=$('dock'),sensSlider=$('sens'),sensVal=$('sens-val'),
+      ws=null,retryTimer=null,connected=false,
+      frameCount=0,fpsTimer=null,gotVisualsAt=0,noFramesTimer=null,
       guilds=[],primaryGuildId=null;
 
+  var THEMES=[
+    {id:'vaporzr',name:'Vaporzr',accent:'#6a5cff',accent2:'#00f0ff'},
+    {id:'neon',name:'Neon Blast',accent:'#ff073a',accent2:'#1ed6ff'},
+    {id:'midnight',name:'Midnight Club',accent:'#8a7dff',accent2:'#60a5fa'},
+    {id:'synthwave',name:'Synthwave',accent:'#f472b6',accent2:'#fb923c'},
+    {id:'plasma',name:'Plasma',accent:'#22d3ee',accent2:'#a78bfa'},
+    {id:'ultraviolet',name:'Ultraviolet',accent:'#a855f7',accent2:'#6366f1'},
+    {id:'marshmallow',name:'Marshmallow',accent:'#f472b6',accent2:'#e879f9'},
+    {id:'emerald',name:'Emerald City',accent:'#34d399',accent2:'#22d3ee'}
+  ];
+  var theme=THEMES[0];
+
+  function applyTheme(t){
+    theme=t;
+    var r=document.documentElement.style;
+    r.setProperty('--acc',t.accent);
+    r.setProperty('--acc2',t.accent2);
+    r.setProperty('--glow',t.accent+'55');
+    renderSwatches();
+  }
+
+  /* ---------- connection ---------- */
   function setConnected(c){
     connected=c;
     if(c){
       statusDot.className='on';
-      statusText.textContent='Connected';
+      statusText.textContent=(location.protocol==='https:'?'Secure · Connected':'Connected');
       connecting.className='hidden';
       noFramesTimer=setTimeout(function(){
-        if(!firstFrameAt){
-          noFrames.style.display='flex';
-          noFrames.className='';
-        }
+        if(!gotVisualsAt){noFrames.className='';noFrames.classList.remove('hidden');noFrames.style.display='flex'}
       },5000);
     }else{
       statusDot.className='';
       statusText.textContent='Disconnected';
       connecting.className='';
-      noFrames.style.display='none';
-      noFrames.className='hidden';
-      firstFrameAt=0;
+      noFrames.style.display='none';noFrames.className='hidden';
+      gotVisualsAt=0;
     }
   }
 
   function connect(){
     if(ws){ws.onclose=null;ws.close()}
-    var loc=window.location;
-    var wsUrl='ws://'+loc.hostname+':'+(loc.port||'4876')+'/ws';
+    var wsUrl=(location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws';
     try{ws=new WebSocket(wsUrl)}catch(e){scheduleReconnect();return}
     ws.onopen=function(){
       ws.send(JSON.stringify({type:'hello',role:'panel',name:'web-viz-'+Math.random().toString(36).slice(2,6)}));
-      ws.send(JSON.stringify({type:'panel:subscribe',channels:['state','queue','visuals']}));
-      ws.send(JSON.stringify({type:'cmd',command:'openVisuals'}));
+      ws.send(JSON.stringify({type:'panel:subscribe',channels:['state','queue','visuals','pcm']}));
       ws.send(JSON.stringify({type:'state:request'}));
       setConnected(true);
+      refreshUnlock();
     };
     ws.onmessage=function(ev){
       var msg;try{msg=JSON.parse(ev.data)}catch(e){return}
@@ -182,12 +259,32 @@ body::before{content:'';position:absolute;inset:0;
         case 'snapshot':
           if(msg.guilds){guilds=msg.guilds;primaryGuildId=msg.primaryGuildId||null;renderGuilds()}
           if(msg.state)showState(msg.state);
+          if(msg.theme){for(var i=0;i<THEMES.length;i++)if(THEMES[i].id===msg.theme.id)applyTheme(THEMES[i])}
+          if(typeof msg.sensitivity==='number')setSensitivity(msg.sensitivity,false);
+          break;
+        case 'theme':{
+          var t=msg.theme;if(t)for(var j=0;j<THEMES.length;j++)if(THEMES[j].id===t.id)applyTheme(THEMES[j]);
+          break;
+        }
+        case 'visuals:sensitivity':
+          setSensitivity(msg.multiplier,false);
           break;
         case 'state:update':
           showState(msg.state);
           break;
+        case 'audio:pcm':
+          markVisual();
+          pushPcm(msg.data);
+          break;
+        case 'visuals:bars':
+          markVisual();
+          lastBarAt=Date.now();
+          for(var k=0;k<BARS;k++)target[k]=Math.max(0,Math.min(1,(msg.bars[k]||0)*sensitivity));
+          frameCount++;
+          break;
         case 'visuals:frame':
-          if(!firstFrameAt){firstFrameAt=Date.now();noFrames.style.display='none';noFrames.className='hidden'}
+          markVisual();
+          lastFrameAt=Date.now();
           viz.src=msg.data;
           frameCount++;
           break;
@@ -200,48 +297,291 @@ body::before{content:'';position:absolute;inset:0;
     ws.onerror=function(){ws.close()};
   }
 
+  function markVisual(){
+    if(!gotVisualsAt){
+      gotVisualsAt=Date.now();
+      noFrames.style.display='none';noFrames.className='hidden';
+    }
+  }
+
+  /* ---------- MilkDrop (Butterchurn) + WebAudio pipeline ---------- */
+  var actx=null,analyser=null,gainNode=null,nextAt=0,
+      bcViz=null,presetNames=[],presetIdx=-1,presetLocked=false,cycleTimer=null;
+
+  /** Resolve the UMD export shape: some builds nest createVisualizer under .default. */
+  var BC_LIB=null;
+  function bcLib(){
+    if(BC_LIB)return BC_LIB;
+    if(typeof butterchurn==='undefined')return null;
+    if(typeof butterchurn.createVisualizer==='function'){BC_LIB=butterchurn;return BC_LIB}
+    if(butterchurn.default&&typeof butterchurn.default.createVisualizer==='function'){BC_LIB=butterchurn.default;return BC_LIB}
+    return null;
+  }
+  function butterAvailable(){return !!bcLib()&&typeof butterchurnPresets!=='undefined'}
+
+  function refreshUnlock(){
+    unlockPill.style.display=(connected&&!actx&&butterAvailable())?'flex':'none';
+  }
+  unlockPill.onclick=function(){unlockAudio()};
+
+  function unlockAudio(){
+    if(actx)return true;
+    var AC=window.AudioContext||window.webkitAudioContext;
+    if(!AC||!butterAvailable()){refreshUnlock();return false}
+    try{
+      actx=new AC();
+      gainNode=actx.createGain();
+      gainNode.gain.value=sensitivity*0.9;
+      analyser=actx.createAnalyser();
+      analyser.fftSize=2048;
+      analyser.smoothingTimeConstant=0.6;
+      gainNode.connect(analyser); // silent: never routed to speakers
+      nextAt=actx.currentTime+0.06;
+      initButter();
+      refreshUnlock();
+      return true;
+    }catch(e){return false}
+  }
+  window.addEventListener('pointerdown',function(){
+    if(unlockAudio()&&actx.state==='suspended')actx.resume();
+  },{passive:true});
+
+  /** Schedule an incoming stereo-s16/48k base64 chunk into the silent analyser graph. */
+  function pushPcm(b64){
+    if(!actx)return;
+    try{
+      var bin=atob(b64),n=Math.floor(bin.length/4);
+      if(n<=0)return;
+      // Drop chunks if we're running >400ms behind (keeps latency bounded).
+      if(nextAt>actx.currentTime+0.4)return;
+      var buf=actx.createBuffer(1,n,48000),d=buf.getChannelData(0);
+      for(var i=0;i<n;i++){
+        var l=(bin.charCodeAt(i*4)&0xff)|(bin.charCodeAt(i*4+1)<<8),
+            r=(bin.charCodeAt(i*4+2)&0xff)|(bin.charCodeAt(i*4+3)<<8);
+        l=(l<<16)>>16;r=(r<<16)>>16;
+        d[i]=((l+r)/2)/32768;
+      }
+      var src=actx.createBufferSource();
+      src.buffer=buf;
+      src.connect(gainNode);
+      if(nextAt<actx.currentTime)nextAt=actx.currentTime+0.02;
+      src.start(nextAt);
+      nextAt+=buf.duration;
+    }catch(e){}
+  }
+
+  function initButter(){
+    if(bcViz||!butterAvailable())return;
+    try{
+      /* Real API: createVisualizer(ctx, canvas, { width, height, pixelRatio, textureRatio })
+         — passing an array silently falls back to Butterchurn's square default. */
+      bcCanvas.width=innerWidth;
+      bcCanvas.height=innerHeight;
+      bcViz=bcLib().createVisualizer(actx,bcCanvas,{
+        width:bcCanvas.width,
+        height:bcCanvas.height,
+        pixelRatio:1,
+        textureRatio:1
+      });
+      bcViz.connectAudio(analyser);
+      presetNames=Object.keys(butterchurnPresets.getPresets());
+      loadPreset(Math.floor(Math.random()*presetNames.length),0.1);
+      cycleTimer=setInterval(function(){
+        if(!presetLocked&&document.visibilityState==='visible')loadPreset(presetIdx+1,2.5);
+      },42000);
+      showPresetName();
+    }catch(e){
+      console.error('[viz] butterchurn init failed:',e);
+      bcViz=null;
+    }
+  }
+  function loadPreset(i,blend){
+    if(!bcViz||!presetNames.length)return;
+    presetIdx=((i%presetNames.length)+presetNames.length)%presetNames.length;
+    try{bcViz.loadPreset(butterchurnPresets.getPresets()[presetNames[presetIdx]],blend||2)}catch(e){}
+    showPresetName();
+  }
+  function showPresetName(){
+    if(presetIdx<0||!presetNames[presetIdx])return;
+    presetNameEl.textContent=presetLocked?'🔒 '+presetNames[presetIdx]:presetNames[presetIdx];
+    presetNameEl.style.opacity='1';
+    clearTimeout(showPresetName.t);
+    showPresetName.t=setTimeout(function(){presetNameEl.style.opacity='0'},3500);
+  }
+  $('btn-next').onclick=function(){loadPreset(presetIdx+1,1.2)};
+  $('btn-prev').onclick=function(){loadPreset(presetIdx-1,1.2)};
+  $('btn-lock').onclick=function(){
+    presetLocked=!presetLocked;
+    this.textContent=presetLocked?'🔒':'🔓';
+    this.classList.toggle('active',presetLocked);
+    showPresetName();
+  };
+
+  /* ---------- sensitivity ---------- */
+  var BARS=24,target=new Array(BARS).fill(0),disp=new Array(BARS).fill(0),
+      peaks=new Array(BARS).fill(0),sensitivity=1.0,lastBarAt=0,lastFrameAt=0;
+
+  function setSensitivity(v,fromUser){
+    v=Math.max(0.5,Math.min(1.5,v));
+    sensitivity=v;
+    sensSlider.value=Math.round(v*100);
+    sensVal.textContent=v.toFixed(2)+'×';
+    if(gainNode)gainNode.gain.setTargetAtTime(Math.min(1.4,v*0.9),actx.currentTime,0.05);
+    if(fromUser&&ws&&ws.readyState===WebSocket.OPEN){
+      ws.send(JSON.stringify({type:'cmd',command:'sensitivity',sensitivity:v}));
+    }
+  }
+  sensSlider.addEventListener('input',function(){
+    setSensitivity(Number(sensSlider.value)/100,true);
+  });
+
+  /* ---------- themes UI ---------- */
+  function renderSwatches(){
+    var w=$('swatches');w.innerHTML='';
+    THEMES.forEach(function(t){
+      var b=document.createElement('button');
+      b.className='swatch'+(t.id===theme.id?' active':'');
+      b.title=t.name;
+      b.style.background='linear-gradient(135deg,'+t.accent+','+t.accent2+')';
+      b.onclick=function(){
+        applyTheme(t);
+        if(ws&&ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify({type:'cmd',command:'theme',themeId:t.id}));
+      };
+      w.appendChild(b);
+    });
+  }
+
+  /* ---------- fullscreen ---------- */
+  $('btn-fs').onclick=function(){
+    if(document.fullscreenElement)document.exitFullscreen();
+    else document.documentElement.requestFullscreen().catch(function(){});
+  };
+
+  /* ---------- rendering loop ---------- */
+  var dpr=window.devicePixelRatio||1,bcBroken=false;
+  function resize(){
+    dpr=Math.min(window.devicePixelRatio||1,2);
+    barsCanvas.width=innerWidth*dpr;barsCanvas.height=innerHeight*dpr;
+    bcCanvas.width=innerWidth;
+    bcCanvas.height=innerHeight;
+    if(bcViz&&typeof bcViz.setRendererSize==='function'){
+      try{bcViz.setRendererSize(bcCanvas.width,bcCanvas.height)}catch(e){}
+    }
+  }
+  window.addEventListener('resize',resize);
+  window.addEventListener('fullscreenchange',function(){setTimeout(resize,60)});
+
+  function draw(){
+    requestAnimationFrame(draw);
+    var now=Date.now();
+    var frameMode=now-(lastFrameAt||0)<4000;
+    var milkMode=!frameMode&&bcViz&&actx&&!bcBroken;
+    viz.style.display=frameMode?'block':'none';
+    bcCanvas.style.display=milkMode?'block':'none';
+    barsCanvas.style.display=(frameMode||milkMode)?'none':'block';
+
+    if(frameMode)return;
+    if(milkMode){
+      try{bcViz.render()}catch(e){
+        // One bad frame drops us back to bars — loudly, not silently.
+        console.error('[viz] butterchurn render failed:',e);
+        bcBroken=true;
+      }
+      return;
+    }
+    drawBars(now);
+  }
+
+  function drawBars(now){
+    ctx.clearRect(0,0,barsCanvas.width,barsCanvas.height);
+    var W=barsCanvas.width,H=barsCanvas.height;
+    var active=now-lastBarAt<2000;
+    var baseY=H*0.86,maxH=H*0.62,slot=W/BARS,barW=Math.min(slot*0.55,26*dpr);
+
+    for(var i=0;i<BARS;i++){
+      disp[i]+=(target[i]-disp[i])*0.35;
+      if(active&&target[i]>peaks[i])peaks[i]=target[i];
+      else peaks[i]=Math.max(disp[i],peaks[i]-0.006);
+      var v=active?disp[i]:(0.04+0.02*Math.sin(now/900+i*0.7));
+      var h=Math.max(2*dpr,v*maxH),x=i*slot+(slot-barW)/2,y=baseY-h;
+      var g=ctx.createLinearGradient(0,baseY,0,baseY-maxH);
+      g.addColorStop(0,theme.accent+'dd');
+      g.addColorStop(0.6,theme.accent+'f0');
+      g.addColorStop(1,theme.accent2+'f2');
+      ctx.fillStyle=g;
+      ctx.shadowColor=theme.glow||theme.accent+'66';
+      ctx.shadowBlur=14*dpr*(active?v:0.3);
+      roundRect(x,y,barW,h,barW/2);
+      ctx.shadowBlur=0;
+      ctx.fillStyle='rgba(250,250,250,0.85)';
+      ctx.fillRect(x,baseY-peaks[i]*maxH-2*dpr,barW,2*dpr);
+    }
+    ctx.fillStyle=theme.accent+'2e';
+    ctx.fillRect(0,baseY,W,1);
+  }
+  function roundRect(x,y,w,h,r){
+    r=Math.min(r,h/2,w/2);
+    ctx.beginPath();
+    ctx.moveTo(x+r,y);
+    ctx.arcTo(x+w,y,x+w,y+h,r);
+    ctx.arcTo(x+w,y+h,x,y+h,r);
+    ctx.arcTo(x,y+h,x,y,r);
+    ctx.arcTo(x,y,x+w,y,r);
+    ctx.closePath();ctx.fill();
+  }
+
+  /* ---------- track / guild UI ---------- */
   function showState(st){
     if(st&&st.track){
       overlay.className='';
       title.textContent=st.track.name||'Playing';
       artists.textContent=(st.track.artists||[]).join(', ');
-      if(st.track.image)art.src=st.track.image;else art.src='';
-    }else{
-      overlay.className='hidden';
-    }
+      art.src=st.track.image||'';
+    }else overlay.className='hidden';
   }
-
   function renderGuilds(){
     guildBar.innerHTML='';
     guilds.forEach(function(g){
       var b=document.createElement('button');
       b.className='guild-btn'+(g.id===primaryGuildId?' active':'');
       b.textContent=g.name||g.id;
-      b.onclick=function(){switchGuild(g.id)};
+      b.onclick=function(){
+        if(ws&&ws.readyState===WebSocket.OPEN){
+          ws.send(JSON.stringify({type:'cmd',command:'switchGuild',guildId:g.id}));
+          ws.send(JSON.stringify({type:'panel:subscribe',channels:['state','queue','visuals','pcm'],guildId:g.id}));
+        }
+        primaryGuildId=g.id;renderGuilds();
+      };
       guildBar.appendChild(b);
     });
   }
-
-  function switchGuild(gid){
-    if(ws&&ws.readyState===WebSocket.OPEN){
-      ws.send(JSON.stringify({type:'cmd',command:'switchGuild',guildId:gid}));
-      ws.send(JSON.stringify({type:'panel:subscribe',channels:['state','queue','visuals'],guildId:gid}));
-      primaryGuildId=gid;
-      renderGuilds();
-    }
-  }
-
   function scheduleReconnect(){
     if(retryTimer)return;
     retryTimer=setTimeout(function(){retryTimer=null;connect()},3000);
   }
 
+  /* ---------- dock auto-hide ---------- */
+  var dockTimer=null;
+  function pokeDock(){
+    dock.classList.add('show');
+    clearTimeout(dockTimer);
+    dockTimer=setTimeout(function(){dock.classList.remove('show')},3800);
+  }
+  window.addEventListener('mousemove',pokeDock,{passive:true});
+  window.addEventListener('touchstart',pokeDock,{passive:true});
+  window.addEventListener('pointerdown',pokeDock,{passive:true});
+
+  trustText.textContent=location.protocol==='https:'?'SECURE HTTPS CONNECTION':'LOCAL NETWORK';
+
   fpsTimer=setInterval(function(){
-    if(frameCount>0)fpsEl.textContent=Math.round(frameCount*2)+' fps';
-    else fpsEl.textContent='';
+    fpsEl.textContent=frameCount>0?Math.round(frameCount*2)+' fps':'';
     frameCount=0;
   },500);
 
+  applyTheme(THEMES[0]);
+  resize();
+  draw();
+  pokeDock();
   connect();
 })();
 </script>

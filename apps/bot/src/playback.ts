@@ -86,7 +86,12 @@ export class PlaybackController {
 
   /** Feed the live PCM spectrum analyzer (only the primary session should). */
   setAnalyzerTap(enabled: boolean): void {
-    this.voice.setPcmTap(enabled ? (data) => analyzer.feedPcm(data) : null);
+    this.voice.setSpectrumTap(enabled ? (data) => analyzer.feedPcm(data) : null);
+  }
+
+  /** Repeat-current-track mode (natural ends replay instead of advancing). */
+  setRepeat(on: boolean): void {
+    this.queue.setState({ repeat: on });
   }
 
   private clearEndTimer(): void {
@@ -162,7 +167,11 @@ export class PlaybackController {
         this.streamCache.set(track.uri, video);
       } else if (track.source === 'spotify') {
         const query = `${track.name} ${(track.artists ?? []).join(' ')}`.trim();
-        const video = await searchAndResolveYoutube(query);
+        const video = await searchAndResolveYoutube(query, {
+          name: track.name,
+          artists: track.artists,
+          durationMs: track.durationMs,
+        });
         if (video) this.streamCache.set(track.uri, video);
       }
     } catch (err) {
@@ -178,8 +187,25 @@ export class PlaybackController {
     // Only advance if we're still on the track this timer was scheduled for.
     if (this.endUri && current?.uri !== this.endUri) return;
     if (current && state.track?.uri === current.uri) {
+      if (state.repeat) {
+        this.replayCurrent();
+        return;
+      }
       this.next();
     }
+  }
+
+  /** Replay the current track from the top (repeat mode). */
+  private replayCurrent(): void {
+    const cur = this.queue.getCurrentTrack();
+    if (!cur) {
+      this.next();
+      return;
+    }
+    this.queue.setState({ positionMs: 0 });
+    void this.play().catch((err) => {
+      console.warn(`[playback] repeat replay failed: ${err instanceof Error ? err.message : err}`);
+    });
   }
 
   private currentSource(): MediaSource {
@@ -199,6 +225,10 @@ export class PlaybackController {
       if (this.currentUri !== uri) return;
       if (this.spotifyFallback) {
         this.spotifyFallback = false;
+      }
+      if (this.queue.getState().repeat && this.queue.getCurrentTrack()) {
+        this.replayCurrent();
+        return;
       }
       this.next();
     };
@@ -366,13 +396,19 @@ export class PlaybackController {
 
   /** No Spotify device available — play the track's YouTube match instead. */
   private async playYoutubeFallback(current: TrackInfo): Promise<void> {
+    const t0 = Date.now();
     console.log(`[playback] no Spotify device — falling back to YouTube for "${current.name}"`);
     this.stopSpotifyFeed();
     this.stopSpotifyProgress();
     let video: ResolvedVideo | null | undefined = this.streamCache.get(current.uri);
     if (!video) {
       const query = `${current.name} ${(current.artists ?? []).join(' ')}`.trim();
-      video = await searchAndResolveYoutube(query);
+      video = await searchAndResolveYoutube(query, {
+        name: current.name,
+        artists: current.artists,
+        durationMs: current.durationMs,
+      });
+      console.log(`[playback] youtube fallback resolve took ${Date.now() - t0}ms for "${current.name}"`);
     }
     if (!video) {
       throw new SpotifyError(`No Spotify device available and no YouTube match for "${current.name}".`);

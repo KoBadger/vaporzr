@@ -1,6 +1,9 @@
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   ActionRowBuilder,
   ActivityType,
@@ -43,8 +46,29 @@ import {
 import { Session, SessionManager } from './session.js';
 import { PermissionsManager } from './permissions.js';
 import { analyzer } from './analyzer.js';
+import { vizTunnel } from './tunnel.js';
+import { renderPanelIconPng, PANEL_ICON_FALLBACKS } from './panelIcons.js';
 import type { Bridge } from './bridge.js';
 import type { PermissionLevel, TrackInfo } from '@vaporzr/shared';
+
+/** First non-internal IPv4 address of this machine — reachable from the LAN. */
+function localIp(): string {
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const iface of list ?? []) {
+      if (iface.family === 'IPv4' && !iface.internal) return iface.address;
+    }
+  }
+  return '127.0.0.1';
+}
+
+/**
+ * Hostname advertised in `/viz`, `/panel`, and `/help` links. Defaults to the
+ * LAN IP (works for anyone on the same network); set PUBLIC_HOST in .env to
+ * advertise a custom domain instead (e.g. behind port forwarding or DNS).
+ */
+function vizHost(): string {
+  return config.publicHost || localIp();
+}
 
 const COMMANDS = [
   new SlashCommandBuilder()
@@ -273,6 +297,8 @@ export class DiscordBot {
       );
       this.syncPrimaryGuild();
       void this.registerCommands();
+      void this.ensurePanelEmojis();
+      void this.syncBotAvatar();
     });
     this.client.on('interactionCreate', (i) => void this.onInteraction(i));
     this.client.on('messageCreate', (m) => void this.handleMessageCommand(m));
@@ -666,13 +692,8 @@ export class DiscordBot {
       }
 
       case 'viz': {
-        const port = config.port;
-        const embed = new EmbedBuilder()
-          .setTitle('🌐 Web Visualizer')
-          .setDescription(`Open this URL on any device on your network:\n\n<http://vaporzr.local:${port}/viz>\n\nThis shows the live visualizer frames in your browser — no Electron needed.`)
-          .setColor(this.themeColor())
-          .setFooter({ text: 'Keep this tab open while music plays' });
-        await interaction.reply({ embeds: [embed], ephemeral: true });
+        const admin = this.isAdminMember(interaction.user.id, interaction.guild, interaction.member);
+        await interaction.reply({ embeds: [this.vizEmbed(admin)], ephemeral: true });
         break;
       }
 
@@ -1260,13 +1281,8 @@ export class DiscordBot {
         }
 
         case 'viz': {
-          const port = config.port;
-          const embed = new EmbedBuilder()
-            .setTitle('🌐 Web Visualizer')
-            .setDescription(`Open this URL on any device on your network:\n\n<http://vaporzr.local:${port}/viz>\n\nThis shows the live visualizer frames in your browser — no Electron needed.`)
-            .setColor(this.themeColor())
-            .setFooter({ text: 'Keep this tab open while music plays' });
-          await message.reply({ embeds: [embed] });
+          const admin = this.isAdminMember(message.author.id, message.guild, message.member);
+          await message.reply({ embeds: [this.vizEmbed(admin)] });
           break;
         }
 
@@ -1406,11 +1422,49 @@ export class DiscordBot {
     if (!message.inGuild()) return false;
     const channel = message.member?.voice?.channel;
     if (!channel) return false;
-    await s.voice.join(message.guild!.id, channel.id, message.guild!.voiceAdapterCreator);
+    try {
+      await s.voice.join(message.guild!.id, channel.id, message.guild!.voiceAdapterCreator);
+    } catch (err) {
+      // Joins can time out transiently (voice gateway hiccup); the internal
+      // retry usually lands seconds later — auto-resume queued playback then.
+      this.scheduleAutoResume(s);
+      throw err;
+    }
     const state = s.queue.getState();
     if (state.playing) s.voice.startStream();
     console.log('[discord] auto-joined voice channel');
     return true;
+  }
+
+  private autoResumeTimers = new Map<string, NodeJS.Timeout>();
+
+  /** Resume queued playback automatically once voice recovers from a join timeout. */
+  private scheduleAutoResume(s: Session): void {
+    const key = s.guildId || '__dm__';
+    if (this.autoResumeTimers.has(key)) return;
+    let waited = 0;
+    const t: NodeJS.Timeout = setInterval(() => {
+      waited += 1500;
+      if (!s.voice.isJoined()) {
+        if (waited >= 30000) {
+          clearInterval(t);
+          this.autoResumeTimers.delete(key);
+          console.warn('[discord] auto-resume gave up — voice never recovered within 30s');
+        }
+        return;
+      }
+      clearInterval(t);
+      this.autoResumeTimers.delete(key);
+      const st = s.queue.getState();
+      if (!st.playing && st.track) {
+        console.log('[discord] voice recovered — auto-resuming queued track');
+        void s.playback.play().catch((err) => {
+          console.warn(`[discord] auto-resume failed: ${err instanceof Error ? err.message : err}`);
+        });
+      }
+    }, 1500);
+    t.unref?.();
+    this.autoResumeTimers.set(key, t);
   }
 
   /** Launch the local Vaporzr player window (Electron). */
@@ -1574,58 +1628,192 @@ export class DiscordBot {
     }
   }
 
+  private panelEmojis = new Map<string, { id: string; name: string }>();
+
+  /** Bump when panel icon art changes — stale uploaded emojis get replaced. */
+  private static readonly PANEL_ICON_VERSION = 2;
+
+  /**
+   * Keep the bot's Discord avatar in sync with the generated brand logo.
+   * Discord rate-limits avatar changes hard (2/hour), so only update when the
+   * logo bytes actually changed (hash tracked in the data dir).
+   */
+  private async syncBotAvatar(): Promise<void> {
+    try {
+      const logoPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public', 'logo.png');
+      const logo = await fs.readFile(logoPath);
+      const hash = createHash('sha256').update(logo).digest('hex');
+      const hashFile = path.join(config.dataDir, 'avatar.hash');
+      let last = '';
+      try {
+        last = (await fs.readFile(hashFile, 'utf8')).trim();
+      } catch {
+        /* first run */
+      }
+      if (last === hash) return;
+      await this.client.user?.setAvatar(logo);
+      await fs.mkdir(config.dataDir, { recursive: true });
+      await fs.writeFile(hashFile, hash);
+      console.log('[discord] bot avatar updated to brand logo');
+    } catch (err) {
+      console.warn(`[discord] avatar sync skipped: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  /**
+   * Upload the generated Vaporzr panel icons as custom emojis (once) so the
+   * Discord panel buttons use real icon art instead of Unicode glyphs.
+   * Any failure falls back to Unicode per-button.
+   */
+  private async ensurePanelEmojis(): Promise<void> {
+    try {
+      const guild =
+        this.client.guilds.cache.find((g) => g.members.me?.permissions.has(PermissionFlagsBits.ManageGuild)) ??
+        this.client.guilds.cache.first();
+      if (!guild) return;
+      const existing = new Map(guild.emojis.cache.map((e) => [e.name!, e.id]));
+      const versionFile = path.join(config.dataDir, 'panel-icons.version');
+      let version = 0;
+      try {
+        version = Number((await fs.readFile(versionFile, 'utf8')).trim()) || 0;
+      } catch {
+        /* first run */
+      }
+      const stale = version !== DiscordBot.PANEL_ICON_VERSION;
+      let created = 0;
+      for (const name of Object.keys(PANEL_ICON_FALLBACKS)) {
+        try {
+          let id = existing.get(name);
+          if (id && stale) {
+            // Icon art changed — replace the uploaded emoji with the new render.
+            // If we can't delete (no permission), keep the existing emoji:
+            // old art beats no art.
+            try {
+              await guild.emojis.delete(id);
+              id = undefined;
+            } catch {
+              /* keep existing */
+            }
+          }
+          if (!id) {
+            const emoji = await guild.emojis.create({ attachment: renderPanelIconPng(name), name });
+            id = emoji.id;
+            created++;
+          }
+          if (id) this.panelEmojis.set(name, { id, name });
+        } catch (err) {
+          console.warn(
+            `[discord] panel emoji "${name}" unavailable (${err instanceof Error ? err.message : err}) — using Unicode`,
+          );
+        }
+      }
+      if (created > 0) console.log(`[discord] uploaded ${created} panel icons to "${guild.name}"`);
+      if (this.panelEmojis.size > 0) console.log(`[discord] panel icons active: ${this.panelEmojis.size}`);
+      if (stale) {
+        await fs.mkdir(config.dataDir, { recursive: true });
+        await fs.writeFile(versionFile, String(DiscordBot.PANEL_ICON_VERSION));
+      }
+    } catch (err) {
+      console.warn(`[discord] panel icon setup failed: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  /** Custom panel emoji when available, Unicode shape otherwise. */
+  private vzE(name: string, fallback: string): { id?: string; name: string } {
+    const e = this.panelEmojis.get(name);
+    return e ? { id: e.id, name: e.name } : { name: fallback };
+  }
+
   private panelPayload(s: Session): { embeds: EmbedBuilder[]; components: ActionRowBuilder<ButtonBuilder>[] } {
     const st = s.queue.getState();
     const track = st.track;
     const dur = st.durationMs || track?.durationMs || 0;
-    const pos = st.positionMs;
-    const pct = dur ? Math.round((pos / dur) * 10) : 0;
-    const bar = '▰'.repeat(pct) + '▱'.repeat(10 - pct);
+    const livePos = st.positionMs + (st.playing ? Math.max(0, Date.now() - (st.updatedAt || Date.now())) : 0);
+    const pos = dur > 0 ? Math.min(livePos, dur) : st.positionMs;
+
+    // Vaporzr-branded progress bar: monospace track with a glowing playhead knob.
+    const slots = 16;
+    const filled = dur ? Math.min(slots, Math.max(0, Math.round((pos / dur) * slots))) : 0;
+    const bar = '━'.repeat(filled) + (filled < slots ? '⬤' : '━') + '─'.repeat(Math.max(0, slots - filled - 1));
+    const statusIcon = st.playing ? '▶️' : '⏸';
     const djEnabled = s.playback.isDjEnabled(s.guildId);
 
     const embed = new EmbedBuilder().setColor(this.themeColor()).setTimestamp();
+    if (this.client.user) {
+      embed.setAuthor({ name: 'VAPORZR', iconURL: this.client.user.displayAvatarURL() });
+    }
     if (track) {
       embed
         .setTitle(`${srcEmoji(track.source)} ${track.name}`)
-        .setDescription(`${track.artists.join(', ')}\n${st.playing ? '▶' : '⏸'} ${bar} ${fmtMs(pos)} / ${fmtMs(dur)}`);
+        .setDescription(
+          `${track.artists.join(', ')}\n\n\`${bar}\`\n${statusIcon} \`${fmtMs(pos)} / ${fmtMs(dur)}\``,
+        );
       if (track.image) embed.setThumbnail(track.image);
     } else {
       embed.setTitle('Nothing playing').setDescription('Queue something with /play — this panel updates live.');
     }
+    const snap = s.queue.getSnapshot();
+    const posIdx = snap.tracks.findIndex((t) => t.current) + 1;
     embed.addFields([
-      { name: 'Queue', value: `${s.queue.getSnapshot().tracks.length}`, inline: true },
-      { name: 'Shuffle', value: st.shuffle ? '🔀 on' : 'off', inline: true },
-      { name: 'Volume', value: `${st.volume}%`, inline: true },
-      { name: 'Voice', value: s.voice.isJoined() ? '🔊 streaming to VC' : 'not streaming', inline: true },
-      { name: 'DJ', value: djEnabled ? '🎛️ on' : 'off', inline: true },
+      { name: '📜 Queue', value: `${snap.tracks.length}${posIdx ? ` · #${posIdx} now` : ''}`, inline: true },
+      { name: '🔀 Shuffle', value: st.shuffle ? 'on' : 'off', inline: true },
+      { name: '🔁 Repeat', value: st.repeat ? 'on' : 'off', inline: true },
+      { name: '🔊 Volume', value: `${st.volume}%`, inline: true },
+      { name: '🎙️ Voice', value: s.voice.isJoined() ? 'streaming' : 'not in VC', inline: true },
+      { name: '🎛️ DJ', value: djEnabled ? 'on' : 'off', inline: true },
     ]);
+    embed.setFooter({ text: `${this.client.user?.username ?? 'Vaporzr'} · this panel updates itself` });
 
     const rows: ActionRowBuilder<ButtonBuilder>[] = [
       new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder().setCustomId('vz:prev').setEmoji('⏮').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('vz:toggle').setEmoji(st.playing ? '⏸' : '▶').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('vz:next').setEmoji('⏭').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('vz:shuffle').setEmoji('🔀').setStyle(st.shuffle ? ButtonStyle.Success : ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('vz:prev').setEmoji(this.vzE('vz_prev', '⏮')).setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId('vz:toggle')
+          .setEmoji(this.vzE(st.playing ? 'vz_pause' : 'vz_play', st.playing ? '⏸' : '▶'))
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('vz:next').setEmoji(this.vzE('vz_next', '⏭')).setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId('vz:repeat')
+          .setEmoji(this.vzE('vz_repeat', '🔁'))
+          .setStyle(st.repeat ? ButtonStyle.Success : ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId('vz:shuffle')
+          .setEmoji(this.vzE('vz_shuffle', '🔀'))
+          .setStyle(st.shuffle ? ButtonStyle.Success : ButtonStyle.Secondary),
       ),
       new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder().setCustomId('vz:vol-down').setLabel('🔉').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('vz:vol-up').setLabel('🔊').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('vz:stop').setLabel('⏹').setStyle(ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId('vz:leave').setLabel('📤').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('vz:back10').setLabel('10s').setEmoji(this.vzE('vz_back10', '⏪')).setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('vz:fwd10').setLabel('10s').setEmoji(this.vzE('vz_fwd10', '⏩')).setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('vz:vol-down').setEmoji(this.vzE('vz_voldown', '🔉')).setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('vz:vol-up').setEmoji(this.vzE('vz_volup', '🔊')).setStyle(ButtonStyle.Secondary),
+      ),
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder().setCustomId('vz:dj').setLabel('DJ').setEmoji(this.vzE('vz_dj', '🎛️')).setStyle(djEnabled ? ButtonStyle.Success : ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('vz:stop').setEmoji(this.vzE('vz_stop', '⏹')).setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId('vz:leave').setEmoji(this.vzE('vz_eject', '📤')).setStyle(ButtonStyle.Secondary),
       ),
     ];
     const djRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder().setCustomId('vz:dj').setLabel('DJ').setEmoji('🎛️').setStyle(djEnabled ? ButtonStyle.Success : ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('vz:sfx:airhorn').setLabel('📣').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('vz:sfx:drop').setLabel('💥').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('vz:sfx:riser').setLabel('📈').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('vz:sfx:reverse').setLabel('↩️').setStyle(ButtonStyle.Primary),
     );
     if (djEnabled) {
-      djRow.addComponents(
-        new ButtonBuilder().setCustomId('vz:sfx:airhorn').setLabel('📣').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('vz:sfx:drop').setLabel('💥').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('vz:sfx:riser').setLabel('📈').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('vz:sfx:reverse').setLabel('↩️').setStyle(ButtonStyle.Primary),
+      rows.push(djRow);
+    }
+    // Discord only allows https URLs on link buttons — surface the web panel
+    // and visualizer whenever the secure tunnel is up.
+    const plink = vizTunnel.panelLink();
+    const vlink = vizTunnel.vizLink();
+    if (plink.secure && vlink.secure) {
+      rows.push(
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder().setLabel('🌐 Full control panel').setStyle(ButtonStyle.Link).setURL(plink.url),
+          new ButtonBuilder().setLabel('🌈 Visualizer').setStyle(ButtonStyle.Link).setURL(vlink.url),
+        ),
       );
     }
-    rows.push(djRow);
     return { embeds: [embed], components: rows };
   }
 
@@ -1637,6 +1825,9 @@ export class DiscordBot {
       toggle: 'pause',
       next: 'skip',
       shuffle: 'shuffle',
+      repeat: 'shuffle',
+      back10: 'seek',
+      fwd10: 'seek',
       'vol-down': 'volume',
       'vol-up': 'volume',
       stop: 'clear',
@@ -1666,6 +1857,17 @@ export class DiscordBot {
       case 'shuffle':
         s.playback.shuffle(!st.shuffle);
         break;
+      case 'repeat':
+        s.playback.setRepeat(!st.repeat);
+        break;
+      case 'back10':
+      case 'fwd10': {
+        const pos = st.positionMs + (st.playing ? Math.max(0, Date.now() - (st.updatedAt || Date.now())) : 0);
+        const dur = st.durationMs || st.track?.durationMs || 0;
+        const target = Math.max(0, pos + (action === 'back10' ? -10000 : 10000));
+        s.playback.seek(dur > 0 ? Math.min(target, dur - 500) : target);
+        break;
+      }
       case 'vol-down':
         s.playback.volume(Math.max(0, st.volume - 10));
         break;
@@ -1708,12 +1910,51 @@ export class DiscordBot {
     return this.bridge.getTheme().embedColor;
   }
 
+  /** Shared reference for both `/viz` and `V@viz`. Secure link first when the tunnel is up. */
+  private vizEmbed(isAdmin: boolean): EmbedBuilder {
+    const link = vizTunnel.vizLink();
+    const host = vizHost();
+    const lines: string[] = [];
+    if (link.secure) lines.push(`🔒 **Secure link — share this one:**\n<${link.url}>`);
+    if (isAdmin) lines.push(`🛠️ **Local network (admin):**\n<http://${host}:${config.port}/viz>`);
+    let desc: string;
+    if (link.secure) {
+      desc = `${lines.join('\n\n')}\n\nRenders live in any browser — encrypted, standalone, no player app needed. Visuals start automatically with playback.`;
+    } else if (isAdmin) {
+      desc = `${lines.join('\n\n')}\n\n⚠️ Secure tunnel is offline — it restarts itself; retry shortly.`;
+    } else {
+      desc = '🔒 The secure visualizer link is starting up — run this command again in ~30 seconds.';
+    }
+    return new EmbedBuilder()
+      .setTitle('🌐 Web Visualizer')
+      .setDescription(desc)
+      .setColor(this.themeColor())
+      .setFooter({
+        text: link.secure ? 'HTTPS keeps links trusted · works great on phones' : 'Secure link reconnects automatically',
+      });
+  }
+
+  private isAdminMember(userId: string, guild: Guild | null, member: unknown): boolean {
+    if (this.perms.isOwner(userId)) return true;
+    if (!guild || !member) return false;
+    const m = member as { id: string; roles: { cache: ReadonlyMap<string, unknown> } };
+    try {
+      return this.perms.getLevel(guild, m) === 'admin';
+    } catch {
+      return false;
+    }
+  }
+
   /** Shared reference for both `/help` and `V@help`. */
   private helpEmbed(): EmbedBuilder {
-    const host = 'vaporzr.local';
+    const link = vizTunnel.vizLink();
+    // Public embed: secure link only — the LAN address stays an admin-only detail.
+    const vizLine = link.secure
+      ? `**Web visualizer:** <${link.url}> 🔒`
+      : '**Web visualizer:** run `/viz` for the secure link';
     return new EmbedBuilder()
       .setTitle('🎧 Vaporzr')
-      .setDescription(`Music & visualizer bot — play, queue, and vibe.\n\n**Web visualizer:** <http://${host}:${config.port}/viz>`)
+      .setDescription(`Music & visualizer bot — play, queue, and vibe.\n\n${vizLine}`)
       .setColor(this.themeColor())
       .addFields(
         {

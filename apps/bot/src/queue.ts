@@ -157,6 +157,22 @@ export class QueueManager {
     return removed;
   }
 
+  /** Move a track from one position to another (panel reordering). */
+  move(from: number, to: number): boolean {
+    if (
+      from < 0 || from >= this.tracks.length ||
+      to < 0 || to >= this.tracks.length || from === to
+    ) return false;
+    const [item] = this.tracks.splice(from, 1);
+    this.tracks.splice(to, 0, item);
+    // Keep the playing cursor glued to its track.
+    if (from === this.currentIndex) this.currentIndex = to;
+    else if (from < this.currentIndex && to >= this.currentIndex) this.currentIndex -= 1;
+    else if (from > this.currentIndex && to <= this.currentIndex) this.currentIndex += 1;
+    this.emitQueue();
+    return true;
+  }
+
   clear(): void {
     this.tracks = [];
     this.currentIndex = -1;

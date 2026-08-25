@@ -12,14 +12,12 @@ import {
   type DiscordGatewayAdapterCreator,
 } from '@discordjs/voice';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { Transform } from 'node:stream';
+import { Readable, Transform } from 'node:stream';
 import { config } from './config.js';
 
 /**
- * googlevideo rejects ffmpeg's default UA with an empty response (no frames),
- * so we must present a browser-like one when pulling YouTube stream URLs.
- * ffmpeg-static's build has no `-user_agent` option, so we send the header
- * via `-headers` (supported everywhere). Local files get no UA options at all.
+ * User-Agent used when the bot itself (Node fetch) pulls a media stream.
+ * googlevideo rejects plain client UAs, so we present a browser-like one.
  */
 const STREAM_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
@@ -50,8 +48,10 @@ export class VoiceManager {
   private bytesSinceLog = 0;
   /** True while the playback feed is expected to push PCM (arm/disarm from playback.ts). */
   private expectingPcm = false;
-  /** Optional tap on every PCM chunk (for the spectrum analyzer). */
+  /** Optional tap on every PCM chunk (audio:pcm broadcast to visualizer windows). */
   private pcmTap: ((data: Buffer) => void) | null = null;
+  /** Dedicated spectrum-analyzer feed — independent of pcmTap so both coexist. */
+  private spectrumTap: ((data: Buffer) => void) | null = null;
   /** Called when the active stream's write buffer drains (resume a paused source). */
   private onStreamDrain: (() => void) | null = null;
   /** Called after repeated stall warnings to try un-sticking the feed chain. */
@@ -71,6 +71,11 @@ export class VoiceManager {
 
   setPcmTap(cb: ((data: Buffer) => void) | null): void {
     this.pcmTap = cb;
+  }
+
+  /** Feed the bot-side spectrum analyzer (separate slot from setPcmTap). */
+  setSpectrumTap(cb: ((data: Buffer) => void) | null): void {
+    this.spectrumTap = cb;
   }
 
   /** Re-point the join/leave notification (the bridge wires the primary session). */
@@ -319,6 +324,7 @@ export class VoiceManager {
         if (stream.writableEnded || stream.destroyed) return;
         const out = this.mixSfx(chunk as Buffer);
         this.pcmTap?.(out);
+        this.spectrumTap?.(out);
         cb(null, out);
       },
     });
@@ -337,6 +343,12 @@ export class VoiceManager {
 
   /**
    * Stream a URL (yt-dlp direct link) into the VC via ffmpeg → 48 kHz stereo PCM.
+   *
+   * For http(s) URLs the media is downloaded by Node itself and piped into
+   * ffmpeg's stdin: googlevideo 403s ffmpeg's own HTTPS client (TLS
+   * fingerprinting) and rejects requests without a `Range` header — Node's
+   * fetch with `Range: bytes=0-` satisfies both. ffmpeg never touches the
+   * network for streamed URLs.
    *
    * googlevideo intermittently answers 403 for signed stream URLs (YouTube's
    * anti-scraping throttle). When `refreshUrl` is provided the stream is
@@ -361,15 +373,29 @@ export class VoiceManager {
     this.stopStream();
     const token = this.streamToken;
     const startedAt = Date.now();
+    const isHttp = /^https?:\/\//i.test(url);
+    // HLS playlists (SoundCloud serves .m3u8) must be demuxed by ffmpeg itself —
+    // piping the playlist bytes into stdin produces noise, not audio.
+    const isHls = isHttp && /\.m3u8(\?|$)/i.test(url);
     const args = ['-hide_banner', '-loglevel', 'error'];
-    if (url.startsWith('http://') || url.startsWith('https://')) {
-      args.push('-headers', `User-Agent: ${STREAM_USER_AGENT}\r\n`);
+    if (isHttp && !isHls) {
+      // stdin is not seekable, so a resume seek runs on the output side
+      // (decode + discard); opus/aac decoding is far faster than realtime.
+      args.push('-i', 'pipe:0');
+      if (opts.seekMs) args.push('-ss', String(opts.seekMs / 1000));
+    } else {
+      if (opts.seekMs) args.push('-ss', String(opts.seekMs / 1000));
+      args.push('-i', url);
     }
-    if (opts.seekMs) args.push('-ss', String(opts.seekMs / 1000));
-    args.push('-i', url, '-vn', '-ac', '2', '-ar', '48000');
+    args.push('-vn', '-ac', '2', '-ar', '48000');
     args.push('-f', 's16le', 'pipe:1');
 
-    const proc = spawn(config.ffmpegPath, args, { windowsHide: true });
+    const proc = spawn(config.ffmpegPath, args, {
+      windowsHide: true,
+      env: Object.fromEntries(
+        Object.entries(process.env).filter(([k]) => !k.toLowerCase().endsWith('_proxy')),
+      ),
+    });
     this.ffmpeg = proc;
     this.streamStartTime = Date.now();
     this.pausedPositionMs = opts.seekMs ?? 0;
@@ -386,6 +412,7 @@ export class VoiceManager {
       if (line) console.warn(`[voice] ffmpeg: ${line.slice(0, 400)}`);
     });
     proc.stdout.pipe(stream);
+    if (isHttp && !isHls) this.fetchIntoStdin(url, proc, token);
     const resource = createAudioResource(stream, { inputType: StreamType.Raw, inlineVolume: true });
     this.resource = resource;
     if (opts.volume !== undefined) this.volumePercent = opts.volume;
@@ -427,6 +454,55 @@ export class VoiceManager {
       this.ffmpeg = null;
       if (opts.onEnd) opts.onEnd();
     });
+  }
+
+  /**
+   * Download `url` in Node and pipe it into ffmpeg's stdin. googlevideo
+   * currently rejects requests whose `Range` header is missing, open-ended
+   * (`bytes=0-`), or larger than ~256 KiB, so the file is fetched as a
+   * series of bounded 256 KiB chunks. `Readable.from` + `pipe` apply
+   * backpressure so only a couple of chunks buffer ahead of ffmpeg's
+   * (realtime-paced) consumption. The download aborts as soon as ffmpeg
+   * exits; download failures close stdin, which makes ffmpeg exit and
+   * triggers the caller's refreshUrl retry path.
+   */
+  private fetchIntoStdin(url: string, proc: ChildProcess, token: number): void {
+    const CHUNK_BYTES = 256 * 1024;
+    const abort = new AbortController();
+    proc.on('exit', () => abort.abort());
+    // EPIPE is expected when ffmpeg is killed mid-download (skip/stop).
+    proc.stdin?.on('error', () => {});
+
+    async function* chunks(): AsyncGenerator<Buffer> {
+      let offset = 0;
+      for (;;) {
+        const res = await fetch(url, {
+          headers: {
+            'User-Agent': STREAM_USER_AGENT,
+            Range: `bytes=${offset}-${offset + CHUNK_BYTES - 1}`,
+          },
+          signal: abort.signal,
+        });
+        if (res.status === 416) return; // requested past EOF — track fully fetched
+        if (res.status !== 206 && res.status !== 200) throw new Error(`HTTP ${res.status}`);
+        const chunk = Buffer.from(await res.arrayBuffer());
+        if (chunk.length === 0) return;
+        const contentRange = res.headers.get('content-range'); // "bytes start-end/total"
+        const total = contentRange ? Number(contentRange.split('/')[1]) : NaN;
+        offset += chunk.length;
+        yield chunk;
+        if (Number.isFinite(total) ? offset >= total : chunk.length < CHUNK_BYTES) return;
+      }
+    }
+
+    const source = Readable.from(chunks(), { highWaterMark: 2 });
+    source.on('error', (err) => {
+      if (token !== this.streamToken) return;
+      console.warn(`[voice] stream download failed: ${err instanceof Error ? err.message : err}`);
+      source.destroy();
+      proc.stdin?.end();
+    });
+    source.pipe(proc.stdin!);
   }
 
   /** Set the loudness of the active server-side stream (0–100). */

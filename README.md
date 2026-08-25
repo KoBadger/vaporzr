@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/logo.png" width="140" alt="Vaporzr"></p>
+
 # Vaporzr
 
 Shared Spotify playback: queue songs in Discord, stream audio through a local Electron player, watch the visualization in Spotify via a Spicetify panel.

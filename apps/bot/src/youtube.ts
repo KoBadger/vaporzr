@@ -14,6 +14,13 @@ export interface ResolvedVideo extends ResolvedTrack {
 const YT_WATCH_RE = /(?:youtube\.com\/(?:watch\?.*v=|shorts\/|embed\/|live\/)|youtu\.be\/)([A-Za-z0-9_-]{6,})/;
 const YT_PLAYLIST_RE = /(?:youtube\.com|music\.youtube\.com)\/playlist\?(?:[^#]*&)?list=([A-Za-z0-9_-]+)/;
 
+/**
+ * Audio-first format selection: the bot only plays audio, and YouTube
+ * currently serves 403s for the combined video+audio format (itag 18)
+ * while audio-only formats (itag 251/140, …) download normally.
+ */
+const AUDIO_FORMAT = 'bestaudio[acodec!=none]/best[acodec!=none]/best';
+
 export function isYoutubeUrl(input: string): boolean {
   return /(^|[./])youtube\.com\//.test(input) || /(^|[./])youtu\.be\//.test(input) || /(^|[./])music\.youtube\.com\//.test(input);
 }
@@ -59,12 +66,15 @@ interface YtDlpMeta {
   url?: string;
 }
 
-function runYtDlp(args: string[]): Promise<string> {
+function ytDlpOnce(args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
+    const noProxyEnv = Object.fromEntries(
+      Object.entries(process.env).filter(([k]) => !k.toLowerCase().endsWith('_proxy')),
+    );
     execFile(
       config.ytDlpPath,
-      args,
-      { windowsHide: true, timeout: 60_000, maxBuffer: 4 * 1024 * 1024 },
+      ['--no-check-certificates', '--socket-timeout', '10', '--retries', '1', ...args],
+      { windowsHide: true, timeout: 45_000, maxBuffer: 4 * 1024 * 1024, env: noProxyEnv },
       (err, stdout, stderr) => {
         if (err) {
           reject(new YoutubeError(`yt-dlp failed: ${(stderr || err.message).toString().slice(0, 300)}`));
@@ -74,6 +84,35 @@ function runYtDlp(args: string[]): Promise<string> {
       },
     );
   });
+}
+
+/**
+ * Error fragments that indicate a transient YouTube-side hiccup (degraded
+ * player response, soft throttle, momentary 403) rather than a bad input.
+ * These are worth retrying — the same request typically succeeds seconds later.
+ */
+const TRANSIENT_YTDLP_ERRORS = [
+  'Requested format is not available',
+  'HTTP Error 403',
+  'HTTP Error 429',
+  'HTTP Error 5',
+  'Unable to download',
+  'Failed to extract',
+  'Sign in to confirm',
+  'ETIMEDOUT',
+];
+
+async function runYtDlp(args: string[], retries = 2): Promise<string> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await ytDlpOnce(args);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const transient = TRANSIENT_YTDLP_ERRORS.some((t) => msg.includes(t));
+      if (!transient || attempt >= retries) throw err;
+      await new Promise((r) => setTimeout(r, 900 * (attempt + 1)));
+    }
+  }
 }
 
 /** Resolve a YouTube video (id or URL) into a queuable track with a live stream URL. */
@@ -86,7 +125,7 @@ export async function resolveYoutubeVideo(input: string): Promise<ResolvedVideo>
     '--no-playlist',
     '--no-warnings',
     '-f',
-    'best[height<=720][acodec!=none]/best[acodec!=none]/best',
+    AUDIO_FORMAT,
     '--get-url',
     '--print',
     '%(id)s|%(title)s|%(duration)s|%(thumbnail)s|%(channel)s',
@@ -156,42 +195,186 @@ export async function resolveYoutubePlaylist(input: string): Promise<ResolvedVid
 }
 
 /**
- * Search AND resolve a stream URL in a single yt-dlp subprocess call using
- * `ytsearch1:`. Returns a fully resolved ResolvedVideo with streamUrl ready,
- * or null if nothing matched. This avoids the two-step YouTube API + yt-dlp
- * dance that `searchYoutube` + `resolveYoutubeVideo` would require.
+ * Words that usually mark unofficial variants (remixes, lives, covers…).
+ * They DEPRIORITIZE a candidate — never disqualify — unless the query itself
+ * asks for one ("kids with guns remix" keeps remixes in contention).
  */
-export async function searchAndResolveYoutube(query: string): Promise<ResolvedVideo | null> {
+const VARIANT_RE =
+  /\b(remix|bootleg|live|cover|karaoke|acoustic|instrumental|nightcore|mashup|sped\s*up|slowed|reverb)\b/i;
+
+function normText(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/\([^)]*\)/g, ' ')
+    .replace(/\[[^\]]*\]/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+export interface YoutubeSearchOptions {
+  /** Canonical track title (used instead of the raw query for token matching). */
+  name?: string;
+  /** Artist names — presence in channel/title is rewarded strongly. */
+  artists?: string[];
+  /** Expected length; near-exact durations get a bonus, way-off ones a penalty. */
+  durationMs?: number;
+}
+
+interface FlatHit {
+  videoId: string;
+  title: string;
+  channel: string;
+  durationSec: number;
+}
+
+/** Fast metadata-only YouTube search (no per-video extraction). */
+async function flatSearch(query: string): Promise<FlatHit[]> {
+  const raw = await runYtDlp([
+    '--no-playlist',
+    '--no-warnings',
+    '--flat-playlist',
+    '--print',
+    '%(id)s|%(title)s|%(channel)s|%(duration)s',
+    `ytsearch5:${query}`,
+  ]);
+  const hits: FlatHit[] = [];
+  for (const line of raw.trim().split(/\r?\n/)) {
+    const [id, title = '', channel = '', dur = ''] = line.split('|');
+    if (!id || !/^[A-Za-z0-9_-]{6,}$/.test(id)) continue;
+    hits.push({ videoId: id, title, channel, durationSec: Number(dur) || 0 });
+  }
+  return hits;
+}
+
+function scoreHit(
+  hit: FlatHit,
+  rank: number,
+  query: string,
+  opts: YoutubeSearchOptions,
+): number {
+  const t = normText(hit.title);
+  const ch = normText(hit.channel ?? '');
+  let score = 10 - rank; // earlier results win ties
+
+  const nameTokens = normText(opts.name ?? query)
+    .split(' ')
+    .filter((w) => w.length > 1);
+  for (const w of nameTokens) score += t.includes(w) ? 2 : -3;
+
+  for (const artist of opts.artists ?? []) {
+    const na = normText(artist);
+    if (!na) continue;
+    if (ch.includes(na)) score += 4;
+    else if (t.includes(na)) score += 2;
+    else score -= 1;
+  }
+
+  if (!VARIANT_RE.test(query) && VARIANT_RE.test(hit.title)) score -= 8;
+
+  const wantMs = opts.durationMs ?? 0;
+  if (wantMs > 0 && hit.durationSec > 0) {
+    const d = Math.abs(hit.durationSec * 1000 - wantMs);
+    if (d < 3000) score += 3;
+    else if (d < 10000) score += 1;
+    else if (d > 60000) score -= 2;
+  }
+  return score;
+}
+
+/**
+ * Search AND resolve a stream URL. Fetches the top 5 candidates cheaply
+ * (metadata only), scores them against the expected title/artists/duration —
+ * pushing remixes/lives/covers below the canonical release — then fully
+  * extracts the winner. Returns null if nothing matched.
+  *
+  * Latency strategy: a legacy fused `ytsearch1` extraction (stream URL in one
+  * subprocess) races the cheap scored search. When scoring confirms #1 is the
+  * best pick — the common case — the fused result is returned with zero extra
+  * wall time; otherwise the higher-scored candidate gets extracted instead.
+  * Successful results are LRU-cached for 10 minutes.
+  */
+const resolveCache = new Map<string, { at: number; video: ResolvedVideo }>();
+const RESOLVE_CACHE_TTL = 10 * 60 * 1000;
+const RESOLVE_CACHE_MAX = 40;
+
+export async function searchAndResolveYoutube(
+  query: string,
+  opts: YoutubeSearchOptions = {},
+): Promise<ResolvedVideo | null> {
+  const cached = resolveCache.get(query);
+  if (cached && Date.now() - cached.at < RESOLVE_CACHE_TTL) {
+    return cached.video;
+  }
+  const t0 = Date.now();
   try {
-    const raw = await runYtDlp([
+    // Fast path: fused single-call top-result extraction (legacy behavior).
+    const fusedP = runYtDlp([
       '--no-playlist',
       '--no-warnings',
       '-f',
-      'best[height<=720][acodec!=none]/best[acodec!=none]/best',
+      AUDIO_FORMAT,
       '--get-url',
       '--print',
       '%(id)s|%(title)s|%(duration)s|%(thumbnail)s|%(channel)s',
       `ytsearch1:${query}`,
-    ]);
-    const lines = raw.trim().split(/\r?\n/);
-    const metaLine = lines.find((l) => l.includes('|'));
-    const streamUrl = lines.find((l) => l.startsWith('https://'));
-    if (!metaLine || !streamUrl) return null;
-    const [vid, title, duration, thumbnail, channel] = metaLine.split('|');
-    return {
-      videoId: vid,
-      uri: `youtube:video:${vid}`,
-      name: title,
-      artists: [channel ?? 'YouTube'],
-      album: 'YouTube',
-      durationMs: (Number(duration) || 0) * 1000,
-      image: thumbnail || undefined,
-      source: 'youtube',
-      streamUrl,
-      channel: channel ?? 'YouTube',
-      thumbnail: thumbnail || undefined,
-    };
-  } catch {
+    ]).catch(() => null);
+    // Accuracy path: cheap metadata for the top 5.
+    const hitsP = flatSearch(query).catch(() => [] as FlatHit[]);
+    const [fusedRaw, hits] = await Promise.all([fusedP, hitsP]);
+    if (hits.length === 0 && !fusedRaw) return null;
+
+    let best = hits[0];
+    let bestScore = -Infinity;
+    hits.forEach((h, i) => {
+      const s = scoreHit(h, i, query, opts);
+      if (s > bestScore) {
+        bestScore = s;
+        best = h;
+      }
+    });
+
+    let video: ResolvedVideo | null = null;
+    const fusedWinner =
+      fusedRaw && (hits.length === 0 || best === hits[0]);
+
+    if (fusedWinner) {
+      const lines = fusedRaw.trim().split(/\r?\n/);
+      const metaLine = lines.find((l) => l.includes('|'));
+      const streamUrl = lines.find((l) => l.startsWith('https://'));
+      if (metaLine && streamUrl) {
+        const [vid, title, duration, thumbnail, channel] = metaLine.split('|');
+        video = {
+          videoId: vid,
+          uri: `youtube:video:${vid}`,
+          name: title,
+          artists: [channel ?? 'YouTube'],
+          album: 'YouTube',
+          durationMs: (Number(duration) || 0) * 1000,
+          image: thumbnail || undefined,
+          source: 'youtube',
+          streamUrl,
+          channel: channel ?? 'YouTube',
+          thumbnail: thumbnail || undefined,
+        };
+      }
+    }
+    if (!video && best) {
+      console.log(
+        `[youtube] score override -> extracting #${hits.indexOf(best) + 1} "${best.title}"`,
+      );
+      video = await resolveYoutubeVideo(best.videoId);
+    }
+    if (!video) return null;
+
+    console.log(`[youtube] resolved "${video.name}" in ${Date.now() - t0}ms (${fusedWinner ? 'fast path' : 'scored path'})`);
+    resolveCache.set(query, { at: Date.now(), video });
+    if (resolveCache.size > RESOLVE_CACHE_MAX) {
+      const oldest = [...resolveCache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+      if (oldest) resolveCache.delete(oldest[0]);
+    }
+    return video;
+  } catch (err: any) {
+    console.error(`[youtube] searchAndResolveYoutube failed for "${query}":`, err?.message ?? err);
     return null;
   }
 }

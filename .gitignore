@@ -46,3 +46,7 @@ tree.txt
 viz.txt
 viz2.txt
 viz3.txt
+
+# Vendored binaries (all downloadable)
+vendor/
+voiceapi.txt

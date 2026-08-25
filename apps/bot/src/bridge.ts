@@ -18,13 +18,17 @@ import { VoiceManager } from './voice.js';
 import { LibrespotManager } from './librespot.js';
 import { Session, SessionManager } from './session.js';
 import { config } from './config.js';
-import { DEFAULT_THEME } from './themes.js';
+import { DEFAULT_THEME, themeById } from './themes.js';
+import { analyzer } from './analyzer.js';
+import { searchAndResolveYoutube } from './youtube.js';
 
 interface Client {
   socket: WebSocket;
   role: 'panel' | 'visualizer';
   name: string;
   subscribedVisuals: boolean;
+  /** Panels that want raw PCM (browser-side MilkDrop/analyser rendering). */
+  subscribedPcm: boolean;
   /** Guild this client is interested in (undefined = primary / all). */
   guildId?: string;
 }
@@ -39,7 +43,6 @@ export class Bridge {
   private sensitivity = 1.0;
   onBurstData: ((data: string) => void) | null = null;
   onVisualsRequested: (() => void) | null = null;
-  private visualizerOpenPending = false;
   librespot: LibrespotManager;
 
   constructor(
@@ -72,7 +75,16 @@ export class Bridge {
       if (s.guildId === this.sessions.guildId) this.syncPrimary();
     });
 
-    this.wss.on('connection', (socket) => {
+    this.wss.on('connection', (socket, req) => {
+      // Share-key gate: WebSockets must carry the same cookie the pages use.
+      if (config.shareKey) {
+        const cookie = req.headers.cookie ?? '';
+        const m = /(?:^|;\s*)vz_key=([^;]+)/.exec(cookie);
+        if (!m || m[1] !== config.shareKey) {
+          socket.close();
+          return;
+        }
+      }
       socket.on('message', (data) => this.handleMessage(socket, data));
       socket.on('close', () => this.handleClose(socket));
       socket.on('error', () => this.handleClose(socket));
@@ -116,8 +128,10 @@ export class Bridge {
     });
     const gid = this.primaryGuildId || '__primary__';
     s.setPcmSink((data: Buffer) => {
+      const hasPcmPanels = [...this.panels].some((p) => p.subscribedPcm);
+      if (this.visualizers.size === 0 && !hasPcmPanels) return; // nobody listening — skip base64 work entirely
       const b64 = data.toString('base64');
-      this.broadcastPcmToVisualizers(gid, b64);
+      this.broadcastPcm(gid, b64);
     });
     const q = s.queue;
     const onQueueChanged = (): void => {
@@ -150,7 +164,6 @@ export class Bridge {
     for (const vis of this.visualizers) {
       if (vis.socket === socket) {
         this.visualizers.delete(vis);
-        this.visualizerOpenPending = false;
         console.log('[bridge] visualizer disconnected');
         break;
       }
@@ -169,11 +182,11 @@ export class Bridge {
         role: msg.role,
         name: msg.name ?? '',
         subscribedVisuals: false,
+        subscribedPcm: false,
         guildId: msg.guildId || undefined,
       };
       if (msg.role === 'visualizer') {
         this.visualizers.add(client);
-        this.visualizerOpenPending = false;
         console.log(`[bridge] visualizer connected${client.guildId ? ` (guild ${client.guildId})` : ''}`);
         this.sendToSocket(socket, { type: 'visuals:enabled', enabled: this.visualsSubscribed(client.guildId) });
         this.sendToSocket(socket, { type: 'audio:forward', enabled: false });
@@ -181,6 +194,7 @@ export class Bridge {
         this.sendToSocket(socket, { type: 'state:update', state: this.lastState });
         this.sendToSocket(socket, { type: 'theme', theme: this.theme });
         this.sendToSocket(socket, { type: 'visuals:sensitivity', multiplier: this.sensitivity });
+        this.ensureBarsTicker();
       } else {
         this.panels.add(client);
         console.log(`[bridge] panel connected${client.guildId ? ` (guild ${client.guildId})` : ''}`);
@@ -234,6 +248,7 @@ export class Bridge {
         const client = this.clientOf(socket);
         if (client) {
           client.subscribedVisuals = msg.channels.includes('visuals');
+          client.subscribedPcm = msg.channels.includes('pcm');
           if (msg.guildId) client.guildId = msg.guildId;
           const gid = client.guildId;
           this.sendToSocket(socket, {
@@ -246,10 +261,8 @@ export class Bridge {
               enabled: this.visualsSubscribed(vis.guildId),
             });
           }
-          if (client.subscribedVisuals && this.visualizers.size === 0 && !this.visualizerOpenPending) {
-            this.visualizerOpenPending = true;
-            console.log('[bridge] panel wants visuals but no visualizer connected -- requesting player window');
-            this.onVisualsRequested?.();
+          if (client.subscribedVisuals) {
+            this.ensureBarsTicker();
           }
         }
         this.sendSnapshot(socket);
@@ -306,6 +319,9 @@ export class Bridge {
       case 'shuffle':
         if (msg.shuffle != null) this.playback.shuffle(msg.shuffle);
         break;
+      case 'repeat':
+        if (msg.repeat != null) this.playback.setRepeat(msg.repeat);
+        break;
       case 'clear':
         this.playback.stopAll();
         this.queue.clear();
@@ -335,6 +351,71 @@ export class Bridge {
           this.setPrimaryGuildId(msg.guildId);
         }
         break;
+      case 'sensitivity':
+        // Same global, persisted setting as the /sensitivity slash command.
+        if (msg.sensitivity != null) {
+          const v = Math.max(0.5, Math.min(1.5, msg.sensitivity));
+          this.setSensitivity(v);
+          console.log(`[bridge] sensitivity set to ${v}x via panel`);
+        }
+        break;
+      case 'theme':
+        if (msg.themeId) {
+          const t = themeById(msg.themeId);
+          if (t) {
+            this.setTheme(t);
+            console.log(`[bridge] theme set to "${t.name}" via panel`);
+          }
+        }
+        break;
+      case 'move':
+        if (msg.index != null && msg.to != null) {
+          if (!this.queue.move(msg.index, msg.to)) {
+            this.notice('error', 'Could not move that track.');
+          }
+        }
+        break;
+      case 'playSearch': {
+        const q = (msg.query ?? '').trim();
+        if (!q) break;
+        const playNow = msg.now !== false;
+        void (async () => {
+          try {
+            const video = await searchAndResolveYoutube(q);
+            if (!video) {
+              this.notice('error', `No YouTube match for "${q}"`);
+              return;
+            }
+            this.queue.enqueue(
+              {
+                uri: video.uri,
+                name: video.name,
+                artists: video.artists,
+                album: video.album,
+                durationMs: video.durationMs,
+                image: video.image,
+                source: 'youtube',
+              },
+              'panel',
+            );
+            this.notice('success', `${playNow ? 'Now playing' : 'Added'}: ${video.name}`);
+            if (playNow) {
+              // Point the cursor at the fresh track when idle, then start.
+              while (this.queue.getCurrentTrack()?.uri !== video.uri) {
+                if (!this.queue.next()) break;
+              }
+              void this.playback.play().catch((err) => {
+                console.error('[bridge] playSearch playback failed:', err instanceof Error ? err.message : err);
+                this.notice('error', `Playback failed: ${err instanceof Error ? err.message : err}`);
+              });
+            }
+          } catch (err) {
+            console.error('[bridge] playSearch failed:', err);
+            this.notice('error', `Search failed: ${err instanceof Error ? err.message : err}`);
+          }
+        })();
+        break;
+      }
       default:
         break;
     }
@@ -356,6 +437,11 @@ export class Bridge {
     const msg: OutboundMessage = { type: 'dj:update', enabled };
     this.broadcastPanels(msg);
     this.broadcastVisualizers(msg);
+  }
+
+  /** Toast-style feedback to every connected panel. */
+  notice(level: 'info' | 'success' | 'error', text: string): void {
+    this.broadcastPanels({ type: 'panel:notice', level, text });
   }
 
   private visualsSubscribed(guildId?: string): boolean {
@@ -389,6 +475,7 @@ export class Bridge {
     } catch { /* non-fatal */ }
     const msg: OutboundMessage = { type: 'visuals:sensitivity', multiplier };
     this.broadcastVisualizers(msg);
+    this.broadcastPanels(msg);
   }
 
   hasVisualizers(): boolean {
@@ -428,6 +515,28 @@ export class Bridge {
 
   private framesSeen = 0;
   private lastFrameLog = 0;
+  private lastFrameSentAt = 0;
+  private barsTicker: NodeJS.Timeout | null = null;
+
+  /**
+   * Lightweight 8 fps spectrum broadcast for standalone web visualizers.
+   * ~150 bytes/message vs multi-KB rendered frames — the web /viz page draws
+   * its own bars from this, so it never needs the desktop player running.
+   */
+  private ensureBarsTicker(): void {
+    if (this.barsTicker) return;
+    this.barsTicker = setInterval(() => {
+      const hasConsumers =
+        this.visualizers.size > 0 || [...this.panels].some((p) => p.subscribedVisuals);
+      if (!hasConsumers || !analyzer.hasData()) return;
+      const msg: OutboundMessage = { type: 'visuals:bars', bars: analyzer.currentBars() };
+      for (const panel of this.panels) {
+        if (panel.subscribedVisuals) this.sendToSocket(panel.socket, msg);
+      }
+      for (const vis of this.visualizers) this.sendToSocket(vis.socket, msg);
+    }, 125);
+    this.barsTicker.unref?.();
+  }
 
   private broadcastVisuals(data: string, guildId?: string): void {
     this.framesSeen++;
@@ -438,6 +547,10 @@ export class Bridge {
       console.log(`[bridge] visuals:frame x${this.framesSeen} received, ${n} panel(s) for guild ${guildId ?? 'all'}`);
       this.framesSeen = 0;
     }
+    // Cap forwarded frame rate at ~25 fps — producers can burst faster and
+    // flooding slow clients (phones on the tunnel) compounds into lag.
+    if (now - this.lastFrameSentAt < 40) return;
+    this.lastFrameSentAt = now;
     const msg: OutboundMessage = { type: 'visuals:frame', data, guildId };
     for (const panel of this.panels) {
       if (panel.subscribedVisuals && this.panelMatchesGuild(panel, guildId)) {
@@ -452,11 +565,16 @@ export class Bridge {
     return panel.guildId === guildId;
   }
 
-  private broadcastPcmToVisualizers(guildId: string, data: string): void {
+  private broadcastPcm(guildId: string, data: string): void {
     const msg: OutboundMessage = { type: 'audio:pcm', guildId, data };
     for (const vis of this.visualizers) {
       if (!vis.guildId || vis.guildId === guildId) {
         this.sendToSocket(vis.socket, msg);
+      }
+    }
+    for (const panel of this.panels) {
+      if (panel.subscribedPcm && (!guildId || !panel.guildId || panel.guildId === guildId)) {
+        this.sendToSocket(panel.socket, msg);
       }
     }
   }

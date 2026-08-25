@@ -24,6 +24,31 @@ export const config = {
   librespotDeviceName: process.env.LIBRESPOT_DEVICE_NAME ?? 'Vaporzr',
   /** Local TCP port librespot streams raw PCM to (must be space-free in the bridge command). */
   librespotBridgePort: Number(process.env.LIBRESPOT_BRIDGE_PORT ?? 4789),
+  /**
+   * Hostname advertised in /viz, /panel, and /help links. Empty = auto-detect
+   * the LAN IP. Set to a custom domain when running behind port forwarding.
+   */
+  publicHost: process.env.PUBLIC_HOST ?? '',
+  /** cloudflared binary used to expose an HTTPS quick tunnel for /viz + /panel links. */
+  cloudflaredPath:
+    process.env.CLOUDFLARED_PATH ??
+    path.join(__dirname, '..', '..', '..', 'vendor', 'cloudflared', 'cloudflared.exe'),
+  /** Set VIZ_TUNNEL=off to disable the automatic HTTPS secure-link tunnel. */
+  vizTunnel: process.env.VIZ_TUNNEL !== 'off' && process.env.VIZ_TUNNEL !== '0',
+  /** Cloudflare named-tunnel token (dashboard "install connector" token). Enables your own branded domain, e.g. viz.vaporzr.app. Empty = ephemeral trycloudflare.com URL. */
+  tunnelToken: process.env.TUNNEL_TOKEN ?? '',
+  /**
+   * Permanent public base URL for /viz + /panel links (e.g. a Tailscale Funnel
+   * hostname like https://vaporzr-bot.your-tailnet.ts.net). When set, every
+   * bot link uses it and the cloudflared quick tunnel stays off.
+   */
+  staticBaseUrl: process.env.PUBLIC_BASE_URL ?? '',
+  /**
+   * Shared-secret gate for /panel + /viz (and their WebSockets). When set,
+   * first visit needs ?key=<SHARE_KEY> — a cookie then remembers the device.
+   * Empty = no gate (LAN-only setups).
+   */
+  shareKey: process.env.SHARE_KEY ?? '',
   /** Bitrate librespot requests from Spotify (320 needs Premium). */
   librespotBitrate: Number(process.env.LIBRESPOT_BITRATE ?? 320),
   /** When true, `V@p` plays via YouTube instead of the Spotify device to save API quota. */

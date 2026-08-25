@@ -9,12 +9,16 @@ import { tokenStore } from './tokenStore.js';
 import { Bridge } from './bridge.js';
 import { SessionManager } from './session.js';
 import { PermissionsManager } from './permissions.js';
+import { vizTunnel } from './tunnel.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export function startServer(sessions: SessionManager, perms: PermissionsManager): Bridge {
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', `http://localhost:${config.port}`);
+    // HTML routes are dev-iterated constantly — never let browsers serve stale
+    // copies (the /vendor route below overrides this with long caching).
+    res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -25,25 +29,95 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
       return;
     }
 
-    void handleRoute(url, res);
+    void handleRoute(req, url, res);
   });
 
   const bridge = new Bridge(sessions, perms, server);
 
   server.listen(config.port, '0.0.0.0', () => {
     console.log(`[vaporzr] control server on http://0.0.0.0:${config.port}`);
+    vizTunnel.start();
   });
 
   return bridge;
 }
 
-async function handleRoute(url: URL, res: http.ServerResponse): Promise<void> {
+/** True when the request carries the shared key (cookie or ?key= param). */
+export function hasShareAccess(req: http.IncomingMessage, url: URL): boolean {
+  if (!config.shareKey) return true;
+  const cookie = req.headers.cookie ?? '';
+  const m = /(?:^|;\s*)vz_key=([^;]+)/.exec(cookie);
+  if (m && m[1] === config.shareKey) return true;
+  return url.searchParams.get('key') === config.shareKey;
+}
+
+function keyPrompt(res: http.ServerResponse): void {
+  res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8' });
+  res.end(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Vaporzr — Access</title>
+<link rel="icon" type="image/png" href="/favicon.png">
+<style>body{font-family:system-ui,sans-serif;background:#0b1026;color:#c7d2fe;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}
+form{background:rgba(16,22,46,.8);border:1px solid rgba(140,160,255,.25);padding:2rem;border-radius:16px;text-align:center}
+h1{font-size:15px;letter-spacing:3px;background:linear-gradient(90deg,#00f0ff,#6a5cff);-webkit-background-clip:text;background-clip:text;color:transparent}
+input{display:block;margin:1rem auto;padding:.6rem .9rem;border-radius:9px;border:1px solid rgba(140,160,255,.3);background:rgba(10,14,32,.7);color:#e2e8f0;font-size:14px;width:220px}
+button{padding:.6rem 1.4rem;border-radius:9px;border:none;background:linear-gradient(135deg,#6a5cff,#00f0ff);color:#0b1026;font-weight:700;cursor:pointer}</style>
+</head><body><form method="GET"><h1>VAPORZR</h1><p style="color:#94a3b8;font-size:12px">Enter the share key to continue</p>
+<input name="key" placeholder="share key" autofocus><button>Enter</button></form></body></html>`);
+}
+
+async function handleRoute(req: http.IncomingMessage, url: URL, res: http.ServerResponse): Promise<void> {
+  const host = req.headers.host ?? `localhost:${config.port}`;
+  const origin = `https://${host}`;
   try {
+    // Share-key gate for the interactive surfaces. Brand assets, legal pages,
+    // the landing page and the Spotify OAuth flow stay open.
+    const gated =
+      url.pathname.startsWith('/panel') ||
+      url.pathname.startsWith('/viz') ||
+      url.pathname.startsWith('/vendor/');
+    if (gated && !hasShareAccess(req, url)) {
+      keyPrompt(res);
+      return;
+    }
+    // Valid ?key= on a gated route — remember this device for a year.
+    if (gated && config.shareKey && url.searchParams.get('key') === config.shareKey) {
+      res.setHeader('Set-Cookie', `vz_key=${config.shareKey}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax`);
+    }
+    // Brand assets.
+    if (url.pathname === '/favicon.png' || url.pathname === '/logo.png') {
+      try {
+        const file = fs.readFileSync(path.join(__dirname, '..', 'public', url.pathname.slice(1)));
+        res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' });
+        res.end(file);
+        return;
+      } catch {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+    }
+    // Static vendor bundles for the web visualizer (butterchurn etc.).
+    if (url.pathname.startsWith('/vendor/')) {
+      const rel = url.pathname.slice('/vendor/'.length);
+      if (/^[\w.-]+\.js$/.test(rel)) {
+        const file = fs.readFileSync(path.join(__dirname, '..', 'public', 'vendor', rel));
+        res.writeHead(200, {
+          'Content-Type': 'application/javascript; charset=utf-8',
+          'Cache-Control': 'public, max-age=86400',
+        });
+        res.end(file);
+        return;
+      }
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Not found.');
+      return;
+    }
+
     switch (url.pathname) {
       case '/':
       case '/index.html': {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         res.end(html(`
+          <img src="/logo.png" alt="Vaporzr" style="width:96px;height:96px;border-radius:22px;box-shadow:0 8px 30px rgba(106,92,255,.45);margin-bottom:1rem">
           <h1>Vaporzr Bot</h1>
           <p>${tokenStore.load() ? 'Spotify account linked.' : 'Spotify not linked.'}</p>
           <p><a href="/login">Link Spotify account</a></p>
@@ -98,7 +172,9 @@ async function handleRoute(url: URL, res: http.ServerResponse): Promise<void> {
       case '/panel':
       case '/panel.html': {
         try {
-          const file = fs.readFileSync(path.join(__dirname, '..', 'public', 'panel.html'), 'utf8');
+          const file = fs
+            .readFileSync(path.join(__dirname, '..', 'public', 'panel.html'), 'utf8')
+            .replace(/\{\{ORIGIN\}\}/g, origin);
           res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
           res.end(file);
         } catch {
@@ -111,7 +187,9 @@ async function handleRoute(url: URL, res: http.ServerResponse): Promise<void> {
       case '/viz':
       case '/viz.html': {
         try {
-          const file = fs.readFileSync(path.join(__dirname, '..', 'public', 'viz.html'), 'utf8');
+          const file = fs
+            .readFileSync(path.join(__dirname, '..', 'public', 'viz.html'), 'utf8')
+            .replace(/\{\{ORIGIN\}\}/g, origin);
           res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
           res.end(file);
         } catch {

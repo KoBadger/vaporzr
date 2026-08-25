@@ -2,6 +2,7 @@ import { app, BrowserWindow, desktopCapturer, globalShortcut, ipcMain, screen, s
 import path from 'node:path';
 
 const www = path.join(__dirname, '..');
+const LOGO = path.join(__dirname, '..', 'assets', 'logo.png');
 
 const BOT_PORT = Number(process.env.VAPORZR_PORT ?? 4876);
 const VISUALIZER = process.env.VAPORZR_VISUALIZER !== '0';
@@ -39,6 +40,7 @@ function createVisualizerWindow(): void {
     height: 720,
     frame: false,
     backgroundColor: '#05060f',
+    icon: LOGO,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -76,6 +78,7 @@ function createOverlayWindow(screensaver: boolean): void {
     alwaysOnTop: true,
     hasShadow: false,
     skipTaskbar: true,
+    icon: LOGO,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
