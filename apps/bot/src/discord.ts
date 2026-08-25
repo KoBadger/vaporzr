@@ -2213,7 +2213,7 @@ export class DiscordBot {
         },
         {
           name: '🔧 Admin',
-          value: '`/perms` — view / set command levels and roles · `/stats` — bot statistics · `/invite` — get the invite link',
+          value: '`/perms` — view / set command levels and roles · `/stats` — bot statistics · `/key rotate` — reissue web access · `/invite` — get the invite link',
         },
         {
           name: '⌨️ Quick (prefix)',
