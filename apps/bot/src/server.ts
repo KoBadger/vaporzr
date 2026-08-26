@@ -115,14 +115,19 @@ async function handleRoute(req: http.IncomingMessage, url: URL, res: http.Server
     switch (url.pathname) {
       case '/':
       case '/index.html': {
+        // Bot tokens are base64(appId).signature — decode for the invite link.
+        const appId = Buffer.from(config.discordToken.split('.')[0], 'base64').toString('ascii');
+        const perms = (1n << 11n) | (1n << 14n) | (1n << 15n) | (1n << 20n) | (1n << 31n) | (1n << 52n);
+        const inviteUrl = `https://discord.com/oauth2/authorize?client_id=${appId}&permissions=${perms}&scope=bot+applications.commands`;
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         res.end(html(`
           <img src="/logo.png" alt="Vaporzr" style="width:96px;height:96px;border-radius:22px;box-shadow:0 8px 30px rgba(106,92,255,.45);margin-bottom:1rem">
           <h1>Vaporzr Bot</h1>
+          <p><a href="${inviteUrl}" style="border-color:#6a5cff;background:rgba(106,92,255,.18);font-weight:600">➕ Add to your server</a></p>
           <p>${tokenStore.load() ? 'Spotify account linked.' : 'Spotify not linked.'}</p>
           <p><a href="/login">Link Spotify account</a></p>
           <p>Player status: <span id="s">checking…</span></p>
-          <p><a href="/panel">Open the control panel →</a></p>
+          <p><a href="/panel">Open the control panel →</a> <a href="/viz">Visualizer →</a></p>
           <script>
             try {
               fetch('/api/token').then(r => r.json()).then(d => {

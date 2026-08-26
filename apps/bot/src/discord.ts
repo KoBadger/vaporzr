@@ -926,12 +926,16 @@ export class DiscordBot {
       case 'invite': {
         const appId = this.client.user!.id;
         const perms = (1n << 11n) | (1n << 14n) | (1n << 15n) | (1n << 20n) | (1n << 31n) | (1n << 52n);
-        const url = `https://discord.com/api/oauth2/authorize?client_id=${appId}&permissions=${perms}&scope=bot+applications.commands`;
-        const embed = new EmbedBuilder()
-          .setTitle('Invite Vaporzr')
-          .setDescription(`[Click here to add Vaporzr to your server](${url})\n\n**Required permissions:** Connect, Speak, Send Messages, Embed Links, Attach Files, Use Application Commands, Use External Sounds`)
-          .setColor(this.themeColor());
-        await interaction.reply({ embeds: [embed], ephemeral: true });
+        const url = `https://discord.com/oauth2/authorize?client_id=${appId}&permissions=${perms}&scope=bot+applications.commands`;
+        await interaction.reply({
+          content: '➕ **Add Vaporzr to a server** — pick the server in the dropdown, hit Authorize, done.',
+          components: [
+            new ActionRowBuilder<ButtonBuilder>().addComponents(
+              new ButtonBuilder().setLabel('➕ Add to your server').setStyle(ButtonStyle.Link).setURL(url),
+            ),
+          ],
+          ephemeral: true,
+        });
         break;
       }
 
@@ -1416,12 +1420,15 @@ export class DiscordBot {
         case 'invite': {
           const appId = this.client.user!.id;
           const perms = (1n << 11n) | (1n << 14n) | (1n << 15n) | (1n << 20n) | (1n << 31n) | (1n << 52n);
-          const url = `https://discord.com/api/oauth2/authorize?client_id=${appId}&permissions=${perms}&scope=bot+applications.commands`;
-          const embed = new EmbedBuilder()
-            .setTitle('Invite Vaporzr')
-            .setDescription(`[Click here to add Vaporzr to your server](${url})\n\n**Required permissions:** Connect, Speak, Send Messages, Embed Links, Attach Files, Use Application Commands, Use External Sounds`)
-            .setColor(this.themeColor());
-          await message.reply({ embeds: [embed] });
+          const url = `https://discord.com/oauth2/authorize?client_id=${appId}&permissions=${perms}&scope=bot+applications.commands`;
+          await message.reply({
+            content: '➕ **Add Vaporzr to a server** — pick the server in the dropdown, hit Authorize, done.',
+            components: [
+              new ActionRowBuilder<ButtonBuilder>().addComponents(
+                new ButtonBuilder().setLabel('➕ Add to your server').setStyle(ButtonStyle.Link).setURL(url),
+              ),
+            ],
+          });
           break;
         }
 

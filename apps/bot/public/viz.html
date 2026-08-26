@@ -431,7 +431,7 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
       loadPreset(Math.floor(Math.random()*presetNames.length),0.1);
       cycleTimer=setInterval(function(){
         if(!presetLocked&&document.visibilityState==='visible')loadPreset(pickIndex(presetIdx+1,1),2.5);
-      },42000);
+      },15000);
       showPresetName();
     }catch(e){
       console.error('[viz] butterchurn init failed:',e);
