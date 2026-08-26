@@ -50,3 +50,6 @@ viz3.txt
 # Vendored binaries (all downloadable)
 vendor/
 voiceapi.txt
+
+# Personal / sensitive
+**/discord_backup_codes.txt
