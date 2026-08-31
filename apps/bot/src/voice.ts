@@ -60,6 +60,12 @@ export class VoiceManager {
   /** Loudness applied to every new audio resource (0–100). */
   private volumePercent = 100;
 
+  /** True when the voice connection is alive but the audio stream has died
+   *  (ffmpeg crashed, pipe broken, etc.) — resume should re-stream instead of unpause. */
+  isStalled(): boolean {
+    return this.isJoined() && !this.paused && this.ffmpeg === null;
+  }
+
   /** Auto-leave after this long with nothing playing. */
   static readonly IDLE_LEAVE_MS = 30 * 60 * 1000;
   /** ~1 second of 48 kHz stereo s16 PCM so bursts don't cause stutter. */
@@ -178,6 +184,13 @@ export class VoiceManager {
     this.player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Pause } });
     connection.subscribe(this.player);
     this.player.on('error', (e) => {
+      // A killed ffmpeg's tail packet can still hit the player after a
+      // skip/stop. If the errored resource is not the current one, the
+      // transition already replaced it — log nothing and, crucially, do NOT
+      // stopStream() (that would tear down the NEW stream).
+      const res = (e as { resource?: AudioResource | null }).resource;
+      if (res && res !== this.resource) return;
+      if (/write after end/.test(e.message)) return; // expected mid-teardown
       console.error('[voice] player error:', e.message);
       this.stopStream();
     });
@@ -333,10 +346,14 @@ export class VoiceManager {
     });
     // A late chunk from a killed ffmpeg can still race a just-ended stream.
     // Swallow it instead of letting an unhandled 'error' take the process down.
+    // ERR_STREAM_WRITE_AFTER_END and ERR_STREAM_PREMATURE_CLOSE are the normal
+    // signature of a skip/stop tearing the pipe down — expected, not noise.
     stream.on('error', (err) => {
-      if (err && !(err as NodeJS.ErrnoException).code?.startsWith('ERR_STREAM_WRITE_AFTER_END')) {
-        console.warn(`[voice] mix stream error: ${err instanceof Error ? err.message : err}`);
-      }
+      const code = (err as NodeJS.ErrnoException).code ?? '';
+      const msg = err instanceof Error ? err.message : String(err);
+      if (code.startsWith('ERR_STREAM_WRITE_AFTER_END') || code === 'ERR_STREAM_PREMATURE_CLOSE'
+        || /premature close|write after end/i.test(msg)) return;
+      if (err) console.warn(`[voice] mix stream error: ${msg}`);
     });
     return stream;
   }

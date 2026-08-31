@@ -18,6 +18,7 @@ import {
   spotifySetShuffle,
   spotifySetVolume,
   SpotifyError,
+  type ResolvedTrack,
 } from './spotify.js';
 
 export type SendFn = (msg: CommandMessage) => void;
@@ -80,9 +81,46 @@ export class PlaybackController {
     private librespot: LibrespotManager | null = null,
   ) {}
 
+  /** Callback fired when a track finishes (or is skipped). Useful for Endless Wave auto-queue. */
+  onTrackEnd: ((endedTrack: TrackInfo) => void) | null = null;
+
   /** Route visualizer-targeted state messages (only the primary session broadcasts). */
   setSendVisualizer(fn: SendFn): void {
     this.sendVisualizer = fn;
+  }
+
+  /** Kick off stream-URL resolution in the background the moment a track is
+   *  queued. play() then starts the instant the voice-channel join completes
+   *  instead of serially waiting 5-20s on yt-dlp afterwards. The YouTube
+   *  resolver dedupes by query key, so play() reuses this exact resolve. */
+  prefetchStream(track: ResolvedTrack | TrackInfo): void {
+    if (this.streamCache.has(track.uri) || (track as ResolvedTrack).streamUrl) return;
+    const uri = track.uri;
+    void (async () => {
+      try {
+        let video: ResolvedVideo | null = null;
+        if (track.source === 'youtube') {
+          video = await resolveYoutubeVideo(uri.replace('youtube:video:', ''));
+        } else if (track.source === 'apple') {
+          video = await resolveApplePlayback(track);
+        } else if (track.source === 'soundcloud') {
+          video = await resolveSoundcloudVideo(soundcloudUriToUrl(uri));
+        } else if (track.source === 'spotify') {
+          // Only worth pre-resolving YouTube when the Spotify device can't play it.
+          if (config.spotifyPreferYoutube || !this.librespot?.isRunning()) {
+            const query = `${track.name} ${(track.artists ?? []).join(' ')}`.trim();
+            video = await searchAndResolveYoutube(query, {
+              name: track.name,
+              artists: track.artists,
+              durationMs: track.durationMs,
+            });
+          }
+        }
+        if (video) this.streamCache.set(uri, video);
+      } catch {
+        // Best-effort warm-up; play() resolves on demand if this fails.
+      }
+    })();
   }
 
   /** Feed the live PCM spectrum analyzer (only the primary session should). */
@@ -188,11 +226,13 @@ export class PlaybackController {
     // Only advance if we're still on the track this timer was scheduled for.
     if (this.endUri && current?.uri !== this.endUri) return;
     if (current && state.track?.uri === current.uri) {
+      const ended = { ...current };
       if (state.repeat) {
         this.replayCurrent();
         return;
       }
       this.next();
+      if (this.onTrackEnd) this.onTrackEnd(ended);
     }
   }
 
@@ -222,6 +262,10 @@ export class PlaybackController {
   /** Advance to the next track once a server-side stream naturally ends. */
   private serverStreamOnEnd(): () => void {
     const uri = this.currentUri;
+    // Capture the track that is ending BEFORE we advance the queue, so the
+    // Endless Wave onTrackEnd hook can record it (YouTube/SoundCloud/etc. paths
+    // don't go through the position-timer and would otherwise never trigger EW).
+    const endedTrack = this.queue.getCurrentTrack() ?? null;
     return () => {
       if (this.currentUri !== uri) return;
       if (this.spotifyFallback) {
@@ -232,6 +276,7 @@ export class PlaybackController {
         return;
       }
       this.next();
+      if (this.onTrackEnd && endedTrack) this.onTrackEnd(endedTrack);
     };
   }
 
@@ -737,7 +782,13 @@ export class PlaybackController {
       // genuinely ended) — the position catches the real end, not 2s early.
       if (dur > 0 && pos >= dur - 2000 && bytes === this.lastSpotifyBytes) {
         this.clearEndTimer();
-        this.next();
+        if (this.onTrackEnd) {
+          const ended = this.queue.getCurrentTrack();
+          this.next();
+          if (ended) this.onTrackEnd(ended);
+        } else {
+          this.next();
+        }
         return;
       }
       this.lastSpotifyBytes = bytes;
@@ -870,10 +921,31 @@ export class PlaybackController {
     this.voice.pause();
   }
 
-  resume(): void {
+  /** Resume playback. If the stream has stalled (ffmpeg died), re-stream from
+   *  the current position instead of just unpausing a dead pipe. */
+  async resume(): Promise<void> {
     if (!this.voice.isJoined()) {
       console.warn('[playback] resume ignored — not in a voice channel');
       return;
+    }
+    // Stall recovery: stream died but voice is still connected — re-play from position.
+    if (this.voice.isStalled()) {
+      const state = this.queue.getState();
+      const pos = state.positionMs || this.voice.getPositionMs();
+      const track = state.track;
+      if (track && pos > 0) {
+        console.log(`[playback] stall detected — restarting "${track.name}" from ${Math.round(pos / 1000)}s`);
+        this.sendVisualizer({ type: 'cmd', command: 'stop' });
+        try {
+          await this.play();
+          // seek to where we left off
+          this.seek(pos);
+          return;
+        } catch (err) {
+          console.warn(`[playback] stall recovery failed: ${err instanceof Error ? err.message : err}`);
+          // Fall through to normal resume as last resort.
+        }
+      }
     }
     if (this.usingServerStream()) {
       this.voice.resume();
@@ -896,10 +968,10 @@ export class PlaybackController {
     this.voice.resume();
   }
 
-  toggle(): void {
+  async toggle(): Promise<void> {
     const state = this.queue.getState();
     if (state.playing) this.pause();
-    else this.resume();
+    else await this.resume();
   }
 
   seek(positionMs: number): void {

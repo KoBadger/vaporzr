@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -26,6 +26,10 @@ body::before{content:'';position:absolute;inset:0;
    #viz img (desktop player frames) > #bc (MilkDrop) > #canvas (bars) */
 #bc{position:absolute;inset:0;width:100%;height:100%;z-index:1;display:none}
 body.calm #bc{filter:brightness(.75) saturate(.85)}
+#ew{position:absolute;inset:0;width:100%;height:100%;z-index:1;display:none}
+/* CRT scanline overlay — only visible in synthwave mode (pure CSS, zero frame cost) */
+#ew-crt{position:absolute;inset:0;z-index:2;pointer-events:none;display:none;
+  background:repeating-linear-gradient(0deg,rgba(4,0,10,.16) 0,rgba(4,0,10,.16) 1px,transparent 1px,transparent 3px)}
 #canvas{position:absolute;inset:0;width:100%;height:100%;z-index:2}
 #viz{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#05060f;z-index:3;display:none}
 
@@ -138,6 +142,8 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
 </div>
 
 <canvas id="bc"></canvas>
+<canvas id="ew"></canvas>
+<div id="ew-crt"></div>
 <canvas id="canvas"></canvas>
 <img id="viz" alt="">
 
@@ -165,6 +171,7 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
   <button class="dock-btn" id="btn-next" title="Next preset">⏭</button>
   <button class="dock-btn" id="btn-calm" data-tip="Calm mode — gentler brightness, stricter flash guard" title="">🌙</button>
   <button class="dock-btn" id="btn-lock" data-tip="Lock current preset">🔓</button>
+  <button class="dock-btn" id="btn-synth" data-tip="Synthwave road (Endless Wave)">🛣</button>
   <div class="dock-sep"></div>
   <div id="swatches" title="Theme"></div>
   <div class="dock-sep"></div>
@@ -266,6 +273,10 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
           if(msg.state)showState(msg.state);
           if(msg.theme){for(var i=0;i<THEMES.length;i++)if(THEMES[i].id===msg.theme.id)applyTheme(THEMES[i])}
           if(typeof msg.sensitivity==='number')setSensitivity(msg.sensitivity,false);
+          // A snapshot only ever AUTO-ENABLES synth (EW is on). It must never
+          // turn OFF a manually selected synth view — only a live 'endlesswave'
+          // broadcast (an actual state change) may do that.
+          if(msg.endlesswave===true)handleEndlessWave({active:true,generated:0});
           break;
         case 'theme':{
           var t=msg.theme;if(t)for(var j=0;j<THEMES.length;j++)if(THEMES[j].id===t.id)applyTheme(THEMES[j]);
@@ -284,8 +295,13 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
         case 'visuals:bars':
           markVisual();
           lastBarAt=Date.now();
-          for(var k=0;k<BARS;k++)target[k]=Math.max(0,Math.min(1,(msg.bars[k]||0)*sensitivity));
+          var eSum=0;
+          for(var k=0;k<BARS;k++){target[k]=Math.max(0,Math.min(1,(msg.bars[k]||0)*sensitivity));eSum+=target[k]}
+          lastEnergy=eSum/BARS;
           frameCount++;
+          break;
+        case 'endlesswave':
+          handleEndlessWave(msg);
           break;
         case 'visuals:frame':
           markVisual();
@@ -472,7 +488,7 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
 
   /* ---------- sensitivity ---------- */
   var BARS=24,target=new Array(BARS).fill(0),disp=new Array(BARS).fill(0),
-      peaks=new Array(BARS).fill(0),sensitivity=1.0,lastBarAt=0,lastFrameAt=0;
+      peaks=new Array(BARS).fill(0),sensitivity=1.0,lastBarAt=0,lastFrameAt=0,lastEnergy=0;
 
   function setSensitivity(v,fromUser){
     v=Math.max(0.5,Math.min(1.5,v));
@@ -524,19 +540,27 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
   window.addEventListener('resize',resize);
   window.addEventListener('fullscreenchange',function(){setTimeout(resize,60)});
 
+  // prefers-reduced-motion: freeze synth animation if user prefers less motion
+  var prefersReduced=false;
+  try{prefersReduced=window.matchMedia('(prefers-reduced-motion: reduce)').matches}catch(e){}
+  try{window.matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change',function(e){prefersReduced=e.matches})}catch(e){}
+
   function draw(){
     requestAnimationFrame(draw);
     var now=Date.now();
     var frameMode=now-(lastFrameAt||0)<4000;
-    var milkMode=!frameMode&&bcViz&&actx&&!bcBroken;
+    var synthMode=synthActive&&!frameMode;
+    var milkMode=!frameMode&&!synthMode&&bcViz&&actx&&!bcBroken;
     viz.style.display=frameMode?'block':'none';
     bcCanvas.style.display=milkMode?'block':'none';
-    barsCanvas.style.display=(frameMode||milkMode)?'none':'block';
+    synthCanvas.style.display=synthMode?'block':'none';
+    synthCrt.style.display=synthMode?'block':'none';
+    barsCanvas.style.display=(frameMode||milkMode||synthMode)?'none':'block';
 
     if(frameMode)return;
+    if(synthMode){drawSynth(now);return;}
     if(milkMode){
       try{bcViz.render()}catch(e){
-        // One bad frame drops us back to bars — loudly, not silently.
         console.error('[viz] butterchurn render failed:',e);
         bcBroken=true;
       }
@@ -581,6 +605,456 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
     ctx.arcTo(x,y+h,x,y,r);
     ctx.arcTo(x,y,x+w,y,r);
     ctx.closePath();ctx.fill();
+  }
+
+  /* ---------- synthwave road (Endless Wave) ---------- */
+  var synthCanvas=$('ew'),sctx=synthCanvas.getContext('2d'),synthActive=false,synthOffset=0;
+  var synthCrt=$('ew-crt');
+  function resizeSynth(){synthCanvas.width=innerWidth*dpr;synthCanvas.height=innerHeight*dpr}
+  window.addEventListener('resize',resizeSynth);
+
+  function drawSynth(now){
+    var W=synthCanvas.width,H=synthCanvas.height;
+    sctx.clearRect(0,0,W,H);
+    var vx=W/2,hy=H*0.55;
+    var e=prefersReduced?0:lastEnergy; // beat energy 0..1
+    var step=prefersReduced?0:(0.004+e*0.008);
+    if(!prefersReduced)synthOffset=(synthOffset+step)%1;
+
+    /* ---------- cached texture layers (grain + asphalt) ---------- */
+    if(!drawSynth._grain){
+      var gc=document.createElement('canvas');gc.width=140;gc.height=140;
+      var gx=gc.getContext('2d');var gid=gx.createImageData(140,140);
+      for(var gi=0;gi<gid.data.length;gi+=4){var gv=Math.random()*255|0;gid.data[gi]=gid.data[gi+1]=gid.data[gi+2]=gv;gid.data[gi+3]=30;}
+      gx.putImageData(gid,0,0);
+      drawSynth._grain=sctx.createPattern(gc,'repeat');
+    }
+    if(!drawSynth._asphalt){
+      var ac=document.createElement('canvas');ac.width=120;ac.height=120;
+      var ax=ac.getContext('2d');var aid=ax.createImageData(120,120);
+      for(var ai=0;ai<aid.data.length;ai+=4){var av=40+Math.random()*90|0;aid.data[ai]=aid.data[ai+1]=aid.data[ai+2]=av;aid.data[ai+3]=46;}
+      ax.putImageData(aid,0,0);
+      drawSynth._asphalt=sctx.createPattern(ac,'repeat');
+    }
+
+    /* ---------- 1. night sky ---------- */
+    var sg=sctx.createLinearGradient(0,0,0,hy);
+    sg.addColorStop(0,'#03030c');
+    sg.addColorStop(0.45,'#12082e');
+    sg.addColorStop(0.78,'#3a0f55');
+    sg.addColorStop(1,'#8a1f6e');
+    sctx.fillStyle=sg;sctx.fillRect(0,0,W,hy);
+
+    /* soft cloud bands (painterly streaks around the sun) */
+    if(!drawSynth._clouds){
+      drawSynth._clouds=[];
+      for(var cli=0;cli<8;cli++){
+        drawSynth._clouds.push({x:Math.random(),y:0.14+Math.random()*0.52,w:0.16+Math.random()*0.3,h:0.006+Math.random()*0.014,a:0.08+Math.random()*0.14});
+      }
+    }
+    for(var cl=0;cl<drawSynth._clouds.length;cl++){
+      var c=drawSynth._clouds[cl];
+      var cx=c.x*W,cy=c.y*hy;
+      var nearSun=1-Math.min(1,Math.abs(cx-vx)/(W*0.5));
+      sctx.fillStyle='rgba('+(200+nearSun*55|0)+','+(60+nearSun*40|0)+',140,'+(c.a*(0.6+nearSun*0.6)).toFixed(3)+')';
+      sctx.beginPath();sctx.ellipse(cx,cy,c.w*W*0.5,c.h*H,0,0,Math.PI*2);sctx.fill();
+    }
+
+    /* ---------- 2. stars ---------- */
+    if(!drawSynth._stars){
+      drawSynth._stars=[];
+      for(var si=0;si<170;si++)drawSynth._stars.push({x:Math.random(),y:Math.random()*0.8,s:Math.random()*1.8+0.5,b:Math.random()*5+1.5});
+    }
+    for(var si2=0;si2<drawSynth._stars.length;si2++){
+      var st=drawSynth._stars[si2];
+      var tw=prefersReduced?0.8:(0.5+0.5*Math.abs(Math.sin(now/900*st.b+si2*1.7)));
+      sctx.globalAlpha=(0.25+tw*0.55)*(0.7+e*0.3);
+      sctx.fillStyle=(si2%13===0)?'#ffd9f2':'#ffffff';
+      sctx.fillRect(st.x*W,st.y*hy,st.s*dpr,st.s*dpr);
+    }
+    sctx.globalAlpha=1;
+
+    /* ---------- 3. giant striped sun ---------- */
+    var sunR=W*0.165*(1+e*0.06);
+    var sunY=hy-sunR*0.08;
+    sctx.save();sctx.globalCompositeOperation='lighter';
+    var halo=sctx.createRadialGradient(vx,sunY,sunR*0.6,vx,sunY,sunR*(2.6+e*0.8));
+    halo.addColorStop(0,'rgba(255,60,160,'+(0.30+e*0.25).toFixed(3)+')');
+    halo.addColorStop(0.5,'rgba(180,30,140,'+(0.12+e*0.10).toFixed(3)+')');
+    halo.addColorStop(1,'rgba(120,20,120,0)');
+    sctx.fillStyle=halo;sctx.beginPath();sctx.arc(vx,sunY,sunR*3.4,0,Math.PI*2);sctx.fill();
+    sctx.restore();
+    var sunG=sctx.createLinearGradient(0,sunY-sunR,0,sunY+sunR);
+    sunG.addColorStop(0,'#ffb35c');
+    sunG.addColorStop(0.35,'#ff6a8a');
+    sunG.addColorStop(0.7,'#ff2ea6');
+    sunG.addColorStop(1,'#d81b8f');
+    sctx.fillStyle=sunG;sctx.beginPath();sctx.arc(vx,sunY,sunR,0,Math.PI*2);sctx.fill();
+    /* sun surface shading: darker limb at the bottom, hot core top */
+    var sunSh=sctx.createRadialGradient(vx,sunY-sunR*0.35,sunR*0.1,vx,sunY,sunR);
+    sunSh.addColorStop(0,'rgba(255,240,200,0.25)');sunSh.addColorStop(0.6,'rgba(255,255,255,0)');sunSh.addColorStop(1,'rgba(60,0,60,0.28)');
+    sctx.fillStyle=sunSh;sctx.beginPath();sctx.arc(vx,sunY,sunR,0,Math.PI*2);sctx.fill();
+    /* horizontal stripe gaps, thicker toward the bottom */
+    for(var stri=0;stri<7;stri++){
+      var yy=sunY+sunR*(0.02+stri*0.145);
+      var hh=sunR*(0.018+stri*0.010);
+      var half=Math.sqrt(Math.max(0,sunR*sunR-(yy-sunY)*(yy-sunY)));
+      sctx.fillStyle='rgba(13,6,32,'+(0.86-stri*0.02).toFixed(2)+')';
+      sctx.fillRect(vx-half,yy,half*2,hh);
+    }
+
+    /* ---------- 4. neon city: back layer + front layer with antennas ---------- */
+    if(!drawSynth._cityBack){
+      drawSynth._cityBack=[];drawSynth._city=[];
+      for(var bb=0;bb<30;bb++){
+        var bxc=(bb+0.5)/30+(Math.random()-0.5)*0.02;
+        var cb=1-Math.min(1,Math.abs(bxc-0.5)*2.1);
+        drawSynth._cityBack.push({x:bxc,w:0.02+Math.random()*0.03,h:(0.08+Math.random()*0.2)*(0.4+cb)});
+      }
+      for(var bi=0;bi<48;bi++){
+        var bx=(bi+0.5)/48+(Math.random()-0.5)*0.01;
+        var centerBias=1-Math.min(1,Math.abs(bx-0.5)*2.1);
+        drawSynth._city.push({x:bx,w:0.010+Math.random()*0.016,h:(0.10+Math.random()*0.30)*(0.35+centerBias),seed:Math.floor(Math.random()*97)});
+      }
+    }
+    for(var bk=0;bk<drawSynth._cityBack.length;bk++){
+      var b2=drawSynth._cityBack[bk];
+      sctx.fillStyle='#1a0d30';
+      sctx.fillRect(b2.x*W,hy-b2.h*hy,b2.w*W,b2.h*hy);
+    }
+    for(var ci=0;ci<drawSynth._city.length;ci++){
+      var b=drawSynth._city[ci];
+      var bx2=b.x*W,bw=b.w*W,bh=b.h*hy,by2=hy-bh;
+      sctx.fillStyle='#08031a';sctx.fillRect(bx2,by2,bw,bh);
+      /* antenna + blinking beacon on the tall towers */
+      if(b.h>0.22){
+        sctx.strokeStyle='#08031a';sctx.lineWidth=1*dpr;
+        sctx.beginPath();sctx.moveTo(bx2+bw*0.5,by2);sctx.lineTo(bx2+bw*0.5,by2-H*0.028);sctx.stroke();
+        var blink=prefersReduced?0.6:(0.35+0.65*Math.abs(Math.sin(now/700+b.seed)));
+        sctx.fillStyle='rgba(255,60,80,'+blink.toFixed(2)+')';
+        sctx.beginPath();sctx.arc(bx2+bw*0.5,by2-H*0.028,1.6*dpr,0,Math.PI*2);sctx.fill();
+      }
+      var wcols=Math.max(1,Math.floor(bw/(3.4*dpr))),wrows=Math.max(2,Math.min(7,Math.floor(bh/(4.6*dpr))));
+      for(var wy=0;wy<wrows;wy++){
+        for(var wx=0;wx<wcols;wx++){
+          if((b.seed+wx*7+wy*13)%11>3)continue;
+          sctx.globalAlpha=0.5+((b.seed+wx*3+wy)%5)*0.09+e*0.15;
+          sctx.fillStyle=((b.seed+wx+wy)%6===0)?'#ffd27a':'#7ad7ff';
+          sctx.fillRect(bx2+wx*(bw/wcols)+bw*0.14,by2+wy*(bh/wrows)+bh*0.06,Math.max(1,dpr*1.2),Math.max(1,dpr*1.6));
+        }
+      }
+      sctx.globalAlpha=1;
+    }
+    /* city base haze */
+    var hz=sctx.createLinearGradient(0,hy-H*0.06,0,hy);
+    hz.addColorStop(0,'rgba(150,50,130,0)');hz.addColorStop(1,'rgba(150,50,130,0.22)');
+    sctx.fillStyle=hz;sctx.fillRect(0,hy-H*0.06,W,H*0.06);
+
+    /* ---------- 5. wireframe hills at the edges ---------- */
+    sctx.strokeStyle='rgba(70,200,255,'+(0.28+e*0.2).toFixed(3)+')';
+    sctx.lineWidth=1*dpr;
+    function wireHill(x0,w0,h0){
+      var steps=10;
+      sctx.beginPath();
+      for(var k=0;k<=steps;k++){
+        var xx=x0+w0*k/steps;
+        var yv=hy-h0*Math.sin(Math.PI*k/steps)*(0.75+0.25*Math.sin(k*2.3+x0));
+        if(k===0)sctx.moveTo(xx,yv);else sctx.lineTo(xx,yv);
+      }
+      sctx.stroke();
+      for(var k2=1;k2<steps;k2++){
+        var xx2=x0+w0*k2/steps;
+        var yv2=hy-h0*Math.sin(Math.PI*k2/steps)*(0.75+0.25*Math.sin(k2*2.3+x0));
+        sctx.beginPath();sctx.moveTo(xx2,yv2);sctx.lineTo(xx2,hy);sctx.stroke();
+      }
+    }
+    wireHill(W*0.01,W*0.20,hy*0.16);
+    wireHill(W*0.79,W*0.20,hy*0.15);
+
+    /* ---------- 6. glowing horizon line ---------- */
+    sctx.strokeStyle='rgba(120,230,255,'+(0.45+e*0.3).toFixed(3)+')';
+    sctx.lineWidth=1.5*dpr;sctx.shadowColor='#37e6ff';sctx.shadowBlur=8*dpr;
+    sctx.beginPath();sctx.moveTo(0,hy);sctx.lineTo(W,hy);sctx.stroke();
+    sctx.shadowBlur=0;
+
+    /* ---------- 7. cyan perspective grid floor ---------- */
+    var gg=sctx.createLinearGradient(0,hy,0,H);
+    gg.addColorStop(0,'#1c0a33');gg.addColorStop(0.25,'#0d0420');gg.addColorStop(1,'#050110');
+    sctx.fillStyle=gg;sctx.fillRect(0,hy,W,H-hy);
+    var gridA=0.30+e*0.25;
+    sctx.lineWidth=1*dpr;
+    for(var vi=-16;vi<=16;vi++){
+      sctx.strokeStyle='rgba(64,180,255,'+(gridA*(0.35+0.65*Math.abs(vi)/16)).toFixed(3)+')';
+      sctx.beginPath();sctx.moveTo(vx+vi*(W/12)*0.06,hy);sctx.lineTo(vx+vi*(W/12),H);sctx.stroke();
+    }
+    var rows=14;
+    for(var ri=0;ri<rows;ri++){
+      var t=(ri+synthOffset)/rows;
+      var fy=hy+(H-hy)*t*t;
+      sctx.strokeStyle='rgba(64,180,255,'+(gridA*(0.25+0.75*t)).toFixed(3)+')';
+      sctx.beginPath();sctx.moveTo(0,fy);sctx.lineTo(W,fy);sctx.stroke();
+    }
+    /* haze right under the horizon for depth */
+    var hz2=sctx.createLinearGradient(0,hy,0,hy+H*0.07);
+    hz2.addColorStop(0,'rgba(140,60,150,0.25)');hz2.addColorStop(1,'rgba(140,60,150,0)');
+    sctx.fillStyle=hz2;sctx.fillRect(0,hy,W,H*0.07);
+
+    /* ---------- 8. the road: textured asphalt, wear lanes, seams, dashes ---------- */
+    var rTop=W*0.030,rBot=W*0.215;
+    function roadQuad(topFrac,botFrac){
+      var yt=hy+(H-hy)*topFrac,yb=hy+(H-hy)*botFrac;
+      var wt=rTop+(rBot-rTop)*topFrac,wb=rTop+(rBot-rTop)*botFrac;
+      sctx.beginPath();sctx.moveTo(vx-wt,yt);sctx.lineTo(vx+wt,yt);sctx.lineTo(vx+wb,yb);sctx.lineTo(vx-wb,yb);sctx.closePath();
+    }
+    var rg=sctx.createLinearGradient(0,hy,0,H);
+    rg.addColorStop(0,'#4a0820');rg.addColorStop(0.5,'#8c1038');rg.addColorStop(1,'#b8174a');
+    sctx.fillStyle=rg;roadQuad(0,1);sctx.fill();
+    /* asphalt grain clipped to the road */
+    sctx.save();roadQuad(0,1);sctx.clip();
+    sctx.globalCompositeOperation='overlay';sctx.globalAlpha=0.5;
+    sctx.fillStyle=drawSynth._asphalt;sctx.fillRect(0,hy,W,H-hy);
+    sctx.globalAlpha=1;
+    /* tire-wear lanes: subtly darker strips where rubber polishes the asphalt */
+    for(var side=-1;side<=1;side+=2){
+      sctx.fillStyle='rgba(20,0,10,0.20)';
+      sctx.beginPath();
+      sctx.moveTo(vx+side*rTop*0.55-rTop*0.22,hy);sctx.lineTo(vx+side*rTop*0.55+rTop*0.22,hy);
+      sctx.lineTo(vx+side*rBot*0.58+rBot*0.16,H);sctx.lineTo(vx+side*rBot*0.58-rBot*0.16,H);
+      sctx.closePath();sctx.fill();
+    }
+    /* expansion seams crossing the road */
+    if(!drawSynth._seams)drawSynth._seams=[0.22,0.41,0.63,0.82];
+    sctx.strokeStyle='rgba(10,0,8,0.35)';sctx.lineWidth=1.5*dpr;
+    for(var sm=0;sm<drawSynth._seams.length;sm++){
+      var ts=drawSynth._seams[sm];
+      var ys=hy+(H-hy)*ts*ts;
+      var ws=rTop+(rBot-rTop)*ts;
+      sctx.beginPath();sctx.moveTo(vx-ws,ys);sctx.lineTo(vx+ws,ys);sctx.stroke();
+    }
+    /* center crown sheen from the sun */
+    var cs=sctx.createLinearGradient(0,hy,0,H);
+    cs.addColorStop(0,'rgba(255,150,190,0.10)');cs.addColorStop(1,'rgba(255,150,190,0)');
+    sctx.fillStyle=cs;roadQuad(0,1);sctx.fill();
+    sctx.restore();
+    /* sun reflection streak down the road */
+    var rfA=0.10+e*0.14;
+    var rf=sctx.createLinearGradient(0,hy,0,H);
+    rf.addColorStop(0,'rgba(255,120,200,'+rfA.toFixed(3)+')');rf.addColorStop(1,'rgba(255,120,200,0)');
+    sctx.fillStyle=rf;
+    sctx.beginPath();sctx.moveTo(vx-rTop*0.8,hy);sctx.lineTo(vx+rTop*0.8,hy);sctx.lineTo(vx+rBot*0.45,H);sctx.lineTo(vx-rBot*0.45,H);sctx.closePath();sctx.fill();
+    /* white edge lines */
+    sctx.strokeStyle='rgba(255,255,255,0.75)';sctx.lineWidth=2.2*dpr;
+    sctx.beginPath();sctx.moveTo(vx-rTop,hy);sctx.lineTo(vx-rBot,H);sctx.stroke();
+    sctx.beginPath();sctx.moveTo(vx+rTop,hy);sctx.lineTo(vx+rBot,H);sctx.stroke();
+    /* scrolling center dashes */
+    var dp=(synthOffset*2)%1,nd=10;
+    sctx.fillStyle='rgba(255,255,255,0.9)';
+    for(var di=0;di<nd;di++){
+      var t1=((di+dp)%nd)/nd,t2=((di+0.45+dp)%nd)/nd;
+      if(t2<=t1)continue;
+      var y1=hy+(H-hy)*t1*t1,y2=hy+(H-hy)*t2*t2;
+      var w1=Math.max(1,dpr*(1+t1*3)),w2=Math.max(1.5,dpr*(1+t2*3));
+      sctx.beginPath();sctx.moveTo(vx-w1/2,y1);sctx.lineTo(vx+w1/2,y1);sctx.lineTo(vx+w2/2,y2);sctx.lineTo(vx-w2/2,y2);sctx.closePath();sctx.fill();
+    }
+
+    /* ---------- 9. palms framing the edges ---------- */
+    function drawPalm(px,ph,phase){
+      var baseX=px*W,baseY=hy+H*0.02,topY=hy-ph*H;
+      var sway=prefersReduced?0:(Math.sin(now/1500+phase)*(2+e*4))*dpr;
+      var topX=baseX+sway;
+      var col='#070212';
+      var tw=Math.max(2.5,ph*H*0.030);
+      sctx.fillStyle=col;
+      sctx.beginPath();
+      sctx.moveTo(baseX-tw,baseY);
+      sctx.quadraticCurveTo(baseX+sway*0.5-tw*0.35,(baseY+topY)/2,topX-tw*0.22,topY);
+      sctx.lineTo(topX+tw*0.22,topY);
+      sctx.quadraticCurveTo(baseX+sway*0.5+tw*0.35,(baseY+topY)/2,baseX+tw,baseY);
+      sctx.closePath();sctx.fill();
+      sctx.beginPath();sctx.arc(topX,topY,tw*0.55,0,Math.PI*2);sctx.fill();
+      sctx.beginPath();sctx.arc(topX-tw*0.5,topY+tw*0.7,tw*0.32,0,Math.PI*2);sctx.fill();
+      sctx.beginPath();sctx.arc(topX+tw*0.45,topY+tw*0.8,tw*0.30,0,Math.PI*2);sctx.fill();
+      var fLen=ph*H*0.55;
+      for(var fi=0;fi<9;fi++){
+        var a=-Math.PI*0.95+fi*(Math.PI*0.9/8);
+        var ex=topX+Math.cos(a)*fLen;
+        var ey=topY+Math.sin(a)*fLen*0.55+fLen*0.30;
+        var mx=topX+Math.cos(a)*fLen*0.55;
+        var my=topY+Math.sin(a)*fLen*0.95-fLen*0.05;
+        var px2=-(ey-topY),py2=(ex-topX);
+        var len=Math.sqrt(px2*px2+py2*py2)||1;
+        var wdt=fLen*0.11;
+        var ox=px2/len*wdt,oy=py2/len*wdt;
+        sctx.beginPath();
+        sctx.moveTo(topX,topY);
+        sctx.quadraticCurveTo(mx+ox,my+oy,ex,ey);
+        sctx.quadraticCurveTo(mx-ox,my-oy,topX,topY);
+        sctx.closePath();sctx.fill();
+      }
+    }
+    drawPalm(0.035,0.34,0.0);drawPalm(0.115,0.26,1.7);
+    drawPalm(0.885,0.27,0.9);drawPalm(0.965,0.35,2.6);
+
+    /* ---------- 10. DeLorean in the LEFT LANE of the road ---------- */
+    /* road half-width at the car's ground line, so the wheels sit ON the asphalt */
+    var carGY=H*0.915;
+    var carF=(carGY-hy)/(H-hy);
+    var roadHalfAtCar=rTop+(rBot-rTop)*carF;
+    var bob=prefersReduced?0:Math.sin(now/240)*1.1*dpr*(0.4+e);
+    sctx.save();
+    sctx.translate(vx-roadHalfAtCar*0.42,carGY+bob);
+    sctx.rotate(-0.05+(prefersReduced?0:Math.sin(now/380)*0.005*(0.5+e)));
+    var cw=W*0.30,ch=cw*0.42;
+    /* ground contact shadow */
+    sctx.fillStyle='rgba(0,0,0,0.6)';
+    sctx.beginPath();sctx.ellipse(0,2*dpr,cw*0.54,ch*0.11,0,0,Math.PI*2);sctx.fill();
+    /* wet-road reflection of the car */
+    sctx.save();
+    sctx.scale(1,-0.45);sctx.globalAlpha=0.14;
+    sctx.translate(0,-ch*0.10);
+    function dlBody(ox,oy){
+      sctx.beginPath();
+      sctx.moveTo(-cw*0.48+ox,-ch*0.02+oy);
+      sctx.lineTo(-cw*0.44+ox,-ch*0.34+oy);
+      sctx.lineTo(-cw*0.26+ox,-ch*0.66+oy);
+      sctx.lineTo(cw*0.26+ox,-ch*0.64+oy);
+      sctx.lineTo(cw*0.44+ox,-ch*0.32+oy);
+      sctx.lineTo(cw*0.48+ox,-ch*0.02+oy);
+      sctx.closePath();
+    }
+    sctx.fillStyle='#8d93a6';dlBody(0,0);sctx.fill();
+    sctx.fillStyle='#ff1e3c';sctx.fillRect(-cw*0.42,-ch*0.26,cw*0.84,ch*0.09);
+    sctx.restore();
+    /* headlight pools spilling ahead of the car */
+    sctx.save();sctx.globalCompositeOperation='lighter';
+    var hlA=0.16+e*0.18;
+    var hl=sctx.createRadialGradient(-cw*0.62,-ch*0.05,0,-cw*0.62,-ch*0.05,cw*0.5);
+    hl.addColorStop(0,'rgba(255,240,205,'+hlA.toFixed(3)+')');hl.addColorStop(1,'rgba(255,240,205,0)');
+    sctx.fillStyle=hl;sctx.fillRect(-cw*1.15,-ch*0.6,cw*1.05,ch*1.1);
+    sctx.restore();
+    /* wheels with rims */
+    for(var wh=-1;wh<=1;wh+=2){
+      sctx.fillStyle='#05050a';
+      sctx.beginPath();sctx.ellipse(wh*cw*0.36,-ch*0.02,cw*0.075,ch*0.12,0,0,Math.PI*2);sctx.fill();
+      sctx.fillStyle='#2c2f3a';
+      sctx.beginPath();sctx.ellipse(wh*cw*0.36,-ch*0.02,cw*0.04,ch*0.07,0,0,Math.PI*2);sctx.fill();
+    }
+    /* silver body */
+    var bodyG=sctx.createLinearGradient(0,-ch*0.66,0,-ch*0.02);
+    bodyG.addColorStop(0,'#dfe3ec');bodyG.addColorStop(0.4,'#a6acbe');bodyG.addColorStop(0.75,'#6a7086');bodyG.addColorStop(1,'#474c5e');
+    sctx.fillStyle=bodyG;dlBody(0,0);sctx.fill();
+    /* magenta rim light from the sun along the left shoulder */
+    sctx.strokeStyle='rgba(255,110,190,0.4)';sctx.lineWidth=1.6*dpr;
+    sctx.beginPath();sctx.moveTo(-cw*0.48,-ch*0.02);sctx.lineTo(-cw*0.44,-ch*0.34);sctx.lineTo(-cw*0.26,-ch*0.66);sctx.stroke();
+    /* rear window band + cyan glass streak */
+    sctx.fillStyle='#10141f';
+    sctx.beginPath();
+    sctx.moveTo(-cw*0.24,-ch*0.62);sctx.lineTo(cw*0.24,-ch*0.60);
+    sctx.lineTo(cw*0.32,-ch*0.40);sctx.lineTo(-cw*0.32,-ch*0.40);
+    sctx.closePath();sctx.fill();
+    sctx.strokeStyle='rgba(90,225,255,0.5)';sctx.lineWidth=1.4*dpr;
+    sctx.beginPath();sctx.moveTo(-cw*0.16,-ch*0.58);sctx.lineTo(cw*0.06,-ch*0.42);sctx.stroke();
+    /* engine-deck louvers (the DeLorean signature) */
+    sctx.strokeStyle='rgba(15,18,28,0.85)';sctx.lineWidth=1.2*dpr;
+    for(var lv=0;lv<4;lv++){
+      var ly=-ch*0.37+lv*ch*0.035;
+      sctx.beginPath();sctx.moveTo(-cw*0.24,ly);sctx.lineTo(cw*0.24,ly);sctx.stroke();
+    }
+    /* side mirrors */
+    sctx.fillStyle='#3a3f4e';
+    sctx.beginPath();sctx.moveTo(-cw*0.27,-ch*0.58);sctx.lineTo(-cw*0.33,-ch*0.60);sctx.lineTo(-cw*0.28,-ch*0.52);sctx.closePath();sctx.fill();
+    sctx.beginPath();sctx.moveTo(cw*0.27,-ch*0.56);sctx.lineTo(cw*0.33,-ch*0.58);sctx.lineTo(cw*0.28,-ch*0.50);sctx.closePath();sctx.fill();
+    /* whip antenna */
+    sctx.strokeStyle='#1c1f28';sctx.lineWidth=1*dpr;
+    sctx.beginPath();sctx.moveTo(cw*0.22,-ch*0.62);sctx.lineTo(cw*0.26,-ch*0.98);sctx.stroke();
+    sctx.fillStyle='#ff4d6a';sctx.beginPath();sctx.arc(cw*0.26,-ch*0.98,1.4*dpr,0,Math.PI*2);sctx.fill();
+    /* segmented taillight bar with glow */
+    sctx.fillStyle='#ff1e3c';
+    sctx.shadowColor='#ff1e3c';sctx.shadowBlur=(12+e*16)*dpr;
+    sctx.fillRect(-cw*0.44,-ch*0.27,cw*0.32,ch*0.085);
+    sctx.fillRect(cw*0.12,-ch*0.27,cw*0.32,ch*0.085);
+    sctx.shadowBlur=0;
+    sctx.fillStyle='rgba(30,4,10,0.9)';
+    sctx.fillRect(-cw*0.10,-ch*0.27,cw*0.20,ch*0.085);
+    /* white reverse lights + bumper */
+    sctx.fillStyle='#ffe9e0';
+    sctx.fillRect(-cw*0.06,-ch*0.25,cw*0.045,ch*0.045);
+    sctx.fillRect(cw*0.015,-ch*0.25,cw*0.045,ch*0.045);
+    sctx.fillStyle='#23262f';sctx.fillRect(-cw*0.46,-ch*0.16,cw*0.92,ch*0.11);
+    sctx.fillStyle='#e8e4da';sctx.fillRect(-cw*0.07,-ch*0.14,cw*0.14,ch*0.06);
+    /* exhausts with faint glow */
+    sctx.fillStyle='#0a0b10';
+    sctx.fillRect(-cw*0.32,-ch*0.07,cw*0.11,ch*0.05);
+    sctx.fillRect(cw*0.21,-ch*0.07,cw*0.11,ch*0.05);
+    var exA=0.10+e*0.14;
+    sctx.fillStyle='rgba(255,120,60,'+exA.toFixed(3)+')';
+    sctx.beginPath();sctx.ellipse(-cw*0.265,-ch*0.045,cw*0.06,ch*0.02,0,0,Math.PI*2);sctx.fill();
+    sctx.beginPath();sctx.ellipse(cw*0.265,-ch*0.045,cw*0.06,ch*0.02,0,0,Math.PI*2);sctx.fill();
+    /* chromatic aberration on heavy beats */
+    if(!prefersReduced&&e>0.5){
+      var ab=1.6*dpr;
+      sctx.globalCompositeOperation='screen';
+      sctx.fillStyle='rgba(255,0,80,0.14)';dlBody(-ab,0);sctx.fill();
+      sctx.fillStyle='rgba(0,255,255,0.14)';dlBody(ab,0);sctx.fill();
+      sctx.globalCompositeOperation='source-over';
+    }
+    sctx.restore();
+    /* taillight cast onto the road behind the car */
+    var tcA=0.12+e*0.16;
+    var tc=sctx.createRadialGradient(vx-roadHalfAtCar*0.42,carGY-ch*0.2,0,vx-roadHalfAtCar*0.42,carGY-ch*0.2,cw*0.7);
+    tc.addColorStop(0,'rgba(255,30,60,'+tcA.toFixed(3)+')');tc.addColorStop(1,'rgba(255,30,60,0)');
+    sctx.save();roadQuad(0,1);sctx.clip();
+    sctx.fillStyle=tc;sctx.fillRect(vx-rBot,carGY-ch,cw*1.6,ch*1.6);
+    sctx.restore();
+
+    /* ---------- 11. film grain over everything (kills the flat CG look) ---------- */
+    sctx.save();
+    sctx.globalCompositeOperation='overlay';sctx.globalAlpha=0.55;
+    sctx.fillStyle=drawSynth._grain;sctx.fillRect(0,0,W,H);
+    sctx.restore();
+
+    /* ---------- 12. ENDLESS WAVE neon signature ---------- */
+    var sigA=prefersReduced?0.42:0.34+0.25*e+0.06*Math.sin(now/650);
+    sctx.save();
+    sctx.textAlign='center';
+    sctx.font='700 '+Math.round(14*dpr)+'px "Courier New",monospace';
+    sctx.shadowColor='#ff2e9a';sctx.shadowBlur=16*dpr;
+    sctx.fillStyle='rgba(255,120,225,'+Math.min(0.75,sigA).toFixed(3)+')';
+    var sigTxt='ENDLESS WAVE';
+    if(!('letterSpacing' in sctx)){sigTxt='E N D L E S S   W A V E'}
+    else{try{sctx.letterSpacing=(6*dpr)+'px'}catch(er){}}
+    sctx.fillText(sigTxt,vx,H*0.09);
+    sctx.restore();
+
+    /* ---------- 13. vignette ---------- */
+    var vig=sctx.createRadialGradient(W/2,H/2,H*0.22,W/2,H/2,H*0.82);
+    vig.addColorStop(0,'rgba(3,0,10,0)');vig.addColorStop(1,'rgba(3,0,10,0.6)');
+    sctx.fillStyle=vig;sctx.fillRect(0,0,W,H);
+  }
+
+  /* toggle synth mode */
+  $('btn-synth').onclick=function(){
+    synthActive=!synthActive;
+    $('btn-synth').classList.toggle('active',synthActive);
+  };
+
+  /* handle EW status from bridge. The synthwave road no longer hijacks the
+     visualizer when Endless Wave turns on — EW's job is song curation, and
+     butterchurn/MilkDrop stay in charge. The 🛣 button remains for anyone who
+     wants the road manually; set localStorage vz_ew_auto='1' to restore the
+     old auto-switch behaviour. */
+  var ewAutoViz=false;
+  try{ewAutoViz=localStorage.getItem('vz_ew_auto')==='1'}catch(e){}
+  function handleEndlessWave(msg){
+    if(!ewAutoViz)return;
+    if(msg.active&&!synthActive){
+      synthActive=true;
+      $('btn-synth').classList.add('active');
+    }
+    if(!msg.active&&synthActive){
+      synthActive=false;
+      $('btn-synth').classList.remove('active');
+    }
   }
 
   /* ---------- track / guild UI ---------- */
@@ -653,8 +1127,8 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
       var audioActive=now-lastBarAt<5000;
       // Still-preset skip: nothing moving while music plays.
       if(audioActive){
-        if(motion<1.6){stillCount++;}else{stillCount=0;}
-        if(stillCount>=3&&!presetLocked){
+        if(motion<1.0){stillCount++;}else{stillCount=0;}
+        if(stillCount>=25&&!presetLocked){
           stillCount=0;
           loadPreset(pickIndex(presetIdx+1,1),1.5);
           return;
@@ -734,6 +1208,7 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
   applyTheme(THEMES[0]);
   applyCalm();
   resize();
+  resizeSynth();
   draw();
   pokeDock();
   connect();

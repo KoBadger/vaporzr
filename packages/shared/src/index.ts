@@ -150,7 +150,7 @@ export type InboundMessage =
   | CommandMessage;
 
 export type OutboundMessage =
-  | { type: 'snapshot'; state: PlaybackState; queue: QueueSnapshot; permissions?: PermissionSnapshot; voice?: { joined: boolean; channelId?: string }; theme?: VaporzrTheme; djEnabled?: boolean; primaryGuildId?: string; guilds?: Array<{ id: string; name: string }>; sensitivity?: number }
+  | { type: 'snapshot'; state: PlaybackState; queue: QueueSnapshot; permissions?: PermissionSnapshot; voice?: { joined: boolean; channelId?: string }; theme?: VaporzrTheme; djEnabled?: boolean; primaryGuildId?: string; guilds?: Array<{ id: string; name: string }>; sensitivity?: number; guest?: boolean; endlesswave?: boolean }
   | { type: 'state:update'; state: PlaybackState; guildId?: string }
   | { type: 'queue:update'; queue: QueueSnapshot }
   | { type: 'perm:update'; permissions: PermissionSnapshot }
@@ -168,6 +168,7 @@ export type OutboundMessage =
   | { type: 'panel:notice'; level: 'info' | 'success' | 'error'; text: string }
   /** Asks a visualizer window to capture a short clip and return burst:data. */
   | { type: 'burst:start'; durationMs?: number }
+  | { type: 'endlesswave'; active: boolean; generated: number }
   | { type: 'ready'; ok: boolean }
   | { type: 'error'; message: string }
   | CommandMessage;

@@ -13,13 +13,14 @@ A Discord music bot with a branded web control panel and a browser-based MilkDro
 
 - **Multi-source playback** — Spotify (librespot device, server-side), YouTube, SoundCloud (incl. DRM-track YouTube fallback + HLS), Apple Music links (iTunes metadata → YouTube match), Suno, local files
 - **🎛️ Web control panel** (`/panel`) — search-and-play, queue reordering, repeat, themes, reactivity, keyboard shortcuts; works from any device through an HTTPS link
+- **👁 Guest mode** — the visualizer and a **view-only panel** are open to anyone with the URL; only *control* requires a key (enforced server-side)
 - **🌈 Web visualizer** (`/viz`) — Butterchurn (MilkDrop 2) in the browser, ~1,700 presets, motion-skip + strobe-guard + 🌙 Calm mode, standalone (no desktop app needed)
-- **Discord button panel** (`V@pan`) — custom icon emojis, live-updating embed, NOW PLAYING confirmations, secure link buttons
-- **🔴 Live now-playing message** (`/nowplaying`) — posts a self-updating embed per channel
-- **🔑 Share keys** — `SHARE_KEY` gates the panel/viz behind a cookie; `/key give` hands pre-authorized links to trusted users, `/key rotate` kills them all
+- **Discord button panel** (`V@pan`) — custom icon emojis, live-updating embed, NOW PLAYING confirmations, secure link buttons; postable by **server admins**
+- **🔴 Mini now-playing** — a compact strip auto-posts wherever commands are used the moment music starts; updates in place, re-anchors to the bottom on every track change
+- **🔑 Share keys** — `SHARE_KEY` gates panel control behind a cookie; `/key give` (admin-level by default) hands pre-authorized links to trusted users, `/key rotate` (owner-only) kills them all
 - **🥚 Easter egg** — servers that activate a key can rename the bot (`/nickname`, must end in `-rzr`/`-orzr`/`-porzr`)
 - **Multi-server** — isolated per-guild sessions, per-guild permissions, queues persist across restarts
-- **Self-healing** — watchdog launcher, auto-resume after voice timeouts, yt-dlp retry logic, preloading for gapless transitions
+- **Self-healing** — watchdog launcher, auto-resume after voice timeouts, yt-dlp retry logic, preloading for gapless transitions, panel registrations persisted across restarts, owner auto-detect with retries
 
 ## Quick start
 
@@ -42,6 +43,20 @@ The bot serves its panel/visualizer on `http://localhost:4876`. For links that w
 | Cloudflare named tunnel (your domain) | `TUNNEL_TOKEN=<connector token>` |
 | Gate | `SHARE_KEY=<secret>` — `/key give` hands out pre-authorized links |
 
+## Sharing & permissions
+
+The web tier is two-level: **viewing is open** (landing page, `/viz`, and a view-only panel), **control requires the key**. Discord commands need no keys — anyone in a server with the bot can use them.
+
+| Rank | Who | Powers |
+|---|---|---|
+| **Bot owner** (`OWNER_ID`, or auto-detected) | you | everything, in every server — `/key rotate`, admin-level commands |
+| **Admin** | server owner + roles granted via `/perms grant admin <role>` | post `/panel` panels, `/key give`, mod+ commands |
+| **Mod / User** | `/perms grant mod <role>` / everyone | DJ + sfx / playback + queue commands |
+
+Per-command levels are adjustable per guild (`/perms setlevel <command> <level>`).
+
+**Health check:** `GET /health` → `{ ok, uptimeSec, guilds, playing, sessions }` (open, metadata only).
+
 ## Commands
 
 `/help` in Discord shows the full reference (prefix `V@` shortcuts included).
@@ -60,5 +75,6 @@ Access: `/key give` `/key rotate` `/perms` (admin) — `/nickname` (🥚)
 ## Notes
 
 - Vendor binaries (`yt-dlp`, `librespot`, `cloudflared`) are downloaded separately into `vendor/` (gitignored). Keep `yt-dlp` updated (`vendor\yt-dlp\yt-dlp.exe -U`) — extractors rot against site changes.
-- Every guild's queue persists across restarts (`apps/bot/data/queues/`), restored paused.
+- Every guild's queue persists across restarts (`apps/bot/data/queues/`), restored paused. Panel/now-playing registrations persist too (`apps/bot/data/panels.json`).
+- Set `OWNER_ID=<your Discord user id>` in `apps/bot/.env` to pin owner rank (otherwise auto-detected from the app record, with retries).
 - Docker: `docker build -f apps/bot/Dockerfile -t vaporzr-bot .` (see Dockerfile header for caveats).

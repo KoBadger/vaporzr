@@ -219,6 +219,55 @@ function mapTrack(t: SpotifyTrack): ResolvedTrack {
   };
 }
 
+/** Score a search result by how closely its name matches the query (lower = better). */
+function scoreSearchResult(name: string, query: string): number {
+  const n = name.toLowerCase().trim();
+  if (n === query) return 0;                     // exact match
+  if (n.startsWith(query)) return 1;              // starts with query
+  if (n.includes(query)) return 2;                // contains query
+  // Fuzzy: count how many query words appear in the name.
+  const qWords = query.split(/\s+/);
+  const matchCount = qWords.filter((w) => n.includes(w)).length;
+  return 3 + (qWords.length - matchCount);        // fewer missing words = better
+}
+
+/** Words that mark a track as a variant (remix/edit/live/movie version…) rather
+ *  than the canonical release. Mirrors the EW engine's marker list. */
+const VERSION_MARKER_RE =
+  /\b(remix|edit|vip|bootleg|flip|dub|radio edit|extended|club mix|sped up|slowed|reverb|nightcore|mashup|movie version|film version|motion picture|end credits|end title|closing credits|soundtrack version|soundtrack|ost|single version|album version|bonus track|deluxe|remastered|remaster|digital master|digital remaster|anniversary edition|clean|explicit|radio version|video version|live|acoustic|cover|unplugged|demo|instrumental|a cappella)\b/i;
+
+/** Strip parenthesized/bracketed segments and trailing dash version markers so
+ *  "Nightcall (Emmit Fenn Remix)" reduces to "nightcall". A leading year is
+ *  tolerated: " - 2020 Digital Master" counts as a version marker too. */
+function stripVersionSegments(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/\s*[\(\[][^\)\]]*[\)\]]\s*/g, ' ')
+    .replace(/\s*[-–—]\s*(?:\d{4}\s+)?(?:digital\s+)?(?:remastered|remaster|master)\b.*$/g, ' ')
+    .replace(/\s*[-–—]\s*(remix|edit|vip|bootleg|live|acoustic|cover|slowed|sped|version|mix|instrumental|a cappella|radio|extended|clean|explicit|ost|soundtrack|deluxe|demo|unplugged)\b.*$/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Rank search results for a free-text play query (lower = better).
+ *  Beyond plain name matching this penalizes version variants (remixes, edits,
+ *  movie versions…) when the user didn't ask for one, and boosts tracks whose
+ *  artist appears in the query — so "nightcall kavinsky" returns the original,
+ *  not a remix. */
+function scorePlayResult(track: ResolvedTrack, query: string): number {
+  const q = query.toLowerCase().trim();
+  const n = track.name.toLowerCase().trim();
+  let s = scoreSearchResult(n, q);
+  const core = stripVersionSegments(n);
+  if (core && core !== n && VERSION_MARKER_RE.test(n)) {
+    if (!VERSION_MARKER_RE.test(q)) s += 6;       // variant the user didn't ask for
+    else if (q.includes(core) || core.includes(q)) s -= 3; // asked for a variant of THIS song
+  }
+  if (track.artists.some((a) => a && q.includes(a.toLowerCase().trim()))) s -= 4;
+  if (core === q || n === q) s -= 5;
+  return s;
+}
+
 /** GET helper that transparently retries once on 401 after refreshing the token. */
 async function apiGet<T>(path: string, token: string): Promise<T> {
   const doGet = async (tok: string) =>
@@ -382,9 +431,13 @@ function isSpotifyUrl(input: string): boolean {
 export async function resolveTracks(input: string): Promise<ResolvedTrack[]> {
   await loadCache();
   if (!isSpotifyUrl(input)) {
-    const results = await searchTracks(input, 1);
+    const results = await searchTracks(input, 8);
     if (results.length === 0) throw new SpotifyError('No tracks found.');
-    return results;
+    // Rank by play-intent quality: exact match > artist-confirmed title >
+    // contains > fuzzy, with version variants (remixes/movie versions) penalized.
+    const q = input.toLowerCase().trim();
+    results.sort((a, b) => scorePlayResult(a, q) - scorePlayResult(b, q));
+    return [results[0]];
   }
 
   const idMatch = input.match(/(?:track|album|playlist|artist)[:/]([A-Za-z0-9]+)/);
@@ -627,4 +680,92 @@ export function spotifySetVolume(deviceId: string, volumePercent: number): Promi
 
 export function spotifySetShuffle(deviceId: string, shuffle: boolean): Promise<void> {
   return deviceCommand('PUT', `/me/player/shuffle?state=${shuffle}&device_id=${encodeURIComponent(deviceId)}`);
+}
+
+/* ---------- Endless Wave: audio features + recommendations ---------- */
+
+export interface AudioFeatures {
+  danceability: number;
+  energy: number;
+  valence: number;
+  tempo: number;
+  acousticness: number;
+  instrumentalness: number;
+  liveness: number;
+  speechiness: number;
+  key: number;
+  mode: number;
+  time_signature: number;
+  duration_ms: number;
+}
+
+/** Batch-fetch audio features for up to 100 Spotify track IDs. */
+export async function getAudioFeatures(trackIds: string[]): Promise<Map<string, AudioFeatures>> {
+  const out = new Map<string, AudioFeatures>();
+  if (trackIds.length === 0) return out;
+  const token = await getAccessToken();
+  // Spotify batches in chunks of 100.
+  for (let i = 0; i < trackIds.length; i += 100) {
+    const chunk = trackIds.slice(i, i + 100);
+    const res = await fetchWithTimeout(
+      `${API_URL}/audio-features?ids=${chunk.join(',')}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok) break;
+    const data = (await res.json()) as { audio_features: (AudioFeatures | null)[] };
+    for (let j = 0; j < chunk.length; j++) {
+      const af = data.audio_features?.[j];
+      if (af) out.set(chunk[j], af);
+    }
+  }
+  return out;
+}
+
+/** Extract a Spotify track ID from a URI or URL. */
+export function extractSpotifyId(input: string): string | null {
+  const m = input.match(/(?:track[:/]|open\.spotify\.com\/track\/)([A-Za-z0-9]{22})/);
+  return m?.[1] ?? null;
+}
+
+export interface RecommendationParams {
+  seedTracks?: string[];
+  seedArtists?: string[];
+  seedGenres?: string[];
+  targetEnergy?: number;
+  targetTempo?: number;
+  targetValence?: number;
+  targetDanceability?: number;
+  targetAcousticness?: number;
+  targetInstrumentalness?: number;
+  minTempo?: number;
+  maxTempo?: number;
+  limit?: number;
+}
+
+/** Fetch recommendations from Spotify's /recommendations endpoint. */
+export async function getRecommendations(params: RecommendationParams): Promise<ResolvedTrack[]> {
+  const token = await getAccessToken();
+  const q = new URLSearchParams();
+  if (params.seedTracks?.length) q.set('seed_tracks', params.seedTracks.slice(0, 5).join(','));
+  if (params.seedArtists?.length) q.set('seed_artists', params.seedArtists.slice(0, 5).join(','));
+  if (params.seedGenres?.length) q.set('seed_genres', params.seedGenres.slice(0, 5).join(','));
+  if (params.targetEnergy !== undefined) q.set('target_energy', String(params.targetEnergy));
+  if (params.targetTempo !== undefined) q.set('target_tempo', String(params.targetTempo));
+  if (params.targetValence !== undefined) q.set('target_valence', String(params.targetValence));
+  if (params.targetDanceability !== undefined) q.set('target_danceability', String(params.targetDanceability));
+  if (params.targetAcousticness !== undefined) q.set('target_acousticness', String(params.targetAcousticness));
+  if (params.targetInstrumentalness !== undefined) q.set('target_instrumentalness', String(params.targetInstrumentalness));
+  if (params.minTempo !== undefined) q.set('min_tempo', String(params.minTempo));
+  if (params.maxTempo !== undefined) q.set('max_tempo', String(params.maxTempo));
+  q.set('limit', String(params.limit ?? 20));
+
+  const res = await fetchWithTimeout(`${API_URL}/recommendations?${q}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new SpotifyError(`Recommendations failed (${res.status}): ${text.slice(0, 200)}`, res.status);
+  }
+  const data = (await res.json()) as { tracks: SpotifyTrack[] };
+  return (data.tracks ?? []).map(mapTrack);
 }

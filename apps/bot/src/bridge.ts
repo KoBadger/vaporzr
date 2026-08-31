@@ -43,6 +43,20 @@ export class Bridge {
   private sensitivity = 1.0;
   onBurstData: ((data: string) => void) | null = null;
   librespot: LibrespotManager;
+  /** Per-socket auth state: true = key holder (full control), false = guest (view-only). */
+  private socketAuthed = new Map<WebSocket, boolean>();
+  /** Human-readable guild list for the panel/visualizer guild switcher. */
+  private guildList: Array<{ id: string; name: string }> = [];
+
+  get guildCount(): number {
+    return this.guildList.length;
+  }
+
+  setGuildList(list: Array<{ id: string; name: string }>): void {
+    this.guildList = list;
+    for (const vis of this.visualizers) this.sendSnapshot(vis.socket);
+    for (const panel of this.panels) this.sendSnapshot(panel.socket);
+  }
 
   constructor(
     private sessions: SessionManager,
@@ -75,14 +89,14 @@ export class Bridge {
     });
 
     this.wss.on('connection', (socket, req) => {
-      // Share-key gate: WebSockets must carry the same cookie the pages use.
+      // Share-key auth: keyed sockets get full control; keyless sockets connect
+      // as guests — they can watch (snapshots, visuals) but commands are ignored.
       if (config.shareKey) {
         const cookie = req.headers.cookie ?? '';
         const m = /(?:^|;\s*)vz_key=([^;]+)/.exec(cookie);
-        if (!m || m[1] !== config.shareKey) {
-          socket.close();
-          return;
-        }
+        this.socketAuthed.set(socket, !!m && m[1] === config.shareKey);
+      } else {
+        this.socketAuthed.set(socket, true);
       }
       socket.on('message', (data) => this.handleMessage(socket, data));
       socket.on('close', () => this.handleClose(socket));
@@ -153,6 +167,7 @@ export class Bridge {
   }
 
   private handleClose(socket: WebSocket): void {
+    this.socketAuthed.delete(socket);
     for (const panel of this.panels) {
       if (panel.socket === socket) {
         this.panels.delete(panel);
@@ -196,7 +211,8 @@ export class Bridge {
         this.ensureBarsTicker();
       } else {
         this.panels.add(client);
-        console.log(`[bridge] panel connected${client.guildId ? ` (guild ${client.guildId})` : ''}`);
+        const guest = config.shareKey && !this.isAuthed(socket);
+        console.log(`[bridge] panel connected${client.guildId ? ` (guild ${client.guildId})` : ''}${guest ? ' [guest]' : ''}`);
         this.sendSnapshot(socket);
       }
       return;
@@ -212,6 +228,10 @@ export class Bridge {
     for (const p of this.panels) if (p.socket === socket) return 'panel';
     for (const v of this.visualizers) if (v.socket === socket) return 'visualizer';
     return null;
+  }
+
+  private isAuthed(socket: WebSocket): boolean {
+    return this.socketAuthed.get(socket) ?? true;
   }
 
   private clientOf(socket: WebSocket): Client | null {
@@ -231,9 +251,11 @@ export class Bridge {
       case 'audio:chunk':
         break;
       case 'burst:data':
+        if (!this.isAuthed(socket)) return;
         this.onBurstData?.(msg.data);
         break;
       case 'cmd':
+        if (!this.isAuthed(socket)) return;
         this.handlePanelCommand(msg);
         break;
       default:
@@ -245,6 +267,7 @@ export class Bridge {
     switch (msg.type) {
       case 'burst:data':
         // Web visualizers (panel role) capture their own canvas clips.
+        if (!this.isAuthed(socket)) return;
         this.onBurstData?.(msg.data);
         break;
       case 'panel:subscribe': {
@@ -272,6 +295,7 @@ export class Bridge {
         break;
       }
       case 'cmd':
+        if (!this.isAuthed(socket)) return;
         this.handlePanelCommand(msg);
         break;
       case 'state:request':
@@ -302,10 +326,10 @@ export class Bridge {
         this.playback.pause();
         break;
       case 'resume':
-        this.playback.resume();
+        void this.playback.resume();
         break;
       case 'toggle':
-        this.playback.toggle();
+        void this.playback.toggle();
         break;
       case 'next':
         this.playback.next();
@@ -443,6 +467,12 @@ export class Bridge {
     this.broadcastPanels({ type: 'panel:notice', level, text });
   }
 
+  /** Broadcast a message to all connected panels and visualizers. */
+  broadcast(msg: OutboundMessage): void {
+    this.broadcastPanels(msg);
+    this.broadcastVisualizers(msg);
+  }
+
   private visualsSubscribed(guildId?: string): boolean {
     for (const p of this.panels) {
       if (!p.subscribedVisuals) continue;
@@ -498,9 +528,18 @@ export class Bridge {
       tracks: this.queue.getSnapshot().tracks,
       currentIndex: this.queue.getSnapshot().currentIndex,
     };
-    const guildList = this.sessions.all()
-      .filter((s) => s.guildId !== '__fallback__')
-      .map((s) => ({ id: s.guildId, name: s.guildId }));
+    const guildList = this.guildList.length > 0
+      ? this.guildList
+      : this.sessions.all()
+          .filter((s) => s.guildId !== '__fallback__')
+          .map((s) => ({ id: s.guildId, name: s.guildId }));
+    // Privacy: guild NAMES are only for share-key holders. Anonymous /viz
+    // viewers (viewing is deliberately keyless) get generic "Server N" labels
+    // — the ids stay so the guild switcher still works without leaking names.
+    const authed = this.isAuthed(socket);
+    const guildsForClient = guildList.map((g, i) =>
+      authed ? g : { id: g.id, name: `Server ${i + 1}` },
+    );
     const out: OutboundMessage = {
       type: 'snapshot',
       state: this.lastState,
@@ -512,8 +551,10 @@ export class Bridge {
       theme: this.theme,
       djEnabled: this.primaryGuildId ? this.playback.isDjEnabled(this.primaryGuildId) : false,
       primaryGuildId: this.primaryGuildId ?? undefined,
-      guilds: guildList.length > 0 ? guildList : undefined,
+      guilds: guildsForClient.length > 0 ? guildsForClient : undefined,
       sensitivity: this.sensitivity,
+      guest: config.shareKey ? !authed : undefined,
+      endlesswave: this.primaryGuildId ? this.sessions.get(this.primaryGuildId)?.endlessWave.active : undefined,
     };
     this.sendToSocket(socket, out);
   }

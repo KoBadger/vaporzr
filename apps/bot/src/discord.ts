@@ -13,10 +13,13 @@ import {
   Client,
   EmbedBuilder,
   GatewayIntentBits,
+  MessageFlags,
   PermissionFlagsBits,
   REST,
   Routes,
   SlashCommandBuilder,
+  StringSelectMenuBuilder,
+  StringSelectMenuOptionBuilder,
   type ChatInputCommandInteraction,
   type Guild,
   type GuildBasedChannel,
@@ -43,6 +46,7 @@ import {
   isSoundcloudUrl,
   resolveSoundcloudSet,
   resolveSoundcloudVideo,
+  SoundcloudError,
 } from './soundcloud.js';
 import { Session, SessionManager } from './session.js';
 import { PermissionsManager } from './permissions.js';
@@ -50,7 +54,8 @@ import { analyzer } from './analyzer.js';
 import { vizTunnel } from './tunnel.js';
 import { renderPanelIconPng, PANEL_ICON_FALLBACKS } from './panelIcons.js';
 import type { Bridge } from './bridge.js';
-import type { PermissionLevel, TrackInfo } from '@vaporzr/shared';
+import type { PermissionLevel, TrackInfo, PlaybackState } from '@vaporzr/shared';
+import * as EW from './endlesswave.js';
 
 /** First non-internal IPv4 address of this machine — reachable from the LAN. */
 function localIp(): string {
@@ -60,6 +65,33 @@ function localIp(): string {
     }
   }
   return '127.0.0.1';
+}
+
+/** Map resolver/playback errors to user-friendly one-liners. */
+function friendlyPlayError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (err instanceof SoundcloudError) {
+    if (/DRM/i.test(msg)) return 'That SoundCloud track is DRM-protected — no playable stream available.';
+    if (/empty|unavailable/i.test(msg)) return 'That SoundCloud set appears to be empty or unavailable.';
+    if (/extract/i.test(msg)) return 'Could not extract audio from that SoundCloud link.';
+    return `SoundCloud error: ${msg}`;
+  }
+  if (err instanceof YoutubeError) {
+    if (/search failed/i.test(msg)) return 'Could not find that on YouTube.';
+    if (/yt-dlp failed/i.test(msg)) return 'YouTube extraction failed — the video may be private or region-locked.';
+    return `YouTube error: ${msg}`;
+  }
+  if (err instanceof SpotifyError) {
+    if (/rate.limit/i.test(msg) || /429/i.test(msg)) return 'Spotify rate-limited — try again in a minute.';
+    if (/not found/i.test(msg)) return 'Could not find that track on Spotify.';
+    return `Spotify error: ${msg}`;
+  }
+  if (/not in a voice channel/i.test(msg)) return 'Join a voice channel first, then try again.';
+  if (/DRM/i.test(msg)) return 'That track is DRM-protected — no playable stream available.';
+  if (/rate.limit|429/i.test(msg)) return 'Rate-limited — try again in a moment.';
+  if (/timed out|ETIMEDOUT/i.test(msg)) return 'Connection timed out — check your network and try again.';
+  if (/private|unavailable|not found/i.test(msg)) return 'That track is private or unavailable.';
+  return msg;
 }
 
 /**
@@ -87,7 +119,7 @@ const COMMANDS = [
   new SlashCommandBuilder().setName('queue').setDescription('Show the current queue'),
   new SlashCommandBuilder().setName('skip').setDescription('Skip to the next track'),
   new SlashCommandBuilder().setName('pause').setDescription('Pause playback'),
-  new SlashCommandBuilder().setName('resume').setDescription('Resume playback'),
+    new SlashCommandBuilder().setName('resume').setDescription('Resume or refresh stalled playback'),
   new SlashCommandBuilder().setName('clear').setDescription('Clear the queue'),
   new SlashCommandBuilder()
     .setName('remove')
@@ -110,6 +142,12 @@ const COMMANDS = [
       .setDescription('Web panel/visualizer access links (trusted users)')
       .addSubcommand((sc) => sc.setName('give').setDescription('Get your pre-authorized panel + visualizer links'))
       .addSubcommand((sc) => sc.setName('rotate').setDescription('Owner: issue a new key — all old links stop working')),
+    new SlashCommandBuilder()
+      .setName('endwav')
+      .setDescription('Endless Wave — AI-powered autoplay that evolves with your vibe')
+      .addSubcommand((sc) => sc.setName('on').setDescription('Activate Endless Wave'))
+      .addSubcommand((sc) => sc.setName('off').setDescription('Deactivate Endless Wave'))
+      .addSubcommand((sc) => sc.setName('status').setDescription('Show Endless Wave status')),
     new SlashCommandBuilder()
       .setName('nickname')
       .setDescription('🥚 Rename me in THIS server (unlocked by key activation)')
@@ -227,13 +265,92 @@ function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
+/** True when an edit failure means the target message no longer exists
+ *  (deleted, or the channel it lived in is gone). Anything else — missing
+ *  permissions, rate limits, network blips — should keep the registration
+ *  so the panel self-heals once access is restored. */
+function isMessageGone(err: unknown): boolean {
+  const e = err as { status?: number; code?: number; message?: string } | null;
+  if (!e) return false;
+  if (e.status === 404 || e.code === 10008) return true; // Unknown Message
+  if (e.code === 10003) return true; // Unknown Channel
+  return false;
+}
+
 export class DiscordBot {
   private client: Client;
   private rest: REST;
+  /** guildId -> in-flight Endless Wave auto-queue, so overlapping track-end
+   *  callbacks (rapid skips) can't double-enqueue or race each other. */
+  private ewBusy = new Set<string>();
+  /** Debounced topUp timers per guild — collapsed so rapid queue changes
+   *  (skip + manual add back-to-back) trigger only one refill pass. */
+  private ewTopUpTimers = new Map<string, NodeJS.Timeout>();
+  /** URI of the most recently started track per guild, so markPlayed is only
+   *  called once per track (on start) instead of on every queue/state change. */
+  private ewStartedUri = new Map<string, string>();
   /** guildId -> panel message location. */
   private panels = new Map<string, { channelId: string; messageId: string }>();
   private npMessages = new Map<string, { channelId: string; messageId: string }>();
+  /** guildId -> last text channel a command ran in (mini now-playing posts there). */
+  private lastTextChannel = new Map<string, string>();
+  /** guildId -> auto-posted mini now-playing message (always-on, self-updating). */
+  private miniNp = new Map<string, { channelId: string; messageId: string }>();
+  /** guildId -> track uri the mini strip currently represents (for re-anchoring). */
+  private miniTrackUri = new Map<string, string>();
   private panelRefreshQueued = false;
+
+  // ---- persisted panel registrations (survive restarts) ----
+  private panelSaveTimer: NodeJS.Timeout | null = null;
+
+  private panelsFile(): string {
+    return path.join(config.dataDir, 'panels.json');
+  }
+
+  private async loadPanelRegistrations(): Promise<void> {
+    try {
+      const raw = await fs.readFile(this.panelsFile(), 'utf8');
+      const d = JSON.parse(raw) as {
+        panels?: Record<string, { channelId: string; messageId: string }>;
+        npMessages?: Record<string, { channelId: string; messageId: string }>;
+        miniNp?: Record<string, { channelId: string; messageId: string }>;
+        miniTrackUri?: Record<string, string>;
+        lastTextChannel?: Record<string, string>;
+      };
+      for (const [k, v] of Object.entries(d.panels ?? {})) this.panels.set(k, v);
+      for (const [k, v] of Object.entries(d.npMessages ?? {})) this.npMessages.set(k, v);
+      for (const [k, v] of Object.entries(d.miniNp ?? {})) this.miniNp.set(k, v);
+      for (const [k, v] of Object.entries(d.miniTrackUri ?? {})) this.miniTrackUri.set(k, v);
+      for (const [k, v] of Object.entries(d.lastTextChannel ?? {})) this.lastTextChannel.set(k, v);
+      const n = this.panels.size + this.npMessages.size + this.miniNp.size;
+      if (n) console.log(`[vaporzr] restored ${n} panel/now-playing registration(s) from disk`);
+    } catch { /* none yet */ }
+  }
+
+  private scheduleSavePanels(): void {
+    if (this.panelSaveTimer) return;
+    this.panelSaveTimer = setTimeout(() => {
+      this.panelSaveTimer = null;
+      void this.savePanelRegistrations();
+    }, 500);
+    this.panelSaveTimer.unref?.();
+  }
+
+  private async savePanelRegistrations(): Promise<void> {
+    try {
+      const obj = {
+        panels: Object.fromEntries(this.panels),
+        npMessages: Object.fromEntries(this.npMessages),
+        miniNp: Object.fromEntries(this.miniNp),
+        miniTrackUri: Object.fromEntries(this.miniTrackUri),
+        lastTextChannel: Object.fromEntries(this.lastTextChannel),
+      };
+      await fs.mkdir(config.dataDir, { recursive: true });
+      await fs.writeFile(this.panelsFile(), JSON.stringify(obj), 'utf8');
+    } catch (err) {
+      console.warn('[discord] panel registration save failed:', err instanceof Error ? err.message : err);
+    }
+  }
   /** Beat-reactive presence equalizer state. */
   private presenceTimer: NodeJS.Timeout | null = null;
   private lastPresence = '';
@@ -272,8 +389,26 @@ export class DiscordBot {
             console.log(`[discord] playback active in guild ${s.guildId} - panels/visualizer now mirror it`);
             bridge.setPrimaryGuildId(s.guildId);
           }
+          // Always-on mini now-playing: post once per session, self-updates after.
+          void this.maybeAutoMiniNp(s.guildId, st);
         },
       });
+      // Endless Wave: keep a 2-track lookahead buffer topped up on any queue
+      // or state change — skips, manual adds and natural ends all trigger a
+      // refill, so EW behaves like a normal extension of the queue.
+      s.queue.subscribe({
+        onQueueChanged: () => this.scheduleWaveTopUp(s),
+        onStateChanged: (st) => {
+          if (st.playing && st.track) this.markWaveStarted(s, st.track);
+          this.scheduleWaveTopUp(s);
+        },
+      });
+      s.playback.onTrackEnd = (ended) => {
+        if (!s.endlessWave.active) return;
+        void this.waveTrackEnded(s, ended).catch((err) => {
+          console.warn(`[endlesswave] on-end failed: ${err instanceof Error ? err.message : err}`);
+        });
+      };
     });
   }
 
@@ -285,22 +420,42 @@ export class DiscordBot {
   async start(): Promise<void> {
     this.client.on('clientReady', async () => {
       console.log(`[vaporzr] logged in as ${this.client.user?.tag}`);
-      if (!config.ownerId) {
-        try {
-          const app = await this.client.application?.fetch();
-          const owner = app?.owner;
-          const ownerId = owner
-            ? 'ownerId' in owner
-              ? (owner as { ownerId?: string }).ownerId
-              : (owner as { id: string }).id
-            : null;
-          if (ownerId) {
-            this.perms.setOwner(ownerId);
-            console.log(`[vaporzr] auto-detected owner: ${ownerId} (set OWNER_ID in .env to pin it)`);
+      void this.loadPanelRegistrations();
+      if (!config.ownerId) {// Auto-detect owner from the application record. This fetch can fail
+        // on a flaky network at boot, so retry with backoff, then keep
+        // re-checking periodically — owner rank must never silently vanish.
+        let attempts = 0;
+        const detect = async (): Promise<void> => {
+          if (this.perms.hasOwner) return;
+          attempts++;
+          try {
+            const app = await this.client.application?.fetch();
+            const owner = app?.owner;
+            const ownerId = owner
+              ? 'ownerId' in owner
+                ? (owner as { ownerId?: string }).ownerId
+                : (owner as { id: string }).id
+              : null;
+            if (ownerId) {
+              this.perms.setOwner(ownerId);
+              console.log(`[vaporzr] auto-detected owner: ${ownerId} (set OWNER_ID in .env to pin it)`);
+              return;
+            }
+            throw new Error('no owner in application record');
+          } catch (err) {
+            console.warn(`[vaporzr] owner auto-detect attempt ${attempts} failed:`, err instanceof Error ? err.message : err);
+            if (attempts < 6) setTimeout(() => void detect(), 5000 * attempts);
+            else {
+              // Slow periodic re-check until it sticks.
+              const t = setInterval(() => {
+                if (this.perms.hasOwner) { clearInterval(t); return; }
+                void detect();
+              }, 15 * 60 * 1000);
+              t.unref?.();
+            }
           }
-        } catch (err) {
-          console.warn('[vaporzr] could not auto-detect owner:', err instanceof Error ? err.message : err);
-        }
+        };
+        void detect();
       }
       const guilds = await this.client.guilds.fetch();
       console.log(
@@ -326,6 +481,7 @@ export class DiscordBot {
   private syncPrimaryGuild(): void {
     void this.client.guilds.fetch().then((guilds) => {
       this.bridge.setPrimaryGuildId(guilds.first()?.id ?? null);
+      this.bridge.setGuildList(guilds.map((g) => ({ id: g.id, name: g.name })));
     });
   }
 
@@ -380,7 +536,7 @@ export class DiscordBot {
         "I'm **Vaporzr** — a music & visualizer bot, all set up. Quick start:\n\n" +
           '`/play <song or link>` — queue a track (Spotify, YouTube, SoundCloud, Suno)\n' +
           '`V@p <song or link>` — same thing, quick prefix\n' +
-          '`/panel` — live control panel with buttons (needs the bot owner)\n' +
+          '`/panel` — live control panel with buttons (server admins)\n' +
           '`/join` — join your VC and start streaming\n\n' +
           'The server owner is **admin** here automatically — use `/perms` to grant roles. Every server has its own isolated queue and the queue clears automatically when the bot joins or leaves a voice channel.',
       )
@@ -407,15 +563,24 @@ export class DiscordBot {
       await this.handleButton(interaction);
       return;
     }
+    if (interaction.isStringSelectMenu()) {
+      if (interaction.customId === 'queue_page') {
+        const s = this.sessionFor(interaction.guildId);
+        const start = parseInt(interaction.values[0] ?? '0', 10);
+        const { embeds, components } = this.queuePage(s, Number.isFinite(start) ? start : 0);
+        await interaction.update({ embeds, components }).catch(() => {});
+      }
+      return;
+    }
     if (!interaction.isChatInputCommand()) return;
     try {
       await this.handleCommand(interaction);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(`[discord] command "/${interaction.commandName}" failed in guild ${interaction.guildId ?? 'DM'}: ${msg}`);
-      const reply = { content: `⚠️ ${msg}`, ephemeral: true };
-      if (interaction.deferred) await interaction.followUp(reply);
-      else await interaction.reply(reply);
+      const friendly = friendlyPlayError(err);
+      if (interaction.deferred) await interaction.followUp({ content: `⚠️ ${friendly}`, flags: MessageFlags.Ephemeral });
+      else await interaction.reply({ content: `⚠️ ${friendly}`, flags: MessageFlags.Ephemeral });
     }
   }
 
@@ -479,12 +644,16 @@ export class DiscordBot {
   private async handleCommand(interaction: ChatInputCommandInteraction): Promise<void> {
     const name = interaction.commandName;
     const s = this.sessionFor(interaction.guildId);
+    if (interaction.guildId && interaction.channelId) {
+      this.lastTextChannel.set(interaction.guildId, interaction.channelId);
+      this.scheduleSavePanels();
+    }
 
     const wait = this.cooldownRemaining(interaction.user.id, name);
     if (wait > 0) {
       await interaction.reply({
         content: `⏳ Slow down — you can use \`/${name}\` again in ${Math.ceil(wait / 1000)}s.`,
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -528,27 +697,8 @@ export class DiscordBot {
           await interaction.reply('The queue is empty.');
           return;
         }
-        const lines = snap.tracks.map((t, i) => {
-          const cur = i === snap.currentIndex ? '▶ ' : `${i + 1}. `;
-          return `${cur}${srcEmoji(t.source)} **${t.name}** — ${t.artists.join(', ')}`;
-        });
-        const chunks: string[] = [];
-        let chunk = '';
-        for (const line of lines) {
-          if (chunk.length + line.length > 1900) {
-            chunks.push(chunk);
-            chunk = line;
-          } else {
-            chunk += (chunk ? '\n' : '') + line;
-          }
-        }
-        if (chunk) chunks.push(chunk);
-        await interaction.reply({
-          embeds: [new EmbedBuilder().setTitle(`Queue (${snap.tracks.length})`).setDescription(chunks[0]).setColor(this.themeColor())],
-        });
-        for (let i = 1; i < chunks.length; i++) {
-          await interaction.followUp({ embeds: [new EmbedBuilder().setDescription(chunks[i]).setColor(this.themeColor())] });
-        }
+        const { embeds, components } = this.queuePage(s, 0);
+        await interaction.reply({ embeds, components });
         break;
       }
 
@@ -569,7 +719,7 @@ export class DiscordBot {
 
       case 'resume':
         if (!this.requireLevel('resume', interaction)) return this.deny(interaction);
-        s.playback.resume();
+        await s.playback.resume();
         await interaction.reply('▶️ Resumed');
         break;
 
@@ -603,18 +753,18 @@ export class DiscordBot {
       case 'join': {
         if (!this.requireLevel('join', interaction)) return this.deny(interaction);
         if (!interaction.inGuild()) {
-          await interaction.reply({ content: 'Must be used inside a server.', ephemeral: true });
+          await interaction.reply({ content: 'Must be used inside a server.', flags: MessageFlags.Ephemeral });
           return;
         }
         const guild = interaction.guild!;
         const member = interaction.member;
         if (!member || !('voice' in member)) {
-          await interaction.reply({ content: 'Voice state unavailable.', ephemeral: true });
+          await interaction.reply({ content: 'Voice state unavailable.', flags: MessageFlags.Ephemeral });
           return;
         }
         const channel = member.voice.channel;
         if (!channel) {
-          await interaction.reply({ content: 'You must be in a voice channel first.', ephemeral: true });
+          await interaction.reply({ content: 'You must be in a voice channel first.', flags: MessageFlags.Ephemeral });
           return;
         }
         await interaction.deferReply();
@@ -640,7 +790,7 @@ export class DiscordBot {
 
       case 'nowplaying': {
         if (!interaction.inGuild()) {
-          await interaction.reply({ content: 'Must be used inside a server.', ephemeral: true });
+          await interaction.reply({ content: 'Must be used inside a server.', flags: MessageFlags.Ephemeral });
           return;
         }
         const guildId = interaction.guildId!;
@@ -648,19 +798,20 @@ export class DiscordBot {
         if (existing) {
           const ok = await this.editNp(existing.channelId, existing.messageId, guildId);
           if (ok) {
-            await interaction.reply({ content: '🔴 Live now-playing message refreshed above.', ephemeral: true });
+            await interaction.reply({ content: '🔴 Live now-playing message refreshed above.', flags: MessageFlags.Ephemeral });
             break;
           }
           this.npMessages.delete(guildId);
         }
         const channel = interaction.channel;
         if (!channel || !('send' in channel)) {
-          await interaction.reply({ content: 'Cannot post here.', ephemeral: true });
+          await interaction.reply({ content: 'Cannot post here.', flags: MessageFlags.Ephemeral });
           break;
         }
         const msg = await channel.send({ embeds: [this.npPayload(s)] });
         this.npMessages.set(guildId, { channelId: interaction.channelId, messageId: msg.id });
-        await interaction.reply({ content: '🔴 Live now-playing message posted above — it updates itself.', ephemeral: true });
+        this.scheduleSavePanels();
+        await interaction.reply({ content: '🔴 Live now-playing message posted above — it updates itself.', flags: MessageFlags.Ephemeral });
         break;
       }
 
@@ -674,32 +825,22 @@ export class DiscordBot {
 
       case 'panel': {
         if (!interaction.inGuild()) {
-          await interaction.reply({ content: 'Must be used inside a server.', ephemeral: true });
+          await interaction.reply({ content: 'Must be used inside a server.', flags: MessageFlags.Ephemeral });
           return;
         }
-        if (!this.requireWindowOwner(interaction.user.id, interaction.guild, interaction.member)) {
-          await interaction.reply({ content: '⛔ Owner only.', ephemeral: true });
+        if (!this.isAdminMember(interaction.user.id, interaction.guild, interaction.member)) {
+          await interaction.reply({
+            content: '⛔ Admins only — server admins can post the panel (or use `/perms` to grant admin to a role).',
+            flags: MessageFlags.Ephemeral,
+          });
           return;
         }
         if (!this.requireLevel('panel', interaction)) return this.deny(interaction);
-        await interaction.deferReply({ ephemeral: true });
-        const existing = this.panels.get(interaction.guildId!);
-        if (existing) {
-          const ok = await this.editPanel(existing.channelId, existing.messageId, interaction.guildId!);
-          if (ok) {
-            await interaction.editReply({ content: 'Control panel refreshed.' });
-            break;
-          }
-          this.panels.delete(interaction.guildId!);
-        }
-        const channel = interaction.channel;
-        if (!channel || !('send' in channel)) {
-          await interaction.editReply({ content: 'Cannot post here.' });
-          break;
-        }
-        const msg = await channel.send(this.panelPayload(s));
-        this.panels.set(interaction.guildId!, { channelId: interaction.channelId, messageId: msg.id });
-        await interaction.editReply({ content: '🎛️ Control panel posted above.' });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        // Always re-post at the bottom of the channel (old copy deleted) so the
+        // panel lands where you're looking instead of scrolled up from before.
+        await this.repostPanel(interaction.guildId!, interaction.channel as GuildTextBasedChannel | null);
+        await interaction.editReply({ content: '🎛️ Control panel posted right here.' });
         break;
       }
 
@@ -709,14 +850,14 @@ export class DiscordBot {
         const vl = vizTunnel.vizLink();
         await interaction.reply({
           content: `🎬 Fullscreen visuals live in the browser now:\n${vl.url}\n\nOpen it and tap ⛶ (or F) for fullscreen.`,
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
         break;
       }
 
       case 'viz': {
         const admin = this.isAdminMember(interaction.user.id, interaction.guild, interaction.member);
-        await interaction.reply({ embeds: [this.vizEmbed(admin)], ephemeral: true });
+        await interaction.reply({ embeds: [this.vizEmbed(admin)], flags: MessageFlags.Ephemeral });
         break;
       }
 
@@ -744,14 +885,14 @@ export class DiscordBot {
           const linkLine = pl.secure ? `${pl.url}?key=${newKey}` : `(links appear once PUBLIC_BASE_URL or a tunnel is up)`;
           await interaction.reply({
             content: `🔑 New key issued — all previous links and remembered devices are dead.\n${linkLine}`,
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
           break;
         }
         // give
-        if (!this.requireLevel('panel', interaction)) return this.deny(interaction);
+        if (!this.requireLevel('key', interaction)) return this.deny(interaction);
         if (!config.shareKey) {
-          await interaction.reply({ content: 'No share key is configured — the web panel is open access.', ephemeral: true });
+          await interaction.reply({ content: 'No share key is configured — the web panel is open access.', flags: MessageFlags.Ephemeral });
           break;
         }
         const pl = vizTunnel.panelLink();
@@ -768,10 +909,72 @@ export class DiscordBot {
                   `\n\n🥚 *Psst… this server can now rename me — try* \`/nickname set\``,
               )
               .setColor(this.themeColor())
-              .setFooter({ text: 'Keep these links private — anyone holding them gets in' }),
+              .setFooter({ text: 'Keep these links private — anyone holding them gets in · /key rotate to revoke all' }),
           ],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
+        break;
+      }
+
+      case 'endwav': {
+        if (!this.requireLevel('endwav', interaction)) return this.deny(interaction);
+        if (!interaction.guildId) return void (await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral }));
+        const s = this.sessionFor(interaction.guildId);
+        const sub = interaction.options.getSubcommand();
+        if (sub === 'on') {
+          if (s.endlessWave.active) {
+            await interaction.reply({ content: '🌊 Endless Wave is already active.', flags: MessageFlags.Ephemeral });
+            break;
+          }
+          EW.activate(s.endlessWave);
+          // Seed the played-set with the current track (synchronous, cheap) so
+          // EW doesn't immediately re-pick it.
+          const current = s.queue.getCurrentTrack();
+          if (current) {
+            EW.markPlayed(s.endlessWave, current.uri, current.name, current.artists);
+          }
+          this.bridge.broadcast({ type: 'endlesswave', active: true, generated: 0 });
+          // Reply FIRST so we never breach Discord's 3s interaction window, then
+          // enrich EW's audio-feature context in the background.
+          const ewOnMsg = '🌊 **Endless Wave activated** — I\'ll keep the vibes flowing with AI-curated tracks that evolve with your session.';
+          await interaction.reply({
+            content: current ? ewOnMsg : `${ewOnMsg}\nQueue up a track to set the vibe — I'll take it from there.`,
+            flags: MessageFlags.Ephemeral,
+          });
+          if (current) {
+            void EW.fetchFeatures(current)
+              .then((af) => { if (af) EW.recordFeatures(s.endlessWave, af, current.artists[0]); })
+              .catch(() => {});
+          }
+          // Immediately fill the lookahead buffer so the wave has tracks queued
+          // from the start, not just after the first song ends.
+          void this.topUpWave(s).catch((err) => {
+            console.warn(`[endlesswave] initial top-up failed: ${err instanceof Error ? err.message : err}`);
+          });
+        } else if (sub === 'off') {
+          if (!s.endlessWave.active) {
+            await interaction.reply({ content: 'Endless Wave isn\'t active right now.', flags: MessageFlags.Ephemeral });
+            break;
+          }
+          EW.deactivate(s.endlessWave);
+          const t = this.ewTopUpTimers.get(interaction.guildId!);
+          if (t) clearTimeout(t);
+          this.ewTopUpTimers.delete(interaction.guildId!);
+          this.ewStartedUri.delete(interaction.guildId!);
+          this.bridge.broadcast({ type: 'endlesswave', active: false, generated: s.endlessWave.generated });
+          await interaction.reply({
+            content: `🌊 **Endless Wave deactivated** — ${s.endlessWave.generated} tracks were auto-curated this session.`,
+            flags: MessageFlags.Ephemeral,
+          });
+        } else {
+          const snap = EW.snapshot(s.endlessWave);
+          await interaction.reply({
+            content: snap.active
+              ? `🌊 **Endless Wave is active** — ${snap.generated} tracks generated, ${snap.playedCount} unique tracks played.`
+              : 'Endless Wave is not active. Use `/endwav on` to start.',
+            flags: MessageFlags.Ephemeral,
+          });
+        }
         break;
       }
 
@@ -846,7 +1049,7 @@ export class DiscordBot {
         if (!this.requireLevel('wav', interaction)) return this.deny(interaction);
         const file = interaction.options.getAttachment('file');
         if (!file) {
-          await interaction.reply({ content: 'No file attached.', ephemeral: true });
+          await interaction.reply({ content: 'No file attached.', flags: MessageFlags.Ephemeral });
           break;
         }
         await interaction.deferReply();
@@ -867,7 +1070,7 @@ export class DiscordBot {
       case 'dj': {
         if (!this.requireLevel('dj', interaction)) return this.deny(interaction);
         if (!interaction.guildId) {
-          await interaction.reply({ content: 'Must be used inside a server.', ephemeral: true });
+          await interaction.reply({ content: 'Must be used inside a server.', flags: MessageFlags.Ephemeral });
           break;
         }
         const enabled = interaction.options.getBoolean('enabled');
@@ -893,11 +1096,11 @@ export class DiscordBot {
       case 'sfx': {
         if (!this.requireLevel('sfx', interaction)) return this.deny(interaction);
         if (!interaction.guildId) {
-          await interaction.reply({ content: 'Must be used inside a server.', ephemeral: true });
+          await interaction.reply({ content: 'Must be used inside a server.', flags: MessageFlags.Ephemeral });
           break;
         }
         if (!s.playback.isDjEnabled(interaction.guildId)) {
-          await interaction.reply({ content: '🎛️ DJ effects are off for this server. A mod can enable them with `/dj on`.', ephemeral: true });
+          await interaction.reply({ content: '🎛️ DJ effects are off for this server. A mod can enable them with `/dj on`.', flags: MessageFlags.Ephemeral });
           break;
         }
         const sound = interaction.options.getString('sound');
@@ -905,7 +1108,7 @@ export class DiscordBot {
           const sounds = s.playback.listSoundEffects();
           await interaction.reply({
             content: `🎛️ **Soundboard** — ${sounds.map((snd) => `${snd.emoji} \`${snd.id}\``).join('  ')}\nPlay one with \`/sfx <sound>\` or the panel buttons.`,
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
           break;
         }
@@ -919,7 +1122,7 @@ export class DiscordBot {
       }
 
       case 'help': {
-        await interaction.reply({ embeds: [this.helpEmbed()], ephemeral: true });
+        await interaction.reply({ embeds: [this.helpEmbed()], flags: MessageFlags.Ephemeral });
         break;
       }
 
@@ -934,13 +1137,13 @@ export class DiscordBot {
               new ButtonBuilder().setLabel('➕ Add to your server').setStyle(ButtonStyle.Link).setURL(url),
             ),
           ],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
         break;
       }
 
       case 'stats': {
-        await interaction.reply({ embeds: [this.statsEmbed()], ephemeral: true });
+        await interaction.reply({ embeds: [this.statsEmbed()], flags: MessageFlags.Ephemeral });
         break;
       }
 
@@ -955,6 +1158,10 @@ export class DiscordBot {
   private async handleMessageCommand(message: Message): Promise<void> {
     if (message.author.bot) return;
     if (!message.content.startsWith('v@') && !message.content.startsWith('V@')) return;
+    if (message.guildId && message.channelId) {
+      this.lastTextChannel.set(message.guildId, message.channelId);
+      this.scheduleSavePanels();
+    }
 
     const rest = message.content.slice(2).trimStart();
     if (!rest) {
@@ -1002,6 +1209,7 @@ export class DiscordBot {
       dj: 'dj',
       sfx: 'sfx',
       sens: 'sensitivity', sensitivity: 'sensitivity',
+      ew: 'endwav', endwav: 'endwav',
       help: 'help',
     };
     const canonical = alias[cmd];
@@ -1069,7 +1277,7 @@ export class DiscordBot {
         case 'r':
         case 'resume': {
           if (!canUse('resume')) return void (await deny());
-          s.playback.resume();
+          await s.playback.resume();
           await message.reply('▶️ Resumed');
           break;
         }
@@ -1077,7 +1285,7 @@ export class DiscordBot {
         case 't':
         case 'toggle': {
           if (!canUse('pause')) return void (await deny());
-          s.playback.toggle();
+          await s.playback.toggle();
           await message.reply(s.queue.getState().playing ? '▶️ Resumed' : '⏸️ Paused');
           break;
         }
@@ -1103,29 +1311,8 @@ export class DiscordBot {
             await message.reply('The queue is empty.');
             break;
           }
-          const lines = snap.tracks.map((t, i) => {
-            const cur = i === snap.currentIndex ? '▶ ' : `${i + 1}. `;
-            return `${cur}${srcEmoji(t.source)} **${t.name}** — ${t.artists.join(', ')}`;
-          });
-          const chunks: string[] = [];
-          let chunk = '';
-          for (const line of lines) {
-            if (chunk.length + line.length > 1900) {
-              chunks.push(chunk);
-              chunk = line;
-            } else {
-              chunk += (chunk ? '\n' : '') + line;
-            }
-          }
-          if (chunk) chunks.push(chunk);
-          await message.reply({
-            embeds: [new EmbedBuilder().setTitle(`Queue (${snap.tracks.length})`).setDescription(chunks[0]).setColor(this.themeColor())],
-          });
-          for (let i = 1; i < chunks.length; i++) {
-            if ('send' in message.channel) {
-              await message.channel.send({ embeds: [new EmbedBuilder().setDescription(chunks[i]).setColor(this.themeColor())] });
-            }
-          }
+          const { embeds, components } = this.queuePage(s, 0);
+          await message.reply({ embeds, components });
           break;
         }
 
@@ -1142,6 +1329,7 @@ export class DiscordBot {
           if (!('send' in message.channel)) return void (await message.reply('Cannot post here.'));
           const sent = await message.channel.send({ embeds: [this.npPayload(s)] });
           this.npMessages.set(guildId, { channelId: message.channelId, messageId: sent.id });
+          this.scheduleSavePanels();
           await message.reply('🔴 Live now-playing message posted above — it updates itself.');
           break;
         }
@@ -1264,26 +1452,17 @@ export class DiscordBot {
 
         case 'pan':
         case 'panel': {
-          if (!canWindow()) return void (await deny());
+          if (!this.isAdminMember(message.author.id, message.guild, message.member)) {
+            await message.reply('⛔ Admins only — server admins can post the panel (or `/perms` grant admin to a role).');
+            return;
+          }
           if (!canUse('panel')) return void (await deny());
           if (!message.inGuild()) return void (await message.reply('Must be used inside a server.'));
           const guildId = message.guildId!;
-          const existing = this.panels.get(guildId);
-          if (existing) {
-            const ok = await this.editPanel(existing.channelId, existing.messageId, guildId);
-            if (ok) {
-              await message.reply('Control panel refreshed.');
-              break;
-            }
-            this.panels.delete(guildId);
-          }
-          if (!('send' in message.channel)) {
-            await message.reply('Cannot post here.');
-            break;
-          }
-          const sent = await message.channel.send(this.panelPayload(s));
-          this.panels.set(guildId, { channelId: sent.channelId, messageId: sent.id });
-          await message.reply('🎛️ Control panel posted above.');
+          await message.reply('🎛️ Bringing the control panel down to you.');
+          // Re-post at the bottom of the channel (old copy deleted) so it's
+          // visible without scrolling back up.
+          await this.repostPanel(guildId, message.channel as GuildTextBasedChannel);
           break;
         }
 
@@ -1312,7 +1491,7 @@ export class DiscordBot {
             await message.reply(`🔑 New key issued — all previous links and remembered devices are dead.\n${linkLine}`);
             break;
           }
-          if (!canUse('panel')) return void (await deny());
+          if (!canUse('key')) return void (await deny());
           if (!config.shareKey) {
             await message.reply('No share key is configured — the web panel is open access.');
             break;
@@ -1330,7 +1509,7 @@ export class DiscordBot {
                     `\n\n🥚 *Psst… this server can now rename me — try* \`V@nick Neon-rzr\``,
                 )
                 .setColor(this.themeColor())
-                .setFooter({ text: 'Keep these links private — anyone holding them gets in' }),
+                .setFooter({ text: 'Keep these links private — anyone holding them gets in · V@key rotate to revoke all' }),
             ],
           });
           if (message.guildId) await this.markKeyedGuild(message.guildId);
@@ -1341,6 +1520,46 @@ export class DiscordBot {
         case 'screensaver': {
           const svl = vizTunnel.vizLink();
           await message.reply(`🎬 Fullscreen visuals live in the browser now:\n${svl.url}\n\nOpen it and tap ⛶ (or F) for fullscreen.`);
+          break;
+        }
+
+        case 'ew':
+        case 'endwav': {
+          if (!canUse('endwav')) return void (await deny());
+          if (!message.guildId) return void (await message.reply('Must be used in a server.'));
+          const ewS = this.sessionFor(message.guildId);
+          const subCmd = (args || 'status').toLowerCase();
+          if (subCmd === 'on' || subCmd === 'activate') {
+            if (ewS.endlessWave.active) return void (await message.reply('🌊 Endless Wave is already active.'));
+            EW.activate(ewS.endlessWave);
+            const cur = ewS.queue.getCurrentTrack();
+            if (cur) EW.markPlayed(ewS.endlessWave, cur.uri, cur.name, cur.artists);
+            this.bridge.broadcast({ type: 'endlesswave', active: true, generated: 0 });
+            const ewPrefixMsg = '🌊 **Endless Wave activated** — I\'ll keep the vibes flowing with AI-curated tracks that evolve with your session.';
+            await message.reply(cur ? ewPrefixMsg : `${ewPrefixMsg}\nQueue up a track to set the vibe — I'll take it from there.`);
+            if (cur) {
+              void EW.fetchFeatures(cur)
+                .then((af) => { if (af) EW.recordFeatures(ewS.endlessWave, af, cur.artists[0]); })
+                .catch(() => {});
+            }
+            void this.topUpWave(ewS).catch((err) => {
+              console.warn(`[endlesswave] initial top-up failed: ${err instanceof Error ? err.message : err}`);
+            });
+          } else if (subCmd === 'off' || subCmd === 'deactivate') {
+            if (!ewS.endlessWave.active) return void (await message.reply('Endless Wave isn\'t active right now.'));
+            EW.deactivate(ewS.endlessWave);
+            const t = this.ewTopUpTimers.get(message.guildId!);
+            if (t) clearTimeout(t);
+            this.ewTopUpTimers.delete(message.guildId!);
+            this.ewStartedUri.delete(message.guildId!);
+            this.bridge.broadcast({ type: 'endlesswave', active: false, generated: ewS.endlessWave.generated });
+            await message.reply(`🌊 **Endless Wave deactivated** — ${ewS.endlessWave.generated} tracks were auto-curated this session.`);
+          } else {
+            const snap = EW.snapshot(ewS.endlessWave);
+            await message.reply(snap.active
+              ? `🌊 **Endless Wave is active** — ${snap.generated} tracks generated, ${snap.playedCount} unique tracks played.`
+              : 'Endless Wave is not active. Use `V@ew on` to start.');
+          }
           break;
         }
 
@@ -1439,7 +1658,7 @@ export class DiscordBot {
       if (err instanceof Error && err.message === 'denied') return;
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(`[discord] V@ command error: ${msg}`);
-      await message.reply(`⚠️ ${msg}`);
+      await message.reply(`⚠️ ${friendlyPlayError(err)}`);
     }
     this.commandsRun++;
   }
@@ -1449,6 +1668,7 @@ export class DiscordBot {
     const first = tracks[0];
     const requestedBy = message.author.username;
     s.queue.enqueueMany(tracks, requestedBy);
+    if (first) s.playback.prefetchStream(first);
     let playbackFailed: string | null = null;
     try {
       await this.ensureJoinedForMessage(message, s);
@@ -1523,6 +1743,7 @@ export class DiscordBot {
     const first = tracks[0];
     const requestedBy = message.author.username;
     s.queue.insertAfterCurrent(tracks, requestedBy);
+    if (first) s.playback.prefetchStream(first);
     let playbackFailed: string | null = null;
     try {
       await this.ensureJoinedForMessage(message, s);
@@ -1601,6 +1822,7 @@ export class DiscordBot {
     const first = tracks[0];
     const requestedBy = interaction.member?.user.username ?? 'unknown';
     s.queue.insertAfterCurrent(tracks, requestedBy);
+    if (first) s.playback.prefetchStream(first);
     let playbackFailed: string | null = null;
     try {
       await this.ensureJoinedForPlayback(interaction, s);
@@ -1628,6 +1850,9 @@ export class DiscordBot {
     const first = tracks[0];
     const requestedBy = interaction.member?.user.username ?? 'unknown';
     s.queue.enqueueMany(tracks, requestedBy);
+    // Warm the stream resolve while the voice-channel join is in flight so
+    // playback starts as soon as the join completes instead of serially after.
+    if (first) s.playback.prefetchStream(first);
     let playbackFailed: string | null = null;
     try {
       await this.ensureJoinedForPlayback(interaction, s);
@@ -1651,7 +1876,7 @@ export class DiscordBot {
   }
 
   private async deny(interaction: ChatInputCommandInteraction): Promise<void> {
-    await interaction.reply({ content: '⛔ You don\'t have permission to do that.', ephemeral: true });
+    await interaction.reply({ content: '⛔ You don\'t have permission to do that.', flags: MessageFlags.Ephemeral });
   }
 
   /** Auto-join the author's voice channel before playback, Luna/Jockie-style. */
@@ -1735,6 +1960,89 @@ export class DiscordBot {
         this.npMessages.delete(guildId);
       }
     }
+    // Always-on mini now-playing — same cycle, compact embed.
+    for (const [guildId, mini] of this.miniNp) {
+      if (!(await this.editMiniNp(mini.channelId, mini.messageId, guildId))) {
+        this.miniNp.delete(guildId);
+        this.miniTrackUri.delete(guildId);
+      }
+    }
+    this.scheduleSavePanels();
+  }
+
+  /**
+   * Posts the always-on mini now-playing message the first time a guild starts
+   * playing — in whatever channel was last used for commands. After that it
+   * updates in place on every queue/state change via refreshAllPanels, and
+   * re-anchors to the bottom of the channel whenever the track changes so it
+   * never gets buried by chat.
+   */
+  private async maybeAutoMiniNp(guildId: string | undefined, st: PlaybackState): Promise<void> {
+    if (!guildId || !st.track) return;
+    const channelId = this.lastTextChannel.get(guildId);
+    if (!channelId) return;
+    const uri = st.track.uri;
+    if (this.miniTrackUri.get(guildId) === uri && this.miniNp.has(guildId)) return;
+    try {
+      const channel = await this.client.channels.fetch(channelId);
+      if (!channel || !('send' in channel)) return;
+      const existing = this.miniNp.get(guildId);
+      if (existing) {
+        // Re-anchor: delete the old strip so the fresh one sits at the bottom.
+        try {
+          const old = await channel.messages.fetch(existing.messageId);
+          await old.delete();
+        } catch { /* already gone */ }
+      }
+      const msg = await channel.send({ embeds: [this.miniNpPayload(this.sessionFor(guildId))] });
+      this.miniNp.set(guildId, { channelId, messageId: msg.id });
+      this.miniTrackUri.set(guildId, uri);
+      this.scheduleSavePanels();
+    } catch {
+      /* no access to that channel — will retry on next state change */
+    }
+  }
+
+  private async editMiniNp(channelId: string, messageId: string, guildId: string): Promise<boolean> {
+    try {
+      const channel = await this.client.channels.fetch(channelId);
+      if (!channel?.isTextBased()) return false;
+      const msg = await channel.messages.fetch(messageId);
+      await msg.edit({ embeds: [this.miniNpPayload(this.sessionFor(guildId))] });
+      return true;
+    } catch (err) {
+      return !isMessageGone(err);
+    }
+  }
+
+  /** Compact always-on now-playing strip — the panel's small sibling. */
+  private miniNpPayload(s: Session): EmbedBuilder {
+    const st = s.queue.getState();
+    const track = st.track;
+    if (!track) {
+      return new EmbedBuilder()
+        .setColor(this.themeColor())
+        .setDescription('⏸️ **Idle** — queue something with `/play` or `V@p`');
+    }
+    const dur = st.durationMs || track.durationMs || 0;
+    const livePos = st.positionMs + (st.playing ? Math.max(0, Date.now() - (st.updatedAt || Date.now())) : 0);
+    const pos = dur > 0 ? Math.min(livePos, dur) : st.positionMs;
+    const slots = 10;
+    const filled = dur ? Math.min(slots, Math.max(0, Math.round((pos / dur) * slots))) : 0;
+    const bar = '▰'.repeat(filled) + '▱'.repeat(Math.max(0, slots - filled));
+    const status = st.playing ? '▶️' : '⏸';
+    const snap = s.queue.getSnapshot();
+    const upNext = snap.tracks.find((x, i) => i > snap.tracks.findIndex((y) => y.current));
+    const embed = new EmbedBuilder()
+      .setColor(this.themeColor())
+      .setDescription(
+        `${status} ${srcEmoji(track.source)} **${truncate(track.name, 60)}**\n` +
+          `${(track.artists ?? []).join(', ') || track.album}\n` +
+          `\`${bar}\` \`${fmtMs(pos)}\`/\`${fmtMs(dur)}\`` +
+          (upNext ? `\n⏭ ${truncate(upNext.name, 42)}` : ''),
+      );
+    if (track.image) embed.setThumbnail(track.image);
+    return embed;
   }
 
   private async editPanel(channelId: string, messageId: string, guildId: string): Promise<boolean> {
@@ -1744,8 +2052,11 @@ export class DiscordBot {
       const msg = await channel.messages.fetch(messageId);
       await msg.edit(this.panelPayload(this.sessionFor(guildId)));
       return true;
-    } catch {
-      return false;
+    } catch (err) {
+      // Only forget the panel when the message is truly gone. Permission or
+      // network hiccups keep the registration so it self-heals once access
+      // is restored (e.g. after a roles fix) — no need to re-run /panel.
+      return !isMessageGone(err);
     }
   }
 
@@ -1756,8 +2067,8 @@ export class DiscordBot {
       const msg = await channel.messages.fetch(messageId);
       await msg.edit({ embeds: [this.npPayload(this.sessionFor(guildId))] });
       return true;
-    } catch {
-      return false;
+    } catch (err) {
+      return !isMessageGone(err);
     }
   }
 
@@ -2064,7 +2375,7 @@ export class DiscordBot {
     const req = permissionCommand[action];
     const requiresSfx = action.startsWith('sfx:');
     if ((req || requiresSfx) && !this.canUse(requiresSfx ? 'sfx' : req, interaction)) {
-      await interaction.reply({ content: '⛔ You don\'t have permission to do that.', ephemeral: true });
+      await interaction.reply({ content: '⛔ You don\'t have permission to do that.', flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -2076,29 +2387,29 @@ export class DiscordBot {
       case 'prev': {
         s.playback.previous();
         const np = this.nowPlayingEmbed(s, '⏮️ Previous');
-        if (np) void interaction.followUp({ embeds: [np], ephemeral: true }).catch(() => {});
+        if (np) void interaction.followUp({ embeds: [np], flags: MessageFlags.Ephemeral }).catch(() => {});
         break;
       }
       case 'toggle':
-        s.playback.toggle();
+        await s.playback.toggle();
         break;
       case 'next': {
         s.playback.next();
         const np = this.nowPlayingEmbed(s, '⏭️ Skipped');
-        if (np) void interaction.followUp({ embeds: [np], ephemeral: true }).catch(() => {});
+        if (np) void interaction.followUp({ embeds: [np], flags: MessageFlags.Ephemeral }).catch(() => {});
         break;
       }
       case 'shuffle': {
         s.playback.shuffle(!st.shuffle);
         void interaction
-          .followUp({ content: st.shuffle ? '🔀 Shuffle off' : '🔀 Shuffle on', ephemeral: true })
+          .followUp({ content: st.shuffle ? '🔀 Shuffle off' : '🔀 Shuffle on', flags: MessageFlags.Ephemeral })
           .catch(() => {});
         break;
       }
       case 'repeat': {
         s.playback.setRepeat(!st.repeat);
         void interaction
-          .followUp({ content: st.repeat ? '🔁 Repeat off' : '🔁 Repeat on — track replays at its end', ephemeral: true })
+          .followUp({ content: st.repeat ? '🔁 Repeat off' : '🔁 Repeat on — track replays at its end', flags: MessageFlags.Ephemeral })
           .catch(() => {});
         break;
       }
@@ -2111,7 +2422,7 @@ export class DiscordBot {
         void interaction
           .followUp({
             content: `${action === 'back10' ? '⏪' : '⏩'} ${fmtMs(Math.max(0, target))}${dur ? ` / ${fmtMs(dur)}` : ''}`,
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           })
           .catch(() => {});
         break;
@@ -2120,7 +2431,7 @@ export class DiscordBot {
       case 'vol-up': {
         const v = action === 'vol-down' ? Math.max(0, st.volume - 10) : Math.min(100, st.volume + 10);
         s.playback.volume(v);
-        void interaction.followUp({ content: `🔊 Volume ${v}%`, ephemeral: true }).catch(() => {});
+        void interaction.followUp({ content: `🔊 Volume ${v}%`, flags: MessageFlags.Ephemeral }).catch(() => {});
         break;
       }
       case 'stop':
@@ -2142,7 +2453,7 @@ export class DiscordBot {
           const id = action.slice(4);
           void s.playback.playSoundEffect(id);
           const sfx = s.playback.listSoundEffects().find((snd) => snd.id === id);
-          void interaction.followUp({ content: `🔊 ${sfx ? `${sfx.emoji} ${sfx.name}` : id}`, ephemeral: true }).catch(() => {});
+          void interaction.followUp({ content: `🔊 ${sfx ? `${sfx.emoji} ${sfx.name}` : id}`, flags: MessageFlags.Ephemeral }).catch(() => {});
         }
         break;
     }
@@ -2157,6 +2468,75 @@ export class DiscordBot {
 
   private themeColor(): number {
     return this.bridge.getTheme().embedColor;
+  }
+
+  private static readonly QUEUE_PAGE = 15;
+
+  /** Build the queue embed for one 15-song page plus a jump-to dropdown for
+   *  the rest — a single message even for 200-track playlists, instead of a
+   *  wall of follow-up chunks. */
+  private queuePage(s: Session, start: number): {
+    embeds: EmbedBuilder[];
+    components: ActionRowBuilder<StringSelectMenuBuilder>[];
+  } {
+    const snap = s.queue.getSnapshot();
+    const tracks = snap.tracks;
+    const PAGE = DiscordBot.QUEUE_PAGE;
+    const startIdx = Math.max(0, Math.min(Number.isFinite(start) ? start : 0, Math.max(0, tracks.length - 1)));
+    const end = Math.min(tracks.length, startIdx + PAGE);
+    const lines: string[] = [];
+    for (let i = startIdx; i < end; i++) {
+      const t = tracks[i];
+      const cur = i === snap.currentIndex ? '▶ ' : `${i + 1}. `;
+      lines.push(`${cur}${srcEmoji(t.source)} **${t.name}** — ${t.artists.join(', ')}`);
+    }
+    const embed = new EmbedBuilder()
+      .setTitle(`Queue (${tracks.length}) — showing ${startIdx + 1}–${end}`)
+      .setDescription(lines.join('\n') || 'Nothing here yet.')
+      .setColor(this.themeColor());
+    const components: ActionRowBuilder<StringSelectMenuBuilder>[] = [];
+    if (tracks.length > PAGE) {
+      const menu = new StringSelectMenuBuilder()
+        .setCustomId('queue_page')
+        .setPlaceholder('Jump to another stretch of the queue…');
+      const opts: StringSelectMenuOptionBuilder[] = [];
+      for (let p = 0; p < tracks.length && opts.length < 25; p += PAGE) {
+        const e = Math.min(tracks.length, p + PAGE);
+        opts.push(
+          new StringSelectMenuOptionBuilder()
+            .setLabel(`${p + 1}–${e}`)
+            .setValue(String(p))
+            .setDefault(p === startIdx),
+        );
+      }
+      menu.addOptions(opts);
+      components.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu));
+    }
+    return { embeds: [embed], components };
+  }
+
+  /** Re-post the control panel at the CURRENT bottom of the channel: the old
+   *  message is deleted first, so V@pan//panel brings the panel down to you
+   *  instead of leaving it scrolled up where nobody sees it. */
+  private async repostPanel(guildId: string, channel: GuildTextBasedChannel | null): Promise<void> {
+    const existing = this.panels.get(guildId);
+    if (existing) {
+      try {
+        const ch = await this.client.channels.fetch(existing.channelId);
+        if (ch && ch.isTextBased()) {
+          const msg = await ch.messages.fetch(existing.messageId).catch(() => null);
+          await msg?.delete();
+        }
+      } catch {
+        /* old panel already gone or we lack manage-messages — just re-post */
+      }
+      this.panels.delete(guildId);
+    }
+    if (!channel) return;
+    const s = this.sessionFor(guildId);
+    const sent = await channel.send(this.panelPayload(s));
+    this.panels.set(guildId, { channelId: sent.channelId, messageId: sent.id });
+    this.scheduleSavePanels();
   }
 
   /** Shared reference for both `/viz` and `V@viz`. Secure link first when the tunnel is up. */
@@ -2332,6 +2712,93 @@ export class DiscordBot {
       };
       this.bridge.requestBurst(3000);
     });
+  }
+
+  /** Endless Wave: record features for the ended track and refill the buffer. */
+  private async waveTrackEnded(s: Session, ended: TrackInfo): Promise<void> {
+    if (!s.endlessWave.active) return;
+    const features = await EW.fetchFeatures(ended);
+    if (features) EW.recordFeatures(s.endlessWave, features, ended.artists[0]);
+    EW.markPlayed(s.endlessWave, ended.uri, ended.name, ended.artists);
+    await this.topUpWave(s);
+  }
+
+  /** Mark a track as played as soon as it starts (not on end) so EW's dedup
+   *  immediately excludes it from future picks — critical for the lookahead
+   *  buffer to not re-pick the currently playing song's variants. */
+  private markWaveStarted(s: Session, track: TrackInfo): void {
+    if (!s.endlessWave.active) return;
+    if (this.ewStartedUri.get(s.guildId) === track.uri) return;
+    this.ewStartedUri.set(s.guildId, track.uri);
+    EW.markPlayed(s.endlessWave, track.uri, track.name, track.artists);
+  }
+
+  /** Debounced trigger for topUpWave — fires 700ms after any queue/state change
+   *  so rapid skips or manual adds collapse into a single refill pass. */
+  private scheduleWaveTopUp(s: Session): void {
+    if (!s.endlessWave.active) return;
+    const t = this.ewTopUpTimers.get(s.guildId);
+    if (t) clearTimeout(t);
+    this.ewTopUpTimers.set(
+      s.guildId,
+      setTimeout(() => {
+        this.ewTopUpTimers.delete(s.guildId);
+        void this.topUpWave(s).catch((err) =>
+          console.warn(`[endlesswave] top-up failed: ${err instanceof Error ? err.message : err}`),
+        );
+      }, 700),
+    );
+  }
+
+  /** Keep a lookahead buffer of 2 EW-picked tracks at the tail of the queue.
+   *  They're ordinary queue entries, so skips/manual adds interleave naturally;
+   *  any queue or state change re-tops the buffer. */
+  private async topUpWave(s: Session): Promise<void> {
+    if (!s.endlessWave.active) return;
+    if (this.ewBusy.has(s.guildId)) return;
+    this.ewBusy.add(s.guildId);
+    try {
+      const AHEAD = 2;
+      for (;;) {
+        if (!s.endlessWave.active) return;
+        const snap = s.queue.getSnapshot();
+        const upcoming = snap.tracks.slice(snap.currentIndex + 1);
+        let ahead = 0;
+        for (const t of upcoming) if (t.addedBy === 'endless-wave') ahead++;
+        if (ahead >= AHEAD) return;
+
+        // Context window around the current position: up to 3 recently played
+        // tracks (seeds) + the next 6 upcoming (so the lookahead buffer and
+        // any user-queued tracks are included as seeds and dedup targets).
+        const recent = EW.pickContext(snap.tracks, snap.currentIndex, 3, 6);
+        const exclude = new Set(upcoming.map((t) => t.uri));
+        const failed = new Set<string>();
+        let resolved: TrackInfo | null = null;
+        for (let attempt = 0; attempt < 3 && !resolved; attempt++) {
+          if (!s.endlessWave.active) return;
+          const candidate = await EW.pickNextTrack(s.endlessWave, recent, failed, upcoming);
+          if (!candidate) break;
+          failed.add(candidate.uri);
+          resolved = await EW.resolveCandidate(candidate);
+          if (!resolved) console.log(`[endlesswave] could not resolve "${candidate.name}" — trying another`);
+        }
+        if (!resolved) {
+          console.warn('[endlesswave] no suitable candidate right now — staying armed');
+          return;
+        }
+        s.queue.enqueue(resolved, 'endless-wave');
+        s.endlessWave.generated++;
+        this.bridge.broadcast({ type: 'endlesswave', active: true, generated: s.endlessWave.generated });
+        console.log(`[endlesswave] queued: "${resolved.name}" — ${resolved.artists.join(', ')} (#${s.endlessWave.generated})`);
+      }
+    } finally {
+      this.ewBusy.delete(s.guildId);
+      // If the queue is idle (nothing playing), kick playback so the wave runs.
+      const st = s.queue.getState();
+      if (s.endlessWave.active && !st.playing && s.queue.getCurrentTrack() && s.voice.isJoined()) {
+        void s.playback.play().catch(() => {});
+      }
+    }
   }
 }
 

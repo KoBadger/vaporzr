@@ -200,7 +200,7 @@ export async function resolveYoutubePlaylist(input: string): Promise<ResolvedVid
  * asks for one ("kids with guns remix" keeps remixes in contention).
  */
 const VARIANT_RE =
-  /\b(remix|bootleg|live|cover|karaoke|acoustic|instrumental|nightcore|mashup|sped\s*up|slowed|reverb)\b/i;
+  /\b(remix|bootleg|live|cover|karaoke|acoustic|instrumental|nightcore|mashup|sped\s*up|slowed|reverb|version|tribute|minor\s*key|fan\s*made|8d\s*audio|bass\s*boosted)\b/i;
 
 function normText(s: string): string {
   return s
@@ -259,24 +259,33 @@ function scoreHit(
   const nameTokens = normText(opts.name ?? query)
     .split(' ')
     .filter((w) => w.length > 1);
-  for (const w of nameTokens) score += t.includes(w) ? 2 : -3;
+  let missing = 0;
+  for (const w of nameTokens) {
+    if (t.includes(w)) score += 2;
+    else { score -= 4; missing++; }
+  }
+  // Over half the title words absent = this is almost certainly the wrong song.
+  if (nameTokens.length > 0 && missing > nameTokens.length / 2) score -= 10;
 
   for (const artist of opts.artists ?? []) {
     const na = normText(artist);
     if (!na) continue;
-    if (ch.includes(na)) score += 4;
+    // "Artist - Topic" channels are YouTube's auto-generated official audio.
+    if (ch === `${na} topic` || ch.endsWith(' topic') && ch.includes(na)) score += 6;
+    else if (ch.includes(na)) score += 4;
     else if (t.includes(na)) score += 2;
     else score -= 1;
   }
 
-  if (!VARIANT_RE.test(query) && VARIANT_RE.test(hit.title)) score -= 8;
+  if (!VARIANT_RE.test(query) && !VARIANT_RE.test(opts.name ?? '') && VARIANT_RE.test(hit.title)) score -= 8;
 
   const wantMs = opts.durationMs ?? 0;
   if (wantMs > 0 && hit.durationSec > 0) {
     const d = Math.abs(hit.durationSec * 1000 - wantMs);
-    if (d < 3000) score += 3;
-    else if (d < 10000) score += 1;
-    else if (d > 60000) score -= 2;
+    if (d < 2000) score += 4;
+    else if (d < 8000) score += 2;
+    else if (d > 45000) score -= 6;
+    else if (d > 15000) score -= 2;
   }
   return score;
 }
@@ -294,17 +303,40 @@ function scoreHit(
   * Successful results are LRU-cached for 10 minutes.
   */
 const resolveCache = new Map<string, { at: number; video: ResolvedVideo }>();
-const RESOLVE_CACHE_TTL = 10 * 60 * 1000;
-const RESOLVE_CACHE_MAX = 40;
+/** Concurrent resolves for the same track share one subprocess instead of duplicating. */
+const inflightResolves = new Map<string, Promise<ResolvedVideo | null>>();
+const RESOLVE_CACHE_TTL = 45 * 60 * 1000;
+const RESOLVE_CACHE_MAX = 60;
+
+/** Canonical cache key: collapses phrasing differences between callers
+ *  ("Bar Breaker" vs "Artist - Bar Breaker" vs case/spacing variants). */
+function resolveKey(query: string, opts: YoutubeSearchOptions): string {
+  const name = normText(opts.name ?? query);
+  const artists = (opts.artists ?? []).map(normText).filter(Boolean).join(' ');
+  return `${name}~${artists || normText(query)}`;
+}
 
 export async function searchAndResolveYoutube(
   query: string,
   opts: YoutubeSearchOptions = {},
 ): Promise<ResolvedVideo | null> {
-  const cached = resolveCache.get(query);
+  const key = resolveKey(query, opts);
+  const cached = resolveCache.get(key);
   if (cached && Date.now() - cached.at < RESOLVE_CACHE_TTL) {
     return cached.video;
   }
+  const running = inflightResolves.get(key);
+  if (running) return running;
+  const p = doSearchAndResolve(query, opts, key).finally(() => inflightResolves.delete(key));
+  inflightResolves.set(key, p);
+  return p;
+}
+
+async function doSearchAndResolve(
+  query: string,
+  opts: YoutubeSearchOptions,
+  key: string,
+): Promise<ResolvedVideo | null> {
   const t0 = Date.now();
   try {
     // Fast path: fused single-call top-result extraction (legacy behavior).
@@ -358,16 +390,32 @@ export async function searchAndResolveYoutube(
         };
       }
     }
-    if (!video && best) {
-      console.log(
-        `[youtube] score override -> extracting #${hits.indexOf(best) + 1} "${best.title}"`,
-      );
-      video = await resolveYoutubeVideo(best.videoId);
+    if (!video && hits.length > 0) {
+      // Extract in score order and keep going when a candidate is unplayable
+      // ("This video is not available", age-gated, region-locked…) — a single
+      // dead top pick must not fail the whole search.
+      const ranked = hits
+        .map((h, i) => ({ h, s: scoreHit(h, i, query, opts) }))
+        .sort((a, b) => b.s - a.s)
+        .slice(0, 3);
+      for (const cand of ranked) {
+        try {
+          if (cand.h !== best) {
+            console.log(`[youtube] score override -> extracting #${hits.indexOf(cand.h) + 1} "${cand.h.title}"`);
+          }
+          video = await resolveYoutubeVideo(cand.h.videoId);
+          break;
+        } catch (err) {
+          console.warn(
+            `[youtube] "${cand.h.title}" unresolvable (${err instanceof Error ? err.message : err}) — trying next candidate`,
+          );
+        }
+      }
     }
     if (!video) return null;
 
     console.log(`[youtube] resolved "${video.name}" in ${Date.now() - t0}ms (${fusedWinner ? 'fast path' : 'scored path'})`);
-    resolveCache.set(query, { at: Date.now(), video });
+    resolveCache.set(key, { at: Date.now(), video });
     if (resolveCache.size > RESOLVE_CACHE_MAX) {
       const oldest = [...resolveCache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
       if (oldest) resolveCache.delete(oldest[0]);

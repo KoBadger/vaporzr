@@ -6,6 +6,7 @@ import { VoiceManager } from './voice.js';
 import type { LibrespotManager } from './librespot.js';
 import { config } from './config.js';
 import type { PlaybackState, TrackInfo } from '@vaporzr/shared';
+import * as EW from './endlesswave.js';
 
 /**
  * One guild's isolated playback: its own queue, voice connection, and playback
@@ -16,6 +17,7 @@ export class Session {
   readonly queue: QueueManager;
   readonly voice: VoiceManager;
   readonly playback: PlaybackController;
+  readonly endlessWave = EW.createState();
 
   constructor(
     readonly guildId: string,

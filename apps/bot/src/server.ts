@@ -14,6 +14,9 @@ import { vizTunnel } from './tunnel.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export function startServer(sessions: SessionManager, perms: PermissionsManager): Bridge {
+  // Declared here so the request handler (which runs later) can read live
+  // guild data from the bridge once it exists.
+  let bridge: Bridge | null = null;
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', `http://localhost:${config.port}`);
     // HTML routes are dev-iterated constantly — never let browsers serve stale
@@ -29,10 +32,26 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
       return;
     }
 
+    // Open health check — minimal metadata for uptime monitors.
+    if (url.pathname === '/health') {
+      const guilds = bridge?.guildCount ?? 0;
+      const all = sessions.all();
+      const body = JSON.stringify({
+        ok: true,
+        uptimeSec: Math.round(process.uptime()),
+        guilds,
+        playing: all.filter((s) => s.queue.getState().playing).length,
+        sessions: all.length,
+      });
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(body);
+      return;
+    }
+
     void handleRoute(req, url, res);
   });
 
-  const bridge = new Bridge(sessions, perms, server);
+  bridge = new Bridge(sessions, perms, server);
 
   server.listen(config.port, '0.0.0.0', () => {
     console.log(`[vaporzr] control server on http://0.0.0.0:${config.port}`);
@@ -68,17 +87,13 @@ async function handleRoute(req: http.IncomingMessage, url: URL, res: http.Server
   const host = req.headers.host ?? `localhost:${config.port}`;
   const origin = `https://${host}`;
   try {
-    // Share-key gate for the interactive surfaces. Brand assets, legal pages,
-    // the landing page and the Spotify OAuth flow stay open.
-    const gated =
-      url.pathname.startsWith('/panel') ||
-      url.pathname.startsWith('/viz') ||
-      url.pathname.startsWith('/vendor/');
+    // Share-key gate: only the CONTROL panel requires the key. The visualizer
+    // and its vendor bundles are open — viewing is free, controlling is not.
+    const gated = url.pathname.startsWith('/panel');
     if (gated && !hasShareAccess(req, url)) {
       keyPrompt(res);
       return;
     }
-    // Valid ?key= on a gated route — remember this device for a year.
     if (gated && config.shareKey && url.searchParams.get('key') === config.shareKey) {
       res.setHeader('Set-Cookie', `vz_key=${config.shareKey}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax`);
     }
@@ -163,13 +178,21 @@ async function handleRoute(req: http.IncomingMessage, url: URL, res: http.Server
       }
 
       case '/api/token': {
+        // The Spotify OAuth access token is sensitive — only expose it to key
+        // holders (the same gate that protects /panel). Without this, anyone
+        // who learns the public tunnel URL could GET the operator's token.
+        if (config.shareKey && !hasShareAccess(req, url)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'unauthorized' }));
+          return;
+        }
         if (!tokenStore.load()) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'not_authorized' }));
           return;
         }
         const token = await getAccessToken();
-        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
         res.end(JSON.stringify({ token }));
         break;
       }

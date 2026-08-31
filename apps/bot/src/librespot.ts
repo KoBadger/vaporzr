@@ -55,6 +55,12 @@ export class LibrespotManager {
   private static readonly PCM_BYTES_PER_SEC = 44_100 * 2 * 2;
   private baseMs = 0;
   private pcmBytes = 0;
+  /** Auto-restart bookkeeping: a dead librespot forces every Spotify play
+   *  through the slow YouTube fallback, so an unexpected exit must respawn. */
+  private stopped = false;
+  private restartTimer: NodeJS.Timeout | null = null;
+  private restarts = 0;
+  private bridgePath = '';
 
   get enabled(): boolean {
     return Boolean(config.librespotPath);
@@ -109,10 +115,13 @@ export class LibrespotManager {
       return;
     }
     try {
+      this.stopped = false;
+      this.restarts = 0;
       this.bridgeDir = path.join(os.tmpdir(), 'vaporzr-bridge');
       fs.mkdirSync(this.bridgeDir, { recursive: true });
       const bridgePath = path.join(this.bridgeDir, 'bridge.cjs');
       fs.writeFileSync(bridgePath, BRIDGE_SRC);
+      this.bridgePath = bridgePath;
       // A previous bot run (crash or tsx restart) can leave librespot.exe and its
       // bridge orphaned. Stale librespots all register the same Connect device
       // (id = SHA1(name)) and make Spotify route play commands to the wrong
@@ -227,17 +236,48 @@ export class LibrespotManager {
     this.proc = proc;
     proc.on('error', (err) => {
       console.warn(`[librespot] failed to start: ${err.message}`);
-      this.proc = null;
+      if (this.proc === proc) this.proc = null;
+      if (!this.stopped) this.scheduleRestart();
     });
     proc.on('exit', (code) => {
       console.warn(`[librespot] exited with code ${code}`);
-      this.proc = null;
+      if (this.proc === proc) this.proc = null;
+      // An unexpected exit (crash, Spotify auth drop) must respawn, otherwise
+      // every Spotify play silently degrades to the slow YouTube fallback.
+      if (!this.stopped) this.scheduleRestart();
     });
+    // A process that stays up for a minute resets the restart backoff.
+    setTimeout(() => {
+      if (this.proc === proc) this.restarts = 0;
+    }, 60_000).unref?.();
     proc.stdout?.on('data', (d) => console.log(`[librespot] ${String(d).trim()}`));
     proc.stderr?.on('data', (d) => console.warn(`[librespot] ${String(d).trim()}`));
   }
 
+  /** Re-spawn librespot with capped backoff after an unexpected exit. */
+  private scheduleRestart(): void {
+    if (this.restartTimer || !this.bridgePath || !config.librespotPath) return;
+    this.restarts++;
+    if (this.restarts > 10) {
+      console.error('[librespot] giving up after repeated exits — Spotify plays will use the YouTube fallback');
+      return;
+    }
+    const delay = Math.min(30_000, 2000 * this.restarts);
+    console.warn(`[librespot] unexpected exit — restarting in ${delay / 1000}s (attempt ${this.restarts})`);
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = null;
+      if (this.stopped || this.proc) return;
+      this.spawnLibrespot(this.bridgePath);
+    }, delay);
+    this.restartTimer.unref?.();
+  }
+
   stop(): void {
+    this.stopped = true;
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
     if (this.socket) {
       try {
         this.socket.destroy();

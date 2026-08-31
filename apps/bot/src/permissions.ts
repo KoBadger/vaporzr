@@ -22,6 +22,7 @@ const DEFAULT_COMMAND_LEVELS: Record<string, PermissionLevel> = {
   join: 'user',
   leave: 'user',
   panel: 'user',
+  key: 'admin',
   player: 'admin',
   screensaver: 'admin',
   theme: 'user',
@@ -34,6 +35,7 @@ const DEFAULT_COMMAND_LEVELS: Record<string, PermissionLevel> = {
   shuffle: 'user',
   dj: 'mod',
   sfx: 'user',
+  endwav: 'user',
   perms: 'admin',
 };
 
@@ -115,6 +117,9 @@ export class PermissionsManager {
     guild: Guild,
     member: { id: string; roles: { cache: ReadonlyMap<string, unknown> } },
   ): PermissionLevel {
+    // The bot's owner outranks everyone in every server — no role setup needed.
+    const owner = this.ownerOverride ?? config.ownerId;
+    if (owner && member.id === owner) return 'admin';
     if (member.id === guild.ownerId) return 'admin';
     const roleIds = [...member.roles.cache.keys()];
     if (this.hasRole(guild.id, 'admin', roleIds)) return 'admin';

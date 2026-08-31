@@ -13,13 +13,19 @@ export interface ResolvedSoundcloudTrack extends ResolvedTrack {
 }
 
 const SC_URL_RE = /(^|[./])(soundcloud\.com|snd\.sc)\//;
+const SC_SET_PATH_RE = /\/sets\//;
 
 export function isSoundcloudUrl(input: string): boolean {
   return SC_URL_RE.test(input);
 }
 
 export function isSoundcloudSetUrl(input: string): boolean {
-  return /\/sets\//.test(input);
+  try {
+    const pathname = new URL(input.startsWith('http') ? input : `https://${input}`).pathname;
+    return SC_SET_PATH_RE.test(pathname);
+  } catch {
+    return SC_SET_PATH_RE.test(input);
+  }
 }
 
 /** Track URIs carry the source URL so lazy playlist entries can be resolved later. */
