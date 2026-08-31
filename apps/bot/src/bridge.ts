@@ -205,9 +205,10 @@ export class Bridge {
         this.sendToSocket(socket, { type: 'visuals:enabled', enabled: this.visualsSubscribed(client.guildId) });
         this.sendToSocket(socket, { type: 'audio:forward', enabled: false });
         this.notifyDj();
-        this.sendToSocket(socket, { type: 'state:update', state: this.lastState });
-        this.sendToSocket(socket, { type: 'theme', theme: this.theme });
-        this.sendToSocket(socket, { type: 'visuals:sensitivity', multiplier: this.sensitivity });
+        // Full snapshot on connect (state, theme, sensitivity, current guild)
+        // so a fresh visualizer immediately renders the server + playback state
+        // instead of waiting for the next setGuildList()/state change.
+        this.sendSnapshot(socket);
         this.ensureBarsTicker();
       } else {
         this.panels.add(client);
@@ -528,18 +529,23 @@ export class Bridge {
       tracks: this.queue.getSnapshot().tracks,
       currentIndex: this.queue.getSnapshot().currentIndex,
     };
+    // Privacy: only the CURRENT (primary) server is ever exposed to web
+    // clients — even key-authed users. Other servers' names (and existence)
+    // are never sent, so multi-server lists are hidden from every viewer.
+    const primaryId = this.primaryGuildId;
     const guildList = this.guildList.length > 0
       ? this.guildList
       : this.sessions.all()
           .filter((s) => s.guildId !== '__fallback__')
           .map((s) => ({ id: s.guildId, name: s.guildId }));
-    // Privacy: guild NAMES are only for share-key holders. Anonymous /viz
-    // viewers (viewing is deliberately keyless) get generic "Server N" labels
-    // — the ids stay so the guild switcher still works without leaking names.
+    const current = guildList.find((g) => g.id === primaryId) ??
+      (primaryId ? { id: primaryId, name: primaryId } : undefined);
+    // Anonymous /viz viewers (viewing is deliberately keyless) still get a
+    // generic label — the id stays so the guild switcher keeps working.
     const authed = this.isAuthed(socket);
-    const guildsForClient = guildList.map((g, i) =>
-      authed ? g : { id: g.id, name: `Server ${i + 1}` },
-    );
+    const guildsForClient = current
+      ? [authed ? current : { id: current.id, name: 'Server' }]
+      : [];
     const out: OutboundMessage = {
       type: 'snapshot',
       state: this.lastState,
