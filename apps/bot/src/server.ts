@@ -53,9 +53,20 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
 
   bridge = new Bridge(sessions, perms, server);
 
+  // Bind the port BEFORE starting librespot (whose killStale() would otherwise
+  // kill a running instance's processes while this one races to bind). If the
+  // port is taken we exit quietly — the running bot is left untouched.
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      console.log(`[vaporzr] port ${config.port} is already in use by another instance — exiting.`);
+      process.exit(0);
+    }
+    console.error(`[vaporzr] server error: ${err.message}`);
+  });
   server.listen(config.port, '0.0.0.0', () => {
     console.log(`[vaporzr] control server on http://0.0.0.0:${config.port}`);
     vizTunnel.start();
+    bridge?.startLibrespot();
   });
 
   return bridge;

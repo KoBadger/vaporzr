@@ -3,6 +3,7 @@ import { SessionManager } from './session.js';
 import { PermissionsManager } from './permissions.js';
 import { startServer } from './server.js';
 import { DiscordBot } from './discord.js';
+import net from 'node:net';
 
 process.on('unhandledRejection', (reason) => {
   console.error('[vaporzr] unhandled rejection:', reason instanceof Error ? reason.stack ?? reason.message : reason);
@@ -13,10 +14,30 @@ process.on('uncaughtException', (err) => {
   console.error('[vaporzr] uncaught exception:', err instanceof Error ? err.stack ?? err.message : err);
 });
 
+/** True when another process is already listening on config.port (single-instance guard). */
+function isPortTaken(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const s = net.connect({ port, host: '127.0.0.1' });
+    s.once('connect', () => {
+      s.destroy();
+      resolve(true);
+    });
+    s.once('error', () => resolve(false));
+  });
+}
+
 async function main(): Promise<void> {
   if (!config.discordToken) {
     console.error('DISCORD_TOKEN is missing. Copy apps/bot/.env.example to apps/bot/.env and fill it in.');
     process.exit(1);
+  }
+
+  // Duplicate-launch guard: MUST run before startServer(), whose Bridge
+  // constructor calls librespot.start() → killStale() and would kill the
+  // running instance's librespot/bridge before this one even binds the port.
+  if (await isPortTaken(config.port)) {
+    console.log(`[vaporzr] another instance already holds port ${config.port} — exiting quietly.`);
+    process.exit(0);
   }
 
   const sessions = new SessionManager();

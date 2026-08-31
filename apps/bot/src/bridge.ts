@@ -80,7 +80,6 @@ export class Bridge {
     } catch { /* no saved sensitivity yet */ }
 
     this.librespot = new LibrespotManager();
-    void this.librespot.start();
     this.sessions.attachLibrespot(this.librespot);
 
     this.sessions.onPrimaryChanged(() => this.syncPrimary());
@@ -121,6 +120,12 @@ export class Bridge {
 
   private resolveGuildId(requested?: string): string | undefined {
     return requested || this.primaryGuildId || undefined;
+  }
+
+  /** Start librespot AFTER the HTTP port has bound, so a duplicate instance
+   *  that fails to bind never reaches killStale() and nukes the running bot. */
+  startLibrespot(): void {
+    void this.librespot.start();
   }
 
   private syncPrimary(): void {
