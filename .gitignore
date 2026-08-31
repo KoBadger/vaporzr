@@ -38,6 +38,7 @@ Thumbs.db
 # Misc
 bot.bat
 bot.ps1
+stay_awake.ps1
 start-bot.bat
 start_bot.cmd
 stop-bot.bat
