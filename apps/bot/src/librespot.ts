@@ -61,13 +61,27 @@ export class LibrespotManager {
   private restartTimer: NodeJS.Timeout | null = null;
   private restarts = 0;
   private bridgePath = '';
+  /**
+   * The sink subprocess (bridge) may only be spawned at first playback, so a
+   * never-connected socket is normal at idle. Once the bridge HAS connected,
+   * a dead socket means the PCM path is broken — only then is the device
+   * considered unavailable (avoids both silent stalls and idle false-negatives).
+   */
+  private bridgeEverConnected = false;
 
   get enabled(): boolean {
     return Boolean(config.librespotPath);
   }
 
   isRunning(): boolean {
-    return this.proc !== null && !this.proc.killed;
+    // A live librespot whose bridge DIED after connecting accepts play
+    // commands but streams into the void — the silent-stall failure. Before
+    // first connection the socket is legitimately null (lazy sink spawn).
+    return (
+      this.proc !== null &&
+      !this.proc.killed &&
+      (!this.bridgeEverConnected || this.socket !== null)
+    );
   }
 
   /** The consumer that receives raw 44.1 kHz stereo S16 PCM. Set to null when not playing. */
@@ -176,6 +190,7 @@ export class LibrespotManager {
     return new Promise((resolve, reject) => {
       const server = net.createServer((socket) => {
         this.socket = socket;
+        this.bridgeEverConnected = true;
         socket.on('data', (d) => {
           this.pcmBytes += d.length;
           const ok = this.pcmHandler?.(d);
@@ -184,7 +199,23 @@ export class LibrespotManager {
           }
         });
         socket.on('close', () => {
-          if (this.socket === socket) this.socket = null;
+          if (this.socket === socket) {
+            this.socket = null;
+            // The bridge died under a still-running librespot (a stale bot's
+            // killStale, or a node crash). Its subprocess sink can never
+            // recover, so kill librespot — the exit handler respawns both.
+            if (!this.stopped && this.proc) {
+              console.warn('[librespot] PCM bridge lost — recycling librespot');
+              const p = this.proc;
+              this.proc = null;
+              try {
+                p.kill();
+              } catch {
+                /* ignore */
+              }
+              this.scheduleRestart();
+            }
+          }
         });
         socket.on('error', () => {});
       });
@@ -202,6 +233,7 @@ export class LibrespotManager {
   }
 
   private spawnLibrespot(bridgePath: string): void {
+    this.bridgeEverConnected = false;
     const args = [
       '--name',
       config.librespotDeviceName,
