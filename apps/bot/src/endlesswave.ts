@@ -8,6 +8,7 @@ import {
   searchTracks,
 } from './spotify.js';
 import { searchAndResolveYoutube } from './youtube.js';
+import { deezerRelatedTracks } from './deezer.js';
 import type { TrackInfo } from '@vaporzr/shared';
 
 export type { AudioFeatures } from './spotify.js';
@@ -611,6 +612,24 @@ export async function pickNextTrack(
     survivors = pool.filter(relax);
   }
 
+  // Strategy 5 (outside-program fallback): when Spotify's own search/recs
+  // dead-end — typical for DJ/producer seeds whose catalogs are mostly long
+  // sets that the long-form filter rejects — ask Deezer (keyless, quota-free)
+  // for individual tracks by related artists. Keeps the wave flowing without
+  // touching any Spotify app quota.
+  if (survivors.length === 0 && recentTracks.length > 0) {
+    stage = 5;
+    const last = recentTracks[recentTracks.length - 1];
+    const artist = (similarArtistSeed(state) || last.artists[0] || '').trim();
+    if (artist) {
+      try {
+        survivors = viable(await deezerRelatedTracks(artist));
+      } catch {
+        // fall through — Deezer is best-effort only
+      }
+    }
+  }
+
   if (survivors.length === 0 && stage > 0) {
     console.warn(`[endlesswave] all ${stage} strategies exhausted with no viable candidate`);
   }
@@ -688,6 +707,30 @@ export async function resolveCandidate(track: ResolvedTrack): Promise<TrackInfo 
         addedBy: 'endless-wave',
         addedAt: Date.now(),
       };
+    }
+    // Metadata-only pick (e.g. Deezer fallback): resolve a YouTube stream by
+    // name+artist so it can actually play.
+    if (!track.streamUrl && !isBadResult(track.name, track.artists)) {
+      const query = `${track.name} ${track.artists.join(' ')}`.trim();
+      const video = await searchAndResolveYoutube(query, {
+        name: track.name,
+        artists: track.artists,
+        durationMs: track.durationMs,
+      });
+      if (video && !isBadResult(video.name, video.artists)) {
+        return {
+          uri: video.uri,
+          name: track.name,
+          artists: track.artists,
+          album: track.album,
+          durationMs: track.durationMs,
+          image: video.image ?? track.image,
+          source: 'youtube',
+          streamUrl: video.streamUrl,
+          addedBy: 'endless-wave',
+          addedAt: Date.now(),
+        };
+      }
     }
   } catch {
     // ignore

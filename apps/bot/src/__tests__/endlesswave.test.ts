@@ -5,6 +5,11 @@ const mocks = vi.hoisted(() => ({
   searchTracks: vi.fn(),
   getAudioFeatures: vi.fn(),
   searchAndResolveYoutube: vi.fn(),
+  deezerRelatedTracks: vi.fn(),
+}));
+
+vi.mock('../deezer.js', () => ({
+  deezerRelatedTracks: (...args: unknown[]) => mocks.deezerRelatedTracks(...args),
 }));
 
 vi.mock('../spotify.js', async (importOriginal) => {
@@ -560,6 +565,21 @@ describe('pickNextTrack (smoke)', () => {
     mocks.searchTracks.mockResolvedValue([]);
     mocks.searchAndResolveYoutube.mockResolvedValue(null);
     mocks.getAudioFeatures.mockResolvedValue(new Map());
+    mocks.deezerRelatedTracks.mockResolvedValue([]);
+  });
+
+  it('strategy 5: falls back to Deezer related tracks when Spotify dead-ends', async () => {
+    const s = createState();
+    activate(s);
+    mocks.getRecommendations.mockResolvedValue([]);
+    mocks.searchTracks.mockResolvedValue([]);
+    mocks.deezerRelatedTracks.mockResolvedValue([
+      { uri: 'deezer:track:1', name: 'Fresh Related Song', artists: ['Other Artist'], album: '', durationMs: 200000, source: 'youtube' },
+    ]);
+    const recent = [fakeTrack({ uri: 'spotify:track:aaaaaaaaaaaaaaaaaaaaaa', name: 'Seed', artists: ['Seed Artist'] })];
+    const pick = await pickNextTrack(s, recent);
+    expect(pick?.name).toBe('Fresh Related Song');
+    expect(mocks.deezerRelatedTracks).toHaveBeenCalledWith('Seed Artist');
   });
 
   it('returns null when EW is inactive (never calls APIs)', async () => {
