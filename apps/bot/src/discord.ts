@@ -2815,9 +2815,18 @@ export class DiscordBot {
       }
     } finally {
       this.ewBusy.delete(s.guildId);
-      // If the queue is idle (nothing playing), kick playback so the wave runs.
+      // Kick playback only for a *new* EW track. After skip/end the cursor still
+      // sits on the just-finished song — starting that again is the same-song loop.
       const st = s.queue.getState();
-      if (s.endlessWave.active && !st.playing && s.queue.getCurrentTrack() && s.voice.isJoined()) {
+      const cur = s.queue.getCurrentTrack();
+      if (
+        s.endlessWave.active &&
+        !st.playing &&
+        cur &&
+        s.voice.isJoined() &&
+        !EW.isDuplicate(s.endlessWave, cur.uri) &&
+        !EW.isRemixOrCover(s.endlessWave, cur.name, cur.artists)
+      ) {
         void s.playback.play().catch(() => {});
       }
     }
