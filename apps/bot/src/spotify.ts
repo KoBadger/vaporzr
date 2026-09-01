@@ -22,6 +22,26 @@ export class SpotifyError extends Error {
 
 let cachedAccessToken: string | null = null;
 let cachedExpiresAt = 0;
+/** Shared app-token cooldown. All Spotify API paths honor the same 429 window. */
+let spotifyCooldownUntil = 0;
+
+function retryAfterSeconds(res: Response): number {
+  const value = Number(res.headers.get('retry-after'));
+  return Number.isFinite(value) && value > 0 ? value : 60;
+}
+
+function noteSpotifyRateLimit(res: Response): number {
+  const wait = retryAfterSeconds(res);
+  spotifyCooldownUntil = Math.max(spotifyCooldownUntil, Date.now() + wait * 1000);
+  return wait;
+}
+
+function throwIfSpotifyCooling(): void {
+  const remaining = spotifyCooldownUntil - Date.now();
+  if (remaining <= 0) return;
+  const wait = Math.max(1, Math.ceil(remaining / 1000));
+  throw new SpotifyError(`Spotify is rate-limited — pausing requests for ${wait}s.`, 429, wait);
+}
 
 function basicAuth(): string {
   return Buffer.from(`${config.spotifyClientId}:${config.spotifyClientSecret}`).toString('base64');
@@ -270,6 +290,7 @@ function scorePlayResult(track: ResolvedTrack, query: string): number {
 
 /** GET helper that transparently retries once on 401 after refreshing the token. */
 async function apiGet<T>(path: string, token: string): Promise<T> {
+  throwIfSpotifyCooling();
   const doGet = async (tok: string) =>
     fetchWithTimeout(`${API_URL}${path}`, { headers: { Authorization: `Bearer ${tok}` } });
 
@@ -277,6 +298,10 @@ async function apiGet<T>(path: string, token: string): Promise<T> {
   if (res.status === 401) {
     const fresh = await getAccessToken(true);
     res = await doGet(fresh);
+  }
+  if (res.status === 429) {
+    const wait = noteSpotifyRateLimit(res);
+    throw new SpotifyError(`Spotify API rate-limited — try again in about ${Math.max(1, Math.ceil(wait / 60))} min.`, 429, wait);
   }
   if (!res.ok) throw new SpotifyError(`Spotify API error (${res.status})`, res.status);
   return (await res.json()) as T;
@@ -406,14 +431,82 @@ async function getWebPlayerToken(): Promise<string | null> {
   }
 }
 
+const PARTNER_API = 'https://api-partner.spotify.com/pathfinder/v1/query';
+
+/**
+ * Free-text search through the web-player token (same auth Spotify's own web
+ * player uses, minted from the sp_dc cookie). Consumes no dev-mode app quota,
+ * so ordinary `V@p "song name"` requests stop hitting the 429 quota lock.
+ * Returns null on any failure so callers fall back to the OAuth path.
+ */
+async function searchTracksAnonymous(query: string, limit: number): Promise<ResolvedTrack[] | null> {
+  const token = await getWebPlayerToken();
+  if (!token) return null;
+  const variables = JSON.stringify({
+    searchTerm: query,
+    offset: 0,
+    limit: Math.min(limit, 50),
+    numberOfTopResults: 5,
+    includeAudiobooks: false,
+  });
+  const url = `${PARTNER_API}?operationName=searchDesktop&variables=${encodeURIComponent(variables)}`;
+  try {
+    const res = await fetchWithTimeout(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'App-Platform': 'WebPlayer',
+        'Content-Type': 'application/json',
+      },
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as {
+      data?: { searchV2?: { tracksV2?: { items?: Array<{ item?: { data?: {
+        uri?: string;
+        name?: string;
+        artists?: { items?: Array<{ profile?: { name?: string } }> };
+        albumOfTrack?: { name?: string; coverArt?: { sources?: Array<{ url?: string }> } };
+        duration?: { totalMilliseconds?: number };
+      } } }> } } };
+    };
+    const items = json.data?.searchV2?.tracksV2?.items ?? [];
+    const out: ResolvedTrack[] = [];
+    for (const it of items) {
+      const d = it.item?.data;
+      if (!d?.uri) continue;
+      out.push({
+        uri: d.uri,
+        name: d.name ?? '',
+        artists: (d.artists?.items ?? []).map((a) => a?.profile?.name).filter((n): n is string => !!n),
+        album: d.albumOfTrack?.name ?? '',
+        durationMs: d.duration?.totalMilliseconds ?? 0,
+        image: d.albumOfTrack?.coverArt?.sources?.[0]?.url,
+        source: 'spotify',
+      });
+    }
+    return out.length ? out : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function searchTracks(query: string, limit = 10): Promise<ResolvedTrack[]> {
   await loadCache();
   const key = `search:${query.toLowerCase().trim()}:${limit}`;
   const cached = cacheGet<ResolvedTrack[]>(key);
   if (cached) return cached;
 
-  // Free-text searches have no anonymous equivalent, so they use the OAuth API
-  // (one cached call per unique query — not a significant quota consumer).
+  // Quota-free web-player search first (the "long ago" workaround) — no app
+  // quota consumed. The OAuth /search call below only runs if that's missing
+  // or disabled via SPOTIFY_ANON_SEARCH=off.
+  if (config.spotifyAnonSearch) {
+    const anon = await searchTracksAnonymous(query, limit);
+    if (anon) {
+      cacheSet(key, anon, SEARCH_TTL_MS);
+      return anon;
+    }
+    if (config.spotifySpDc) warnWebTokenUnavailable();
+  }
+
   const token = await getAccessToken();
   const data = await apiGet<{ tracks: { items: SpotifyTrack[] } }>(
     `/search?q=${encodeURIComponent(query)}&type=track&limit=${limit}`,
@@ -422,6 +515,16 @@ export async function searchTracks(query: string, limit = 10): Promise<ResolvedT
   const out = data.tracks.items.map(mapTrack);
   cacheSet(key, out, SEARCH_TTL_MS);
   return out;
+}
+
+let lastWebTokenWarnAt = 0;
+/** Throttled warning when the web-player token is configured but unusable —
+ *  usually a rotated/invalid sp_dc cookie or TOTP secret. */
+function warnWebTokenUnavailable(): void {
+  const now = Date.now();
+  if (now - lastWebTokenWarnAt < 5 * 60 * 1000) return;
+  lastWebTokenWarnAt = now;
+  console.warn('[spotify] web-player search unavailable — refresh SPOTIFY_SP_DC (or SPOTIFY_TOTP_SECRET) to restore quota-free search');
 }
 
 function isSpotifyUrl(input: string): boolean {
@@ -617,12 +720,15 @@ async function resolvePlaylistWeb(id: string): Promise<ResolvedTrack[] | null> {
 
 /** Raw Spotify Web API call for a device (uses the account token). */
 async function apiRaw(method: 'GET' | 'PUT' | 'POST', path: string, body?: unknown): Promise<Response> {
+  throwIfSpotifyCooling();
   const token = await getAccessToken();
-  return fetchWithTimeout(`${API_URL}${path}`, {
+  const res = await fetchWithTimeout(`${API_URL}${path}`, {
     method,
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+  if (res.status === 429) noteSpotifyRateLimit(res);
+  return res;
 }
 
 /**
@@ -701,21 +807,38 @@ export interface AudioFeatures {
 
 /** Batch-fetch audio features for up to 100 Spotify track IDs. */
 export async function getAudioFeatures(trackIds: string[]): Promise<Map<string, AudioFeatures>> {
+  await loadCache();
   const out = new Map<string, AudioFeatures>();
   if (trackIds.length === 0) return out;
+  const uniqueIds = [...new Set(trackIds)];
+  const missing: string[] = [];
+  for (const id of uniqueIds) {
+    const cached = cacheGet<AudioFeatures>(`features:${id}`);
+    if (cached) out.set(id, cached);
+    else missing.push(id);
+  }
+  if (missing.length === 0) return out;
+  throwIfSpotifyCooling();
   const token = await getAccessToken();
   // Spotify batches in chunks of 100.
-  for (let i = 0; i < trackIds.length; i += 100) {
-    const chunk = trackIds.slice(i, i + 100);
+  for (let i = 0; i < missing.length; i += 100) {
+    const chunk = missing.slice(i, i + 100);
     const res = await fetchWithTimeout(
       `${API_URL}/audio-features?ids=${chunk.join(',')}`,
       { headers: { Authorization: `Bearer ${token}` } },
     );
-    if (!res.ok) break;
+     if (res.status === 429) {
+       const wait = noteSpotifyRateLimit(res);
+       throw new SpotifyError(`Spotify API rate-limited — try again in about ${Math.max(1, Math.ceil(wait / 60))} min.`, 429, wait);
+     }
+     if (!res.ok) break;
     const data = (await res.json()) as { audio_features: (AudioFeatures | null)[] };
     for (let j = 0; j < chunk.length; j++) {
       const af = data.audio_features?.[j];
-      if (af) out.set(chunk[j], af);
+       if (af) {
+         out.set(chunk[j], af);
+         cacheSet(`features:${chunk[j]}`, af, 7 * 24 * 60 * 60 * 1000);
+       }
     }
   }
   return out;
@@ -742,8 +865,20 @@ export interface RecommendationParams {
   limit?: number;
 }
 
-/** Fetch recommendations from Spotify's /recommendations endpoint. */
+/** Fetch recommendations from Spotify's /recommendations endpoint.
+ *  Cached by seed set (the expensive, quota-limited part) for a short window so
+ *  repeated Endless Wave refills over the same context don't re-drain the app
+ *  quota — which is exactly what triggers the multi-hour 429 lock. */
 export async function getRecommendations(params: RecommendationParams): Promise<ResolvedTrack[]> {
+  const seeds = [
+    ...(params.seedTracks ?? []),
+    ...(params.seedArtists ?? []),
+    ...(params.seedGenres ?? []),
+  ].sort().join(',');
+  if (seeds) {
+    const cached = cacheGet<ResolvedTrack[]>(`recs:${seeds}`);
+    if (cached) return cached;
+  }
   const token = await getAccessToken();
   const q = new URLSearchParams();
   if (params.seedTracks?.length) q.set('seed_tracks', params.seedTracks.slice(0, 5).join(','));
@@ -759,13 +894,8 @@ export async function getRecommendations(params: RecommendationParams): Promise<
   if (params.maxTempo !== undefined) q.set('max_tempo', String(params.maxTempo));
   q.set('limit', String(params.limit ?? 20));
 
-  const res = await fetchWithTimeout(`${API_URL}/recommendations?${q}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new SpotifyError(`Recommendations failed (${res.status}): ${text.slice(0, 200)}`, res.status);
-  }
-  const data = (await res.json()) as { tracks: SpotifyTrack[] };
-  return (data.tracks ?? []).map(mapTrack);
+  const data = await apiGet<{ tracks: SpotifyTrack[] }>(`/recommendations?${q}`, token);
+  const out = (data.tracks ?? []).map(mapTrack);
+  if (seeds) cacheSet(`recs:${seeds}`, out, 10 * 60 * 1000);
+  return out;
 }

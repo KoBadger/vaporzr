@@ -131,9 +131,7 @@ export function recordFeatures(
 
   if (artist) {
     const norm = artist.toLowerCase().trim();
-    if (!state.recentArtists.includes(norm)) {
-      state.recentArtists.push(norm);
-    }
+    state.recentArtists.push(norm);
     if (state.recentArtists.length > DEFAULT_CONFIG.artistCooldown + 2) {
       state.recentArtists.shift();
     }
@@ -201,7 +199,7 @@ export function buildTargets(state: EndlessWaveState): Partial<RecommendationPar
 
 /** Normalize a track name for remix/cover detection. */
 export function normalizeTrackName(name: string): string {
-  let n = name
+  const n = String(name ?? '')
     .toLowerCase()
     .replace(/['']/g, '')
     // Strip parenthesized/bracketed version markers: (Remix), (Edit), (Movie Version), etc.
@@ -210,6 +208,11 @@ export function normalizeTrackName(name: string): string {
     .replace(/\s*[-–—]\s*(remix|edit|vip|bootleg|flip|dub|mix|radio edit|extended|club mix|sped up|slowed|reverb|movie version|film version|motion picture version|end credits|soundtrack version|soundtrack|ost|single version|album version|bonus|deluxe|remastered|clean|explicit|radio version|video version)\s*$/gi, '')
     // Strip cover/live/acoustic markers in parens/brackets: (Acoustic), [Live], (Cover), etc.
     .replace(/\s*[\(\[][^\)\]]*\b(cover|acoustic|live|unplugged|demo|alternate version|alternate mix|original mix|instrumental|a cappella)\b[^\)\]]*[\)\]]/gi, '')
+    // Strip YouTube upload noise so the same song under an "Official Audio" /
+    // "(Lyrics)" / "(Music Video)" title still matches its clean Spotify name.
+    .replace(/\s*[\(\[][^\)\]]*\b(official audio|official video|official music video|official lyric video|lyric video|lyrics|music video|visualizer|visualizer video|official visualizer)\b[^\)\]]*[\)\]]/gi, '')
+    // Dash-form YouTube noise: "Song - Official Audio", "Song - Lyrics".
+    .replace(/\s*[-–—]\s*(official audio|official video|official music video|official lyric video|lyric video|lyrics|music video|visualizer|visualizer video|official visualizer)\s*$/gi, '')
     // Strip feat/ft inside parens: (feat. Someone), (ft. Someone)
     .replace(/\s*[\(\[][^)\]]*\b(feat\.?|ft\.?|featuring)\b[^)\]]*[\)\]]/gi, '')
     // Strip bare feat/ft outside parens: feat. Someone, ft. Someone
@@ -218,6 +221,7 @@ export function normalizeTrackName(name: string): string {
     .trim();
   return n;
 }
+
 
 /** Check if a track is a remix/cover/variant of something already played.
  *  `artists` enables title-core matching: YouTube titles ("Nightcall - Kavinsky
@@ -274,6 +278,35 @@ export function isArtistOnCooldown(state: EndlessWaveState, artist: string): boo
   return recent.some((a) => a.toLowerCase().trim() === normalArtist);
 }
 
+/** The most recent artist NOT currently on cooldown — used as a "similar but
+ *  different" search seed so a fallback never repeats the artist that just
+ *  played, while still surfacing a related (earlier-session) artist's catalog. */
+export function similarArtistSeed(state: EndlessWaveState): string {
+  for (let i = state.recentArtists.length - 1; i >= 0; i--) {
+    const a = state.recentArtists[i];
+    if (a && !isArtistOnCooldown(state, a)) return a;
+  }
+  return '';
+}
+
+/** True when a candidate's TITLE mentions an on-cooldown artist — catches
+ *  compilation/setlist uploads ("Best of Coldplay [Setlist]") whose artist
+ *  field is empty, so they can't dodge the artist cooldown via a missing tag. */
+export function titleMentionsCooldownArtist(state: EndlessWaveState, name: string): boolean {
+  const norm = normalizeTrackName(name);
+  if (!norm) return false;
+  const cooldown = state.recentArtists.slice(-DEFAULT_CONFIG.artistCooldown);
+  return cooldown.some((a) => a.length >= 3 && norm.includes(a));
+}
+
+/** EW should queue individual songs, not radio sets, DJ mixes, or full albums. */
+function isLongFormMix(track: ResolvedTrack): boolean {
+  const title = String(track.name ?? '').toLowerCase();
+  if ((track.durationMs ?? 0) > 8 * 60 * 1000) return true;
+  return /\b(essential mix|dj set|continuous mix|full album|compilation|boiler room|radio show|radio mix|meg amix|mixtape|live set|session)\b/i.test(title)
+    || /\b\d+\s*(hour|hr|min)\b/i.test(title);
+}
+
 /** Mark a track as played. Trims old entries when the set gets huge. */
 export function markPlayed(
   state: EndlessWaveState,
@@ -289,9 +322,7 @@ export function markPlayed(
   for (const v of nameVariants(norm, artists, [])) state.playedNames.add(v);
   for (const a of artists) {
     const norm = a.toLowerCase().trim();
-    if (!state.recentArtists.includes(norm)) {
-      state.recentArtists.push(norm);
-    }
+    state.recentArtists.push(norm);
   }
   if (state.recentArtists.length > DEFAULT_CONFIG.artistCooldown + 5) {
     state.recentArtists = state.recentArtists.slice(-DEFAULT_CONFIG.artistCooldown - 2);
@@ -425,29 +456,60 @@ export async function pickNextTrack(
 
   // Filter: no URI dupes, no remix/cover variants of played OR queued tracks,
   // no on-cooldown artists, and never re-pick something already waiting.
+  // Importantly, artists from already-queued upcoming tracks count as being on
+  // cooldown too: otherwise a refill burst can queue "Coldplay - Magic" and
+  // then "Best of Coldplay" (or two Paramore songs) before the first one ever
+  // starts playing and updates state.recentArtists.
   const upTracks = upcoming ?? recentTracks;
   const upcomingUris = new Set(upTracks.map((t) => t.uri));
   const upcomingNames = new Set<string>();
+  const upcomingArtists = new Set<string>();
   for (const t of upTracks) {
     for (const v of nameVariants(normalizeTrackName(t.name), t.artists, [])) upcomingNames.add(v);
+    for (const a of t.artists) {
+      const norm = a.toLowerCase().trim();
+      if (norm.length >= 3) upcomingArtists.add(norm);
+    }
   }
-  const viable = (candidates: ResolvedTrack[], ignoreCooldown = false): ResolvedTrack[] =>
+  const cooldownArtists = new Set<string>(
+    state.recentArtists.slice(-DEFAULT_CONFIG.artistCooldown).map((a) => a.toLowerCase().trim()),
+  );
+  for (const a of upcomingArtists) cooldownArtists.add(a);
+  const artistIsOnCooldown = (artist: string): boolean =>
+    cooldownArtists.has(artist.toLowerCase().trim());
+  const titleMentionsAnyCooldownArtist = (name: string): boolean => {
+    const norm = normalizeTrackName(name);
+    if (!norm) return false;
+    return [...cooldownArtists].some((a) => a.length >= 3 && norm.includes(a));
+  };
+
+  const viable = (candidates: ResolvedTrack[]): ResolvedTrack[] =>
     candidates.filter((c) => {
-      if (isDuplicate(state, c.uri)) return false;
-      if (upcomingUris.has(c.uri)) return false;
-      if (excludeUris?.has(c.uri)) return false;
-      if (isRemixOrCover(state, c.name, c.artists)) return false;
-      if (nameVariants(normalizeTrackName(c.name), c.artists, state.recentArtists).some((v) => upcomingNames.has(v))) return false;
+      if (isLongFormMix(c)) { logReject(c.name, 'long-form mix/set'); return false; }
+      if (isDuplicate(state, c.uri)) { logReject(c.name, 'already played this session'); return false; }
+      if (upcomingUris.has(c.uri)) { logReject(c.name, 'already queued'); return false; }
+      if (excludeUris?.has(c.uri)) { logReject(c.name, 'previously failed to resolve'); return false; }
+      if (isRemixOrCover(state, c.name, c.artists)) { logReject(c.name, 'remix/cover of played track'); return false; }
+      if (nameVariants(normalizeTrackName(c.name), c.artists, state.recentArtists).some((v) => upcomingNames.has(v))) { logReject(c.name, 'variant already queued'); return false; }
       const mainArtist = c.artists[0] ?? '';
-      if (!ignoreCooldown && mainArtist && isArtistOnCooldown(state, mainArtist)) return false;
+      if (mainArtist && artistIsOnCooldown(mainArtist)) { logReject(c.name, `artist "${mainArtist}" on cooldown`); return false; }
+      // Compilation/setlist uploads with an empty artist field still mention the
+      // artist in the title — treat them as a cooldown repeat.
+      if (titleMentionsAnyCooldownArtist(c.name)) { logReject(c.name, 'title mentions cooldown artist'); return false; }
       return true;
     });
 
   let candidates: ResolvedTrack[] = [];
   let survivors: ResolvedTrack[] = [];
+  let stage = 0;
+  const logReject = (name: string, reason: string) => {
+    if (process.env.NODE_ENV === 'test') return;
+    console.log(`[endlesswave] rejected candidate "${name}": ${reason}`);
+  };
 
   // Strategy 1: Spotify recommendations (best quality, needs seed tracks).
   if (seedIds.length > 0) {
+    stage = 1;
     try {
       candidates = await getRecommendations({
         seedTracks: seedIds,
@@ -460,33 +522,33 @@ export async function pickNextTrack(
     survivors = viable(candidates);
   }
 
-  // Strategy 2: Spotify search fallback. Query the last track's ARTIST rather
-  // than "artist + title" — the exact-title query mostly returns the same song
-  // and its variants (remixes, movie versions…), which dedup then filters,
-  // killing the wave. An artist query surfaces their wider catalog instead.
+  // Strategy 2: Spotify search fallback. Seed the query with the most recent
+  // artist that is NOT on cooldown, so we surface a related artist's wider
+  // catalog instead of repeating the artist that just played (or, failing that,
+  // a same-title query whose remix/cover variants dedup then filters).
   if (survivors.length === 0 && recentTracks.length > 0) {
+    stage = 2;
     candidates = [];
     try {
       const last = recentTracks[recentTracks.length - 1];
-      const query = (last.artists[0] ?? last.name).trim();
+      const query = (similarArtistSeed(state) || last.artists[0] || last.name).trim();
       if (query) candidates = await searchTracks(query, 20);
     } catch {
       // ignore
     }
-    survivors = viable(candidates, true);
+    survivors = viable(candidates);
   }
 
   // Strategy 3: YouTube search fallback (if nothing usable from Spotify).
-  // Try the seed song first (streamed audio may differ from what was played),
-  // then the artist alone — a filtered duplicate gets a second chance at a
-  // related-but-new video instead of ending the wave.
+  // Try the seed artist's catalog only — explicitly never query by the current
+  // song title, since that always re-finds a remix-variant of the same song,
+  // exactly what causes the same-audio repeat loop. Cooldown applies.
   if (survivors.length === 0 && recentTracks.length > 0) {
+    stage = 3;
     const last = recentTracks[recentTracks.length - 1];
     const attempts: Array<{ q: string; opts: Parameters<typeof searchAndResolveYoutube>[1] }> = [];
-    const byTitle = `${last.artists[0] ?? ''} ${last.name}`.trim();
-    const byArtist = (last.artists[0] ?? last.name).trim();
-    if (byTitle) attempts.push({ q: byTitle, opts: { name: last.name, artists: last.artists, durationMs: last.durationMs } });
-    if (byArtist && byArtist !== byTitle) attempts.push({ q: byArtist, opts: {} });
+    const byArtist = (last.artists[0] ?? '').trim();
+    if (byArtist) attempts.push({ q: byArtist, opts: {} });
     for (const at of attempts) {
       try {
         const video = await searchAndResolveYoutube(at.q, at.opts);
@@ -501,13 +563,56 @@ export async function pickNextTrack(
             source: 'youtube',
             streamUrl: video.streamUrl,
           }];
-          survivors = viable(candidates, true);
-          if (survivors.length > 0) break;
+          // Reject the same song outright (including its remix/cover variants).
+          const v = candidates[0];
+          if (!isRemixOrCover(state, v.name, v.artists)) {
+            survivors = viable(candidates);
+            if (survivors.length > 0) break;
+          } else {
+            logReject(v.name, 'remix/cover of played track');
+          }
         }
       } catch {
         // ignore and try the next query
       }
     }
+  }
+
+  // Strategy 4 (relaxed fallback): as a last resort farm a Spotify search on
+  // the seed artist (with cooldown gate) — a different song is better than a
+  // wave-die. Never reuse prior candidates: same-song remix variant loops are
+  // strictly worse than staying armed.
+  if (survivors.length === 0 && recentTracks.length > 0) {
+    stage = 4;
+    const relax = (c: ResolvedTrack): boolean => {
+      if (isLongFormMix(c)) { logReject(c.name, 'long-form mix/set'); return false; }
+      if (isDuplicate(state, c.uri)) { logReject(c.name, 'already played this session'); return false; }
+      if (upcomingUris.has(c.uri)) { logReject(c.name, 'already queued'); return false; }
+      if (excludeUris?.has(c.uri)) { logReject(c.name, 'previously failed to resolve'); return false; }
+      if (isRemixOrCover(state, c.name, c.artists)) { logReject(c.name, 'remix/cover of played track'); return false; }
+      const variants = nameVariants(normalizeTrackName(c.name), c.artists, state.recentArtists);
+      if (variants.some((v) => upcomingNames.has(v))) { logReject(c.name, 'same song already queued'); return false; }
+      if (titleMentionsAnyCooldownArtist(c.name)) { logReject(c.name, 'title mentions cooldown artist'); return false; }
+      return true;
+    };
+    const last = recentTracks[recentTracks.length - 1];
+    // If every known artist is currently cooled, do not immediately fall back
+    // to the current artist. Wait for a genuinely different recommendation;
+    // same-artist tracks can re-enter naturally after the cooldown window.
+    const q = (similarArtistSeed(state) || (state.recentArtists.length === 0 ? (last.artists[0] || last.name) : '')).trim();
+    let pool: ResolvedTrack[] = [];
+    if (q) {
+      try {
+        pool = await searchTracks(q, 20);
+      } catch {
+        // fall through — nothing usable from Spotify
+      }
+    }
+    survivors = pool.filter(relax);
+  }
+
+  if (survivors.length === 0 && stage > 0) {
+    console.warn(`[endlesswave] all ${stage} strategies exhausted with no viable candidate`);
   }
 
   // Score and pick the best surviving candidate. When the candidates are
@@ -539,6 +644,14 @@ export async function pickNextTrack(
 
 /** After picking a recommendation, resolve it to a queueable track with a stream URL. */
 export async function resolveCandidate(track: ResolvedTrack): Promise<TrackInfo | null> {
+  const isBadResult = (name: string, artists: string[]): boolean => {
+    if (!name || name.trim().length < 2) return true;
+    const mainArtist = artists[0] ?? '';
+    // Reject results where the "artist" is a URL (common yt-dlp parsing glitch).
+    if (/^https?:\/\//i.test(mainArtist.trim())) return true;
+    return false;
+  };
+
   try {
     if (track.uri.startsWith('spotify:')) {
       const query = `${track.name} ${track.artists.join(' ')}`.trim();
@@ -547,7 +660,7 @@ export async function resolveCandidate(track: ResolvedTrack): Promise<TrackInfo 
         artists: track.artists,
         durationMs: track.durationMs,
       });
-      if (video) {
+      if (video && !isBadResult(video.name, video.artists)) {
         return {
           uri: track.uri,
           name: track.name,
@@ -562,7 +675,7 @@ export async function resolveCandidate(track: ResolvedTrack): Promise<TrackInfo 
         };
       }
     }
-    if (track.streamUrl) {
+    if (track.streamUrl && !isBadResult(track.name, track.artists)) {
       return {
         uri: track.uri,
         name: track.name,

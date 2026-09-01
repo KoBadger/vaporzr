@@ -286,6 +286,8 @@ export class DiscordBot {
   /** Debounced topUp timers per guild — collapsed so rapid queue changes
    *  (skip + manual add back-to-back) trigger only one refill pass. */
   private ewTopUpTimers = new Map<string, NodeJS.Timeout>();
+  /** Prevent a no-candidate EW pass from hammering Spotify/YouTube every 700ms. */
+  private ewRetryAfter = new Map<string, number>();
   /** URI of the most recently started track per guild, so markPlayed is only
    *  called once per track (on start) instead of on every queue/state change. */
   private ewStartedUri = new Map<string, string>();
@@ -697,7 +699,7 @@ export class DiscordBot {
           await interaction.reply('The queue is empty.');
           return;
         }
-        const { embeds, components } = this.queuePage(s, 0);
+         const { embeds, components } = this.queuePage(s);
         await interaction.reply({ embeds, components });
         break;
       }
@@ -794,13 +796,10 @@ export class DiscordBot {
           return;
         }
         const guildId = interaction.guildId!;
+        // Repost at the bottom instead of refreshing a scrolled-up old message.
         const existing = this.npMessages.get(guildId);
         if (existing) {
-          const ok = await this.editNp(existing.channelId, existing.messageId, guildId);
-          if (ok) {
-            await interaction.reply({ content: '🔴 Live now-playing message refreshed above.', flags: MessageFlags.Ephemeral });
-            break;
-          }
+          await this.deleteNp(existing.channelId, existing.messageId);
           this.npMessages.delete(guildId);
         }
         const channel = interaction.channel;
@@ -811,7 +810,7 @@ export class DiscordBot {
         const msg = await channel.send({ embeds: [this.npPayload(s)] });
         this.npMessages.set(guildId, { channelId: interaction.channelId, messageId: msg.id });
         this.scheduleSavePanels();
-        await interaction.reply({ content: '🔴 Live now-playing message posted above — it updates itself.', flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: '🔴 Live now-playing message posted right here — it updates itself.', flags: MessageFlags.Ephemeral });
         break;
       }
 
@@ -943,7 +942,7 @@ export class DiscordBot {
           });
           if (current) {
             void EW.fetchFeatures(current)
-              .then((af) => { if (af) EW.recordFeatures(s.endlessWave, af, current.artists[0]); })
+                .then((af) => { if (af) EW.recordFeatures(s.endlessWave, af); })
               .catch(() => {});
           }
           // Immediately fill the lookahead buffer so the wave has tracks queued
@@ -1260,6 +1259,7 @@ export class DiscordBot {
         case 'skip': {
           if (!canUse('skip')) return void (await deny());
           s.playback.next();
+          this.scheduleWaveTopUp(s);
           const np = this.nowPlayingEmbed(s, '⏭️ Skipped');
           if (np) await message.reply({ embeds: [np] });
           else await message.reply('⏭️ Skipped — queue ended');
@@ -1311,7 +1311,7 @@ export class DiscordBot {
             await message.reply('The queue is empty.');
             break;
           }
-          const { embeds, components } = this.queuePage(s, 0);
+          const { embeds, components } = this.queuePage(s);
           await message.reply({ embeds, components });
           break;
         }
@@ -1320,17 +1320,17 @@ export class DiscordBot {
         case 'nowplaying': {
           if (!message.inGuild()) return void (await message.reply('Must be used inside a server.'));
           const guildId = message.guildId!;
+          // Repost at the bottom instead of refreshing a scrolled-up old message.
           const existing = this.npMessages.get(guildId);
           if (existing) {
-            const ok = await this.editNp(existing.channelId, existing.messageId, guildId);
-            if (ok) return void (await message.reply('🔴 Live now-playing message refreshed above.'));
+            await this.deleteNp(existing.channelId, existing.messageId);
             this.npMessages.delete(guildId);
           }
           if (!('send' in message.channel)) return void (await message.reply('Cannot post here.'));
           const sent = await message.channel.send({ embeds: [this.npPayload(s)] });
           this.npMessages.set(guildId, { channelId: message.channelId, messageId: sent.id });
           this.scheduleSavePanels();
-          await message.reply('🔴 Live now-playing message posted above — it updates itself.');
+          await message.reply('🔴 Live now-playing message posted right here — it updates itself.');
           break;
         }
 
@@ -1532,6 +1532,7 @@ export class DiscordBot {
           if (subCmd === 'on' || subCmd === 'activate') {
             if (ewS.endlessWave.active) return void (await message.reply('🌊 Endless Wave is already active.'));
             EW.activate(ewS.endlessWave);
+            this.ewRetryAfter.delete(message.guildId);
             const cur = ewS.queue.getCurrentTrack();
             if (cur) EW.markPlayed(ewS.endlessWave, cur.uri, cur.name, cur.artists);
             this.bridge.broadcast({ type: 'endlesswave', active: true, generated: 0 });
@@ -1539,7 +1540,7 @@ export class DiscordBot {
             await message.reply(cur ? ewPrefixMsg : `${ewPrefixMsg}\nQueue up a track to set the vibe — I'll take it from there.`);
             if (cur) {
               void EW.fetchFeatures(cur)
-                .then((af) => { if (af) EW.recordFeatures(ewS.endlessWave, af, cur.artists[0]); })
+                .then((af) => { if (af) EW.recordFeatures(ewS.endlessWave, af); })
                 .catch(() => {});
             }
             void this.topUpWave(ewS).catch((err) => {
@@ -1548,6 +1549,7 @@ export class DiscordBot {
           } else if (subCmd === 'off' || subCmd === 'deactivate') {
             if (!ewS.endlessWave.active) return void (await message.reply('Endless Wave isn\'t active right now.'));
             EW.deactivate(ewS.endlessWave);
+            this.ewRetryAfter.delete(message.guildId);
             const t = this.ewTopUpTimers.get(message.guildId!);
             if (t) clearTimeout(t);
             this.ewTopUpTimers.delete(message.guildId!);
@@ -1680,9 +1682,9 @@ export class DiscordBot {
       console.warn(`[discord] queued but couldn't start playback: ${playbackFailed}`);
     }
     const embed = new EmbedBuilder()
-      .setTitle('Added to queue')
+      .setTitle('Inserted to play next')
       .setDescription(
-        `${srcEmoji(first.source)} **${first.name}** — ${first.artists.join(', ')}` +
+        `${srcEmoji(first.source)} **${first.name}** — ${truncate(first.artists.join(', '), 80)}` +
           (playbackFailed ? `\n⚠️ Couldn't start playback yet: ${playbackFailed}` : ''),
       )
       .setThumbnail(first.image ?? '')
@@ -1836,7 +1838,7 @@ export class DiscordBot {
     const embed = new EmbedBuilder()
       .setTitle('Inserted to play next')
       .setDescription(
-        `${srcEmoji(first.source)} **${first.name}** — ${first.artists.join(', ')}` +
+        `${srcEmoji(first.source)} **${first.name}** — ${truncate(first.artists.join(', '), 80)}` +
           (playbackFailed ? `\n⚠️ Couldn't start playback yet: ${playbackFailed}` : ''),
       )
       .setThumbnail(first.image ?? '')
@@ -1866,7 +1868,7 @@ export class DiscordBot {
     const embed = new EmbedBuilder()
       .setTitle('Added to queue')
       .setDescription(
-        `${srcEmoji(first.source)} **${first.name}** — ${first.artists.join(', ')}` +
+        `${srcEmoji(first.source)} **${first.name}** — ${truncate(first.artists.join(', '), 80)}` +
           (playbackFailed ? `\n⚠️ Couldn't start playback yet: ${playbackFailed}` : ''),
       )
       .setThumbnail(first.image ?? '')
@@ -2037,7 +2039,7 @@ export class DiscordBot {
       .setColor(this.themeColor())
       .setDescription(
         `${status} ${srcEmoji(track.source)} **${truncate(track.name, 60)}**\n` +
-          `${(track.artists ?? []).join(', ') || track.album}\n` +
+          `${truncate((track.artists ?? []).join(', ') || track.album, 80)}\n` +
           `\`${bar}\` \`${fmtMs(pos)}\`/\`${fmtMs(dur)}\`` +
           (upNext ? `\n⏭ ${truncate(upNext.name, 42)}` : ''),
       );
@@ -2072,6 +2074,19 @@ export class DiscordBot {
     }
   }
 
+  /** Delete a previously-posted now-playing message so /nowplaying can re-anchor it
+   *  at the bottom of the channel instead of refreshing a scrolled-up copy. */
+  private async deleteNp(channelId: string, messageId: string): Promise<void> {
+    try {
+      const channel = await this.client.channels.fetch(channelId);
+      if (!channel?.isTextBased()) return;
+      const msg = await channel.messages.fetch(messageId);
+      await msg.delete();
+    } catch {
+      /* already gone */
+    }
+  }
+
   /** Compact, self-updating "PLAYING NOW" embed for the dedicated /nowplaying message. */
   private npPayload(s: Session): EmbedBuilder {
     const st = s.queue.getState();
@@ -2096,7 +2111,7 @@ export class DiscordBot {
       embed
         .setTitle(`${srcEmoji(track.source)} ${track.name}`)
         .setDescription(
-          `${(track.artists ?? []).join(', ')}\n\n\`${bar}\`\n${statusIcon} \`${fmtMs(pos)} / ${fmtMs(dur)}\`` +
+          `${truncate((track.artists ?? []).join(', '), 80)}\n\n\`${bar}\`\n${statusIcon} \`${fmtMs(pos)} / ${fmtMs(dur)}\`` +
             (upNext ? `\n\n⏭️ **Up next:** ${upNext.name}` : ''),
         );
       if (track.image) embed.setThumbnail(track.image);
@@ -2257,7 +2272,7 @@ export class DiscordBot {
       .setColor(this.themeColor())
       .setAuthor({ name: 'NOW PLAYING', iconURL: this.client.user?.displayAvatarURL() })
       .setTitle(`${srcEmoji(t.source)} ${t.name}`)
-      .setDescription(`${(t.artists ?? []).join(', ')}\n\n\`${bar}\`\n▶️ \`0:00 / ${fmtMs(dur)}\``)
+      .setDescription(`${truncate((t.artists ?? []).join(', '), 80)}\n\n\`${bar}\`\n▶️ \`0:00 / ${fmtMs(dur)}\``)
       .setFooter({ text: `${action} · this panel updates itself` });
     if (t.image) embed.setThumbnail(t.image);
     return embed;
@@ -2285,7 +2300,7 @@ export class DiscordBot {
       embed
         .setTitle(`${srcEmoji(track.source)} ${track.name}`)
         .setDescription(
-          `${track.artists.join(', ')}\n\n\`${bar}\`\n${statusIcon} \`${fmtMs(pos)} / ${fmtMs(dur)}\``,
+          `${truncate(track.artists.join(', '), 80)}\n\n\`${bar}\`\n${statusIcon} \`${fmtMs(pos)} / ${fmtMs(dur)}\``,
         );
       if (track.image) embed.setThumbnail(track.image);
     } else {
@@ -2475,20 +2490,24 @@ export class DiscordBot {
   /** Build the queue embed for one 15-song page plus a jump-to dropdown for
    *  the rest — a single message even for 200-track playlists, instead of a
    *  wall of follow-up chunks. */
-  private queuePage(s: Session, start: number): {
+  private queuePage(s: Session, start?: number): {
     embeds: EmbedBuilder[];
     components: ActionRowBuilder<StringSelectMenuBuilder>[];
   } {
     const snap = s.queue.getSnapshot();
     const tracks = snap.tracks;
     const PAGE = DiscordBot.QUEUE_PAGE;
-    const startIdx = Math.max(0, Math.min(Number.isFinite(start) ? start : 0, Math.max(0, tracks.length - 1)));
+    // Default the view to the upcoming tracks (right after the current one),
+    // not the very beginning of the queue, so users see what will play next.
+    const defaultStart = Math.max(0, Math.min(snap.currentIndex, Math.max(0, tracks.length - 1)));
+    const safeStart = start !== undefined && Number.isFinite(start) ? start : defaultStart;
+    const startIdx = Math.max(0, Math.min(safeStart, Math.max(0, tracks.length - 1)));
     const end = Math.min(tracks.length, startIdx + PAGE);
     const lines: string[] = [];
     for (let i = startIdx; i < end; i++) {
       const t = tracks[i];
       const cur = i === snap.currentIndex ? '▶ ' : `${i + 1}. `;
-      lines.push(`${cur}${srcEmoji(t.source)} **${t.name}** — ${t.artists.join(', ')}`);
+      lines.push(`${cur}${srcEmoji(t.source)} **${t.name}** — ${truncate(t.artists.join(', '), 80)}`);
     }
     const embed = new EmbedBuilder()
       .setTitle(`Queue (${tracks.length}) — showing ${startIdx + 1}–${end}`)
@@ -2718,7 +2737,7 @@ export class DiscordBot {
   private async waveTrackEnded(s: Session, ended: TrackInfo): Promise<void> {
     if (!s.endlessWave.active) return;
     const features = await EW.fetchFeatures(ended);
-    if (features) EW.recordFeatures(s.endlessWave, features, ended.artists[0]);
+    if (features) EW.recordFeatures(s.endlessWave, features);
     EW.markPlayed(s.endlessWave, ended.uri, ended.name, ended.artists);
     await this.topUpWave(s);
   }
@@ -2755,6 +2774,7 @@ export class DiscordBot {
    *  any queue or state change re-tops the buffer. */
   private async topUpWave(s: Session): Promise<void> {
     if (!s.endlessWave.active) return;
+    if ((this.ewRetryAfter.get(s.guildId) ?? 0) > Date.now()) return;
     if (this.ewBusy.has(s.guildId)) return;
     this.ewBusy.add(s.guildId);
     try {
@@ -2784,12 +2804,14 @@ export class DiscordBot {
         }
         if (!resolved) {
           console.warn('[endlesswave] no suitable candidate right now — staying armed');
+          this.ewRetryAfter.set(s.guildId, Date.now() + 15_000);
           return;
         }
         s.queue.enqueue(resolved, 'endless-wave');
         s.endlessWave.generated++;
         this.bridge.broadcast({ type: 'endlesswave', active: true, generated: s.endlessWave.generated });
-        console.log(`[endlesswave] queued: "${resolved.name}" — ${resolved.artists.join(', ')} (#${s.endlessWave.generated})`);
+        console.log(`[endlesswave] queued: "${resolved.name}" — ${truncate(resolved.artists.join(', '), 80)} (#${s.endlessWave.generated})`);
+        this.ewRetryAfter.delete(s.guildId);
       }
     } finally {
       this.ewBusy.delete(s.guildId);
@@ -2895,6 +2917,12 @@ async function resolvePlayInput(query: string): Promise<ResolvedTrack[]> {
   try {
     return await resolveTracks(query);
   } catch (err) {
+    // Spotify's Developer Mode quota can be locked for hours. Keep ordinary
+    // free-text play usable through YouTube instead of surfacing a hard 429.
+    if (err instanceof SpotifyError && err.status === 429 && !/^(spotify:|https?:\/\/(open\.)?spotify\.com\/)/i.test(query)) {
+      const hit = await searchAndResolveYoutube(query);
+      if (hit) return [hit];
+    }
     if (err instanceof SpotifyError) throw err;
     throw new YoutubeError(err instanceof Error ? err.message : String(err));
   }

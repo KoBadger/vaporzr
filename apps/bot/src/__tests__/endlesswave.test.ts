@@ -204,6 +204,17 @@ describe('remix / cover filtering', () => {
     expect(normalizeTrackName('Song Name ft. Someone')).toBe('song name');
   });
 
+  it('normalizeTrackName strips YouTube upload noise', () => {
+    expect(normalizeTrackName('Song Name (Official Audio)')).toBe('song name');
+    expect(normalizeTrackName('Song Name [Official Video]')).toBe('song name');
+    expect(normalizeTrackName('Song Name (Lyrics)')).toBe('song name');
+    expect(normalizeTrackName('Song Name (Music Video)')).toBe('song name');
+    expect(normalizeTrackName('Song Name (Visualizer)')).toBe('song name');
+    expect(normalizeTrackName('Song Name - Official Audio')).toBe('song name');
+    expect(normalizeTrackName('Song Name - Lyrics')).toBe('song name');
+    expect(normalizeTrackName('Song Name (Official Music Video)')).toBe('song name');
+  });
+
   it('normalizeTrackName normalizes whitespace and case', () => {
     expect(normalizeTrackName('  SONG   NAME  ')).toBe('song name');
     expect(normalizeTrackName("Song's Name")).toBe('songs name');
@@ -254,6 +265,14 @@ describe('remix / cover filtering', () => {
     activate(s);
     markPlayed(s, 'spotify:track:1', 'My Song', ['Artist']);
     expect(isRemixOrCover(s, 'my song (remix)')).toBe(true);
+  });
+
+  it('detects the same song under a YouTube "(Official Audio)" title', () => {
+    const s = createState();
+    activate(s);
+    markPlayed(s, 'spotify:track:1', 'Magic', ['Coldplay']);
+    expect(isRemixOrCover(s, 'Coldplay - Magic (Official Audio)', ['Coldplay'])).toBe(true);
+    expect(isRemixOrCover(s, 'Magic (Official Video)', ['Coldplay'])).toBe(true);
   });
 });
 
@@ -477,13 +496,13 @@ describe('markPlayed', () => {
     expect(s.recentArtists).toContain('artist2');
   });
 
-  it('deduplicates artists in recentArtists', () => {
+  it('records each artist occurrence in recentArtists for track cooldowns', () => {
     const s = createState();
     activate(s);
     markPlayed(s, 'spotify:track:1', 'Track 1', ['Same Artist']);
     markPlayed(s, 'spotify:track:2', 'Track 2', ['Same Artist']);
     const count = s.recentArtists.filter((a) => a === 'same artist').length;
-    expect(count).toBe(1);
+    expect(count).toBe(2);
   });
 });
 
@@ -645,7 +664,9 @@ describe('pickNextTrack (smoke)', () => {
     const recent = [fakeTrack({ uri: 'yt:x', name: 'Seed Song', artists: ['Seed Artist'] })];
     const pick = await pickNextTrack(s, recent);
     expect(pick?.uri).toBe('youtube:video:abc123');
-    expect(pick?.streamUrl).toBe('https://example.com/stream');
+    // Artist-catalog query only — searches by song title always re-finds the
+    // current song's remix variant, which would repeat the same audio.
+    expect(mocks.searchAndResolveYoutube).toHaveBeenCalledWith('Seed Artist', expect.any(Object));
   });
 
   it('strategy 3: rejects a YouTube pick that is the seed song itself', async () => {
@@ -668,6 +689,60 @@ describe('pickNextTrack (smoke)', () => {
     });
     const recent = [fakeTrack({ uri: 'yt:x', name: 'Seed Song', artists: ['Seed Artist'] })];
     const pick = await pickNextTrack(s, recent);
+    expect(pick).toBeNull();
+  });
+
+  it('excludes compilation/setlist uploads that mention an on-cooldown artist', async () => {
+    const s = createState();
+    activate(s);
+    markPlayed(s, 'spotify:track:zzz000000000000000001', 'Magic', ['Coldplay']);
+    mocks.getRecommendations.mockResolvedValue([]);
+    // An empty-artist YouTube setlist that still names the on-cooldown artist.
+    mocks.searchTracks.mockResolvedValue([recCandidate({
+      uri: 'spotify:track:dddddddddddddddddddddd',
+      name: 'Best of Coldplay [Coldplay Concert Setlist]',
+      artists: [],
+    })]);
+    const recent = [fakeTrack({ uri: 'spotify:track:aaaaaaaaaaaaaaaaaaaaaa', name: 'Magic', artists: ['Coldplay'] })];
+    const pick = await pickNextTrack(s, recent);
+    expect(pick).toBeNull();
+  });
+
+  it('treats artists already queued in upcoming as on cooldown', async () => {
+    const s = createState();
+    activate(s);
+    // The first Coldplay track is already waiting in the queue, but it has not
+    // started playing yet, so state.recentArtists is still empty. The upcoming
+    // list must still block another Coldplay pick to avoid back-to-back bursts.
+    const upcoming: TrackInfo[] = [
+      fakeTrack({ uri: 'spotify:track:queued0000000000001', name: 'Magic', artists: ['Coldplay'] }),
+    ];
+    mocks.getRecommendations.mockResolvedValue([
+      recCandidate({ uri: 'spotify:track:other0000000000001', artists: ['Coldplay'] }),
+    ]);
+    const recent = [fakeTrack({ uri: 'spotify:track:aaaaaaaaaaaaaaaaaaaaaa', name: 'Seed', artists: ['Seed Artist'] })];
+    const pick = await pickNextTrack(s, recent, undefined, upcoming);
+    expect(pick).toBeNull();
+  });
+
+  it('rejects setlist uploads that mention an artist already queued as upcoming', async () => {
+    const s = createState();
+    activate(s);
+    // "Coldplay - Magic" is queued but not yet played. A compilation setlist
+    // with an empty artist field but "Coldplay" in the title must be blocked.
+    const upcoming: TrackInfo[] = [
+      fakeTrack({ uri: 'spotify:track:queued0000000000001', name: 'Magic', artists: ['Coldplay'] }),
+    ];
+    mocks.getRecommendations.mockResolvedValue([]);
+    mocks.searchTracks.mockResolvedValue([
+      recCandidate({
+        uri: 'spotify:track:setlist0000000000001',
+        name: 'Best of Coldplay [Coldplay Concert Setlist]',
+        artists: [],
+      }),
+    ]);
+    const recent = [fakeTrack({ uri: 'spotify:track:aaaaaaaaaaaaaaaaaaaaaa', name: 'Seed', artists: ['Seed Artist'] })];
+    const pick = await pickNextTrack(s, recent, undefined, upcoming);
     expect(pick).toBeNull();
   });
 
@@ -698,15 +773,17 @@ describe('pickNextTrack (smoke)', () => {
     expect(pick?.name).toBe('Banger');
   });
 
-  it('fallback search may reuse a cooldown artist to keep the wave alive', async () => {
+  it('stays armed rather than re-picking a same-song remix variant', async () => {
     const s = createState();
     activate(s);
     markPlayed(s, 'spotify:track:zzz000000000000000001', 'Earlier Song', ['Fresh Artist']);
     mocks.getRecommendations.mockResolvedValue([]);
-    mocks.searchTracks.mockResolvedValue([recCandidate({ uri: 'spotify:track:dddddddddddddddddddddd' })]);
+    // Only thing the search returns is the same remix variant of the just-played
+    // song — Strategy 4 must reject it instead of re-queueing it in a loop.
+    mocks.searchTracks.mockResolvedValue([recCandidate({ uri: 'spotify:track:dddddddddddddddddddddd', name: 'Earlier Song' })]);
     const recent = [fakeTrack({ uri: 'spotify:track:aaaaaaaaaaaaaaaaaaaaaa', name: 'Seed', artists: ['Seed Artist'] })];
     const pick = await pickNextTrack(s, recent);
-    expect(pick?.uri).toBe('spotify:track:dddddddddddddddddddddd');
+    expect(pick).toBeNull();
   });
 });
 

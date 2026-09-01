@@ -25,7 +25,8 @@ export type SendFn = (msg: CommandMessage) => void;
 
 /** How long before a track ends we try to pre-resolve and buffer the next one. */
 const PRELOAD_LEAD_MS = 30_000;
-/** Resample librespot's 44.1 kHz PCM to Discord's 48 kHz. */
+/** Resample librespot's 44.1 kHz PCM to Discord's 48 kHz, plus R128 loudness
+ *  normalization so Spotify and YouTube/EW tracks land at the same target. */
 const RESAMPLE_ARGS = [
   '-hide_banner',
   '-loglevel',
@@ -42,6 +43,8 @@ const RESAMPLE_ARGS = [
   '48000',
   '-ac',
   '2',
+  '-af',
+  'loudnorm=I=-14:TP=-1.5:LRA=11',
   '-f',
   's16le',
   'pipe:1',
@@ -62,8 +65,15 @@ export class PlaybackController {
   private currentUri: string | null = null;
   /** Device we last successfully issued Spotify commands to (librespot). */
   private spotifyDeviceId?: string;
+  /** Once Spotify reports an app-quota 429, avoid repeating the command for a
+   *  while; Spotify tracks can continue through the YouTube fallback meanwhile. */
+  private spotifyPlaybackBlockedUntil = 0;
   /** Video of the server-side stream (YouTube or Spotify-fallback). */
   private currentVideo: ResolvedVideo | null = null;
+  /** YouTube videoId of the last-started server-side stream. Used to prevent
+   *  a Spotify→YouTube fallback from accidentally replaying the exact same
+   *  video that just finished. */
+  private lastYoutubeVideoId: string | null = null;
   /** Source of the track being left behind (drives visualizer PIP cleanup). */
   private lastSource: MediaSource | null = null;
   /** True while a Spotify track is being played via YouTube (no Spotify device). */
@@ -71,6 +81,8 @@ export class PlaybackController {
   private resampler: ChildProcess | null = null;
   /** uri -> resolved video, so a preloaded next track starts instantly. */
   private streamCache = new Map<string, ResolvedVideo>();
+  /** Invalidates in-flight play() calls when skip/previous/stop changes the cursor. */
+  private playGeneration = 0;
   /** Cumulative number of tracks that have started playing. */
   tracksPlayed = 0;
 
@@ -281,6 +293,7 @@ export class PlaybackController {
   }
 
   async play(): Promise<void> {
+    const generation = ++this.playGeneration;
     this.clearSpotifyRetry();
     const current = this.queue.getCurrentTrack();
     if (!current) return;
@@ -321,8 +334,9 @@ export class PlaybackController {
     if (this.lastSource === 'youtube' || this.lastSource === 'local' || this.lastSource === 'suno' || this.lastSource === 'soundcloud' || this.lastSource === 'apple' || this.spotifyFallback) {
       this.sendVisualizer({ type: 'cmd', command: 'stop' });
     }
-    const device = await this.resolveSpotifyDevice();
-    if (device) {
+      const device = await this.resolveSpotifyDevice();
+      if (generation !== this.playGeneration || this.queue.getCurrentTrack()?.uri !== current.uri) return;
+      if (device) {
       this.spotifyDeviceId = device.id;
       this.currentUri = current.uri;
       if (device.viaLibrespot) {
@@ -331,6 +345,10 @@ export class PlaybackController {
       }
       try {
         await spotifyPlay(device.id, [current.uri]);
+        if (generation !== this.playGeneration || this.queue.getCurrentTrack()?.uri !== current.uri) {
+          void spotifyPause(device.id).catch(() => {});
+          return;
+        }
         this.spotifyRetryAttempts = 0;
       } catch (err) {
         this.stopSpotifyFeed();
@@ -338,17 +356,18 @@ export class PlaybackController {
         if (err instanceof SpotifyError && err.status === 404) {
           console.warn(`[playback] device not active — falling back to YouTube for "${current.name}"`);
           this.spotifyDeviceId = undefined;
-          await this.playYoutubeFallback(current);
+          this.spotifyPlaybackBlockedUntil = Date.now() + 60 * 60 * 1000;
+          await this.playYoutubeFallback(current, generation);
           return;
         }
         if (err instanceof SpotifyError && err.status === 429) {
-          const waitSec = err.retryAfter ?? this.nextRetryWait();
-          this.deferSpotifyPlay(device.id, current, waitSec);
-          throw new SpotifyError(
-            `Spotify is rate-limited for ~${Math.max(1, Math.ceil(waitSec / 60))} min. I queued "${current.name}" and will start it automatically when the window clears.`,
-            429,
-            waitSec,
-          );
+          // Spotify's app quota can remain exhausted well beyond the advertised
+          // Retry-After window. Do not make the user wait or leave a retry timer
+          // fighting EW; play the already-resolved track through YouTube instead.
+          this.spotifyDeviceId = undefined;
+          console.warn(`[playback] Spotify app quota is rate-limited — using YouTube fallback for "${current.name}"`);
+          await this.playYoutubeFallback(current, generation);
+          return;
         }
         throw err;
       }
@@ -369,7 +388,7 @@ export class PlaybackController {
       return;
     }
 
-    await this.playYoutubeFallback(current);
+    await this.playYoutubeFallback(current, generation);
   }
 
   /**
@@ -421,6 +440,7 @@ export class PlaybackController {
       this.streamCache.delete(current.uri);
       this.currentUri = current.uri;
       this.currentVideo = video;
+      this.lastYoutubeVideoId = video.videoId;
       this.queue.setState({
         playing: true,
         track: { ...current, image: video.image ?? current.image },
@@ -446,7 +466,7 @@ export class PlaybackController {
   }
 
   /** No Spotify device available — play the track's YouTube match instead. */
-  private async playYoutubeFallback(current: TrackInfo): Promise<void> {
+  private async playYoutubeFallback(current: TrackInfo, generation: number): Promise<void> {
     const t0 = Date.now();
     console.log(`[playback] no Spotify device — falling back to YouTube for "${current.name}"`);
     this.stopSpotifyFeed();
@@ -461,18 +481,28 @@ export class PlaybackController {
       });
       console.log(`[playback] youtube fallback resolve took ${Date.now() - t0}ms for "${current.name}"`);
     }
+    if (generation !== this.playGeneration || this.queue.getCurrentTrack()?.uri !== current.uri) return;
     if (!video) {
       throw new SpotifyError(`No Spotify device available and no YouTube match for "${current.name}".`);
     }
+    // If the fallback resolves to the exact same YouTube video that just
+    // played, treat it as a duplicate and skip. This prevents "the next song"
+    // from being the same audio when Spotify recommendations/search return a
+    // different track URI that happens to map to the same upload.
+    if (this.lastYoutubeVideoId && video.videoId === this.lastYoutubeVideoId) {
+      console.warn(`[playback] fallback for "${current.name}" resolved to the same YouTube video (${video.videoId}) as the previous track — skipping`);
+      throw new SpotifyError(`Skipping "${current.name}" — it resolves to the same audio as the previous track.`);
+    }
     this.currentUri = current.uri;
     this.currentVideo = video;
+    this.lastYoutubeVideoId = video.videoId;
     this.spotifyFallback = true;
     this.queue.setState({
       playing: true,
       track: current,
       durationMs: video.durationMs,
       positionMs: 0,
-      source: 'spotify',
+      source: 'youtube',
     });
     this.voice.playFfmpegUrl(video.streamUrl!, {
       volume: this.queue.getState().volume,
@@ -690,6 +720,7 @@ export class PlaybackController {
     // YouTube-first mode plays Spotify requests via the YouTube fallback, so no
     // Spotify API calls (device commands) happen at all.
     if (config.spotifyPreferYoutube) return Promise.resolve(null);
+    if (Date.now() < this.spotifyPlaybackBlockedUntil) return Promise.resolve(null);
     // librespot process must actually be running before we try sending it a
     // Spotify Connect command — otherwise the API call wastes ~300-500 ms
     // failing with a 404 before falling back to YouTube.
@@ -807,7 +838,7 @@ export class PlaybackController {
    * track and retry the play command once Spotify's window clears, so the user
    * doesn't have to babysit the wait.
    */
-  private deferSpotifyPlay(deviceId: string, current: TrackInfo, waitSec: number): void {
+  private deferSpotifyPlay(deviceId: string, current: TrackInfo, waitSec: number, generation: number): void {
     this.clearSpotifyRetry();
     this.spotifyDeviceId = deviceId;
     this.currentUri = current.uri;
@@ -824,18 +855,18 @@ export class PlaybackController {
     );
     this.spotifyRetry = setTimeout(async () => {
       this.spotifyRetry = null;
-      if (this.currentUri !== current.uri) return;
+       if (this.currentUri !== current.uri || this.playGeneration !== generation) return;
       try {
         await spotifyPlay(deviceId, [current.uri]);
       } catch (err) {
         if (this.currentUri !== current.uri) return;
         if (err instanceof SpotifyError && err.status === 429) {
-          this.deferSpotifyPlay(deviceId, current, err.retryAfter ?? this.nextRetryWait());
+           this.deferSpotifyPlay(deviceId, current, err.retryAfter ?? this.nextRetryWait(), generation);
           return;
         }
         if (err instanceof SpotifyError && err.status === 404) {
           this.spotifyDeviceId = undefined;
-          await this.playYoutubeFallback(current).catch(() => {});
+           await this.playYoutubeFallback(current, generation).catch(() => {});
           return;
         }
         console.warn(`[playback] deferred Spotify start failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -878,9 +909,12 @@ export class PlaybackController {
   }
 
   next(): void {
+    this.playGeneration++;
     this.clearPreloadTimer();
     this.lastSource = this.currentSource();
     if (!this.queue.next()) {
+      const snap = this.queue.getSnapshot();
+      console.log(`[playback] advance failed — queue ended (index ${snap.currentIndex} of ${snap.tracks.length})`);
       this.clearEndTimer();
       this.currentUri = null;
       this.spotifyFallback = false;
@@ -895,10 +929,16 @@ export class PlaybackController {
       return;
     }
     this.clearEndTimer();
+    const nextTrack = this.queue.getCurrentTrack();
+    if (nextTrack) {
+      // Publish the moved cursor before async Spotify/yt-dlp resolution finishes.
+      this.queue.setState({ playing: false, track: nextTrack, durationMs: nextTrack.durationMs, positionMs: 0, source: nextTrack.source });
+    }
     this.safePlay();
   }
 
   previous(): void {
+    this.playGeneration++;
     this.clearPreloadTimer();
     this.lastSource = this.currentSource();
     this.queue.previous();
@@ -1010,6 +1050,7 @@ export class PlaybackController {
 
   /** Stop everything (queue cleared). */
   stopAll(): void {
+    this.playGeneration++;
     this.clearEndTimer();
     this.clearPreloadTimer();
     this.streamCache.clear();

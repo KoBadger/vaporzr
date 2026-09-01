@@ -121,6 +121,8 @@ export async function resolveYoutubeVideo(input: string): Promise<ResolvedVideo>
   if (!id) throw new YoutubeError('Could not parse that YouTube link.');
 
   const url = `https://www.youtube.com/watch?v=${id}`;
+  // Tab-delimited so titles/channels containing '|' don't shift fields.
+  const META_SEP = '\t';
   const raw = await runYtDlp([
     '--no-playlist',
     '--no-warnings',
@@ -128,16 +130,16 @@ export async function resolveYoutubeVideo(input: string): Promise<ResolvedVideo>
     AUDIO_FORMAT,
     '--get-url',
     '--print',
-    '%(id)s|%(title)s|%(duration)s|%(thumbnail)s|%(channel)s',
+    `%(id)s${META_SEP}%(title)s${META_SEP}%(duration)s${META_SEP}%(thumbnail)s${META_SEP}%(channel)s`,
     url,
   ]);
 
   const lines = raw.trim().split(/\r?\n/);
-  const metaLine = lines.find((l) => l.includes('|'));
+  const metaLine = lines.find((l) => l.includes(META_SEP));
   const streamUrl = lines.find((l) => l.startsWith('https://'));
   if (!metaLine || !streamUrl) throw new YoutubeError('Could not extract a playable stream.');
 
-  const [vid, title, duration, thumbnail, channel] = metaLine.split('|');
+  const [vid, title, duration, thumbnail, channel] = metaLine.split(META_SEP);
   return {
     videoId: vid,
     uri: `youtube:video:${vid}`,
@@ -164,20 +166,21 @@ export async function resolveYoutubePlaylist(input: string): Promise<ResolvedVid
   const playlistId = extractYoutubePlaylistId(input);
   if (!playlistId) throw new YoutubeError('Could not parse that YouTube playlist link.');
 
+  const SEP = '\t';
   const raw = await runYtDlp([
     '--flat-playlist',
     '--no-warnings',
     '--print',
-    '%(id)s|%(title)s|%(channel)s',
+    `%(id)s${SEP}%(title)s${SEP}%(channel)s`,
     `https://www.youtube.com/playlist?list=${playlistId}`,
   ]);
 
-  const lines = raw.trim().split(/\r?\n/).filter((l) => l.includes('|'));
+  const lines = raw.trim().split(/\r?\n/).filter((l) => l.includes(SEP));
   if (lines.length === 0) throw new YoutubeError('That playlist appears to be empty or unavailable.');
 
   const tracks: ResolvedVideo[] = [];
   for (const line of lines) {
-    const [vid, title, channel] = line.split('|');
+    const [vid, title, channel] = line.split(SEP);
     if (!vid || !title) continue;
     tracks.push({
       videoId: vid,
@@ -229,17 +232,18 @@ interface FlatHit {
 
 /** Fast metadata-only YouTube search (no per-video extraction). */
 async function flatSearch(query: string): Promise<FlatHit[]> {
+  const SEP = '\t';
   const raw = await runYtDlp([
     '--no-playlist',
     '--no-warnings',
     '--flat-playlist',
     '--print',
-    '%(id)s|%(title)s|%(channel)s|%(duration)s',
+    `%(id)s${SEP}%(title)s${SEP}%(channel)s${SEP}%(duration)s`,
     `ytsearch5:${query}`,
   ]);
   const hits: FlatHit[] = [];
   for (const line of raw.trim().split(/\r?\n/)) {
-    const [id, title = '', channel = '', dur = ''] = line.split('|');
+    const [id, title = '', channel = '', dur = ''] = line.split(SEP);
     if (!id || !/^[A-Za-z0-9_-]{6,}$/.test(id)) continue;
     hits.push({ videoId: id, title, channel, durationSec: Number(dur) || 0 });
   }
@@ -340,6 +344,8 @@ async function doSearchAndResolve(
   const t0 = Date.now();
   try {
     // Fast path: fused single-call top-result extraction (legacy behavior).
+    // Tab-delimited so titles/channels containing '|' don't shift fields.
+    const META_SEP = '\t';
     const fusedP = runYtDlp([
       '--no-playlist',
       '--no-warnings',
@@ -347,7 +353,7 @@ async function doSearchAndResolve(
       AUDIO_FORMAT,
       '--get-url',
       '--print',
-      '%(id)s|%(title)s|%(duration)s|%(thumbnail)s|%(channel)s',
+      `%(id)s${META_SEP}%(title)s${META_SEP}%(duration)s${META_SEP}%(thumbnail)s${META_SEP}%(channel)s`,
       `ytsearch1:${query}`,
     ]).catch(() => null);
     // Accuracy path: cheap metadata for the top 5.
@@ -371,10 +377,10 @@ async function doSearchAndResolve(
 
     if (fusedWinner) {
       const lines = fusedRaw.trim().split(/\r?\n/);
-      const metaLine = lines.find((l) => l.includes('|'));
+      const metaLine = lines.find((l) => l.includes(META_SEP));
       const streamUrl = lines.find((l) => l.startsWith('https://'));
       if (metaLine && streamUrl) {
-        const [vid, title, duration, thumbnail, channel] = metaLine.split('|');
+        const [vid, title, duration, thumbnail, channel] = metaLine.split(META_SEP);
         video = {
           videoId: vid,
           uri: `youtube:video:${vid}`,

@@ -55,6 +55,8 @@ export const config = {
   spotifyPreferYoutube: process.env.SPOTIFY_PREFER_YOUTUBE === '1' || process.env.SPOTIFY_PREFER_YOUTUBE === 'true',
   /** Resolve public Spotify data with the anonymous web-player token (no app quota). Fallback to OAuth. */
   spotifyUseAnonymous: process.env.SPOTIFY_USE_ANONYMOUS !== '0' && process.env.SPOTIFY_USE_ANONYMOUS !== 'false',
+  /** Free-text search via the quota-free web-player token. Set to 0/off to force OAuth /search. */
+  spotifyAnonSearch: process.env.SPOTIFY_ANON_SEARCH !== '0' && process.env.SPOTIFY_ANON_SEARCH !== 'false',
   /** sp_dc session cookie from open.spotify.com — unlocks FULL-length resolution of any public playlist. */
   spotifySpDc: process.env.SPOTIFY_SP_DC ?? '',
   /** TOTP secret bytes (comma-separated) for the web-player token endpoint; Spotify rotates this occasionally. */

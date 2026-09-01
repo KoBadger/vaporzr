@@ -405,6 +405,11 @@ export class VoiceManager {
       args.push('-i', url);
     }
     args.push('-vn', '-ac', '2', '-ar', '48000');
+    // Force consistent loudness across every source (YouTube/SoundCloud/local/
+    // Apple/Suno). Without this, a hot-mastered YouTube upload can be far louder
+    // than a Spotify track that already lands at ~-14 LUFS. Single-pass dynamic
+    // mode keeps latency low while still riding gain to the target.
+    args.push('-af', 'loudnorm=I=-14:TP=-1.5:LRA=11');
     args.push('-f', 's16le', 'pipe:1');
 
     const proc = spawn(config.ffmpegPath, args, {
