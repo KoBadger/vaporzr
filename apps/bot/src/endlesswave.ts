@@ -69,6 +69,10 @@ const DEFAULT_CONFIG: EWConfig = {
   dedupMax: 800,
 };
 
+/** Candidate name -> last rejection (reason + timestamp), to throttle dead-end
+ *  refill storms from logging the same rejections hundreds of times. */
+const lastRejects = new Map<string, { reason: string; at: number }>();
+
 /** Feature blending weights — most recent track has strongest influence. */
 function weights(n: number): number[] {
   const base = [0.1, 0.15, 0.2, 0.25, 0.3];
@@ -599,6 +603,16 @@ export async function pickNextTrack(
   let stage = 0;
   const logReject = (name: string, reason: string) => {
     if (process.env.NODE_ENV === 'test') return;
+    // Same candidate + same reason repeatedly (a dead-end refill storm) is just
+    // noise — log it once per minute instead of every 700ms pass.
+    const now = Date.now();
+    const memo = lastRejects.get(name);
+    if (memo && memo.reason === reason && now - memo.at < 60_000) return;
+    lastRejects.set(name, { reason, at: now });
+    if (lastRejects.size > 200) {
+      const oldest = [...lastRejects.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+      if (oldest) lastRejects.delete(oldest[0]);
+    }
     console.log(`[endlesswave] rejected candidate "${name}": ${reason}`);
   };
 
