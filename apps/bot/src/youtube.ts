@@ -296,12 +296,30 @@ return score;
 
 /**
  * Quick "is this obviously NOT the song we asked for" check for the speed
- * fallback. Reuses the same scoring as the accuracy path: if the fused
- * fast-path result scores below a floor (missing most title words, wrong
- * artist, way-off length) we refuse to play it — better to skip the track
- * than play an obvious mismatch just because it resolved fast.
+ * fallback. Three independent reject reasons:
+ *  1. Phrase check — when we have a canonical name, the full name (punctuation-
+ *     insensitive) must appear in the title. A same-artist lookalike with a
+ *     different song name ("Untitled Forever" when we asked for "Fix It") is
+ *     rejected even though the artist matches. (Skipped for raw search queries,
+ *     which often have extra words that legitimately won't all be in the title.)
+ *  2. Length cap — an egregiously longer cut (album-length mix vs a single) is
+ *     a miss even when the name matches.
+ *  3. Score floor — the accuracy-path score must clear a bar (wrong artist,
+ *     missing most words, variant).
+ * Better to skip the track than play an obvious mismatch just because it
+ * resolved fast.
  */
 export function isClearlyWrongMatch(video: ResolvedVideo, query: string, opts: YoutubeSearchOptions): boolean {
+  const t = normText(video.name);
+  // 1. Phrase check (canonical names only).
+  const canonical = opts.name ? normText(opts.name) : '';
+  if (canonical.length > 1 && !t.includes(canonical)) return true;
+  // 2. Egregious length mismatch.
+  const wantMs = opts.durationMs ?? 0;
+  if (wantMs > 0 && video.durationMs > 0 && video.durationMs > wantMs * 4 && video.durationMs - wantMs > 10 * 60_000) {
+    return true;
+  }
+  // 3. Score floor.
   const hit: FlatHit = {
     videoId: video.videoId,
     title: video.name,

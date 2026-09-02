@@ -33,15 +33,19 @@ describe('isClearlyWrongMatch (speed fallback guard)', () => {
     expect(isClearlyWrongMatch(v, 'Grant Fix It', { name: 'Fix It', artists: ['Grant'], durationMs: 198_000 })).toBe(true);
   });
 
-  it('rejects a different song with the same artist', () => {
-    const v = video({ name: 'Some Other Track - Grant', artists: ['Grant'], durationMs: 200_000, channel: 'Grant Official' });
+  it('rejects a different song by the same artist (name phrase missing)', () => {
+    // The artist matches but the song name is different — the phrase check catches it.
+    const v = video({ name: 'Untitled Forever - Grant', channel: 'Grant - Topic' });
     expect(isClearlyWrongMatch(v, 'Fix It', { name: 'Fix It', artists: ['Grant'], durationMs: 198_000 })).toBe(true);
   });
 
-  it('accepts a same-title mix (right song name/artist, longer cut)', () => {
-    // Duration mismatch alone isn't "obviously wrong" — EW's long-form filter
-    // handles overlong cuts downstream. The guard only rejects clear mismatches.
-    const v = video({ name: 'End Of Summer - Tame Impala (Full Album Mix)', artists: ['Tame Impala'], durationMs: 2400_000, channel: 'Some Channel' });
+  it('rejects an egregiously longer cut (album-length mix vs a single)', () => {
+    const v = video({ name: 'End Of Summer - Tame Impala (Full Album Mix)', durationMs: 2400_000, channel: 'Some Channel' });
+    expect(isClearlyWrongMatch(v, 'End Of Summer', { name: 'End Of Summer', artists: ['Tame Impala'], durationMs: 432_000 })).toBe(true);
+  });
+
+  it('accepts a plausible same-title remix (not an obvious mismatch)', () => {
+    const v = video({ name: 'End Of Summer (Remix) - Tame Impala', channel: 'Tame Impala - Topic' });
     expect(isClearlyWrongMatch(v, 'End Of Summer', { name: 'End Of Summer', artists: ['Tame Impala'], durationMs: 432_000 })).toBe(false);
   });
 });
