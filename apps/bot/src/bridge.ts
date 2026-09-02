@@ -43,6 +43,8 @@ export class Bridge {
   private sensitivity = 1.0;
   onBurstData: ((data: string) => void) | null = null;
   librespot: LibrespotManager;
+  /** Routed to the Discord layer when the panel toggles Endless Wave. */
+  private endlessWaveToggle: ((guildId: string, active: boolean) => void) | null = null;
   /** Per-socket auth state: true = key holder (full control), false = guest (view-only). */
   private socketAuthed = new Map<WebSocket, boolean>();
   /** Human-readable guild list for the panel/visualizer guild switcher. */
@@ -56,6 +58,11 @@ export class Bridge {
     this.guildList = list;
     for (const vis of this.visualizers) this.sendSnapshot(vis.socket);
     for (const panel of this.panels) this.sendSnapshot(panel.socket);
+  }
+
+  /** Let the Discord layer handle panel-initiated Endless Wave toggles. */
+  setEndlessWaveToggle(fn: (guildId: string, active: boolean) => void): void {
+    this.endlessWaveToggle = fn;
   }
 
   constructor(
@@ -372,6 +379,11 @@ export class Bridge {
         if (msg.djEnabled != null && this.primaryGuildId) {
           this.playback.setDjEnabled(this.primaryGuildId, msg.djEnabled);
           this.notifyDj();
+        }
+        break;
+      case 'endlesswave':
+        if (msg.active != null && this.primaryGuildId && this.endlessWaveToggle) {
+          this.endlessWaveToggle(this.primaryGuildId, !!msg.active);
         }
         break;
       case 'switchGuild':

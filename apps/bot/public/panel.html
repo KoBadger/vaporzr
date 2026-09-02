@@ -202,8 +202,10 @@ body.guest #guilds{display:none}
         <span id="conn-pill" class="badge"><span id="conn-dot"></span> <span id="conn-text">connecting…</span></span>
         <span class="badge" id="voice">🔇 not streaming</span>
         <span class="badge" id="dj-badge">🎛 DJ off</span>
+        <span class="badge" id="wave-badge" title="Endless Wave auto-curation">🌊 EW off</span>
       </div>
       <button id="dj-toggle" data-tip="Toggle the DJ soundboard on/off">🎛</button>
+      <button id="wave-toggle" data-tip="Toggle Endless Wave auto-curation on/off">🌊</button>
     </div>
     <div id="guilds"></div>
   </div>
@@ -312,6 +314,7 @@ body.guest #guilds{display:none}
   var $ = function (id) { return document.getElementById(id); };
   var el = {};
   ['voice','dj-badge','dj-toggle','sfx-status','track-name','track-meta','src-badge','art',
+   'wave-badge','wave-toggle',
    'btn-play','btn-shuffle','btn-repeat','btn-prev','btn-next','btn-clear','progress','t-now','t-dur','vol',
    'queue','queue-count','queue-total','btn-jump','empty','search','btn-q-add','btn-q-play',
    'swatches','sens','sens-val','link-viz','guilds','toasts',
@@ -319,6 +322,7 @@ body.guest #guilds{display:none}
 
   var ws = null, state = null, queue = [], djEnabled = false, connected = false;
   var sensitivity = 1.0, themeId = 'vaporzr';
+  var waveActive = false;
 
   var THEMES = [
     {id:'vaporzr',name:'Vaporzr',accent:'#6a5cff',accent2:'#00f0ff'},
@@ -498,6 +502,12 @@ body.guest #guilds{display:none}
     document.querySelectorAll('#sfx-row button').forEach(function(b){b.classList.toggle('disabled',!djEnabled)});
   }
 
+  function renderWave(){
+    el['wave-toggle'].classList.toggle('active',waveActive);
+    el['wave-badge'].textContent='🌊 EW '+(waveActive?'on':'off');
+    el['wave-badge'].classList.toggle('on',waveActive);
+  }
+
   function setConnected(c){
     connected=c;
     el['conn-dot'].className=c?'live':'';
@@ -564,15 +574,17 @@ body.guest #guilds{display:none}
           state=msg.state;queue=(msg.queue&&msg.queue.tracks)||[];
           if(msg.guest&&!GUEST){GUEST=true;enableGuestMode()}
           if(msg.djEnabled!=null)djEnabled=msg.djEnabled;
+          if(msg.endlesswave!=null)waveActive=msg.endlesswave;
           if(msg.theme){for(var i=0;i<THEMES.length;i++)if(THEMES[i].id===msg.theme.id)applyTheme(THEMES[i])}
           if(typeof msg.sensitivity==='number')setSens(msg.sensitivity,false);
           if(msg.voice)el.voice.textContent=msg.voice.joined?'🔊 streaming':'🔇 not streaming';
           if(msg.guilds&&msg.primaryGuildId)renderGuilds(msg.guilds,msg.primaryGuildId);
-          render();break;
+          render();renderDj();renderWave();break;
         case 'state:update':state=msg.state;render();break;
         case 'queue:update':queue=(msg.queue&&msg.queue.tracks)||[];render();break;
         case 'voice:update':el.voice.textContent=msg.joined?'🔊 streaming':'🔇 not streaming';break;
         case 'dj:update':djEnabled=msg.enabled;renderDj();break;
+        case 'endlesswave':waveActive=msg.active;renderWave();break;
         case 'theme':for(var j=0;j<THEMES.length;j++)if(THEMES[j].id===(msg.theme&&msg.theme.id))applyTheme(THEMES[j]);break;
         case 'visuals:sensitivity':setSens(msg.multiplier,false);break;
         case 'visuals:bars':
@@ -611,6 +623,7 @@ body.guest #guilds{display:none}
   };
   el['btn-clear'].onclick=function(){cmd('clear');toast('info','Queue cleared')};
   el['dj-toggle'].onclick=function(){cmd('dj',{djEnabled:!djEnabled})};
+  el['wave-toggle'].onclick=function(){cmd('endlesswave',{active:!waveActive})};
   el['btn-jump'].onclick=function(){
     var row=document.querySelector('#queue li.current');
     if(row)row.scrollIntoView({behavior:'smooth',block:'center'});

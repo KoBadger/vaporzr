@@ -94,6 +94,7 @@ export type CommandName =
   | 'stop'
   | 'sfx'
   | 'dj'
+  | 'endlesswave'
   | 'openVisuals'
   | 'switchGuild'
   | 'sensitivity'
@@ -119,6 +120,8 @@ export interface CommandMessage {
   sfxId?: string;
   /** DJ soundboard enabled state for command: 'dj'. */
   djEnabled?: boolean;
+  /** Endless Wave enabled state for command: 'endlesswave'. */
+  active?: boolean;
   /** Guild to switch to for command: 'switchGuild'. */
   guildId?: string;
   /** Beat-reactivity multiplier (0.5–1.5) for command: 'sensitivity'. */
