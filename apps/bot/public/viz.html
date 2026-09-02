@@ -299,9 +299,18 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
         case 'visuals:bars':
           markVisual();
           lastBarAt=Date.now();
-          var eSum=0;
-          for(var k=0;k<BARS;k++){target[k]=Math.max(0,Math.min(1,(msg.bars[k]||0)*sensitivity));eSum+=target[k]}
+          var eSum=0,bb=0,mb=0,tb=0,BASS_BARS=6,MID_BARS=9;
+          for(var k=0;k<BARS;k++){
+            var bv=Math.max(0,Math.min(1,(msg.bars[k]||0)*sensitivity));
+            target[k]=bv;eSum+=bv;
+            if(k<BASS_BARS)bb+=bv;
+            else if(k<BASS_BARS+MID_BARS)mb+=bv;
+            else tb+=bv;
+          }
           lastEnergy=eSum/BARS;
+          bassLevel+=(bb/BASS_BARS-bassLevel)*0.4;
+          midLevel+=(mb/MID_BARS-midLevel)*0.35;
+          trebleLevel+=(tb/(BARS-BASS_BARS-MID_BARS)-trebleLevel)*0.5;
           frameCount++;
           break;
         case 'endlesswave':
@@ -493,6 +502,9 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
   /* ---------- sensitivity ---------- */
   var BARS=24,target=new Array(BARS).fill(0),disp=new Array(BARS).fill(0),
       peaks=new Array(BARS).fill(0),sensitivity=1.0,lastBarAt=0,lastFrameAt=0,lastEnergy=0;
+  /* Per-band drivers derived from the same 24-bar feed: bass ~60-370Hz,
+     mid ~370Hz-3.1kHz, treble ~3.1-12kHz (log-spaced server FFT buckets). */
+  var bassLevel=0,midLevel=0,trebleLevel=0,prevBass=0;
 
   function setSensitivity(v,fromUser){
     v=Math.max(0.5,Math.min(1.5,v));
@@ -648,20 +660,22 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
         });
       }
     }
+    var tScale=0.15+trebleLevel*0.85;
     for(var i=0;i<drawSynth._stars.length;i++){
       var st=drawSynth._stars[i];
-      st.twinkle+=st.speed;
-      var alpha=0.3+Math.sin(st.twinkle)*0.3;
-      sctx.globalAlpha=alpha;
+      st.twinkle+=st.speed*(0.4+trebleLevel*2.6);
+      var sx=Math.sin(st.twinkle);
+      var alpha=tScale*(0.35+0.65*Math.max(0,sx));
+      sctx.globalAlpha=Math.max(0,Math.min(1,alpha));
       sctx.fillStyle='#ffffff';
       sctx.beginPath();
-      sctx.arc(st.x,st.y,st.s,0,Math.PI*2);
+      sctx.arc(st.x,st.y,st.s*(0.5+trebleLevel*1.5),0,Math.PI*2);
       sctx.fill();
     }
     sctx.globalAlpha=1;
 
-    // Sun with horizontal stripes
-    var sunR=W*0.12;
+    // Sun with horizontal stripes — radius swells with bass
+    var sunR=W*0.12*(1+bassLevel*0.10);
     var sunX=vx;
     var sunY=hy-sunR*0.3;
     var sunG=sctx.createRadialGradient(sunX,sunY,0,sunX,sunY,sunR);
@@ -681,6 +695,31 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
       sctx.fillRect(sunX-sunR,stripeY,sunR*2,stripeH);
     }
 
+    // Bass shockwaves — rings expand outward from the sun on bass transients
+    var waves=drawSynth._waves||(drawSynth._waves=[]);
+    if(bassLevel>0.18&&bassLevel-prevBass>=0.05&&waves.length<8){
+      waves.push({r:sunR*0.95,spd:Math.max(2,W*0.22*(0.3+bassLevel)),a:0.7});
+    }
+    prevBass=bassLevel;
+    for(var wIdx=waves.length-1;wIdx>=0;wIdx--){
+      var wv=waves[wIdx];
+      wv.r+=wv.spd;
+      wv.spd*=0.97;
+      wv.a*=0.93;
+      if(wv.a<0.02||wv.r>Math.max(W,H))waves.splice(wIdx,1);
+    }
+    for(var wIdx2=0;wIdx2<waves.length;wIdx2++){
+      var w2=waves[wIdx2];
+      sctx.beginPath();
+      sctx.strokeStyle='rgba(255,150,80,'+(w2.a*0.9)+')';
+      sctx.lineWidth=Math.max(1.5,w2.a*5);
+      sctx.shadowColor='rgba(255,140,70,0.75)';
+      sctx.shadowBlur=16;
+      sctx.arc(sunX,sunY,w2.r,0,Math.PI*2);
+      sctx.stroke();
+    }
+    sctx.shadowBlur=0;
+
     // Mountains
     sctx.fillStyle='#1a0a2e';
     sctx.beginPath();
@@ -693,39 +732,44 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
     sctx.closePath();
     sctx.fill();
 
-    // City skyline
+    // City skyline — building heights + window glow jump to the mid band
     if(!drawSynth._buildings){
       drawSynth._buildings=[];
       var bw=W/60;
-      for(var x=0;x<W;x+=bw){
-        var bh=hy*0.1+Math.random()*hy*0.25;
-        drawSynth._buildings.push({x:x,w:bw*0.8,h:bh,windows:[]});
-        // Add windows
-        for(var wy=0;wy<bh;wy+=bw*0.5){
-          for(var wx=0;wx<bw*0.8;wx+=bw*0.4){
+      for(var bx=0;bx<W;bx+=bw){
+        var base=hy*0.10+Math.random()*hy*0.25;
+        var bdd={x:bx,w:bw*0.8,base:base,seed:Math.random()*Math.PI*2,windows:[]};
+        var rows=Math.max(2,Math.round(base/(bw*0.6)));
+        for(var r=0;r<rows;r++){
+          for(var c=0;c<3;c++){
             if(Math.random()>0.3){
-              drawSynth._buildings[drawSynth._buildings.length-1].windows.push({
-                x:wx,y:wy,
+              bdd.windows.push({
+                fx:(c+0.5)/3,
+                fy:(r+0.5)/rows,
                 color:Math.random()>0.5?'#00ffff':'#ff00ff',
                 flicker:Math.random()*Math.PI*2
               });
             }
           }
         }
+        drawSynth._buildings.push(bdd);
       }
     }
     for(var i=0;i<drawSynth._buildings.length;i++){
       var b=drawSynth._buildings[i];
+      var eqWave=0.5+0.5*Math.sin(i*0.75+Date.now()*0.0009);
+      var h=b.base*(0.82+0.6*midLevel*eqWave);
       sctx.fillStyle='#0a0520';
-      sctx.fillRect(b.x,hy-b.h,b.w,b.h);
-      // Windows
+      sctx.fillRect(b.x,hy-h,b.w,h);
+      var ws=Math.min(b.w*0.22,b.w*0.24);
       for(var j=0;j<b.windows.length;j++){
-        var w=b.windows[j];
-        w.flicker+=0.05;
-        var alpha=0.5+Math.sin(w.flicker)*0.3;
-        sctx.globalAlpha=alpha;
-        sctx.fillStyle=w.color;
-        sctx.fillRect(b.x+w.x,hy-b.h+w.y,b.w*0.2,b.h*0.15);
+        var wv=b.windows[j];
+        var rowA=0.3+midLevel*(0.4+0.6*wv.fy);
+        wv.flicker+=0.08;
+        var alpha=rowA*(0.55+Math.sin(wv.flicker)*0.35);
+        sctx.globalAlpha=Math.max(0,Math.min(1,alpha));
+        sctx.fillStyle=wv.color;
+        sctx.fillRect(b.x+wv.fx*b.w-ws/2,hy-h+wv.fy*h-ws*0.5,ws,ws*0.9);
       }
     }
     sctx.globalAlpha=1;
