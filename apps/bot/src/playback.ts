@@ -62,6 +62,8 @@ export class PlaybackController {
   /** Consecutive 429 retries, drives the backoff so we can't re-drain the daily quota. */
   private spotifyRetryAttempts = 0;
   private positionTimer: NodeJS.Timeout | null = null;
+  /** Last time the Spotify-feed stall recovery re-issued playback (debounce). */
+  private lastStallRecoveryAt = 0;
   private currentUri: string | null = null;
   /** Device we last successfully issued Spotify commands to (librespot). */
   private spotifyDeviceId?: string;
@@ -95,6 +97,8 @@ export class PlaybackController {
 
   /** Callback fired when a track finishes (or is skipped). Useful for Endless Wave auto-queue. */
   onTrackEnd: ((endedTrack: TrackInfo) => void) | null = null;
+  /** Callback fired when the queue runs dry (last track ended, nothing to advance). */
+  onQueueEnd: (() => void) | null = null;
 
   /** Route visualizer-targeted state messages (only the primary session broadcasts). */
   setSendVisualizer(fn: SendFn): void {
@@ -779,6 +783,22 @@ export class PlaybackController {
       this.librespot?.resumeSocket();
       const r = this.resampler;
       if (r?.stdout && r.stdout.isPaused()) r.stdout.resume();
+      // Socket resume alone can't revive a dead Spotify session (SESSION_DELETED
+      // churn): re-issue the current track so play() re-takes the device or
+      // falls back to YouTube. Debounced so a burst of stall warnings doesn't
+      // hammer the play path.
+      const state = this.queue.getState();
+      if (state.track && state.playing && this.currentSource() === 'spotify' && !this.spotifyFallback) {
+        const now = Date.now();
+        if (!this.lastStallRecoveryAt || now - this.lastStallRecoveryAt > 20_000) {
+          this.lastStallRecoveryAt = now;
+          console.warn(`[playback] Spotify feed stalled — re-issuing "${state.track.name}"`);
+          this.sendVisualizer({ type: 'cmd', command: 'stop' });
+          void this.play().catch((err) => {
+            console.warn(`[playback] stall re-issue failed: ${err instanceof Error ? err.message : err}`);
+          });
+        }
+      }
     });
   }
 
@@ -926,6 +946,7 @@ export class PlaybackController {
       this.clearSpotifyRetry();
       this.queue.setState({ playing: false, track: undefined, positionMs: 0, durationMs: 0, source: undefined });
       this.voice.stopStream();
+      if (this.onQueueEnd) this.onQueueEnd();
       return;
     }
     this.clearEndTimer();

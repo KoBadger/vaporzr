@@ -420,6 +420,11 @@ export class DiscordBot {
           console.warn(`[endlesswave] on-end failed: ${err instanceof Error ? err.message : err}`);
         });
       };
+      // When the queue runs dry, post a friendly notice so listeners aren't left
+      // wondering why the music stopped.
+      s.playback.onQueueEnd = () => {
+        if (!s.endlessWave.active) void this.notifyQueueEnded(s.guildId);
+      };
       // A wave restored as active from disk needs re-arming after a restart:
       // kick off an immediate top-up so it resumes generating on its own.
       if (s.endlessWave.active) {
@@ -2016,6 +2021,25 @@ export class DiscordBot {
     }
   }
 
+  /** Post a friendly "queue's done" notice to the last-used text channel. */
+  private async notifyQueueEnded(guildId: string): Promise<void> {
+    const channelId = this.lastTextChannel.get(guildId);
+    if (!channelId) return;
+    try {
+      const channel = await this.client.channels.fetch(channelId);
+      if (!channel || !('send' in channel)) return;
+      await channel.send({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(this.themeColor())
+            .setDescription('⏹️ **Queue ended** — nothing left to play. Queue something with `V@p` or `/play` to keep it going!'),
+        ],
+      });
+    } catch {
+      /* no access — skip; not worth retrying */
+    }
+  }
+
   /** Compact always-on now-playing strip — the panel's small sibling. */
   private miniNpPayload(s: Session): EmbedBuilder {
     const st = s.queue.getState();
@@ -2843,9 +2867,14 @@ export class DiscordBot {
           if (!resolved) console.log(`[endlesswave] could not resolve "${candidate.name}" — trying another`);
         }
         if (!resolved) {
-          console.warn('[endlesswave] no suitable candidate right now — staying armed');
+          // Dead-end: the current context can't produce a fresh candidate (the
+          // pool is all already-played/cooldown/rejected). Back off much longer
+          // than a transient failure so refill storms stop re-searching and
+          // re-rejecting the same candidates every couple of seconds. The wave
+          // wakes up again when a new track actually plays (queue change).
+          console.warn('[endlesswave] no suitable candidate right now — backing off');
           EW.noteWaveDeadEnd(s.endlessWave);
-          this.ewRetryAfter.set(s.guildId, Date.now() + 15_000);
+          this.ewRetryAfter.set(s.guildId, Date.now() + 45_000);
           return;
         }
         s.queue.enqueue(resolved, 'endless-wave');
