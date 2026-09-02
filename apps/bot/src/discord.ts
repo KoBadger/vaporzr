@@ -49,6 +49,7 @@ import {
   SoundcloudError,
 } from './soundcloud.js';
 import { Session, SessionManager } from './session.js';
+  import { fetchLyrics, type LyricsResult } from './lyrics.js';
 import { PermissionsManager } from './permissions.js';
 import { analyzer } from './analyzer.js';
 import { vizTunnel } from './tunnel.js';
@@ -176,6 +177,10 @@ const COMMANDS = [
     ),
   new SlashCommandBuilder().setName('wave').setDescription('Post a waveform/spectrum animation of the current audio'),
   new SlashCommandBuilder().setName('burst').setDescription('Capture a short animated clip of the visualizer window'),
+  new SlashCommandBuilder()
+    .setName('lyrics')
+    .setDescription('Show lyrics for the current or searched song')
+    .addStringOption((o) => o.setName('query').setDescription('Song to look up (optional — defaults to current track)').setRequired(false)),
   new SlashCommandBuilder()
     .setName('wav')
     .setDescription('Play an uploaded audio/video file (wav, mp3, mp4, flac, …)')
@@ -836,6 +841,16 @@ export class DiscordBot {
         break;
       }
 
+      case 'lyrics': {
+        if (!this.requireLevel('lyrics', interaction)) return this.deny(interaction);
+        await interaction.deferReply();
+        const query = interaction.options.getString('query') ?? undefined;
+        const payload = await this.lyricsPayload(s, query);
+        if ('error' in payload) await interaction.followUp({ content: payload.error, flags: MessageFlags.Ephemeral });
+        else await interaction.followUp({ embeds: payload.embeds });
+        break;
+      }
+
       case 'shuffle': {
         if (!this.requireLevel('shuffle', interaction)) return this.deny(interaction);
         const on = interaction.options.getBoolean('enabled', true);
@@ -1203,6 +1218,7 @@ export class DiscordBot {
       th: 'theme', theme: 'theme',
       wave: 'wave',
       burst: 'burst',
+      lyrics: 'lyrics',
       player: 'player', open: 'player',
       dj: 'dj',
       sfx: 'sfx',
@@ -1593,6 +1609,14 @@ export class DiscordBot {
           if ('send' in message.channel) {
             await message.channel.send({ content: '📊 Waveform — last ~2.4s:', files: [new AttachmentBuilder(gif, { name: 'vaporzr-wave.gif' })] });
           }
+          break;
+        }
+
+        case 'lyrics': {
+          if (!canUse('lyrics')) return void (await deny());
+          const payload = await this.lyricsPayload(s, args || undefined);
+          if ('error' in payload) await message.reply({ content: payload.error });
+          else await message.reply({ embeds: payload.embeds });
           break;
         }
 
@@ -2040,6 +2064,62 @@ export class DiscordBot {
     }
   }
 
+  /** Chunk lyrics text into embeds that fit Discord's 4096-char description cap. */
+  private lyricsEmbeds(result: LyricsResult): EmbedBuilder[] {
+    const MAX = 3800;
+    const text = result.lyrics.trim();
+    const chunks: string[] = [];
+    let rest = text;
+    while (rest.length > MAX) {
+      const cut = rest.lastIndexOf('\n', MAX);
+      const idx = cut > 0 ? cut : MAX;
+      chunks.push(rest.slice(0, idx));
+      rest = rest.slice(idx).trim();
+    }
+    chunks.push(rest);
+    return chunks.slice(0, 4).map(
+      (chunk, i) =>
+        new EmbedBuilder().setColor(this.themeColor()).setDescription(
+          `${i === 0 ? `📝 **${result.trackName}** — ${result.artistName}${result.synced ? ' (synced)' : ''}\n\n` : ''}${chunk}` +
+            (i === chunks.length - 1 && chunks.length < text.length / MAX ? '\n*(…full lyrics shortened for Discord)*' : ''),
+        ),
+    );
+  }
+
+  /** Resolve what track to use for lyrics: a query (resolve it) or the current track. */
+  private async lyricsPayload(s: Session, query?: string): Promise<{ embeds: EmbedBuilder[] } | { error: string }> {
+    const track = query
+      ? await this.resolveLyricsQuery(query)
+      : s.queue.getCurrentTrack();
+    if (!track) return { error: '📝 Nothing playing — run a query or queue a track first.' };
+    const result = await fetchLyrics(track);
+    if (!result) return { error: `📝 No lyrics found for **${truncate(track.name, 60)}** — works best with title + artist.` };
+    return { embeds: this.lyricsEmbeds(result) };
+  }
+
+  /** Best-effort resolve of a free-form lyrics query into a track (Spotify search, then YouTube). */
+  private async resolveLyricsQuery(query: string): Promise<ResolvedTrack | null> {
+    const q = query.trim();
+    if (!q) return null;
+    try {
+      const hits = await resolveTracks(q);
+      const first = hits.find((t) => t);
+      if (first) return first;
+    } catch {
+      /* fall through to YouTube search */
+    }
+    const video = await searchAndResolveYoutube(q).catch(() => null);
+    if (!video) return null;
+    return {
+      uri: video.uri,
+      name: video.name,
+      artists: video.artists,
+      album: video.album,
+      durationMs: video.durationMs,
+      source: 'youtube',
+    };
+  }
+
   /** Compact always-on now-playing strip — the panel's small sibling. */
   private miniNpPayload(s: Session): EmbedBuilder {
     const st = s.queue.getState();
@@ -2366,6 +2446,7 @@ export class DiscordBot {
       ),
       new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder().setCustomId('vz:dj').setLabel('DJ').setEmoji(this.vzE('vz_dj', '🎛️')).setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('vz:lyrics').setEmoji(this.vzE('vz_lyrics', '📝')).setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('vz:stop').setEmoji(this.vzE('vz_stop', '⏹')).setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('vz:leave').setEmoji(this.vzE('vz_eject', '📤')).setStyle(ButtonStyle.Secondary),
       ),
@@ -2407,6 +2488,7 @@ export class DiscordBot {
       fwd10: 'seek',
       'vol-down': 'volume',
       'vol-up': 'volume',
+      lyrics: 'lyrics',
       stop: 'clear',
       leave: 'leave',
     };
@@ -2431,6 +2513,12 @@ export class DiscordBot {
       case 'toggle':
         await s.playback.toggle();
         break;
+      case 'lyrics': {
+        const payload = await this.lyricsPayload(s);
+        if ('error' in payload) void interaction.followUp({ content: payload.error, flags: MessageFlags.Ephemeral }).catch(() => {});
+        else void interaction.followUp({ embeds: payload.embeds, flags: MessageFlags.Ephemeral }).catch(() => {});
+        break;
+      }
       case 'next': {
         s.playback.next();
         const np = this.nowPlayingEmbed(s, '⏭️ Skipped');

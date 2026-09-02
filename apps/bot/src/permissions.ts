@@ -29,6 +29,7 @@ const DEFAULT_COMMAND_LEVELS: Record<string, PermissionLevel> = {
   wave: 'user',
   burst: 'user',
   wav: 'user',
+  lyrics: 'user',
   skip: 'user',
   remove: 'user',
   clear: 'user',
