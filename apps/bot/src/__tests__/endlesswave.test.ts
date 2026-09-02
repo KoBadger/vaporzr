@@ -50,6 +50,8 @@ import {
   pickNextTrack,
   resolveCandidate,
   fetchFeatures,
+  noteWaveQueued,
+  noteWaveDeadEnd,
 } from '../endlesswave.js';
 import type { EndlessWaveState } from '../endlesswave.js';
 import type { AudioFeatures, ResolvedTrack } from '../spotify.js';
@@ -121,6 +123,24 @@ describe('state management', () => {
     expect(s.recentFeatures).toEqual([]);
     expect(s.generated).toBe(0);
     expect(s.genreDrift).toBe(0);
+  });
+
+  it('tracks run streak, longest run and dead-ends', () => {
+    const s = createState();
+    noteWaveQueued(s, ['Artist A', 'artist-b', '']);
+    noteWaveQueued(s, ['Artist B']);
+    expect(s.runStreak).toBe(2);
+    expect(s.longestRun).toBe(2);
+    expect(s.artistSet.size).toBe(3);
+    noteWaveDeadEnd(s);
+    expect(s.deadEnds).toBe(1);
+    expect(s.runStreak).toBe(0);
+    expect(s.longestRun).toBe(2);
+    const snap = snapshot(s);
+    expect(snap.deadEnds).toBe(1);
+    expect(snap.runStreak).toBe(0);
+    expect(snap.longestRun).toBe(2);
+    expect(snap.artistCount).toBe(3);
   });
 
   it('deactivate sets active to false', () => {

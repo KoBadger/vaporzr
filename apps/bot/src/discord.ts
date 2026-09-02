@@ -1558,9 +1558,25 @@ export class DiscordBot {
             await message.reply(`🌊 **Endless Wave deactivated** — ${ewS.endlessWave.generated} tracks were auto-curated this session.`);
           } else {
             const snap = EW.snapshot(ewS.endlessWave);
-            await message.reply(snap.active
-              ? `🌊 **Endless Wave is active** — ${snap.generated} tracks generated, ${snap.playedCount} unique tracks played.`
-              : 'Endless Wave is not active. Use `V@ew on` to start.');
+            if (!snap.active) {
+              await message.reply('Endless Wave is not active. Use `V@ew on` to start.');
+              break;
+            }
+            await message.reply({
+              embeds: [
+                new EmbedBuilder()
+                  .setTitle('🌊 Endless Wave — session stats')
+                  .setColor(this.themeColor())
+                  .setDescription([
+                    `🎶 **Tracks generated:** ${snap.generated}`,
+                    `✅ **Unique tracks played:** ${snap.playedCount}`,
+                    `🔁 **Longest uninterrupted run:** ${snap.longestRun}`,
+                    `⏳ **Current run streak:** ${snap.runStreak}`,
+                    `🚫 **Dead-end resets:** ${snap.deadEnds}`,
+                    `🎤 **Distinct artists auto-queued:** ${snap.artistCount}`,
+                  ].join('\n')),
+              ],
+            });
           }
           break;
         }
@@ -2803,11 +2819,13 @@ export class DiscordBot {
         }
         if (!resolved) {
           console.warn('[endlesswave] no suitable candidate right now — staying armed');
+          EW.noteWaveDeadEnd(s.endlessWave);
           this.ewRetryAfter.set(s.guildId, Date.now() + 15_000);
           return;
         }
         s.queue.enqueue(resolved, 'endless-wave');
         s.endlessWave.generated++;
+        EW.noteWaveQueued(s.endlessWave, resolved.artists);
         this.bridge.broadcast({ type: 'endlesswave', active: true, generated: s.endlessWave.generated });
         console.log(`[endlesswave] queued: "${resolved.name}" — ${truncate(resolved.artists.join(', '), 80)} (#${s.endlessWave.generated})`);
         this.ewRetryAfter.delete(s.guildId);

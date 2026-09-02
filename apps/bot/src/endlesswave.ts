@@ -31,12 +31,24 @@ export interface EndlessWaveState {
   genreDrift: number;
   /** How many tracks have been auto-queued in this session. */
   generated: number;
+  /** Cumulative no-candidate dead-ends (each set the 15s retry backoff). */
+  deadEnds: number;
+  /** Consecutive tracks queued since the last dead-end. */
+  runStreak: number;
+  /** Longest uninterrupted queued run this session. */
+  longestRun: number;
+  /** Distinct artists auto-queued this session. */
+  artistSet: Set<string>;
 }
 
 export interface EndlessWaveSnapshot {
   active: boolean;
   generated: number;
   playedCount: number;
+  deadEnds: number;
+  runStreak: number;
+  longestRun: number;
+  artistCount: number;
 }
 
 export interface EWConfig {
@@ -90,6 +102,10 @@ export function createState(overrides?: Partial<EWConfig>): EndlessWaveState {
     avg: { ...DEFAULT_AVG },
     genreDrift: 0,
     generated: 0,
+    deadEnds: 0,
+    runStreak: 0,
+    longestRun: 0,
+    artistSet: new Set(),
   };
 }
 
@@ -102,6 +118,10 @@ export function activate(state: EndlessWaveState): void {
   state.avg = { ...DEFAULT_AVG };
   state.genreDrift = 0;
   state.generated = 0;
+  state.deadEnds = 0;
+  state.runStreak = 0;
+  state.longestRun = 0;
+  state.artistSet.clear();
 }
 
 export function deactivate(state: EndlessWaveState): void {
@@ -113,7 +133,27 @@ export function snapshot(state: EndlessWaveState): EndlessWaveSnapshot {
     active: state.active,
     generated: state.generated,
     playedCount: state.playedUris.size,
+    deadEnds: state.deadEnds,
+    runStreak: state.runStreak,
+    longestRun: state.longestRun,
+    artistCount: state.artistSet.size,
   };
+}
+
+/** Record a successful auto-queue — advances the run streak and tracks artists. */
+export function noteWaveQueued(state: EndlessWaveState, artists: string[]): void {
+  state.runStreak++;
+  if (state.runStreak > state.longestRun) state.longestRun = state.runStreak;
+  for (const a of artists) {
+    const norm = String(a ?? '').toLowerCase().trim();
+    if (norm) state.artistSet.add(norm);
+  }
+}
+
+/** Record a no-candidate dead-end — the wave hit its retry backoff. */
+export function noteWaveDeadEnd(state: EndlessWaveState): void {
+  state.deadEnds++;
+  state.runStreak = 0;
 }
 
 /* ---------- Feature analysis ---------- */
