@@ -69,14 +69,19 @@ export async function deezerRelatedTracks(artistName: string): Promise<ResolvedT
   const search = await getJson<{ data?: DeezerArtist[] }>(
     `/search/artist?q=${encodeURIComponent(artistName)}&limit=1`,
   );
-  const artistId = search?.data?.[0]?.id;
+  // A failed/latency-aborted request returns null — do NOT cache that as an
+  // empty result, or a transient Deezer hiccup blacklists the artist for the
+  // whole TTL. Only cache a definitive "no such artist".
+  if (search === null) return [];
+  const artistId = search.data?.[0]?.id;
   if (!artistId) {
     cache.set(key, { at: Date.now(), value: [] });
     return [];
   }
 
   const radio = await getJson<{ data?: DeezerTrack[] }>(`/artist/${artistId}/radio`);
-  const out = (radio?.data ?? [])
+  if (radio === null) return [];
+  const out = (radio.data ?? [])
     .filter((t) => t && t.title && (t.duration ?? 0) > 0)
     .map(mapTrack);
 

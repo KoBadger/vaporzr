@@ -303,7 +303,7 @@ export function titleMentionsCooldownArtist(state: EndlessWaveState, name: strin
 /** EW should queue individual songs, not radio sets, DJ mixes, or full albums. */
 function isLongFormMix(track: ResolvedTrack): boolean {
   const title = String(track.name ?? '').toLowerCase();
-  if ((track.durationMs ?? 0) > 8 * 60 * 1000) return true;
+  if ((track.durationMs ?? 0) > 10 * 60 * 1000) return true;
   return /\b(essential mix|dj set|continuous mix|full album|compilation|boiler room|radio show|radio mix|meg amix|mixtape|live set|session)\b/i.test(title)
     || /\b\d+\s*(hour|hr|min)\b/i.test(title);
 }

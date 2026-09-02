@@ -2791,7 +2791,6 @@ export class DiscordBot {
         // tracks (seeds) + the next 6 upcoming (so the lookahead buffer and
         // any user-queued tracks are included as seeds and dedup targets).
         const recent = EW.pickContext(snap.tracks, snap.currentIndex, 3, 6);
-        const exclude = new Set(upcoming.map((t) => t.uri));
         const failed = new Set<string>();
         let resolved: TrackInfo | null = null;
         for (let attempt = 0; attempt < 3 && !resolved; attempt++) {
