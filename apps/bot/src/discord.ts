@@ -180,7 +180,8 @@ const COMMANDS = [
   new SlashCommandBuilder()
     .setName('lyrics')
     .setDescription('Show lyrics for the current or searched song')
-    .addStringOption((o) => o.setName('query').setDescription('Song to look up (optional — defaults to current track)').setRequired(false)),
+    .addStringOption((o) => o.setName('query').setDescription('Song to look up (optional — defaults to current track)').setRequired(false))
+    .addBooleanOption((o) => o.setName('karaoke').setDescription('Jump straight into live karaoke highlight').setRequired(false)),
   new SlashCommandBuilder()
     .setName('wav')
     .setDescription('Play an uploaded audio/video file (wav, mp3, mp4, flac, …)')
@@ -864,6 +865,17 @@ export class DiscordBot {
         if (!this.requireLevel('lyrics', interaction)) return this.deny(interaction);
         await interaction.deferReply();
         const query = interaction.options.getString('query') ?? undefined;
+        const karaoke = interaction.options.getBoolean('karaoke') ?? false;
+        if (karaoke) {
+          const payload = await this.lyricsKaraokePayload(s, query);
+          if ('error' in payload) {
+            await interaction.followUp({ content: payload.error, flags: MessageFlags.Ephemeral });
+          } else {
+            const msg = await interaction.followUp({ embeds: [payload.embed] });
+            this.registerKaraoke(s, msg.id, interaction.guildId!, interaction.channelId, payload.title, payload.artist, payload.syncedLines);
+          }
+          break;
+        }
         const payload = await this.lyricsPayload(s, query);
         if ('error' in payload) await interaction.followUp({ content: payload.error, flags: MessageFlags.Ephemeral });
         else await interaction.followUp({ embeds: payload.embeds, components: payload.components });
@@ -1237,7 +1249,8 @@ export class DiscordBot {
       th: 'theme', theme: 'theme',
       wave: 'wave',
       burst: 'burst',
-      lyrics: 'lyrics',
+      lyrics: 'lyrics', lyr: 'lyrics',
+      k: 'karaoke', karaoke: 'karaoke',
       player: 'player', open: 'player',
       dj: 'dj',
       sfx: 'sfx',
@@ -1631,11 +1644,24 @@ export class DiscordBot {
           break;
         }
 
-        case 'lyrics': {
+        case 'lyrics':
+        case 'lyr': {
           if (!canUse('lyrics')) return void (await deny());
           const payload = await this.lyricsPayload(s, args || undefined);
           if ('error' in payload) await message.reply({ content: payload.error });
           else await message.reply({ embeds: payload.embeds, components: payload.components });
+          break;
+        }
+
+        case 'k':
+        case 'karaoke': {
+          if (!canUse('lyrics')) return void (await deny());
+          const payload = await this.lyricsKaraokePayload(s, args || undefined);
+          if ('error' in payload) await message.reply({ content: payload.error });
+          else {
+            const msg = await message.reply({ embeds: [payload.embed] });
+            this.registerKaraoke(s, msg.id, message.guildId!, message.channelId, payload.title, payload.artist, payload.syncedLines);
+          }
           break;
         }
 
@@ -2174,21 +2200,43 @@ export class DiscordBot {
     }
     const s = this.sessionFor(interaction.guildId);
     if (!s) return;
+    const msgId = interaction.message.id;
+    this.registerKaraoke(s, msgId, interaction.guildId!, interaction.channelId, stash.title, stash.artist, lines);
     const st = s.queue.getState();
     const pos = st.positionMs + (st.playing ? Math.max(0, Date.now() - (st.updatedAt || Date.now())) : 0);
     const idx = this.syncedLineIndex(lines, pos);
-    const msgId = interaction.message.id;
-    this.karaokeSessions.set(msgId, {
-      guildId: interaction.guildId!,
-      channelId: interaction.channelId,
-      messageId: msgId,
-      title: stash.title,
-      artist: stash.artist,
+    await interaction.update({ embeds: [this.karaokeEmbed(stash.title, stash.artist, lines, idx, pos)], components: [] }).catch(() => {});
+  }
+
+  /** Register a message as a live karaoke session (starts the ticker). */
+  private registerKaraoke(s: Session, messageId: string, guildId: string, channelId: string, title: string, artist: string, lines: SyncedLine[]): void {
+    const st = s.queue.getState();
+    const pos = st.positionMs + (st.playing ? Math.max(0, Date.now() - (st.updatedAt || Date.now())) : 0);
+    this.karaokeSessions.set(messageId, {
+      guildId,
+      channelId,
+      messageId,
+      title,
+      artist,
       lines,
-      lastIdx: idx,
+      lastIdx: this.syncedLineIndex(lines, pos),
     });
     this.ensureKaraokeTicker();
-    await interaction.update({ embeds: [this.karaokeEmbed(stash.title, stash.artist, lines, idx, pos)], components: [] }).catch(() => {});
+  }
+
+  /** Resolve lyrics for a track, jumping straight into karaoke when synced lyrics exist. */
+  private async lyricsKaraokePayload(s: Session, query?: string): Promise<{ embed: EmbedBuilder; title: string; artist: string; syncedLines: SyncedLine[] } | { error: string }> {
+    const track = query ? await this.resolveLyricsQuery(query) : s.queue.getCurrentTrack();
+    if (!track) return { error: '🎤 Nothing playing — run a query or queue a track first.' };
+    const result = await fetchLyrics(track);
+    const lines = result?.syncedLines;
+    if (!result || !lines || lines.length === 0) {
+      return { error: `🎤 No synced lyrics for **${truncate(track.name, 60)}** — try \`/lyrics\` for plain text.` };
+    }
+    const st = s.queue.getState();
+    const pos = st.positionMs + (st.playing ? Math.max(0, Date.now() - (st.updatedAt || Date.now())) : 0);
+    const idx = this.syncedLineIndex(lines, pos);
+    return { embed: this.karaokeEmbed(result.trackName, result.artistName, lines, idx, pos), title: result.trackName, artist: result.artistName, syncedLines: lines };
   }
 
   /** Index of the synced line active at `pos` (the last line with time <= pos). */
