@@ -691,7 +691,12 @@ export async function pickNextTrack(
       }
     }
     const score = (c: ResolvedTrack): number =>
-      scoreCandidate(c, targets, state.recentArtists, features?.get(extractSpotifyId(c.uri) ?? '') ?? undefined);
+      scoreCandidate(
+        c,
+        targets,
+        state.recentArtists,
+        features?.get(extractSpotifyId(c.uri) ?? '') ?? c.estimatedFeatures,
+      );
     survivors.sort((a, b) => score(a) - score(b));
     return survivors[0];
   }

@@ -217,6 +217,9 @@ export interface ResolvedTrack {
   source: MediaSource;
   /** Pre-resolved stream URL (YouTube, SoundCloud, Suno). Avoids a second yt-dlp call. */
   streamUrl?: string;
+  /** Estimated Spotify-style features for sources without a real analysis
+   *  (e.g. Deezer). Lets the wave score off-source candidates musically. */
+  estimatedFeatures?: AudioFeatures;
 }
 
 interface SpotifyTrack {

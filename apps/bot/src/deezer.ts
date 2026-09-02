@@ -1,4 +1,5 @@
 import type { ResolvedTrack } from './spotify.js';
+import type { AudioFeatures } from './spotify.js';
 
 /**
  * Keyless, quota-free Deezer fallback for Endless Wave.
@@ -25,6 +26,10 @@ interface DeezerTrack {
   id: number;
   title: string;
   duration?: number;
+  /** Deezer's tempo readout (BPM) — used to estimate audio features. */
+  bpm?: number;
+  /** Deezer's popularity 0..1-ish — used to approximate energy/valence. */
+  rank?: number;
   artist?: { name?: string };
   album?: { title?: string; cover_medium?: string; cover_big?: string };
 }
@@ -45,6 +50,37 @@ async function getJson<T>(path: string): Promise<T | null> {
   }
 }
 
+/**
+ * Approximate Spotify-style AudioFeatures from the metadata Deezer exposes
+ * (BPM, rank, duration). Deezer tracks otherwise score with midline defaults,
+ * which makes them musically blind; estimating lets a Deezer-only run still
+ * steer toward the evolving energy/tempo/valence target.
+ */
+export function estimateFeatures(t: DeezerTrack): AudioFeatures {
+  let tempo = t.bpm && t.bpm > 0 ? t.bpm : 120;
+  tempo = Math.max(60, Math.min(200, tempo));
+  // Faster tracks read as more energetic; rank (popularity) loosely gates
+  // energy too. Valence is unknown so keep it neutral.
+  const energy =
+    t.rank != null && t.rank >= 0
+      ? Math.min(1, Math.max(0, 0.3 + (t.rank / 1_000_000) + (tempo - 120) / 250))
+      : Math.min(1, Math.max(0, 0.4 + (tempo - 120) / 220));
+  return {
+    tempo,
+    energy,
+    valence: 0.5,
+    danceability: 0.5,
+    acousticness: 0.3,
+    instrumentalness: 0.2,
+    liveness: 0.12,
+    speechiness: 0.06,
+    mode: 1,
+    key: 6,
+    time_signature: 4,
+    duration_ms: (t.duration ?? 0) * 1000,
+  };
+}
+
 function mapTrack(t: DeezerTrack): ResolvedTrack {
   return {
     uri: `deezer:track:${t.id}`,
@@ -54,12 +90,23 @@ function mapTrack(t: DeezerTrack): ResolvedTrack {
     durationMs: (t.duration ?? 0) * 1000,
     image: t.album?.cover_big ?? t.album?.cover_medium,
     source: 'youtube',
+    // Feature estimate rides along so the wave can score Deezer tracks musically.
+    ...(t.bpm != null || t.rank != null ? { estimatedFeatures: estimateFeatures(t) } : {}),
   };
+}
+
+function toTracks(list?: unknown): ResolvedTrack[] {
+  const arr = (list as { data?: DeezerTrack[] } | undefined)?.data ?? [];
+  return arr
+    .filter((t): t is DeezerTrack => !!t && !!t.title && (t.duration ?? 0) > 0)
+    .map(mapTrack);
 }
 
 /**
  * Individual tracks by artists related to `artistName` (Deezer radio).
- * Returns [] on any failure so callers can fall through to other strategies.
+ * Falls back to a plain `search/track` on the artist name when the radio
+ * returns nothing (e.g. an artist with no related-radio feed). Returns []
+ * on any failure so callers can fall through to other strategies.
  */
 export async function deezerRelatedTracks(artistName: string): Promise<ResolvedTrack[]> {
   const key = `radio:${artistName.toLowerCase().trim()}`;
@@ -80,10 +127,15 @@ export async function deezerRelatedTracks(artistName: string): Promise<ResolvedT
   }
 
   const radio = await getJson<{ data?: DeezerTrack[] }>(`/artist/${artistId}/radio`);
-  if (radio === null) return [];
-  const out = (radio.data ?? [])
-    .filter((t) => t && t.title && (t.duration ?? 0) > 0)
-    .map(mapTrack);
+  let out = radio === null ? [] : toTracks(radio);
+  // Radio feed empty? Diversify via a keyword search on the artist — returns
+  // the artist's own individual tracks, still breaking a Spotify-only dead-end.
+  if (out.length === 0) {
+    const trackSearch = await getJson<{ data?: DeezerTrack[] }>(
+      `/search/track?q=${encodeURIComponent(artistName)}&limit=20`,
+    );
+    out = trackSearch === null ? [] : toTracks(trackSearch);
+  }
 
   cache.set(key, { at: Date.now(), value: out });
   return out;

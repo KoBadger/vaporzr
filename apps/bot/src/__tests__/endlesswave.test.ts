@@ -602,6 +602,24 @@ describe('pickNextTrack (smoke)', () => {
     expect(mocks.deezerRelatedTracks).toHaveBeenCalledWith('Seed Artist');
   });
 
+  it('strategy 5: ships estimated features so Deezer picks still steer musically', async () => {
+    const s = createState();
+    activate(s);
+    mocks.getRecommendations.mockResolvedValue([]);
+    mocks.searchTracks.mockResolvedValue([]);
+    // Both candidates have no Spotify id, so features come solely from the
+    // estimatedFeatures the Deezer layer attaches.
+    mocks.deezerRelatedTracks.mockResolvedValue([
+      { uri: 'deezer:track:1', name: 'High Energy', artists: ['Artist A'], album: '', durationMs: 200000, source: 'youtube', estimatedFeatures: { ...fakeFeatures(), energy: 0.9, tempo: 128 } },
+      { uri: 'deezer:track:2', name: 'Low Energy', artists: ['Artist B'], album: '', durationMs: 200000, source: 'youtube', estimatedFeatures: { ...fakeFeatures(), energy: 0.2, tempo: 80 } },
+    ]);
+    const recent = [fakeTrack({ uri: 'spotify:track:aaaaaaaaaaaaaaaaaaaaaa', name: 'Seed', artists: ['Seed Artist'] })];
+    // Push the target high-energy by acknowledging a high-energy average.
+    s.recentFeatures = [fakeFeatures({ energy: 0.9, tempo: 128 })];
+    const pick = await pickNextTrack(s, recent);
+    expect(pick?.name).toBe('High Energy');
+  });
+
   it('returns null when EW is inactive (never calls APIs)', async () => {
     const s = createState();
     const result = await pickNextTrack(s, [fakeTrack()]);
