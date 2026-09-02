@@ -156,6 +156,60 @@ export function noteWaveDeadEnd(state: EndlessWaveState): void {
   state.runStreak = 0;
 }
 
+/* ---------- Persistence ---------- */
+
+/** JSON-safe shape of an EndlessWaveState (Sets are converted to arrays). */
+export interface EndlessWavePersist {
+  active: boolean;
+  playedUris: string[];
+  playedNames: string[];
+  recentArtists: string[];
+  recentFeatures: AudioFeatures[];
+  avg: AudioFeatures;
+  genreDrift: number;
+  generated: number;
+  deadEnds: number;
+  runStreak: number;
+  longestRun: number;
+  artistSet: string[];
+}
+
+/** Flatten a live state for on-disk persistence. */
+export function serializeState(state: EndlessWaveState): EndlessWavePersist {
+  return {
+    active: state.active,
+    playedUris: [...state.playedUris],
+    playedNames: [...state.playedNames],
+    recentArtists: state.recentArtists,
+    recentFeatures: state.recentFeatures,
+    avg: state.avg,
+    genreDrift: state.genreDrift,
+    generated: state.generated,
+    deadEnds: state.deadEnds,
+    runStreak: state.runStreak,
+    longestRun: state.longestRun,
+    artistSet: [...state.artistSet],
+  };
+}
+
+/** Rebuild a live state from persisted data (Sets back from arrays). */
+export function restoreState(data: Partial<EndlessWavePersist>): EndlessWaveState {
+  const s = createState();
+  if (typeof data.active === 'boolean') s.active = data.active;
+  for (const u of data.playedUris ?? []) s.playedUris.add(u);
+  for (const n of data.playedNames ?? []) s.playedNames.add(n);
+  s.recentArtists = Array.isArray(data.recentArtists) ? [...data.recentArtists] : [];
+  s.recentFeatures = Array.isArray(data.recentFeatures) ? [...data.recentFeatures] : [];
+  if (data.avg && typeof data.avg.energy === 'number') s.avg = { ...s.avg, ...data.avg };
+  if (typeof data.genreDrift === 'number') s.genreDrift = data.genreDrift;
+  if (typeof data.generated === 'number') s.generated = data.generated;
+  if (typeof data.deadEnds === 'number') s.deadEnds = data.deadEnds;
+  if (typeof data.runStreak === 'number') s.runStreak = data.runStreak;
+  if (typeof data.longestRun === 'number') s.longestRun = data.longestRun;
+  for (const a of data.artistSet ?? []) s.artistSet.add(String(a).toLowerCase().trim());
+  return s;
+}
+
 /* ---------- Feature analysis ---------- */
 
 /** Record a track's audio features and recompute the rolling average. */

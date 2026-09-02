@@ -52,6 +52,8 @@ import {
   fetchFeatures,
   noteWaveQueued,
   noteWaveDeadEnd,
+  serializeState,
+  restoreState,
 } from '../endlesswave.js';
 import type { EndlessWaveState } from '../endlesswave.js';
 import type { AudioFeatures, ResolvedTrack } from '../spotify.js';
@@ -141,6 +143,38 @@ describe('state management', () => {
     expect(snap.runStreak).toBe(0);
     expect(snap.longestRun).toBe(2);
     expect(snap.artistCount).toBe(3);
+  });
+
+  it('serialize/restore round-trips the wave across a restart', () => {
+    const s = createState();
+    activate(s);
+    s.generated = 4;
+    s.deadEnds = 2;
+    s.runStreak = 3;
+    s.longestRun = 5;
+    s.playedUris.add('spotify:track:a');
+    s.playedUris.add('spotify:track:b');
+    s.playedNames.add('MAGIC');
+    s.recentArtists = ['Coldplay', 'Kavinsky'];
+    const f = fakeFeatures({ energy: 0.8, tempo: 124 });
+    s.recentFeatures = [f];
+    s.avg = f;
+    s.genreDrift = 0.2;
+    s.artistSet.add(' COLDPLAY ');
+    const restored = restoreState(serializeState(s));
+    expect(restored.active).toBe(true);
+    expect(restored.generated).toBe(4);
+    expect(restored.deadEnds).toBe(2);
+    expect(restored.runStreak).toBe(3);
+    expect(restored.longestRun).toBe(5);
+    expect(restored.playedUris.size).toBe(2);
+    expect(restored.playedUris.has('spotify:track:a')).toBe(true);
+    expect(restored.playedNames.has('MAGIC')).toBe(true);
+    expect(restored.recentArtists).toEqual(['Coldplay', 'Kavinsky']);
+    expect(restored.recentFeatures[0].energy).toBe(0.8);
+    expect(restored.avg.energy).toBe(0.8);
+    expect(restored.genreDrift).toBe(0.2);
+    expect(restored.artistSet.has('coldplay')).toBe(true);
   });
 
   it('deactivate sets active to false', () => {

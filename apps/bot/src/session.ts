@@ -17,7 +17,7 @@ export class Session {
   readonly queue: QueueManager;
   readonly voice: VoiceManager;
   readonly playback: PlaybackController;
-  readonly endlessWave = EW.createState();
+  endlessWave = EW.createState();
 
   constructor(
     readonly guildId: string,
@@ -69,8 +69,9 @@ export class SessionManager {
     const s = this.sessions.get(guildId);
     if (!s) return;
     const data = s.queue.serialize();
+    const ew = EW.serializeState(s.endlessWave);
     const file = this.queueFileFor(guildId);
-    if (data.tracks.length === 0) {
+    if (data.tracks.length === 0 && !ew.active) {
       try {
         fs.rmSync(file, { force: true });
       } catch {
@@ -80,7 +81,7 @@ export class SessionManager {
     }
     try {
       fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, JSON.stringify(data, null, 2));
+      fs.writeFileSync(file, JSON.stringify({ ...data, endlessWave: ew }, null, 2));
     } catch (err) {
       console.warn(`[vaporzr] could not persist queue for ${guildId}:`, err instanceof Error ? err.message : err);
     }
@@ -100,10 +101,17 @@ export class SessionManager {
         tracks: TrackInfo[];
         currentIndex: number;
         state: PlaybackState;
+        endlessWave?: unknown;
       };
       s.queue.restore(data);
       const restored = s.queue.getSnapshot().tracks.length;
       console.log(`[vaporzr] restored ${restored} queued track(s) for guild ${guildId} (paused)`);
+      if (data.endlessWave) {
+        s.endlessWave = EW.restoreState(data.endlessWave as Parameters<typeof EW.restoreState>[0]);
+        if (s.endlessWave.active) {
+          console.log(`[vaporzr] restored Endless Wave for guild ${guildId} (${s.endlessWave.generated} generated)`);
+        }
+      }
     } catch (err) {
       console.warn(`[vaporzr] could not restore queue for ${guildId}:`, err instanceof Error ? err.message : err);
     }

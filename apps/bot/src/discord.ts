@@ -411,6 +411,14 @@ export class DiscordBot {
           console.warn(`[endlesswave] on-end failed: ${err instanceof Error ? err.message : err}`);
         });
       };
+      // A wave restored as active from disk needs re-arming after a restart:
+      // kick off an immediate top-up so it resumes generating on its own.
+      if (s.endlessWave.active) {
+        this.ewRetryAfter.delete(s.guildId);
+        void this.topUpWave(s).catch((err) => {
+          console.warn(`[endlesswave] post-restart top-up failed: ${err instanceof Error ? err.message : err}`);
+        });
+      }
     });
   }
 
