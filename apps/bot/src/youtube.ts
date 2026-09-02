@@ -311,6 +311,10 @@ const resolveCache = new Map<string, { at: number; video: ResolvedVideo }>();
 const inflightResolves = new Map<string, Promise<ResolvedVideo | null>>();
 const RESOLVE_CACHE_TTL = 45 * 60 * 1000;
 const RESOLVE_CACHE_MAX = 60;
+/** Hard cap on the accuracy (scored) resolve path — after this the already-
+ *  playable fused fast-path result is used so playback never stalls for tens
+ *  of seconds on sequential candidate extraction. */
+const RESOLVE_BUDGET_MS = 10_000;
 
 /** Canonical cache key: collapses phrasing differences between callers
  *  ("Bar Breaker" vs "Artist - Bar Breaker" vs case/spacing variants). */
@@ -371,52 +375,44 @@ async function doSearchAndResolve(
       }
     });
 
-    let video: ResolvedVideo | null = null;
-    const fusedWinner =
-      fusedRaw && (hits.length === 0 || best === hits[0]);
+    // Parse the fused (playable) result up-front so it can double as the
+    // speed fallback when the accuracy path can't beat it within budget.
+    const fusedVideo = parseFused(fusedRaw, META_SEP);
+    const fusedWinner = fusedRaw && (hits.length === 0 || best === hits[0]);
+    let video: ResolvedVideo | null = fusedWinner ? fusedVideo : null;
 
-    if (fusedWinner) {
-      const lines = fusedRaw.trim().split(/\r?\n/);
-      const metaLine = lines.find((l) => l.includes(META_SEP));
-      const streamUrl = lines.find((l) => l.startsWith('https://'));
-      if (metaLine && streamUrl) {
-        const [vid, title, duration, thumbnail, channel] = metaLine.split(META_SEP);
-        video = {
-          videoId: vid,
-          uri: `youtube:video:${vid}`,
-          name: title,
-          artists: [channel ?? 'YouTube'],
-          album: 'YouTube',
-          durationMs: (Number(duration) || 0) * 1000,
-          image: thumbnail || undefined,
-          source: 'youtube',
-          streamUrl,
-          channel: channel ?? 'YouTube',
-          thumbnail: thumbnail || undefined,
-        };
-      }
-    }
     if (!video && hits.length > 0) {
       // Extract in score order and keep going when a candidate is unplayable
       // ("This video is not available", age-gated, region-locked…) — a single
-      // dead top pick must not fail the whole search.
+      // dead top pick must not fail the whole search. A hard budget keeps the
+      // accuracy path from stalling playback for tens of seconds.
       const ranked = hits
         .map((h, i) => ({ h, s: scoreHit(h, i, query, opts) }))
         .sort((a, b) => b.s - a.s)
         .slice(0, 3);
+      const deadline = Date.now() + RESOLVE_BUDGET_MS;
       for (const cand of ranked) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) break;
         try {
           if (cand.h !== best) {
             console.log(`[youtube] score override -> extracting #${hits.indexOf(cand.h) + 1} "${cand.h.title}"`);
           }
-          video = await resolveYoutubeVideo(cand.h.videoId);
-          break;
+          video = await withTimeout(resolveYoutubeVideo(cand.h.videoId), remaining);
+          if (video) break;
         } catch (err) {
           console.warn(
             `[youtube] "${cand.h.title}" unresolvable (${err instanceof Error ? err.message : err}) — trying next candidate`,
           );
         }
       }
+    }
+    // Budget hit (or every accurate candidate failed) but the fast path gave
+    // us a playable stream — use it rather than returning nothing. Playing
+    // something immediately beats stalling or silently dropping the track.
+    if (!video && fusedVideo) {
+      console.log(`[youtube] resolve budget hit — using fast-path result "${fusedVideo.name}"`);
+      video = fusedVideo;
     }
     if (!video) return null;
 
@@ -431,6 +427,41 @@ async function doSearchAndResolve(
     console.error(`[youtube] searchAndResolveYoutube failed for "${query}":`, err?.message ?? err);
     return null;
   }
+}
+
+/** Resolve a single fused ytsearch1 result into a playable ResolvedVideo. */
+function parseFused(raw: string | null, sep: string): ResolvedVideo | null {
+  if (!raw) return null;
+  const lines = raw.trim().split(/\r?\n/);
+  const metaLine = lines.find((l) => l.includes(sep));
+  const streamUrl = lines.find((l) => l.startsWith('https://'));
+  if (!metaLine || !streamUrl) return null;
+  const [vid, title, duration, thumbnail, channel] = metaLine.split(sep);
+  return {
+    videoId: vid,
+    uri: `youtube:video:${vid}`,
+    name: title,
+    artists: [channel ?? 'YouTube'],
+    album: 'YouTube',
+    durationMs: (Number(duration) || 0) * 1000,
+    image: thumbnail || undefined,
+    source: 'youtube',
+    streamUrl,
+    channel: channel ?? 'YouTube',
+    thumbnail: thumbnail || undefined,
+  };
+}
+
+/** Race a promise against a deadline so a slow subprocess can't stall playback. */
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
+  if (ms <= 0) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), ms);
+    p.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      () => { clearTimeout(timer); resolve(null); },
+    );
+  });
 }
 
 interface SearchItem {

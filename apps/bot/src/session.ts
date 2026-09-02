@@ -106,6 +106,13 @@ export class SessionManager {
       s.queue.restore(data);
       const restored = s.queue.getSnapshot().tracks.length;
       console.log(`[vaporzr] restored ${restored} queued track(s) for guild ${guildId} (paused)`);
+      // Warm the current + next stream URLs in the background so the first
+      // play after a restart starts instantly instead of resolving cold.
+      const cur = s.queue.getCurrentTrack();
+      if (cur) s.playback.prefetchStream(cur);
+      const snap = s.queue.getSnapshot();
+      const next = snap.tracks[snap.currentIndex + 1];
+      if (next) s.playback.prefetchStream(next);
       if (data.endlessWave) {
         s.endlessWave = EW.restoreState(data.endlessWave as Parameters<typeof EW.restoreState>[0]);
         if (s.endlessWave.active) {

@@ -969,17 +969,18 @@ export class PlaybackController {
       return;
     }
     // Stall recovery: stream died but voice is still connected — re-play from position.
+    // (Position 0 counts too — a track that never produced audio must restart.)
     if (this.voice.isStalled()) {
       const state = this.queue.getState();
       const pos = state.positionMs || this.voice.getPositionMs();
       const track = state.track;
-      if (track && pos > 0) {
+      if (track) {
         console.log(`[playback] stall detected — restarting "${track.name}" from ${Math.round(pos / 1000)}s`);
         this.sendVisualizer({ type: 'cmd', command: 'stop' });
         try {
           await this.play();
           // seek to where we left off
-          this.seek(pos);
+          if (pos > 0) this.seek(pos);
           return;
         } catch (err) {
           console.warn(`[playback] stall recovery failed: ${err instanceof Error ? err.message : err}`);
