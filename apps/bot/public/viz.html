@@ -984,7 +984,7 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
   var burstBusy=false;
   function recordBurst(durationMs){
     if(burstBusy||typeof MediaRecorder==='undefined')return;
-    var src=(!frameModeActive()&&bcViz)?bcCanvas:barsCanvas;
+    var src=(!frameModeActive()&&synthActive)?synthCanvas:((!frameModeActive()&&bcViz)?bcCanvas:barsCanvas);
     if(!src.width||!src.height)return;
     burstBusy=true;
     try{
