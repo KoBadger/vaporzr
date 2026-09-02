@@ -311,6 +311,19 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
           bassLevel+=(bb/BASS_BARS-bassLevel)*0.4;
           midLevel+=(mb/MID_BARS-midLevel)*0.35;
           trebleLevel+=(tb/(BARS-BASS_BARS-MID_BARS)-trebleLevel)*0.5;
+          // Bass-kick detection → BPM estimate, road pulse, tail flare.
+          if(bassLevel>0.16&&bassLevel-prevBass>=0.045){
+            var kNow=Date.now();
+            if(kNow-kickAt>250){
+              if(kickAt&&kNow-kickAt>400){
+                var iv=60000/(kNow-kickAt);
+                estBpm=Math.max(70,Math.min(180,estBpm*0.7+iv*0.3));
+              }
+              kickAt=kNow;
+              kickBoost=Math.min(1,kickBoost+1);
+            }
+          }
+          prevBass=bassLevel;
           frameCount++;
           break;
         case 'endlesswave':
@@ -505,6 +518,10 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
   /* Per-band drivers derived from the same 24-bar feed: bass ~60-370Hz,
      mid ~370Hz-3.1kHz, treble ~3.1-12kHz (log-spaced server FFT buckets). */
   var bassLevel=0,midLevel=0,trebleLevel=0,prevBass=0;
+  /* Kick + tempo sensing for the synth scene: rising bass = a kick beat.
+     kickBoost is a short-lived 0..1 pulse; estBpm is a rolling beat-rate
+     estimate so the road scrolls with the track's tempo. */
+  var kickBoost=0,kickAt=0,estBpm=124,synthTrack=null;
 
   function setSensitivity(v,fromUser){
     v=Math.max(0.5,Math.min(1.5,v));
@@ -632,9 +649,13 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
   function drawSynth(now){
     var W=synthCanvas.width,H=synthCanvas.height;
     sctx.clearRect(0,0,W,H);
+    kickBoost=Math.max(0,kickBoost*0.9);
     var vx=W/2,hy=H*0.55;
     var e=prefersReduced?0:lastEnergy;
-    var step=prefersReduced?0:(0.004+e*0.008);
+    /* Road scroll tracks the beat: tempo factor from the rolling BPM estimate,
+       plus a per-kick surge. */
+    var tf=Math.max(0.55,Math.min(1.6,estBpm/124))*(kickBoost>0.5?1.6:1);
+    var step=prefersReduced?0:(0.004+e*0.008)*tf;
     if(!prefersReduced)synthOffset=(synthOffset+step)%1;
 
     // Sky gradient: deep purple to vibrant orange/pink sunset
@@ -697,10 +718,9 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
 
     // Bass shockwaves — rings expand outward from the sun on bass transients
     var waves=drawSynth._waves||(drawSynth._waves=[]);
-    if(bassLevel>0.18&&bassLevel-prevBass>=0.05&&waves.length<8){
-      waves.push({r:sunR*0.95,spd:Math.max(2,W*0.22*(0.3+bassLevel)),a:0.7});
+    if(kickBoost>0.5&&Date.now()-kickAt<120&&waves.length<8){
+      waves.push({r:sunR*0.9,spd:Math.max(2,W*0.22*(0.3+bassLevel)),a:0.8});
     }
-    prevBass=bassLevel;
     for(var wIdx=waves.length-1;wIdx>=0;wIdx--){
       var wv=waves[wIdx];
       wv.r+=wv.spd;
@@ -787,8 +807,8 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
     sctx.fill();
 
     // Road grid lines
-    sctx.strokeStyle='rgba(255,100,200,0.3)';
-    sctx.lineWidth=1;
+    sctx.strokeStyle='rgba(255,100,200,'+(0.25+kickBoost*0.35)+')';
+    sctx.lineWidth=1+kickBoost*1.5;
     for(var i=0;i<20;i++){
       var y=hy+(H-hy)*(i/20);
       var t=(y-hy)/(H-hy);
@@ -880,7 +900,7 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
     // Taillights
     sctx.fillStyle='#ff0040';
     sctx.shadowColor='#ff0040';
-    sctx.shadowBlur=20;
+    sctx.shadowBlur=18+kickBoost*70;
     sctx.fillRect(carX-carW*0.45,carY-carH*0.3,carW*0.15,carH*0.15);
     sctx.fillRect(carX+carW*0.3,carY-carH*0.3,carW*0.15,carH*0.15);
     sctx.shadowBlur=0;
@@ -920,6 +940,23 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
     vig.addColorStop(1,'rgba(0,0,0,0.7)');
     sctx.fillStyle=vig;
     sctx.fillRect(0,0,W,H);
+
+    // NOW PLAYING caption (from the state feed)
+    if(synthTrack&&synthTrack.name){
+      sctx.textAlign='left';
+      sctx.textBaseline='alphabetic';
+      sctx.shadowColor='rgba(255,60,160,0.85)';
+      var capFs=Math.max(13,Math.min(22,W*0.013));
+      sctx.font='600 '+capFs+'px "Inter",system-ui,sans-serif';
+      sctx.shadowBlur=14;
+      sctx.fillStyle='rgba(255,255,255,0.92)';
+      sctx.fillText(synthTrack.name,24,H-42);
+      sctx.font='500 '+Math.round(capFs*0.66)+'px "Inter",system-ui,sans-serif';
+      sctx.fillStyle='rgba(60,230,255,0.85)';
+      sctx.shadowColor='rgba(0,200,255,0.7)';
+      sctx.fillText(synthTrack.artists||'',24,H-20);
+      sctx.shadowBlur=0;
+    }
   }
 
   /* toggle synth mode */
@@ -1049,7 +1086,11 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
       title.textContent=st.track.name||'Playing';
       artists.textContent=(st.track.artists||[]).join(', ');
       art.src=st.track.image||'';
-    }else overlay.className='hidden';
+      synthTrack={name:st.track.name||'',artists:(st.track.artists||[]).join(', ')};
+    }else{
+      overlay.className='hidden';
+      synthTrack=null;
+    }
   }
   function renderGuilds(){
     guildBar.innerHTML='';
