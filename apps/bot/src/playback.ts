@@ -188,7 +188,11 @@ export class PlaybackController {
     this.clearEndTimer();
     const remaining = Math.max(0, durationMs - positionMs);
     if (remaining <= 0) return;
-    const wait = Math.min(remaining + 800, 6 * 60 * 60 * 1000);
+    // The ffmpeg stream's natural onEnd is the authoritative advance for
+    // server streams; this timer is only a fallback for when that never fires.
+    // A generous +3s buffer means a metadata duration that under-reports the
+    // real audio by a second or two can't cut the tail off early.
+    const wait = Math.min(remaining + 3000, 6 * 60 * 60 * 1000);
     this.endUri = this.queue.getCurrentTrack()?.uri ?? null;
     this.endTimer = setTimeout(() => {
       this.endTimer = null;

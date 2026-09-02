@@ -2111,7 +2111,7 @@ export class DiscordBot {
 
   /** Chunk lyrics text into pages that fit Discord's 4096-char description cap. */
   private lyricsChunks(text: string): string[] {
-    const MAX = 3800;
+    const MAX = 2000;
     const clean = text.trim();
     const chunks: string[] = [];
     let rest = clean;
@@ -2129,7 +2129,16 @@ export class DiscordBot {
   private lyricsPageEmbed(title: string, artist: string, synced: boolean, page: string, pageNum: number, total: number): EmbedBuilder {
     return new EmbedBuilder().setColor(this.themeColor()).setDescription(
       `${pageNum === 1 ? `📝 **${title}** — ${artist}${synced ? ' (synced)' : ''}\n\n` : ''}${page}` +
-        (total > 1 ? `\n\n*(page ${pageNum}/${total})*` : ''),
+        (total > 1 ? `\n\n*(part ${pageNum}/${total})*` : ''),
+    );
+  }
+
+  /** Compact intro: title/artist + a short teaser, pointing at the dropdown. */
+  private lyricsTeaserEmbed(title: string, artist: string, synced: boolean, lines: string[], lineCount: number, pageCount: number): EmbedBuilder {
+    const teaser = lines.slice(0, 6).join('\n');
+    return new EmbedBuilder().setColor(this.themeColor()).setDescription(
+      `📝 **${title}** — ${artist}${synced ? ' (synced)' : ''}\n\n${teaser}\n\n` +
+        `*${lineCount} lines · ${pageCount} part${pageCount > 1 ? 's' : ''} — use the dropdown below to read*`,
     );
   }
 
@@ -2139,7 +2148,7 @@ export class DiscordBot {
     if (pages.length > 1) {
       const menu = new StringSelectMenuBuilder()
         .setCustomId(`lyrics_page:${id}`)
-        .setPlaceholder('Jump to a part…');
+        .setPlaceholder('Read the full lyrics…');
       const opts: StringSelectMenuOptionBuilder[] = [];
       for (let i = 0; i < pages.length && opts.length < 25; i++) {
         opts.push(
@@ -2184,7 +2193,12 @@ export class DiscordBot {
       const oldest = [...this.lyricPages.keys()].sort(() => 0)[0];
       if (oldest) this.lyricPages.delete(oldest);
     }
-    const embeds = [this.lyricsPageEmbed(result.trackName, result.artistName, result.synced, pages[0], 1, pages.length)];
+    // Short lyrics fit on one page — show them straight. Otherwise show a
+    // compact teaser and let the dropdown reveal the full text.
+    const allLines = result.lyrics.split('\n').filter((l) => l.trim().length > 0);
+    const embeds = pages.length === 1
+      ? [this.lyricsPageEmbed(result.trackName, result.artistName, result.synced, pages[0], 1, 1)]
+      : [this.lyricsTeaserEmbed(result.trackName, result.artistName, result.synced, allLines, allLines.length, pages.length)];
     const components = this.lyricsComponents(id, pages, Boolean(result.syncedLines?.length), 0);
     return { embeds, components };
   }

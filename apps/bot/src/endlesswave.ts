@@ -64,8 +64,8 @@ const DEFAULT_CONFIG: EWConfig = {
   historyWindow: 5,
   artistCooldown: 3,
   evolveInterval: 3,
-  driftStep: 0.08,
-  maxDrift: 0.35,
+  driftStep: 0.05,
+  maxDrift: 0.2,
   dedupMax: 800,
 };
 
@@ -289,8 +289,8 @@ export function buildTargets(state: EndlessWaveState): Partial<RecommendationPar
     targetDanceability: clamp(a.danceability + d * 0.3),
     targetAcousticness: clamp(a.acousticness - d * 0.2),
     targetInstrumentalness: clamp(a.instrumentalness + d * 0.1),
-    minTempo: Math.max(60, a.tempo - 30 + d * 10),
-    maxTempo: Math.min(200, a.tempo + 30 + d * 10),
+    minTempo: Math.max(60, a.tempo - 20 + d * 10),
+    maxTempo: Math.min(200, a.tempo + 20 + d * 10),
   };
 }
 
@@ -484,7 +484,7 @@ export function scoreCandidate(
   // target. This is what keeps an Endless Wave flowing along a vibe instead of
   // lurching between wildly different songs. Mean distance scaled up so it
   // meaningfully competes with the durability/artist bonuses below.
-  if (features) score += featureDistance(features, targets) * 40;
+  if (features) score += featureDistance(features, targets) * 55;
 
   // Spotify URI bonus (prefer known sources).
   if (track.uri.startsWith('spotify:')) score -= 10;
