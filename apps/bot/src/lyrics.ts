@@ -51,38 +51,96 @@ function stripLrcTimestamps(lrc: string): string {
     .join('\n');
 }
 
-/** LRCLIB exact + fuzzy lookup. */
+/**
+ * Normalize a title/artist into a loose comparable key. Handles the common
+ * reasons obscure lookups miss: "(feat. X)" / "(Remix)" / "[Official Video]"
+ * clutter, non-ASCII punctuation, and extra whitespace.
+ */
+function norm(s: string): string {
+  return s
+    .toLowerCase()
+    // Drop everything in parentheses/brackets — "(feat. X)", "(Remix)", "[…]".
+    .replace(/[([].*?[\])]/g, ' ')
+    // Collapse apostrophes & curly quotes.
+    .replace(/[''`]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Candidate word variants (1..n grams) so "Let It Happen" also tries shorter cores. */
+function titleCores(name: string): string[] {
+  const n = norm(name);
+  if (!n) return [];
+  const words = n.split(' ').filter((w) => w.length > 1);
+  if (words.length === 0) return [n];
+  // Full title first, then progressively shorter prefixes of ≥2 words.
+  const cores = [n];
+  for (let len = words.length - 1; len >= 2; len--) cores.push(words.slice(0, len).join(' '));
+  return [...new Set(cores)];
+}
+
+/** Score a candidate against the wanted title+artist (higher = better). */
+function scoreEntry(entry: LrcEntry, wantArtist: string, wantName: string): number {
+  let s = 0;
+  const ea = norm(entry.artistName);
+  const et = norm(entry.trackName);
+  const na = norm(wantArtist);
+  const nt = norm(wantName);
+  if (na && ea === na) s += 6;
+  else if (na && (ea.includes(na) || na.includes(ea))) s += 3;
+  if (nt && et === nt) s += 6;
+  else if (nt && (et.includes(nt) || nt.includes(et))) s += 3;
+  if (entry.plainLyrics) s += 1; // prefer plain over synced-only
+  return s;
+}
+
+/** LRCLIB lookup: exact get, then fuzzier searches with normalized variants. */
 async function lrcLyrics(track: { name: string; artists: string[]; album?: string; durationMs?: number }): Promise<LyricsResult | null> {
-  const artist = (track.artists[0] ?? '').toLowerCase().trim();
-  const name = track.name.toLowerCase().trim();
-  const album = (track.album ?? '').toLowerCase().trim();
+  const artists = (track.artists ?? []).map((a) => a.trim()).filter(Boolean);
   const durationSec = Math.round((track.durationMs ?? 0) / 1000);
+  const name = track.name.trim();
 
-  // Exact-ish match: artist+title (+album/duration narrows it further).
-  const q = new URLSearchParams();
-  if (artist) q.set('artist_name', artist);
-  q.set('track_name', name);
-  if (album) q.set('album_name', album);
-  if (durationSec > 0) q.set('duration', String(durationSec));
-  const exact = await getJson<LrcEntry>(`${LRC_API}/get?${q.toString()}`);
-  if (exact && (exact.plainLyrics || exact.syncedLyrics)) {
-    return toResult(exact, artist);
+  // 1. Exact get for the full name + each artist (album/duration narrow it).
+  for (const artist of artists) {
+    const q = new URLSearchParams();
+    q.set('track_name', name);
+    if (artist) q.set('artist_name', artist);
+    if (track.album) q.set('album_name', track.album);
+    if (durationSec > 0) q.set('duration', String(durationSec));
+    const exact = await getJson<LrcEntry>(`${LRC_API}/get?${q.toString()}`);
+    if (exact && (exact.plainLyrics || exact.syncedLyrics)) {
+      return toResult(exact, artist);
+    }
   }
 
-  // Fuzzy fallback: search candidates, prefer artist+title match.
-  if (!artist || !name) return null;
-  const s = new URLSearchParams({ q: `${name} ${artist}` });
-  const hits = await getJson<LrcEntry[]>(`${LRC_API}/search?${s.toString()}`);
-  if (!hits || hits.length === 0) return null;
-  const ranked = hits
-    .filter((h) => h && (h.plainLyrics || h.syncedLyrics))
-    .sort((a, b) => Number(Boolean(b)) - Number(Boolean(a)));
-  for (const h of ranked) {
-    const normArtist = h.artistName.toLowerCase();
-    const normName = h.trackName.toLowerCase();
-    if (normArtist.includes(artist) && normName.includes(name)) return toResult(h, artist);
+  // 2. Fuzzy search over normalized title cores × each artist, keep best match.
+  if (!name) return null;
+  const wantArtist = artists[0] ?? '';
+  let bestEntry: LrcEntry | null = null;
+  let bestScore = -Infinity;
+  const seen = new Set<string>();
+  for (const core of titleCores(name)) {
+    for (const artist of artists.length > 0 ? artists : ['']) {
+      const query = `${core} ${artist}`.trim();
+      const key = query.toLowerCase();
+      if (!query || seen.has(key)) continue;
+      seen.add(key);
+      const hits = await getJson<LrcEntry[]>(`${LRC_API}/search?q=${encodeURIComponent(query)}`);
+      if (!hits) continue;
+      for (const h of hits) {
+        if (!h || (!h.plainLyrics && !h.syncedLyrics)) continue;
+        const s = scoreEntry(h, wantArtist, core);
+        if (s > bestScore) {
+          bestScore = s;
+          bestEntry = h;
+        }
+      }
+      // Good enough match — stop early to save requests.
+      if (bestEntry && bestScore >= 9) return toResult(bestEntry, wantArtist);
+    }
   }
-  return ranked[0] ? toResult(ranked[0], artist) : null;
+  return bestEntry && bestScore >= 3 ? toResult(bestEntry, wantArtist) : null;
 }
 
 function toResult(entry: LrcEntry, wantArtist: string): LyricsResult {
@@ -96,16 +154,24 @@ function toResult(entry: LrcEntry, wantArtist: string): LyricsResult {
   };
 }
 
-/** lyrics.ovh fallback (also keyless). */
+/** lyrics.ovh fallback (also keyless). Tries each artist + a cleaned title. */
 async function ovhLyrics(track: { name: string; artists: string[] }): Promise<LyricsResult | null> {
-  const artist = (track.artists[0] ?? '').trim();
+  const artists = (track.artists ?? []).map((a) => a.trim()).filter(Boolean);
   const name = track.name.trim();
-  if (!artist || !name) return null;
-  const res = await getJson<{ lyrics?: string }>(
-    `https://api.lyrics.ovh/v1/${encodeURIComponent(artist)}/${encodeURIComponent(name)}`,
-  );
-  if (!res?.lyrics) return null;
-  return { trackName: name, artistName: artist, synced: false, lyrics: res.lyrics };
+  if (!name) return null;
+  for (const artist of artists.length > 0 ? artists : ['']) {
+    const res = await getJson<{ lyrics?: string }>(
+      `https://api.lyrics.ovh/v1/${encodeURIComponent(artist)}/${encodeURIComponent(name)}`,
+    );
+    if (res?.lyrics) return { trackName: name, artistName: artist || 'Unknown', synced: false, lyrics: res.lyrics };
+    if (artist) {
+      const res2 = await getJson<{ lyrics?: string }>(
+        `https://api.lyrics.ovh/v1/${encodeURIComponent(artist)}/${encodeURIComponent(norm(name))}`,
+      );
+      if (res2?.lyrics) return { trackName: name, artistName: artist, synced: false, lyrics: res2.lyrics };
+    }
+  }
+  return null;
 }
 
 /** Look up lyrics for a track. Returns null when neither source has a hit. */
