@@ -20,6 +20,13 @@ export interface LyricsResult {
   artistName: string;
   synced: boolean;
   lyrics: string;
+  /** Per-line timestamps when the source provided synced (LRC) lyrics. */
+  syncedLines?: SyncedLine[];
+}
+
+export interface SyncedLine {
+  timeMs: number;
+  text: string;
 }
 
 interface LrcEntry {
@@ -49,6 +56,22 @@ function stripLrcTimestamps(lrc: string): string {
     .map((line) => line.replace(/^\[[0-9]+:[0-9]+(\.[0-9]+)?\]\s*/, '').trim())
     .filter(Boolean)
     .join('\n');
+}
+
+/** Parse LRC synced lyrics into timed lines (e.g. `[01:04.90] A notion…`). */
+export function parseSyncedLines(lrc: string): SyncedLine[] {
+  const out: SyncedLine[] = [];
+  for (const raw of lrc.split('\n')) {
+    const m = raw.match(/^\[(\d+):(\d{2})(?:\.(\d{1,3}))?\]\s*(.*)$/);
+    if (!m) continue;
+    const text = m[4].trim();
+    if (!text) continue;
+    const min = Number(m[1]);
+    const sec = Number(m[2]);
+    const frac = m[3] ? Number(`0.${m[3]}`) : 0;
+    out.push({ timeMs: Math.round(min * 60_000 + sec * 1000 + frac * 1000), text });
+  }
+  return out;
 }
 
 /**
@@ -146,12 +169,17 @@ async function lrcLyrics(track: { name: string; artists: string[]; album?: strin
 function toResult(entry: LrcEntry, wantArtist: string): LyricsResult {
   const plain = entry.plainLyrics;
   const synced = entry.syncedLyrics;
-  return {
+  const result: LyricsResult = {
     trackName: entry.trackName,
     artistName: entry.artistName || wantArtist,
     synced: !plain && Boolean(synced),
     lyrics: plain ?? (synced ? stripLrcTimestamps(synced) : ''),
   };
+  if (synced) {
+    const lines = parseSyncedLines(synced);
+    if (lines.length > 0) result.syncedLines = lines;
+  }
+  return result;
 }
 
 /** lyrics.ovh fallback (also keyless). Tries each artist + a cleaned title. */

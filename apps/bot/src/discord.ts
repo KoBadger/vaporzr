@@ -49,7 +49,7 @@ import {
   SoundcloudError,
 } from './soundcloud.js';
 import { Session, SessionManager } from './session.js';
-  import { fetchLyrics, type LyricsResult } from './lyrics.js';
+  import { fetchLyrics, type LyricsResult, type SyncedLine } from './lyrics.js';
 import { PermissionsManager } from './permissions.js';
 import { analyzer } from './analyzer.js';
 import { vizTunnel } from './tunnel.js';
@@ -309,6 +309,11 @@ export class DiscordBot {
    *  prevents overlapping state-change calls from posting duplicate strips. */
   private miniNpBusy = new Set<string>();
   private panelRefreshQueued = false;
+  /** id -> chunked plain-lyrics pages (for the jump-to-part dropdown). */
+  private lyricPages = new Map<string, { title: string; artist: string; synced: boolean; pages: string[]; syncedLines?: SyncedLine[] }>();
+  /** messageId -> live karaoke session (synced lines + track), edited by a ticker. */
+  private karaokeSessions = new Map<string, { guildId: string; channelId: string; messageId: string; title: string; artist: string; lines: SyncedLine[]; lastIdx: number }>();
+  private karaokeTicker: NodeJS.Timeout | null = null;
 
   // ---- persisted panel registrations (survive restarts) ----
   private panelSaveTimer: NodeJS.Timeout | null = null;
@@ -589,7 +594,11 @@ export class DiscordBot {
 
   private async onInteraction(interaction: Interaction): Promise<void> {
     if (interaction.isButton()) {
-      await this.handleButton(interaction);
+      if (interaction.customId.startsWith('lyrics_karaoke:')) {
+        await this.startLyricsKaraoke(interaction);
+      } else {
+        await this.handleButton(interaction);
+      }
       return;
     }
     if (interaction.isStringSelectMenu()) {
@@ -598,6 +607,16 @@ export class DiscordBot {
         const start = parseInt(interaction.values[0] ?? '0', 10);
         const { embeds, components } = this.queuePage(s, Number.isFinite(start) ? start : 0);
         await interaction.update({ embeds, components }).catch(() => {});
+      } else if (interaction.customId.startsWith('lyrics_page:')) {
+        const id = interaction.customId.slice('lyrics_page:'.length);
+        const stash = this.lyricPages.get(id);
+        if (stash) {
+          const idx = parseInt(interaction.values[0] ?? '0', 10);
+          const page = Number.isFinite(idx) ? Math.min(stash.pages.length - 1, Math.max(0, idx)) : 0;
+          const embeds = [this.lyricsPageEmbed(stash.title, stash.artist, stash.synced, stash.pages[page], page + 1, stash.pages.length)];
+          const components = this.lyricsComponents(id, stash.pages, Boolean(stash.syncedLines?.length), page);
+          await interaction.update({ embeds, components }).catch(() => {});
+        }
       }
       return;
     }
@@ -847,7 +866,7 @@ export class DiscordBot {
         const query = interaction.options.getString('query') ?? undefined;
         const payload = await this.lyricsPayload(s, query);
         if ('error' in payload) await interaction.followUp({ content: payload.error, flags: MessageFlags.Ephemeral });
-        else await interaction.followUp({ embeds: payload.embeds });
+        else await interaction.followUp({ embeds: payload.embeds, components: payload.components });
         break;
       }
 
@@ -1616,7 +1635,7 @@ export class DiscordBot {
           if (!canUse('lyrics')) return void (await deny());
           const payload = await this.lyricsPayload(s, args || undefined);
           if ('error' in payload) await message.reply({ content: payload.error });
-          else await message.reply({ embeds: payload.embeds });
+          else await message.reply({ embeds: payload.embeds, components: payload.components });
           break;
         }
 
@@ -2064,12 +2083,12 @@ export class DiscordBot {
     }
   }
 
-  /** Chunk lyrics text into embeds that fit Discord's 4096-char description cap. */
-  private lyricsEmbeds(result: LyricsResult): EmbedBuilder[] {
+  /** Chunk lyrics text into pages that fit Discord's 4096-char description cap. */
+  private lyricsChunks(text: string): string[] {
     const MAX = 3800;
-    const text = result.lyrics.trim();
+    const clean = text.trim();
     const chunks: string[] = [];
-    let rest = text;
+    let rest = clean;
     while (rest.length > MAX) {
       const cut = rest.lastIndexOf('\n', MAX);
       const idx = cut > 0 ? cut : MAX;
@@ -2077,24 +2096,164 @@ export class DiscordBot {
       rest = rest.slice(idx).trim();
     }
     chunks.push(rest);
-    return chunks.slice(0, 4).map(
-      (chunk, i) =>
-        new EmbedBuilder().setColor(this.themeColor()).setDescription(
-          `${i === 0 ? `📝 **${result.trackName}** — ${result.artistName}${result.synced ? ' (synced)' : ''}\n\n` : ''}${chunk}` +
-            (i === chunks.length - 1 && chunks.length < text.length / MAX ? '\n*(…full lyrics shortened for Discord)*' : ''),
-        ),
+    return chunks.filter((c) => c.length > 0);
+  }
+
+  /** Render one lyrics page embed. */
+  private lyricsPageEmbed(title: string, artist: string, synced: boolean, page: string, pageNum: number, total: number): EmbedBuilder {
+    return new EmbedBuilder().setColor(this.themeColor()).setDescription(
+      `${pageNum === 1 ? `📝 **${title}** — ${artist}${synced ? ' (synced)' : ''}\n\n` : ''}${page}` +
+        (total > 1 ? `\n\n*(page ${pageNum}/${total})*` : ''),
     );
   }
 
+  /** Build the dropdown + karaoke components for a lyrics result. */
+  private lyricsComponents(id: string, pages: string[], hasSynced: boolean, current: number): ActionRowBuilder<StringSelectMenuBuilder | ButtonBuilder>[] {
+    const rows: ActionRowBuilder<StringSelectMenuBuilder | ButtonBuilder>[] = [];
+    if (pages.length > 1) {
+      const menu = new StringSelectMenuBuilder()
+        .setCustomId(`lyrics_page:${id}`)
+        .setPlaceholder('Jump to a part…');
+      const opts: StringSelectMenuOptionBuilder[] = [];
+      for (let i = 0; i < pages.length && opts.length < 25; i++) {
+        opts.push(
+          new StringSelectMenuOptionBuilder()
+            .setLabel(`Part ${i + 1} of ${pages.length}`)
+            .setValue(String(i))
+            .setDefault(i === current),
+        );
+      }
+      menu.addOptions(opts);
+      rows.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu));
+    }
+    if (hasSynced) {
+      rows.push(
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder().setCustomId(`lyrics_karaoke:${id}`).setLabel('Karaoke').setEmoji('🎤').setStyle(ButtonStyle.Secondary),
+        ),
+      );
+    }
+    return rows;
+  }
+
   /** Resolve what track to use for lyrics: a query (resolve it) or the current track. */
-  private async lyricsPayload(s: Session, query?: string): Promise<{ embeds: EmbedBuilder[] } | { error: string }> {
+  private async lyricsPayload(s: Session, query?: string): Promise<{ embeds: EmbedBuilder[]; components: ActionRowBuilder<StringSelectMenuBuilder | ButtonBuilder>[] } | { error: string }> {
     const track = query
       ? await this.resolveLyricsQuery(query)
       : s.queue.getCurrentTrack();
     if (!track) return { error: '📝 Nothing playing — run a query or queue a track first.' };
     const result = await fetchLyrics(track);
     if (!result) return { error: `📝 No lyrics found for **${truncate(track.name, 60)}** — works best with title + artist.` };
-    return { embeds: this.lyricsEmbeds(result) };
+    const pages = this.lyricsChunks(result.lyrics);
+    const id = randomBytes(4).toString('hex');
+    this.lyricPages.set(id, {
+      title: result.trackName,
+      artist: result.artistName,
+      synced: result.synced,
+      pages,
+      syncedLines: result.syncedLines,
+    });
+    // Prune old lyric stashes to avoid unbounded growth.
+    if (this.lyricPages.size > 200) {
+      const oldest = [...this.lyricPages.keys()].sort(() => 0)[0];
+      if (oldest) this.lyricPages.delete(oldest);
+    }
+    const embeds = [this.lyricsPageEmbed(result.trackName, result.artistName, result.synced, pages[0], 1, pages.length)];
+    const components = this.lyricsComponents(id, pages, Boolean(result.syncedLines?.length), 0);
+    return { embeds, components };
+  }
+
+  /** Start a live "karaoke" view: highlight the current synced line as it plays. */
+  private async startLyricsKaraoke(interaction: MessageComponentInteraction): Promise<void> {
+    const id = interaction.customId.slice('lyrics_karaoke:'.length);
+    const stash = this.lyricPages.get(id);
+    const lines = stash?.syncedLines;
+    if (!stash || !lines || lines.length === 0) {
+      await interaction.reply({ content: 'No synced lyrics for this song.', flags: MessageFlags.Ephemeral }).catch(() => {});
+      return;
+    }
+    const s = this.sessionFor(interaction.guildId);
+    if (!s) return;
+    const st = s.queue.getState();
+    const pos = st.positionMs + (st.playing ? Math.max(0, Date.now() - (st.updatedAt || Date.now())) : 0);
+    const idx = this.syncedLineIndex(lines, pos);
+    const msgId = interaction.message.id;
+    this.karaokeSessions.set(msgId, {
+      guildId: interaction.guildId!,
+      channelId: interaction.channelId,
+      messageId: msgId,
+      title: stash.title,
+      artist: stash.artist,
+      lines,
+      lastIdx: idx,
+    });
+    this.ensureKaraokeTicker();
+    await interaction.update({ embeds: [this.karaokeEmbed(stash.title, stash.artist, lines, idx, pos)], components: [] }).catch(() => {});
+  }
+
+  /** Index of the synced line active at `pos` (the last line with time <= pos). */
+  private syncedLineIndex(lines: SyncedLine[], pos: number): number {
+    let idx = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].timeMs <= pos) idx = i;
+      else break;
+    }
+    return idx;
+  }
+
+  /** Render the karaoke window: ~5 lines around the active one, active highlighted. */
+  private karaokeEmbed(title: string, artist: string, lines: SyncedLine[], idx: number, pos: number): EmbedBuilder {
+    const start = Math.max(0, idx - 2);
+    const end = Math.min(lines.length, idx + 3);
+    const out: string[] = [];
+    for (let i = start; i < end; i++) {
+      out.push(i === idx ? `**▶ ${lines[i].text}**` : lines[i].text);
+    }
+    return new EmbedBuilder()
+      .setColor(this.themeColor())
+      .setDescription(`🎤 **${title}** — ${artist}\n\n${out.join('\n')}`)
+      .setFooter({ text: `Karaoke · ${fmtMs(pos)} — updates as it plays` });
+  }
+
+  private ensureKaraokeTicker(): void {
+    if (this.karaokeTicker) return;
+    this.karaokeTicker = setInterval(() => void this.tickKaraoke(), 1500);
+  }
+
+  private async tickKaraoke(): Promise<void> {
+    if (this.karaokeSessions.size === 0) {
+      if (this.karaokeTicker) {
+        clearInterval(this.karaokeTicker);
+        this.karaokeTicker = null;
+      }
+      return;
+    }
+    for (const [messageId, sess] of this.karaokeSessions) {
+      const s = this.sessionFor(sess.guildId);
+      if (!s) {
+        this.karaokeSessions.delete(messageId);
+        continue;
+      }
+      const st = s.queue.getState();
+      const track = st.track;
+      if (!track || !st.playing) continue;
+      const pos = st.positionMs + Math.max(0, Date.now() - (st.updatedAt || Date.now()));
+      const idx = this.syncedLineIndex(sess.lines, pos);
+      if (idx === sess.lastIdx) continue;
+      sess.lastIdx = idx;
+      try {
+        const channel = await this.client.channels.fetch(sess.channelId);
+        if (!channel?.isTextBased()) {
+          this.karaokeSessions.delete(messageId);
+          continue;
+        }
+        const msg = await channel.messages.fetch(sess.messageId);
+        await msg.edit({ embeds: [this.karaokeEmbed(sess.title, sess.artist, sess.lines, idx, pos)] });
+      } catch {
+        // Message gone (deleted) — drop the session.
+        this.karaokeSessions.delete(messageId);
+      }
+    }
   }
 
   /** Best-effort resolve of a free-form lyrics query into a track (Spotify search, then YouTube). */
@@ -2516,7 +2675,7 @@ export class DiscordBot {
       case 'lyrics': {
         const payload = await this.lyricsPayload(s);
         if ('error' in payload) void interaction.followUp({ content: payload.error, flags: MessageFlags.Ephemeral }).catch(() => {});
-        else void interaction.followUp({ embeds: payload.embeds, flags: MessageFlags.Ephemeral }).catch(() => {});
+        else void interaction.followUp({ embeds: payload.embeds, components: payload.components, flags: MessageFlags.Ephemeral }).catch(() => {});
         break;
       }
       case 'next': {
