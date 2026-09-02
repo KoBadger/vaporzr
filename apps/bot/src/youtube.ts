@@ -291,21 +291,41 @@ function scoreHit(
     else if (d > 45000) score -= 6;
     else if (d > 15000) score -= 2;
   }
-  return score;
+return score;
 }
+
+/**
+ * Quick "is this obviously NOT the song we asked for" check for the speed
+ * fallback. Reuses the same scoring as the accuracy path: if the fused
+ * fast-path result scores below a floor (missing most title words, wrong
+ * artist, way-off length) we refuse to play it — better to skip the track
+ * than play an obvious mismatch just because it resolved fast.
+ */
+export function isClearlyWrongMatch(video: ResolvedVideo, query: string, opts: YoutubeSearchOptions): boolean {
+  const hit: FlatHit = {
+    videoId: video.videoId,
+    title: video.name,
+    channel: video.channel ?? video.artists[0] ?? 'YouTube',
+    durationSec: Math.round((video.durationMs ?? 0) / 1000),
+  };
+  return scoreHit(hit, 0, query, opts) < FUSED_MIN_ACCEPT_SCORE;
+}
+
+/** Floor for accepting the fused fast-path fallback (see isClearlyWrongMatch). */
+const FUSED_MIN_ACCEPT_SCORE = 6;
 
 /**
  * Search AND resolve a stream URL. Fetches the top 5 candidates cheaply
  * (metadata only), scores them against the expected title/artists/duration —
  * pushing remixes/lives/covers below the canonical release — then fully
-  * extracts the winner. Returns null if nothing matched.
-  *
-  * Latency strategy: a legacy fused `ytsearch1` extraction (stream URL in one
-  * subprocess) races the cheap scored search. When scoring confirms #1 is the
-  * best pick — the common case — the fused result is returned with zero extra
-  * wall time; otherwise the higher-scored candidate gets extracted instead.
-  * Successful results are LRU-cached for 10 minutes.
-  */
+ * extracts the winner. Returns null if nothing matched.
+ *
+ * Latency strategy: a legacy fused `ytsearch1` extraction (stream URL in one
+ * subprocess) races the cheap scored search. When scoring confirms #1 is the
+ * best pick — the common case — the fused result is returned with zero extra
+ * wall time; otherwise the higher-scored candidate gets extracted instead.
+ * Successful results are LRU-cached for 10 minutes.
+ */
 const resolveCache = new Map<string, { at: number; video: ResolvedVideo }>();
 /** Concurrent resolves for the same track share one subprocess instead of duplicating. */
 const inflightResolves = new Map<string, Promise<ResolvedVideo | null>>();
@@ -409,10 +429,15 @@ async function doSearchAndResolve(
     }
     // Budget hit (or every accurate candidate failed) but the fast path gave
     // us a playable stream — use it rather than returning nothing. Playing
-    // something immediately beats stalling or silently dropping the track.
+    // something immediately beats stalling, but only when it's plausibly the
+    // right song — never settle for an obvious mismatch.
     if (!video && fusedVideo) {
-      console.log(`[youtube] resolve budget hit — using fast-path result "${fusedVideo.name}"`);
-      video = fusedVideo;
+      if (isClearlyWrongMatch(fusedVideo, query, opts)) {
+        console.log(`[youtube] fast-path result "${fusedVideo.name}" is a poor match for "${query}" — not settling; skipping`);
+      } else {
+        console.log(`[youtube] resolve budget hit — using fast-path result "${fusedVideo.name}"`);
+        video = fusedVideo;
+      }
     }
     if (!video) return null;
 
