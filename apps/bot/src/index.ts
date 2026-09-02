@@ -5,6 +5,18 @@ import { startServer } from './server.js';
 import { DiscordBot } from './discord.js';
 import net from 'node:net';
 
+// Windows console/redirect writes can mangle non-ASCII (e.g. "Böhmer" → "B?hmer")
+// because the default stream encoding is the ANSI code page, not UTF-8. Force
+// UTF-8 on the byte stream so bot.log stays clean for every title/artist.
+for (const stream of [process.stdout, process.stderr]) {
+  const orig = stream.write.bind(stream);
+  stream.write = ((chunk: unknown, ...args: unknown[]) => {
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), 'utf8');
+    if (typeof args[0] === 'function') return orig(buf, args[0] as (err?: Error | null) => void);
+    return orig(buf);
+  }) as typeof stream.write;
+}
+
 process.on('unhandledRejection', (reason) => {
   console.error('[vaporzr] unhandled rejection:', reason instanceof Error ? reason.stack ?? reason.message : reason);
 });
