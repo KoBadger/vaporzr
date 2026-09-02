@@ -300,6 +300,9 @@ export class DiscordBot {
   private miniNp = new Map<string, { channelId: string; messageId: string }>();
   /** guildId -> track uri the mini strip currently represents (for re-anchoring). */
   private miniTrackUri = new Map<string, string>();
+  /** Guilds currently re-anchoring their mini now-playing strip — a lock that
+   *  prevents overlapping state-change calls from posting duplicate strips. */
+  private miniNpBusy = new Set<string>();
   private panelRefreshQueued = false;
 
   // ---- persisted panel registrations (survive restarts) ----
@@ -1973,9 +1976,13 @@ export class DiscordBot {
     if (!guildId || !st.track) return;
     const channelId = this.lastTextChannel.get(guildId);
     if (!channelId) return;
-    const uri = st.track.uri;
-    if (this.miniTrackUri.get(guildId) === uri && this.miniNp.has(guildId)) return;
+    // Hold the per-guild lock for the whole post/delete dance so a burst of
+    // state-change events for the same track can't create duplicate strips.
+    if (this.miniNpBusy.has(guildId)) return;
+    this.miniNpBusy.add(guildId);
     try {
+      const uri = st.track.uri;
+      if (this.miniTrackUri.get(guildId) === uri && this.miniNp.has(guildId)) return;
       const channel = await this.client.channels.fetch(channelId);
       if (!channel || !('send' in channel)) return;
       const existing = this.miniNp.get(guildId);
@@ -1992,6 +1999,8 @@ export class DiscordBot {
       this.scheduleSavePanels();
     } catch {
       /* no access to that channel — will retry on next state change */
+    } finally {
+      this.miniNpBusy.delete(guildId);
     }
   }
 
@@ -2157,7 +2166,7 @@ export class DiscordBot {
   }
 
   /** Bump when panel icon art changes — stale uploaded emojis get replaced. */
-  private static readonly PANEL_ICON_VERSION = 2;
+  private static readonly PANEL_ICON_VERSION = 3;
 
   /**
    * Keep the bot's Discord avatar in sync with the generated brand logo.
@@ -2314,16 +2323,16 @@ export class DiscordBot {
         new ButtonBuilder()
           .setCustomId('vz:toggle')
           .setEmoji(this.vzE(st.playing ? 'vz_pause' : 'vz_play', st.playing ? '⏸' : '▶'))
-          .setStyle(ButtonStyle.Primary),
+          .setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('vz:next').setEmoji(this.vzE('vz_next', '⏭')).setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
           .setCustomId('vz:repeat')
           .setEmoji(this.vzE('vz_repeat', '🔁'))
-          .setStyle(st.repeat ? ButtonStyle.Success : ButtonStyle.Secondary),
+          .setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
           .setCustomId('vz:shuffle')
           .setEmoji(this.vzE('vz_shuffle', '🔀'))
-          .setStyle(st.shuffle ? ButtonStyle.Success : ButtonStyle.Secondary),
+          .setStyle(ButtonStyle.Secondary),
       ),
       new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder().setCustomId('vz:back10').setLabel('10s').setEmoji(this.vzE('vz_back10', '⏪')).setStyle(ButtonStyle.Secondary),
@@ -2332,16 +2341,16 @@ export class DiscordBot {
         new ButtonBuilder().setCustomId('vz:vol-up').setEmoji(this.vzE('vz_volup', '🔊')).setStyle(ButtonStyle.Secondary),
       ),
       new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder().setCustomId('vz:dj').setLabel('DJ').setEmoji(this.vzE('vz_dj', '🎛️')).setStyle(djEnabled ? ButtonStyle.Success : ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('vz:stop').setEmoji(this.vzE('vz_stop', '⏹')).setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId('vz:dj').setLabel('DJ').setEmoji(this.vzE('vz_dj', '🎛️')).setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('vz:stop').setEmoji(this.vzE('vz_stop', '⏹')).setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('vz:leave').setEmoji(this.vzE('vz_eject', '📤')).setStyle(ButtonStyle.Secondary),
       ),
     ];
     const djRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder().setCustomId('vz:sfx:airhorn').setLabel('📣').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId('vz:sfx:drop').setLabel('💥').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId('vz:sfx:riser').setLabel('📈').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId('vz:sfx:reverse').setLabel('↩️').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('vz:sfx:airhorn').setLabel('📣').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('vz:sfx:drop').setLabel('💥').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('vz:sfx:riser').setLabel('📈').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('vz:sfx:reverse').setLabel('↩️').setStyle(ButtonStyle.Secondary),
     );
     if (djEnabled) {
       rows.push(djRow);

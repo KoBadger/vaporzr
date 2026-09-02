@@ -81,12 +81,12 @@ const ICONS: Record<string, InsideFn[]> = {
   vz_prev: [rect(28, 36, 38, 92), tri(38, 64, 92, 36, 92, 92)],
   vz_next: [rect(90, 36, 100, 92), tri(90, 64, 36, 36, 36, 92)],
   vz_back10: [
-    tri(34, 16, 34, 62, 84, 39), // left triangle, top half
+    tri(84, 16, 84, 62, 34, 39), // left triangle, top half
     rect(44, 78, 56, 114), // digit "1"
     ring(82, 96, 9, 19, 0, 360), // digit "0"
   ],
   vz_fwd10: [
-    tri(94, 16, 94, 62, 44, 39), // right triangle, top half
+    tri(44, 16, 44, 62, 94, 39), // right triangle, top half
     rect(44, 78, 56, 114), // digit "1"
     ring(82, 96, 9, 19, 0, 360), // digit "0"
   ],
