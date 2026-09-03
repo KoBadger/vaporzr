@@ -36,15 +36,18 @@ if [ ! -f "$APP_DIR/.env" ]; then
 fi
 
 # --- 3. Cookies (optional but strongly recommended on datacenter IPs) ------
+# Normalize the path for the container regardless of what the local .env had
+# (a Windows-style path would either point nowhere or make yt-dlp fail on a
+# missing file). Strip the line, then re-add the container path only if the
+# cookies file actually shipped.
+sed -i '/^YOUTUBE_COOKIES_PATH=/d' "$APP_DIR/.env"
 COOKIE_MOUNT=()
 if [ -f "$APP_DIR/cookies.txt" ]; then
   echo "==> cookies.txt found — will mount read-only"
-  if ! grep -q "^YOUTUBE_COOKIES_PATH=" "$APP_DIR/.env"; then
-    echo "YOUTUBE_COOKIES_PATH=/app/data/cookies.txt" >> "$APP_DIR/.env"
-  fi
+  echo "YOUTUBE_COOKIES_PATH=/app/data/cookies.txt" >> "$APP_DIR/.env"
   COOKIE_MOUNT=(-v "$APP_DIR/cookies.txt:/app/data/cookies.txt:ro")
 else
-  echo "==> no cookies.txt (skipping — YouTube may throttle/403 from this IP)"
+  echo "==> no cookies.txt — YouTube may throttle/403 from this IP"
 fi
 
 # --- 4. Data volume --------------------------------------------------------
