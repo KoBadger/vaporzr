@@ -182,6 +182,19 @@ function toResult(entry: LrcEntry, wantArtist: string): LyricsResult {
   return result;
 }
 
+/** SyncLRC free lyrics API (also keyless, aggregates LRCLIB + Musixmatch + NetEase + QQ + Kugou). */
+const SYNCLRC_API = 'https://api.synclrc.dev';
+
+async function syncLrcLyrics(track: { name: string; artists: string[] }): Promise<LyricsResult | null> {
+  const name = track.name.trim();
+  if (!name) return null;
+  const artist = (track.artists[0] ?? '').trim();
+  const q = new URLSearchParams({ track: name, artist, type: 'plain' });
+  const res = await getJson<{ lyrics?: string; type?: string }>(`${SYNCLRC_API}/lyrics?${q.toString()}`);
+  if (!res?.lyrics) return null;
+  return { trackName: name, artistName: artist || 'Unknown', synced: false, lyrics: res.lyrics };
+}
+
 /** lyrics.ovh fallback (also keyless). Tries each artist + a cleaned title. */
 async function ovhLyrics(track: { name: string; artists: string[] }): Promise<LyricsResult | null> {
   const artists = (track.artists ?? []).map((a) => a.trim()).filter(Boolean);
@@ -209,6 +222,7 @@ export async function fetchLyrics(track: Pick<TrackInfo, 'name' | 'artists' | 'a
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value;
   let result = await lrcLyrics(track);
   result ??= await ovhLyrics(track);
+  result ??= await syncLrcLyrics(track);
   cache.set(key, { at: Date.now(), value: result });
   return result;
 }

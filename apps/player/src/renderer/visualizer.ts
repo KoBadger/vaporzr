@@ -3,12 +3,16 @@ import butterchurnPresets from 'butterchurn-presets';
 import type { CommandMessage, PlaybackState } from '@vaporzr/shared';
 import { emptyState } from '@vaporzr/shared';
 import { WsClient } from './wsClient';
+import { SynthOverlay, type SynthLevels } from './synthwave';
 
 const port = Number(new URLSearchParams(window.location.search).get('port') ?? '4876');
 const OVERLAY = new URLSearchParams(window.location.search).get('overlay') === '1';
 const SCREENSAVER = new URLSearchParams(window.location.search).get('screensaver') === '1';
 
 const canvas = document.getElementById('viz') as HTMLCanvasElement;
+const ewCanvas = document.getElementById('ew') as HTMLCanvasElement;
+const ewVideo = document.getElementById('ew-video') as HTMLVideoElement;
+const btnSynth = document.getElementById('btn-synth') as HTMLButtonElement;
 const status = document.getElementById('status') as HTMLDivElement;
 const streamCanvas = document.createElement('canvas');
 const streamCtx = streamCanvas.getContext('2d')!;
@@ -109,8 +113,13 @@ const client = new WsClient({
       handleCmd(msg as CommandMessage);
     } else if (msg.type === 'state:update') {
       handleState(msg.state);
+    } else if (msg.type === 'endlesswave') {
+      handleEndlessWave(msg.active);
     } else if (msg.type === 'snapshot') {
       setDjEnabled(!!msg.djEnabled);
+      // A snapshot only ever AUTO-ENABLES the scene (EW is on) — same rule as
+      // the web visualizer: only a live 'endlesswave' broadcast may turn it off.
+      if (msg.endlesswave === true) handleEndlessWave(true);
     } else if (msg.type === 'dj:update') {
       setDjEnabled(msg.enabled);
     } else if (msg.type === 'audio:pcm') {
@@ -157,6 +166,99 @@ function applySensitivity(multiplier: number): void {
   if (analyser) analyser.smoothingTimeConstant = smoothing;
   try { localStorage.setItem('vaporzr.sensitivity', String(multiplier)); } catch {}
   log(`Sensitivity set to ${multiplier.toFixed(2)}x (smoothing ${smoothing.toFixed(2)})`);
+}
+
+// ---- Endless Wave synthwave scene (VISUALDON DeLorean) ----
+
+let synthOverlay: SynthOverlay | null = null;
+let synthActive = false;
+let synthBars: number[] = new Array(24).fill(0);
+let synthBass = 0;
+let synthMid = 0;
+let synthTreble = 0;
+let synthPrevBass = 0;
+let synthKickBoost = 0;
+let synthKickAt = 0;
+let synthBpm = 124;
+let synthEnergy = 0;
+let freqData: Uint8Array<ArrayBuffer> | null = null;
+const prefersReducedMotion =
+  typeof window.matchMedia === 'function' &&
+  window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/** Per-frame bass/mid/treble + kick/BPM estimate from the shared analyser. */
+function sampleLevels(): SynthLevels {
+  if (analyser) {
+    if (!freqData || freqData.length !== analyser.frequencyBinCount) {
+      freqData = new Uint8Array(analyser.frequencyBinCount);
+    }
+    analyser.getByteFrequencyData(freqData);
+    const n = freqData.length;
+    const data = freqData;
+    const avg = (from: number, to: number): number => {
+      const lo = Math.max(0, from);
+      const hi = Math.min(n, to);
+      if (hi <= lo) return 0;
+      let s = 0;
+      for (let i = lo; i < hi; i++) s += data[i];
+      return s / (hi - lo) / 255;
+    };
+    // fftSize 2048 @ 48kHz -> ~23.4Hz/bin: bass 60-370Hz, mid 370Hz-3.1kHz,
+    // treble 3.1-12kHz. Same smoothing + kick logic as the web visualizer.
+    synthBass += (avg(2, 16) - synthBass) * 0.4;
+    synthMid += (avg(16, 132) - synthMid) * 0.35;
+    synthTreble += (avg(132, 512) - synthTreble) * 0.5;
+    synthEnergy = (synthBass + synthMid + synthTreble) / 3;
+    // 24 log-spaced spectrum bars for the overlay (mirrors the web feed shape).
+    for (let i = 0; i < 24; i++) {
+      const lo = Math.min(n - 1, Math.floor(2 * Math.pow(1.32, i)));
+      const hi = Math.min(n, Math.max(lo + 1, Math.floor(2 * Math.pow(1.32, i + 1))));
+      synthBars[i] += (avg(lo, hi) - synthBars[i]) * 0.35;
+    }
+    if (synthBass > 0.16 && synthBass - synthPrevBass >= 0.045) {
+      const now = Date.now();
+      if (now - synthKickAt > 250) {
+        if (synthKickAt && now - synthKickAt > 400) {
+          const iv = 60000 / (now - synthKickAt);
+          synthBpm = Math.max(70, Math.min(180, synthBpm * 0.7 + iv * 0.3));
+        }
+        synthKickAt = now;
+        synthKickBoost = Math.min(1, synthKickBoost + 1);
+      }
+    }
+    synthPrevBass = synthBass;
+  }
+  return {
+    bass: synthBass,
+    mid: synthMid,
+    treble: synthTreble,
+    kickBoost: synthKickBoost,
+    bpm: synthBpm,
+    energy: synthEnergy,
+  };
+}
+
+function setSynthActive(on: boolean): void {
+  synthActive = on;
+  ewCanvas.style.display = on ? 'block' : 'none';
+  ewVideo.style.display = on ? 'block' : 'none';
+  btnSynth.classList.toggle('active', on);
+  if (on && !prefersReducedMotion) {
+    void ewVideo.play().catch(() => {
+      /* autoplay blocked until the next user gesture */
+    });
+  } else {
+    ewVideo.pause();
+  }
+}
+
+function handleEndlessWave(active: boolean): void {
+  if (active) {
+    btnSynth.classList.add('ew-revealed');
+    if (!synthActive) setSynthActive(true);
+  } else if (synthActive) {
+    setSynthActive(false);
+  }
 }
 
 // ---- Controls overlay ----
@@ -211,6 +313,7 @@ function wireControls(): void {
   btnNext.addEventListener('click', () => sendCmd('next'));
   btnShuffle.addEventListener('click', () => sendCmd('shuffle', { shuffle: !latestState.shuffle }));
   btnPreset.addEventListener('click', () => cyclePreset());
+  btnSynth.addEventListener('click', () => setSynthActive(!synthActive));
   btnDjToggle.addEventListener('click', () => sendCmd('dj', { djEnabled: !djEnabled }));
   for (const [id, btn] of Object.entries(btnSfx)) {
     btn.addEventListener('click', () => sendCmd('sfx', { sfxId: id }));
@@ -244,6 +347,10 @@ function wireControls(): void {
       case 'p':
       case 'P':
         cyclePreset();
+        break;
+      case 'e':
+      case 'E':
+        setSynthActive(!synthActive);
         break;
       case 'ArrowUp':
         e.preventDefault();
@@ -749,20 +856,54 @@ function cyclePreset(): void {
 
 function resize(): void {
   const dpr = Math.min(2, window.devicePixelRatio || 1);
-  canvas.width = canvas.clientWidth * dpr;
-  canvas.height = canvas.clientHeight * dpr;
-  visualizer?.setRendererSize(canvas.clientWidth, canvas.clientHeight, dpr);
+  const w = canvas.clientWidth || 1280;
+  const h = canvas.clientHeight || 720;
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  // The EW canvas may be hidden (clientWidth 0) — mirror the main canvas size.
+  ewCanvas.width = w * dpr;
+  ewCanvas.height = h * dpr;
+  visualizer?.setRendererSize(w, h, dpr);
 }
 
 function renderLoop(): void {
-  if (visualizer) visualizer.render();
+  const lv = sampleLevels();
+  if (synthActive && synthOverlay) {
+    const t = latestState.track;
+    synthOverlay.render(
+      Date.now(),
+      lv,
+      synthBars,
+      t ? { name: t.name || '', artists: (t.artists || []).join(', ') } : null,
+      prefersReducedMotion,
+    );
+  } else if (visualizer) {
+    visualizer.render();
+  }
   requestAnimationFrame(renderLoop);
 }
 
+/** Canvas currently on screen — frame forwarding follows the visible scene. */
+function activeCanvas(): HTMLCanvasElement {
+  return synthActive ? ewCanvas : canvas;
+}
+
 function sendFrame(): void {
-  if (!streamEnabled || !visualizer || !analyser) return;
-  streamCtx.drawImage(canvas, 0, 0, streamCanvas.width, streamCanvas.height);
-  client.send({ type: 'visuals:frame', data: streamCanvas.toDataURL('image/jpeg', 0.6) });
+  if (!streamEnabled || !analyser) return;
+  if (synthActive && !synthOverlay) return;
+  if (!synthActive && !visualizer) return;
+  const src = activeCanvas();
+  if (!src.width || !src.height) return;
+  try {
+    // Synth mode composites the wallpaper video under the overlay canvas.
+    if (synthActive && ewVideo.readyState >= 2) {
+      streamCtx.drawImage(ewVideo, 0, 0, streamCanvas.width, streamCanvas.height);
+    }
+    streamCtx.drawImage(src, 0, 0, streamCanvas.width, streamCanvas.height);
+    client.send({ type: 'visuals:frame', data: streamCanvas.toDataURL('image/jpeg', 0.6) });
+  } catch {
+    /* tainted canvas (video CORS) — skip this frame rather than spamming errors */
+  }
 }
 
 function b64(buf: ArrayBuffer): string {
@@ -795,7 +936,38 @@ function applyTheme(t: { accent: string; accent2: string; glow: string }): void 
 
 /** Capture a short WebM clip of the visuals and send it back to the bot (/burst). */
 async function captureBurst(durationMs: number): Promise<void> {
-  const stream = canvas.captureStream(30);
+  // Synth mode composites the wallpaper video under the overlay via a pump
+  // canvas so the clip shows the full scene, not just the overlay layer.
+  let pump: number | null = null;
+  let captureSrc: HTMLCanvasElement = activeCanvas();
+  if (synthActive && ewVideo.readyState >= 2 && ewCanvas.width > 0 && ewCanvas.height > 0) {
+    try {
+      const comp = document.createElement('canvas');
+      comp.width = ewCanvas.width;
+      comp.height = ewCanvas.height;
+      const cctx = comp.getContext('2d');
+      if (cctx) {
+        captureSrc = comp;
+        pump = window.setInterval(() => {
+          try {
+            cctx.drawImage(ewVideo, 0, 0, comp.width, comp.height);
+            cctx.drawImage(ewCanvas, 0, 0, comp.width, comp.height);
+          } catch {
+            /* tainted video frame — keep the last good composite */
+          }
+        }, 33);
+      }
+    } catch {
+      captureSrc = activeCanvas();
+    }
+  }
+  const stopPump = (): void => {
+    if (pump !== null) {
+      window.clearInterval(pump);
+      pump = null;
+    }
+  };
+  const stream = captureSrc.captureStream(30);
   const mime =
     ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find((m) => MediaRecorder.isTypeSupported(m)) ??
     'video/webm';
@@ -805,6 +977,7 @@ async function captureBurst(durationMs: number): Promise<void> {
     if (e.data.size > 0) chunks.push(e.data);
   };
   rec.onstop = async () => {
+    stopPump();
     stream.getTracks().forEach((t) => t.stop());
     const blob = new Blob(chunks, { type: mime });
     const buf = await blob.arrayBuffer();
@@ -849,6 +1022,21 @@ function init(): void {
   wireControls();
   setControlsVisible(true);
   updateControls();
+  try {
+    synthOverlay = new SynthOverlay(ewCanvas);
+  } catch (e) {
+    log(`synthwave overlay unavailable: ${e instanceof Error ? e.message : String(e)}`);
+    synthOverlay = null;
+  }
+  // Wallpaper video streams from the bot (same helper port as the WS link)
+  // with CORS so frame forwarding stays untainted.
+  try {
+    ewVideo.crossOrigin = 'anonymous';
+    ewVideo.src = `http://127.0.0.1:${port}/ew-bg.mp4`;
+    ewVideo.poster = `http://127.0.0.1:${port}/ew-bg.jpg`;
+  } catch {
+    /* video layer stays on its static fallback */
+  }
 
   pipClose.addEventListener('click', () => {
     // Close hides the mini player; the audio keeps playing.
@@ -913,13 +1101,14 @@ function init(): void {
       visualizer.loadPreset(presets[presetNames[0]], 0);
       visualizer.connectAudio(analyser);
       log('Visualizer running');
-      renderLoop();
       presetCycle = window.setInterval(cyclePreset, 30000);
     } catch (e) {
       log(`butterchurn init failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   });
 
+  resize();
+  renderLoop();
   window.addEventListener('resize', resize);
 }
 

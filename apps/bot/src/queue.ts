@@ -82,7 +82,11 @@ export class QueueManager {
     }
   }
 
-  enqueue(track: Omit<TrackInfo, 'addedBy' | 'addedAt'>, requestedBy: string): { added: boolean; currentIndex: number } {
+  enqueue(
+    track: Omit<TrackInfo, 'addedBy' | 'addedAt'>,
+    requestedBy: string,
+    opts?: { keepCursor?: boolean },
+  ): { added: boolean; currentIndex: number } {
     const item = { ...track, addedBy: requestedBy, addedAt: Date.now() };
     this.resetCursorIfFinished();
     let newIndex: number;
@@ -97,7 +101,11 @@ export class QueueManager {
       this.tracks.push(item);
     }
     if (this.currentIndex === -1) this.currentIndex = 0;
-    this.advanceToAdded(newIndex, this.tracks.length);
+    // Background refills (Endless Wave top-up) must NOT yank the cursor to the
+    // new tail: while idle that pins the cursor at the end, so the next refill
+    // pass sees an empty upcoming list, re-picks the same song forever, and
+    // skip lands on "queue ended". User-initiated adds keep the jump-to-fresh.
+    if (!opts?.keepCursor) this.advanceToAdded(newIndex, this.tracks.length);
     this.totalEnqueued++;
     this.emitQueue();
     return { added: true, currentIndex: this.currentIndex };

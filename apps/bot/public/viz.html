@@ -30,6 +30,8 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
 /* CRT scanline overlay — only visible in synthwave mode (pure CSS, zero frame cost) */
 #ew-crt{position:absolute;inset:0;z-index:2;pointer-events:none;display:none;
   background:repeating-linear-gradient(0deg,rgba(4,0,10,.16) 0,rgba(4,0,10,.16) 1px,transparent 1px,transparent 3px)}
+/* Real VISUALDON wallpaper loop underneath the reactive overlay (same layer as #ew) */
+#ew-video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:1;display:none;background:#05060f}
 /* Easter egg: the synthwave-road toggle stays invisible until Endless Wave
    (V@ew on) has been activated at least once this session. */
 #btn-synth{visibility:hidden;pointer-events:none}
@@ -148,6 +150,7 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
 
 <canvas id="bc"></canvas>
 <canvas id="ew"></canvas>
+<video id="ew-video" src="/ew-bg.mp4" poster="/ew-bg.jpg" loop muted playsinline preload="auto"></video>
 <div id="ew-crt"></div>
 <canvas id="canvas"></canvas>
 <img id="viz" alt="">
@@ -589,6 +592,11 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
     bcCanvas.style.display=milkMode?'block':'none';
     synthCanvas.style.display=synthMode?'block':'none';
     synthCrt.style.display=synthMode?'block':'none';
+    ewVideo.style.display=synthMode?'block':'none';
+    if(synthMode&&!prefersReduced&&!ewPlayBlocked&&ewVideo.paused){
+      try{var pr=ewVideo.play();if(pr&&pr.catch)pr.catch(function(){ewPlayBlocked=true})}catch(e){ewPlayBlocked=true}
+    }
+    if(!synthMode&&!ewVideo.paused)ewVideo.pause();
     barsCanvas.style.display=(frameMode||milkMode||synthMode)?'none':'block';
 
     if(frameMode)return;
@@ -644,6 +652,91 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
   /* ---------- synthwave road (Endless Wave) ---------- */
   var synthCanvas=$('ew'),sctx=synthCanvas.getContext('2d'),synthActive=false,synthOffset=0;
   var synthCrt=$('ew-crt');
+  /* Real VISUALDON wallpaper loop: the #ew canvas becomes a transparent
+     reactive overlay (beat glow + spectrum + caption + grain) over it. When
+     the video is missing or blocked, drawSynth falls back to the painted
+     canvas scene so the screen is never black. */
+  var ewVideo=$('ew-video'),ewVideoFailed=false,ewPlayBlocked=false;
+  if(ewVideo){
+    ewVideo.addEventListener('error',function(){ewVideoFailed=true});
+  }
+  function ewVideoReady(){return !ewVideoFailed&&ewVideo&&ewVideo.readyState>=2}
+  window.addEventListener('pointerdown',function(){
+    ewPlayBlocked=false;
+    if(synthActive&&!prefersReduced&&ewVideo&&ewVideo.paused){try{ewVideo.play().catch(function(){})}catch(e){}}
+  },{passive:true});
+
+  /* Reactive overlay over the wallpaper video. */
+  function drawSynthOverlay(now,W,H){
+    var i,v;
+    // beat glow breathing over the scene
+    var glow=kickBoost*0.10+bassLevel*0.05;
+    if(glow>0.004){
+      var gg=sctx.createRadialGradient(W/2,H*0.62,0,W/2,H*0.62,Math.max(W,H)*0.7);
+      gg.addColorStop(0,'rgba(255,60,170,'+Math.min(0.20,glow)+')');
+      gg.addColorStop(1,'rgba(255,60,170,0)');
+      sctx.fillStyle=gg;
+      sctx.fillRect(0,0,W,H);
+    }
+    // spectrum bars along the bottom (smoothed here — drawBars is idle in synth mode)
+    var active=now-lastBarAt<2000;
+    var slot=W/BARS,barW=Math.min(slot*0.5,22*dpr),baseY=H*0.965,maxH=H*0.30;
+    for(i=0;i<BARS;i++){
+      disp[i]+=(target[i]-disp[i])*0.35;
+      v=active?disp[i]:(0.04+0.02*Math.sin(now/900+i*0.7));
+      var h=Math.max(2*dpr,v*maxH),x=i*slot+(slot-barW)/2,y=baseY-h;
+      var g=sctx.createLinearGradient(0,baseY,0,baseY-maxH);
+      g.addColorStop(0,'rgba(255,80,180,0.85)');
+      g.addColorStop(1,'rgba(80,240,255,0.9)');
+      sctx.fillStyle=g;
+      sctx.shadowColor='rgba(255,80,180,0.55)';
+      sctx.shadowBlur=12*dpr*(active?v:0.3);
+      sctx.fillRect(x,y,barW,h);
+    }
+    sctx.shadowBlur=0;
+    // NOW PLAYING caption (from the state feed)
+    if(synthTrack&&synthTrack.name){
+      sctx.textAlign='left';
+      sctx.textBaseline='alphabetic';
+      sctx.shadowColor='rgba(255,60,160,0.85)';
+      var capFs=Math.max(13,Math.min(22,W*0.013));
+      sctx.font='600 '+capFs+'px "Inter",system-ui,sans-serif';
+      sctx.shadowBlur=14;
+      sctx.fillStyle='rgba(255,255,255,0.92)';
+      sctx.fillText(synthTrack.name,24,H-42);
+      sctx.font='500 '+Math.round(capFs*0.66)+'px "Inter",system-ui,sans-serif';
+      sctx.fillStyle='rgba(60,230,255,0.85)';
+      sctx.shadowColor='rgba(0,200,255,0.7)';
+      sctx.fillText(synthTrack.artists||'',24,H-20);
+      sctx.shadowBlur=0;
+    }
+    // film grain
+    if(!drawSynthOverlay._grain){
+      var gc=document.createElement('canvas');
+      gc.width=100;gc.height=100;
+      var gx=gc.getContext('2d');
+      var gid=gx.createImageData(100,100);
+      for(var gi=0;gi<gid.data.length;gi+=4){
+        var gv=Math.random()*255;
+        gid.data[gi]=gv;gid.data[gi+1]=gv;gid.data[gi+2]=gv;
+        gid.data[gi+3]=30;
+      }
+      gx.putImageData(gid,0,0);
+      drawSynthOverlay._grain=sctx.createPattern(gc,'repeat');
+    }
+    sctx.save();
+    sctx.globalCompositeOperation='overlay';
+    sctx.globalAlpha=0.4;
+    sctx.fillStyle=drawSynthOverlay._grain;
+    sctx.fillRect(0,0,W,H);
+    sctx.restore();
+    // vignette
+    var vig=sctx.createRadialGradient(W/2,H/2,H*0.3,W/2,H/2,H*0.8);
+    vig.addColorStop(0,'rgba(0,0,0,0)');
+    vig.addColorStop(1,'rgba(0,0,0,0.7)');
+    sctx.fillStyle=vig;
+    sctx.fillRect(0,0,W,H);
+  }
   function resizeSynth(){synthCanvas.width=innerWidth*dpr;synthCanvas.height=innerHeight*dpr}
   window.addEventListener('resize',resizeSynth);
 
@@ -651,6 +744,9 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
     var W=synthCanvas.width,H=synthCanvas.height;
     sctx.clearRect(0,0,W,H);
     kickBoost=Math.max(0,kickBoost*0.9);
+    // Real VISUALDON wallpaper video underneath — canvas is just the overlay.
+    // Falls back to the painted scene when the video is missing/blocked.
+    if(ewVideoReady()){drawSynthOverlay(now,W,H);return;}
     var vx=W/2,hy=H*0.55;
     var e=prefersReduced?0:lastEnergy;
     /* Road scroll tracks the beat: tempo factor from the rolling BPM estimate,
@@ -659,27 +755,37 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
     var step=prefersReduced?0:(0.004+e*0.008)*tf;
     if(!prefersReduced)synthOffset=(synthOffset+step)%1;
 
-    // Sky gradient: deep purple to vibrant orange/pink sunset
+    /* VISUALDON grade: deep indigo zenith -> purple -> magenta -> peach horizon */
     var skyG=sctx.createLinearGradient(0,0,0,hy);
-    skyG.addColorStop(0,'#0a0520');
-    skyG.addColorStop(0.3,'#1a0a3e');
-    skyG.addColorStop(0.6,'#4a1a6e');
-    skyG.addColorStop(0.8,'#8a2a9e');
-    skyG.addColorStop(0.95,'#ff6a4e');
-    skyG.addColorStop(1,'#ff9a6e');
+    skyG.addColorStop(0,'#050214');
+    skyG.addColorStop(0.35,'#150833');
+    skyG.addColorStop(0.55,'#3d1454');
+    skyG.addColorStop(0.72,'#7a2a63');
+    skyG.addColorStop(0.86,'#c74f6b');
+    skyG.addColorStop(0.95,'#ff8a5c');
+    skyG.addColorStop(1,'#ffb37a');
     sctx.fillStyle=skyG;sctx.fillRect(0,0,W,hy);
 
-    // Stars with twinkling
-    if(!drawSynth._stars){
+    // Stars: dense field, twinkle follows treble; rebuilt on resize
+    if(!drawSynth._stars||drawSynth._sW!==W||drawSynth._sH!==H){
       drawSynth._stars=[];
-      for(var i=0;i<200;i++){
+      drawSynth._sW=W;drawSynth._sH=H;
+      for(var i=0;i<260;i++){
         drawSynth._stars.push({
           x:Math.random()*W,
-          y:Math.random()*hy*0.7,
-          s:Math.random()*1.5+0.5,
+          y:Math.random()*hy*0.8,
+          s:(Math.random()*1.6+0.6)*(W/1400+0.6),
           twinkle:Math.random()*Math.PI*2,
-          speed:Math.random()*0.02+0.01
+          speed:Math.random()*0.02+0.008
         });
+      }
+      drawSynth._sparkles=[];
+      for(var sp=0;sp<7;sp++){
+        drawSynth._sparkles.push({x:W*(0.05+Math.random()*0.9),y:hy*(0.08+Math.random()*0.5),r:(3+Math.random()*5)*(W/1400+0.6),ph:Math.random()*Math.PI*2});
+      }
+      drawSynth._clouds=[];
+      for(var cb=0;cb<3;cb++){
+        drawSynth._clouds.push({y:hy*(0.34+cb*0.09),spd:(W*0.004)*(0.5+cb*0.35),off:Math.random()*W,sc:0.7+cb*0.4});
       }
     }
     var tScale=0.15+trebleLevel*0.85;
@@ -687,35 +793,73 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
       var st=drawSynth._stars[i];
       st.twinkle+=st.speed*(0.4+trebleLevel*2.6);
       var sx=Math.sin(st.twinkle);
-      var alpha=tScale*(0.35+0.65*Math.max(0,sx));
+      var alpha=tScale*(0.3+0.7*Math.max(0,sx));
       sctx.globalAlpha=Math.max(0,Math.min(1,alpha));
-      sctx.fillStyle='#ffffff';
+      sctx.fillStyle='#fff4fa';
       sctx.beginPath();
-      sctx.arc(st.x,st.y,st.s*(0.5+trebleLevel*1.5),0,Math.PI*2);
+      sctx.arc(st.x,st.y,st.s*(0.5+trebleLevel*1.4),0,Math.PI*2);
+      sctx.fill();
+    }
+    sctx.globalAlpha=1;
+    // 4-point sparkle glints (wallpaper has a few bright stars)
+    var spt=Date.now()*0.0012;
+    for(var sp2=0;sp2<drawSynth._sparkles.length;sp2++){
+      var g2=drawSynth._sparkles[sp2];
+      var tw=0.35+0.65*Math.max(0,Math.sin(spt*1.4+g2.ph))*(0.4+trebleLevel);
+      sctx.globalAlpha=Math.min(1,tw+0.15);
+      sctx.fillStyle='#ffffff';
+      var r=g2.r*(0.7+0.5*trebleLevel);
+      sctx.beginPath();
+      sctx.moveTo(g2.x-r,g2.y);sctx.quadraticCurveTo(g2.x,g2.y,g2.x,g2.y-r);
+      sctx.quadraticCurveTo(g2.x,g2.y,g2.x+r,g2.y);
+      sctx.quadraticCurveTo(g2.x,g2.y,g2.x,g2.y+r);
+      sctx.quadraticCurveTo(g2.x,g2.y,g2.x-r,g2.y);
       sctx.fill();
     }
     sctx.globalAlpha=1;
 
-    // Sun with horizontal stripes — radius swells with bass
-    var sunR=W*0.12*(1+bassLevel*0.10);
+    // Wispy mauve clouds drifting slowly
+    for(var ci=0;ci<drawSynth._clouds.length;ci++){
+      var cl=drawSynth._clouds[ci];
+      if(!prefersReduced)cl.off=(cl.off+cl.spd)%(W+400);
+      var cx=cl.off-200;
+      sctx.fillStyle='rgba(216,130,170,0.10)';
+      sctx.beginPath();
+      sctx.ellipse(cx,cl.y,150*cl.sc*(W/1400+0.6),10*cl.sc,0,0,Math.PI*2);
+      sctx.ellipse(cx+90*cl.sc,cl.y-6*cl.sc,110*cl.sc*(W/1400+0.6),8*cl.sc,0,0,Math.PI*2);
+      sctx.ellipse(cx-95*cl.sc,cl.y+5*cl.sc,100*cl.sc*(W/1400+0.6),7*cl.sc,0,0,Math.PI*2);
+      sctx.fill();
+    }
+
+    /* Sun: big cream disc with glow + thin slits, swells with bass.
+       Reference sun is pale yellow-cream, not orange-red. */
+    var sunR=Math.min(W,H)*0.20*(1+bassLevel*0.06);
     var sunX=vx;
-    var sunY=hy-sunR*0.3;
-    var sunG=sctx.createRadialGradient(sunX,sunY,0,sunX,sunY,sunR);
-    sunG.addColorStop(0,'#ffdd44');
-    sunG.addColorStop(0.3,'#ffaa33');
-    sunG.addColorStop(0.7,'#ff6644');
-    sunG.addColorStop(1,'#ff4466');
+    var sunY=hy-sunR*0.55;
+    var halo=sctx.createRadialGradient(sunX,sunY,sunR*0.4,sunX,sunY,sunR*2.3);
+    halo.addColorStop(0,'rgba(255,170,120,0.35)');
+    halo.addColorStop(0.5,'rgba(255,120,140,0.14)');
+    halo.addColorStop(1,'rgba(255,120,140,0)');
+    sctx.fillStyle=halo;
+    sctx.beginPath();sctx.arc(sunX,sunY,sunR*2.3,0,Math.PI*2);sctx.fill();
+    var sunG=sctx.createLinearGradient(0,sunY-sunR,0,sunY+sunR);
+    sunG.addColorStop(0,'#fff6cf');
+    sunG.addColorStop(0.55,'#ffdf8e');
+    sunG.addColorStop(1,'#ff9e63');
     sctx.fillStyle=sunG;
     sctx.beginPath();
     sctx.arc(sunX,sunY,sunR,0,Math.PI*2);
     sctx.fill();
-    // Sun stripes
-    sctx.fillStyle='rgba(10,5,32,0.7)';
-    for(var i=0;i<8;i++){
-      var stripeY=sunY+sunR*0.2+i*sunR*0.1;
-      var stripeH=sunR*0.04;
-      sctx.fillRect(sunX-sunR,stripeY,sunR*2,stripeH);
+    // Slit cuts: thin at top, thicker toward the bottom (clip to disc)
+    sctx.save();
+    sctx.beginPath();sctx.arc(sunX,sunY,sunR,0,Math.PI*2);sctx.clip();
+    sctx.fillStyle='rgba(122,42,99,0.92)';
+    var slitY=[0.02,0.20,0.38,0.56,0.74,0.90],slitH=[0.018,0.024,0.030,0.038,0.048,0.060];
+    for(var i=0;i<slitY.length;i++){
+      var sy=sunY-sunR+slitY[i]*sunR*2;
+      sctx.fillRect(sunX-sunR,sy,sunR*2,Math.max(1.5,sunR*slitH[i]));
     }
+    sctx.restore();
 
     // Bass shockwaves — rings expand outward from the sun on bass transients
     var waves=drawSynth._waves||(drawSynth._waves=[]);
@@ -741,33 +885,51 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
     }
     sctx.shadowBlur=0;
 
-    // Mountains
-    sctx.fillStyle='#1a0a2e';
-    sctx.beginPath();
-    sctx.moveTo(0,hy);
-    for(var x=0;x<=W;x+=W/50){
-      var h=Math.sin(x*0.01)*hy*0.15+Math.sin(x*0.02)*hy*0.08;
-      sctx.lineTo(x,hy-h);
+    /* Mountains: dark jagged silhouettes left + right, pink rim on top edge */
+    if(!drawSynth._mts||drawSynth._mW!==W){
+      drawSynth._mts={l:[],r:[]};drawSynth._mW=W;
+      for(var mi=0;mi<=24;mi++)drawSynth._mts.l.push(0.35+Math.random()*0.65);
+      for(var mj=0;mj<=24;mj++)drawSynth._mts.r.push(0.35+Math.random()*0.65);
     }
-    sctx.lineTo(W,hy);
-    sctx.closePath();
-    sctx.fill();
+    function ridge(x0,x1,peaks,base,col,rim){
+      sctx.fillStyle=col;sctx.beginPath();sctx.moveTo(x0,hy);
+      var n=peaks.length;
+      for(var ri=0;ri<n;ri++){
+        var px=x0+(x1-x0)*ri/(n-1);
+        sctx.lineTo(px,hy-peaks[ri]*hy*0.11);
+      }
+      sctx.lineTo(x1,hy);sctx.closePath();sctx.fill();
+      sctx.strokeStyle=rim;sctx.lineWidth=Math.max(1,W*0.0009);sctx.globalAlpha=0.35;
+      sctx.beginPath();
+      for(var rk=0;rk<n;rk++){
+        var qx=x0+(x1-x0)*rk/(n-1);
+        var qy=hy-peaks[rk]*hy*0.11;
+        if(rk===0)sctx.moveTo(qx,qy);else sctx.lineTo(qx,qy);
+      }
+      sctx.stroke();sctx.globalAlpha=1;
+    }
+    ridge(0,W*0.36,drawSynth._mts.l,'#150826','rgba(255,120,170,0.5)');
+    ridge(W*0.64,W,drawSynth._mts.r,'#1a0b30','rgba(255,120,170,0.5)');
 
-    // City skyline — building heights + window glow jump to the mid band
-    if(!drawSynth._buildings){
-      drawSynth._buildings=[];
-      var bw=W/60;
-      for(var bx=0;bx<W;bx+=bw){
-        var base=hy*0.10+Math.random()*hy*0.25;
-        var bdd={x:bx,w:bw*0.8,base:base,seed:Math.random()*Math.PI*2,windows:[]};
-        var rows=Math.max(2,Math.round(base/(bw*0.6)));
+    /* City skyline: centered cluster in front of the sun's lower third.
+       Near-black towers, cyan/warm/magenta windows flickering with the mids. */
+    if(!drawSynth._buildings||drawSynth._bW!==W){
+      drawSynth._buildings=[];drawSynth._bW=W;
+      var bN=15,bSpan=W*0.27,bx0=vx-bSpan/2;
+      for(var bx=0;bx<bN;bx++){
+        var bxc=bx/(bN-1);
+        var taper=1-Math.abs(bxc-0.5)*1.15;
+        var base=hy*(0.07+Math.random()*0.10+Math.max(0,taper)*0.10);
+        var bdd={fx:bxc,base:base,seed:Math.random()*Math.PI*2,ant:Math.random()>0.78,windows:[]};
+        var rows=Math.max(3,Math.round(base/(W*0.006+7)));
         for(var r=0;r<rows;r++){
           for(var c=0;c<3;c++){
-            if(Math.random()>0.3){
+            if(Math.random()>0.32){
+              var roll=Math.random();
               bdd.windows.push({
                 fx:(c+0.5)/3,
                 fy:(r+0.5)/rows,
-                color:Math.random()>0.5?'#00ffff':'#ff00ff',
+                color:roll>0.66?'#7ff7ff':(roll>0.33?'#ffd28a':'#ff5fd2'),
                 flicker:Math.random()*Math.PI*2
               });
             }
@@ -776,143 +938,312 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
         drawSynth._buildings.push(bdd);
       }
     }
+    // warm haze behind the towers so they read as backlit by the sun
+    var haze=sctx.createRadialGradient(vx,hy,0,vx,hy,W*0.16);
+    haze.addColorStop(0,'rgba(255,170,120,0.20)');
+    haze.addColorStop(1,'rgba(255,170,120,0)');
+    sctx.fillStyle=haze;
+    sctx.fillRect(vx-W*0.2,hy-W*0.16,W*0.4,W*0.16);
+    var bw2=(W*0.27)/15;
     for(var i=0;i<drawSynth._buildings.length;i++){
       var b=drawSynth._buildings[i];
       var eqWave=0.5+0.5*Math.sin(i*0.75+Date.now()*0.0009);
-      var h=b.base*(0.82+0.6*midLevel*eqWave);
-      sctx.fillStyle='#0a0520';
-      sctx.fillRect(b.x,hy-h,b.w,h);
-      var ws=Math.min(b.w*0.22,b.w*0.24);
+      var h=b.base*(0.85+0.5*midLevel*eqWave);
+      var bxp=vx-W*0.27/2+b.fx*W*0.27;
+      sctx.fillStyle='#0b0618';
+      sctx.fillRect(bxp-bw2*0.42,hy-h,bw2*0.84,h);
+      if(b.ant){
+        sctx.fillStyle='#0b0618';
+        sctx.fillRect(bxp-1,hy-h-H*0.02,2,H*0.02);
+        var blink=0.4+0.6*Math.max(0,Math.sin(Date.now()*0.004+b.seed));
+        sctx.globalAlpha=blink;sctx.fillStyle='#ff4d6d';
+        sctx.beginPath();sctx.arc(bxp,hy-h-H*0.02,2.2,0,Math.PI*2);sctx.fill();
+        sctx.globalAlpha=1;
+      }
+      var ws=Math.min(bw2*0.2,5);
       for(var j=0;j<b.windows.length;j++){
         var wv=b.windows[j];
         var rowA=0.3+midLevel*(0.4+0.6*wv.fy);
-        wv.flicker+=0.08;
+        wv.flicker+=0.06;
         var alpha=rowA*(0.55+Math.sin(wv.flicker)*0.35);
         sctx.globalAlpha=Math.max(0,Math.min(1,alpha));
         sctx.fillStyle=wv.color;
-        sctx.fillRect(b.x+wv.fx*b.w-ws/2,hy-h+wv.fy*h-ws*0.5,ws,ws*0.9);
+        sctx.fillRect(bxp-bw2*0.42+wv.fx*bw2*0.84-ws/2,hy-h+wv.fy*h-ws*0.5,ws,ws*0.9);
       }
     }
     sctx.globalAlpha=1;
 
-    // Road with perspective
-    var roadTop=W*0.02;
-    var roadBot=W*0.4;
-    sctx.fillStyle='#1a0a2e';
+    /* Ground: dark desert base below the horizon */
+    var gndG=sctx.createLinearGradient(0,hy,0,H);
+    gndG.addColorStop(0,'#191028');
+    gndG.addColorStop(0.35,'#120c20');
+    gndG.addColorStop(1,'#07040f');
+    sctx.fillStyle=gndG;sctx.fillRect(0,hy,W,H-hy);
+
+    /* Road: two-lane highway with perspective, scrolling dashes, guardrail.
+       Vanishing point sits just left of the sun so the road leads to the city. */
+    var vpx=vx-W*0.02;
+    var roadTop=W*0.030;
+    var roadBot=W*0.34;
+    function roadHalf(t){return roadTop+(roadBot-roadTop)*t*t;}
+    function roadX(t){return vpx+(vx-vpx)*t;}
+    sctx.fillStyle='#161220';
     sctx.beginPath();
-    sctx.moveTo(vx-roadTop,hy);
-    sctx.lineTo(vx+roadTop,hy);
-    sctx.lineTo(vx+roadBot,H);
-    sctx.lineTo(vx-roadBot,H);
+    sctx.moveTo(roadX(0)-roadTop,hy);
+    sctx.lineTo(roadX(0)+roadTop,hy);
+    sctx.lineTo(roadX(1)+roadBot,H);
+    sctx.lineTo(roadX(1)-roadBot,H);
     sctx.closePath();
     sctx.fill();
-
-    // Road grid lines
-    sctx.strokeStyle='rgba(255,100,200,'+(0.25+kickBoost*0.35)+')';
-    sctx.lineWidth=1+kickBoost*1.5;
-    for(var i=0;i<20;i++){
-      var y=hy+(H-hy)*(i/20);
-      var t=(y-hy)/(H-hy);
-      var w=roadTop+(roadBot-roadTop)*t;
-      sctx.beginPath();
-      sctx.moveTo(vx-w,y);
-      sctx.lineTo(vx+w,y);
-      sctx.stroke();
+    // asphalt sheen: faint warm center reflection of the sun
+    var sheen=sctx.createLinearGradient(0,hy,0,H);
+    sheen.addColorStop(0,'rgba(255,150,110,0.10)');
+    sheen.addColorStop(0.4,'rgba(255,150,110,0.03)');
+    sheen.addColorStop(1,'rgba(0,0,0,0)');
+    sctx.fillStyle=sheen;
+    sctx.beginPath();
+    sctx.moveTo(roadX(0)-roadTop,hy);
+    sctx.lineTo(roadX(0)+roadTop,hy);
+    sctx.lineTo(roadX(1)+roadBot,H);
+    sctx.lineTo(roadX(1)-roadBot,H);
+    sctx.closePath();
+    sctx.fill();
+    // neon road edges: cyan left, magenta right, breathing with kicks
+    sctx.save();
+    sctx.shadowBlur=10+kickBoost*26;
+    sctx.lineWidth=Math.max(1.5,W*0.0016);
+    sctx.strokeStyle='rgba(80,240,255,'+(0.35+kickBoost*0.35)+')';
+    sctx.shadowColor='rgba(80,240,255,0.8)';
+    sctx.beginPath();sctx.moveTo(roadX(0)-roadTop,hy);sctx.lineTo(roadX(1)-roadBot,H);sctx.stroke();
+    sctx.strokeStyle='rgba(255,80,180,'+(0.30+kickBoost*0.35)+')';
+    sctx.shadowColor='rgba(255,80,180,0.8)';
+    sctx.beginPath();sctx.moveTo(roadX(0)+roadTop,hy);sctx.lineTo(roadX(1)+roadBot,H);sctx.stroke();
+    sctx.restore();
+    // solid white left edge line
+    sctx.strokeStyle='rgba(240,240,250,0.75)';
+    sctx.lineWidth=Math.max(1,W*0.0012);
+    sctx.beginPath();sctx.moveTo(roadX(0)-roadTop*0.92,hy+1);sctx.lineTo(roadX(1)-roadBot*0.92,H);sctx.stroke();
+    // scrolling center dashes with perspective spacing
+    var dashN=14;
+    for(var i=0;i<dashN;i++){
+      var dt=((i/dashN)+synthOffset)%1;
+      var dy=hy+(H-hy)*dt*dt;
+      var dw=roadHalf(dt)*0.055*(0.4+dt);
+      var dh=(H-hy)*0.028*(0.3+dt)+1.5;
+      sctx.globalAlpha=0.25+0.65*dt;
+      sctx.fillStyle=dt>0.6?'#ffd9a8':'rgba(255,220,180,0.85)';
+      var dcx=roadX(dt);
+      sctx.fillRect(dcx-dw/2,dy-dh,dw,dh);
     }
-    // Vertical lines
-    for(var i=-10;i<=10;i++){
-      sctx.beginPath();
-      sctx.moveTo(vx+i*roadTop*0.1,hy);
-      sctx.lineTo(vx+i*roadBot*0.1,H);
-      sctx.stroke();
+    sctx.globalAlpha=1;
+    // distant oncoming headlights, left lane
+    var ot=0.10;
+    var ohx=roadX(ot)-roadHalf(ot)*0.45,ohy=hy+(H-hy)*ot*ot;
+    sctx.save();
+    sctx.shadowColor='rgba(255,240,200,0.9)';sctx.shadowBlur=12;
+    sctx.fillStyle='rgba(255,244,214,0.9)';
+    sctx.beginPath();sctx.arc(ohx-4,ohy,2.4,0,Math.PI*2);sctx.fill();
+    sctx.beginPath();sctx.arc(ohx+4,ohy,2.4,0,Math.PI*2);sctx.fill();
+    sctx.restore();
+    // right guardrail with posts + red reflectors
+    var railTop=roadX(0)+roadTop*1.25,railBot=roadX(1)+roadBot*1.12;
+    sctx.strokeStyle='rgba(150,150,170,0.55)';
+    sctx.lineWidth=Math.max(1.5,W*0.0016);
+    sctx.beginPath();sctx.moveTo(railTop,hy-H*0.012);sctx.lineTo(railBot,H*0.94);sctx.stroke();
+    for(var pi=0;pi<9;pi++){
+      var pt=pi/8;
+      var prx=railTop+(railBot-railTop)*pt;
+      var pry=(hy-H*0.012)+(H*0.94-(hy-H*0.012))*pt;
+      var ph=H*0.012*(0.3+pt)+2;
+      sctx.strokeStyle='rgba(120,120,140,0.6)';
+      sctx.lineWidth=Math.max(1,W*0.0011);
+      sctx.beginPath();sctx.moveTo(prx,pry);sctx.lineTo(prx,pry+ph);sctx.stroke();
+      sctx.fillStyle='rgba(255,60,80,'+(0.4+0.5*pt)+')';
+      sctx.fillRect(prx-1.5,pry-1.5,3,3);
     }
 
-    // Palm trees
-    function drawPalm(x,y,h){
-      // Trunk
-      sctx.strokeStyle='#2a1a3e';
-      sctx.lineWidth=h*0.08;
+    /* Palms: black silhouettes with magenta rim, swaying gently.
+       Foreground giants frame the shot; a mid row lines the horizon. */
+    function drawPalm(x,y,h,lean,sway,seed){
+      var swayX=prefersReduced?0:Math.sin(Date.now()*0.0006+seed)*h*0.02*(0.5+midLevel)+sway;
+      var topX=x+lean*h+swayX;
+      var topY=y-h;
+      sctx.strokeStyle='#0b0612';
+      sctx.lineCap='round';
+      sctx.lineWidth=Math.max(2,h*0.045);
       sctx.beginPath();
       sctx.moveTo(x,y);
-      sctx.quadraticCurveTo(x+h*0.1,y-h*0.5,x+h*0.05,y-h);
+      sctx.quadraticCurveTo(x+lean*h*0.4,y-h*0.55,topX,topY);
       sctx.stroke();
-      // Leaves
-      var topX=x+h*0.05;
-      var topY=y-h;
-      sctx.fillStyle='#1a0a2e';
-      for(var i=0;i<8;i++){
-        var angle=(i/8)*Math.PI*2;
-        var len=h*0.4;
+      // faint neon rim on the trunk
+      sctx.strokeStyle='rgba(255,100,190,0.22)';
+      sctx.lineWidth=Math.max(1,h*0.012);
+      sctx.beginPath();
+      sctx.moveTo(x-h*0.02,y);
+      sctx.quadraticCurveTo(x+lean*h*0.4-h*0.02,y-h*0.55,topX-h*0.015,topY);
+      sctx.stroke();
+      // 9 drooping fronds
+      sctx.fillStyle='#060310';
+      for(var fi=0;fi<9;fi++){
+        var ang=(-160+fi*38)*Math.PI/180+(prefersReduced?0:Math.sin(Date.now()*0.0008+seed+fi)*0.03);
+        var len=h*(0.30+((fi*37)%23)/23*0.14);
+        var fx2=topX+Math.cos(ang)*len,fy2=topY+Math.sin(ang)*len*0.55+h*0.06;
         sctx.beginPath();
         sctx.moveTo(topX,topY);
-        sctx.quadraticCurveTo(
-          topX+Math.cos(angle)*len*0.5,
-          topY+Math.sin(angle)*len*0.5-h*0.1,
-          topX+Math.cos(angle)*len,
-          topY+Math.sin(angle)*len
-        );
-        sctx.quadraticCurveTo(
-          topX+Math.cos(angle)*len*0.5,
-          topY+Math.sin(angle)*len*0.5+h*0.05,
-          topX,topY
-        );
+        sctx.quadraticCurveTo(topX+Math.cos(ang)*len*0.55,topY+Math.sin(ang)*len*0.35-h*0.06,fx2,fy2);
+        sctx.quadraticCurveTo(topX+Math.cos(ang)*len*0.45,topY+Math.sin(ang)*len*0.45+h*0.05,topX,topY);
         sctx.fill();
       }
+      // coconuts
+      sctx.fillStyle='#0b0612';
+      sctx.beginPath();sctx.arc(topX-3,topY+3,Math.max(1.5,h*0.02),0,Math.PI*2);sctx.fill();
+      sctx.beginPath();sctx.arc(topX+3,topY+4,Math.max(1.5,h*0.018),0,Math.PI*2);sctx.fill();
     }
-    drawPalm(W*0.1,hy,hy*0.4);
-    drawPalm(W*0.15,hy,hy*0.35);
-    drawPalm(W*0.85,hy,hy*0.38);
-    drawPalm(W*0.9,hy,hy*0.42);
+    // mid-ground row (skip the city center so towers stay visible)
+    if(!drawSynth._palmMid||drawSynth._pW!==W){
+      drawSynth._palmMid=[];drawSynth._pW=W;
+      for(var pm=0;pm<12;pm++){
+        var mfx=pm/11;
+        if(Math.abs(mfx-0.5)<0.16)continue;
+        drawSynth._palmMid.push({fx:mfx,h:hy*(0.10+Math.random()*0.09),lean:(Math.random()-0.5)*0.3,seed:Math.random()*6});
+      }
+    }
+    for(var pm2=0;pm2<drawSynth._palmMid.length;pm2++){
+      var mp=drawSynth._palmMid[pm2];
+      drawPalm(mp.fx*W,hy+2,mp.h,mp.lean,0,mp.seed);
+    }
+    drawPalm(W*0.045,hy+H*0.10,H*0.46,0.10,0,1.7);
+    drawPalm(W*0.155,hy+H*0.05,H*0.32,-0.06,0,4.2);
+    drawPalm(W*0.955,hy+H*0.11,H*0.50,-0.10,0,2.6);
+    drawPalm(W*0.845,hy+H*0.05,H*0.30,0.07,0,5.5);
 
-    // DeLorean car
-    var carX=vx;
-    var carY=H*0.85;
-    var carW=W*0.15;
-    var carH=carW*0.5;
-    // Shadow
-    sctx.fillStyle='rgba(0,0,0,0.5)';
+    /* DeLorean — rear 3/4 view on the highway, like the VISUALDON wallpaper.
+       Dark-red body, louvered rear deck, glowing taillights, silver wheels.
+       Bobs gently with the bass; taillight flare fires on kicks. */
+    var carX=vx+W*0.055;
+    var carBob=prefersReduced?0:(Math.sin(Date.now()*0.0021)*H*0.0016*(1+bassLevel*2)+kickBoost*H*0.0035);
+    var carY=H*0.845+carBob;
+    var carW=Math.min(W*0.30,H*0.42);
+    var carH=carW*0.52;
+    var u=carW/100;
+    // shadow + magenta underglow
+    sctx.fillStyle='rgba(0,0,0,0.55)';
     sctx.beginPath();
-    sctx.ellipse(carX,carY+carH*0.1,carW*0.6,carH*0.15,0,0,Math.PI*2);
+    sctx.ellipse(carX,carY+carH*0.16,carW*0.52,carH*0.13,0,0,Math.PI*2);
     sctx.fill();
-    // Body
-    var bodyG=sctx.createLinearGradient(0,carY-carH,0,carY);
-    bodyG.addColorStop(0,'#c0c0c0');
-    bodyG.addColorStop(0.5,'#808080');
-    bodyG.addColorStop(1,'#404040');
+    sctx.save();
+    sctx.globalAlpha=0.30+kickBoost*0.25;
+    sctx.shadowColor='rgba(255,60,160,0.9)';sctx.shadowBlur=24+kickBoost*40;
+    sctx.fillStyle='rgba(255,60,160,0.20)';
+    sctx.beginPath();
+    sctx.ellipse(carX,carY+carH*0.14,carW*0.44,carH*0.07,0,0,Math.PI*2);
+    sctx.fill();
+    sctx.restore();
+    // main body: dark red with roof highlight
+    var bodyG=sctx.createLinearGradient(0,carY-carH,0,carY+carH*0.15);
+    bodyG.addColorStop(0,'#a83a30');
+    bodyG.addColorStop(0.35,'#7a2120');
+    bodyG.addColorStop(0.7,'#471214');
+    bodyG.addColorStop(1,'#200a0c');
     sctx.fillStyle=bodyG;
     sctx.beginPath();
-    sctx.moveTo(carX-carW*0.5,carY);
-    sctx.lineTo(carX-carW*0.45,carY-carH*0.7);
-    sctx.lineTo(carX-carW*0.3,carY-carH);
-    sctx.lineTo(carX+carW*0.3,carY-carH);
-    sctx.lineTo(carX+carW*0.45,carY-carH*0.7);
-    sctx.lineTo(carX+carW*0.5,carY);
+    sctx.moveTo(carX-46*u,carY+8*u);
+    sctx.lineTo(carX-44*u,carY-14*u);
+    sctx.lineTo(carX-30*u,carY-20*u);
+    sctx.lineTo(carX-24*u,carY-38*u);
+    sctx.lineTo(carX+22*u,carY-40*u);
+    sctx.lineTo(carX+30*u,carY-22*u);
+    sctx.lineTo(carX+44*u,carY-14*u);
+    sctx.lineTo(carX+46*u,carY+8*u);
+    sctx.quadraticCurveTo(carX,carY+14*u,carX-46*u,carY+8*u);
     sctx.closePath();
     sctx.fill();
-    // Windows
-    sctx.fillStyle='#1a1a2e';
+    // left flank highlight (sun catches the driver's side)
+    sctx.strokeStyle='rgba(255,200,150,0.35)';
+    sctx.lineWidth=Math.max(1,u*0.8);
     sctx.beginPath();
-    sctx.moveTo(carX-carW*0.25,carY-carH*0.7);
-    sctx.lineTo(carX-carW*0.2,carY-carH*0.9);
-    sctx.lineTo(carX+carW*0.2,carY-carH*0.9);
-    sctx.lineTo(carX+carW*0.25,carY-carH*0.7);
+    sctx.moveTo(carX-44*u,carY-14*u);
+    sctx.lineTo(carX-30*u,carY-20*u);
+    sctx.lineTo(carX-24*u,carY-38*u);
+    sctx.stroke();
+    // cabin glass + louvers
+    sctx.fillStyle='#0d0d18';
+    sctx.beginPath();
+    sctx.moveTo(carX-21*u,carY-36*u);
+    sctx.lineTo(carX+19*u,carY-38*u);
+    sctx.lineTo(carX+26*u,carY-22*u);
+    sctx.lineTo(carX-27*u,carY-20*u);
     sctx.closePath();
     sctx.fill();
-    // Taillights
-    sctx.fillStyle='#ff0040';
-    sctx.shadowColor='#ff0040';
-    sctx.shadowBlur=18+kickBoost*70;
-    sctx.fillRect(carX-carW*0.45,carY-carH*0.3,carW*0.15,carH*0.15);
-    sctx.fillRect(carX+carW*0.3,carY-carH*0.3,carW*0.15,carH*0.15);
-    sctx.shadowBlur=0;
-    // Wheels
-    sctx.fillStyle='#1a1a1a';
+    sctx.strokeStyle='rgba(127,247,255,0.28)';
+    sctx.lineWidth=Math.max(1,u*0.7);
     sctx.beginPath();
-    sctx.arc(carX-carW*0.3,carY+carH*0.05,carW*0.12,0,Math.PI*2);
-    sctx.fill();
-    sctx.beginPath();
-    sctx.arc(carX+carW*0.3,carY+carH*0.05,carW*0.12,0,Math.PI*2);
-    sctx.fill();
+    sctx.moveTo(carX-27*u,carY-20*u);
+    sctx.lineTo(carX-21*u,carY-36*u);
+    sctx.stroke();
+    // rear-deck louvers: 5 slats
+    for(var li=0;li<5;li++){
+      var ly=carY-34*u+li*3.1*u;
+      sctx.fillStyle='#05050c';
+      sctx.fillRect(carX-19*u+li*0.5*u,ly,36*u-li*0.9*u,1.5*u);
+      sctx.fillStyle='rgba(255,170,140,0.16)';
+      sctx.fillRect(carX-19*u+li*0.5*u,ly,36*u-li*0.9*u,0.5*u);
+    }
+    // black rear panel with plate
+    sctx.fillStyle='#0a0a10';
+    sctx.fillRect(carX-34*u,carY-14*u,68*u,12*u);
+    sctx.fillStyle='#cfd2dc';
+    sctx.fillRect(carX-7*u,carY-10.5*u,14*u,6*u);
+    sctx.fillStyle='#3a3d48';
+    sctx.fillRect(carX-7*u,carY-8*u,14*u,1*u);
+    sctx.fillRect(carX-7*u,carY-6.2*u,14*u,1*u);
+    // taillights: red cores + amber outers, flare on kick
+    var flare=14+kickBoost*66+bassLevel*22;
+    function tailLight(lx){
+      sctx.save();
+      sctx.shadowColor='rgba(255,30,60,0.95)';sctx.shadowBlur=flare;
+      var tg=sctx.createLinearGradient(0,carY-13*u,0,carY-4*u);
+      tg.addColorStop(0,'#ff6a7a');tg.addColorStop(0.45,'#ff2233');tg.addColorStop(1,'#a00e1e');
+      sctx.fillStyle=tg;
+      sctx.beginPath();
+      if(sctx.roundRect)sctx.roundRect(lx,carY-13*u,13*u,8.5*u,1.6*u);else sctx.rect(lx,carY-13*u,13*u,8.5*u);
+      sctx.fill();
+      sctx.restore();
+      sctx.fillStyle='rgba(255,240,240,0.85)';
+      sctx.fillRect(lx+2*u,carY-11.6*u,9*u,1.1*u);
+      sctx.save();
+      sctx.shadowColor='rgba(255,150,40,0.9)';sctx.shadowBlur=flare*0.5;
+      sctx.fillStyle='#ff9a2a';
+      sctx.fillRect(lx+(lx<carX?-3.4*u:13*u),carY-12*u,3*u,7*u);
+      sctx.restore();
+    }
+    tailLight(carX-42*u);
+    tailLight(carX+29*u);
+    // bumper + exhausts
+    sctx.fillStyle='#15151c';
+    sctx.fillRect(carX-46*u,carY+6*u,92*u,5.5*u);
+    sctx.fillStyle='rgba(255,150,80,'+(0.25+kickBoost*0.5)+')';
+    sctx.beginPath();sctx.arc(carX-12*u,carY+9*u,1.4*u,0,Math.PI*2);sctx.fill();
+    sctx.beginPath();sctx.arc(carX+12*u,carY+9*u,1.4*u,0,Math.PI*2);sctx.fill();
+    // wheels: dark tires, silver 5-spoke rims
+    function wheel(wx,ww){
+      sctx.fillStyle='#0b0b0e';
+      sctx.beginPath();sctx.arc(wx,carY+6*u,ww,0,Math.PI*2);sctx.fill();
+      sctx.fillStyle='#b9bdc9';
+      sctx.beginPath();sctx.arc(wx,carY+6*u,ww*0.55,0,Math.PI*2);sctx.fill();
+      sctx.strokeStyle='#4a4e5a';sctx.lineWidth=Math.max(1,ww*0.12);
+      for(var si=0;si<5;si++){
+        var sa=si/5*Math.PI*2+0.4;
+        sctx.beginPath();
+        sctx.moveTo(wx,carY+6*u);
+        sctx.lineTo(wx+Math.cos(sa)*ww*0.5,carY+6*u+Math.sin(sa)*ww*0.5);
+        sctx.stroke();
+      }
+      sctx.fillStyle='#23232c';
+      sctx.beginPath();sctx.arc(wx,carY+6*u,ww*0.14,0,Math.PI*2);sctx.fill();
+    }
+    wheel(carX-32*u,9*u);
+    wheel(carX+33*u,9*u);
 
     // Film grain
     if(!drawSynth._grain){
@@ -985,6 +1316,7 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
   var burstBusy=false;
   function recordBurst(durationMs){
     if(burstBusy||typeof MediaRecorder==='undefined')return;
+    var synthComposite=(!frameModeActive()&&synthActive)&&ewVideoReady();
     var src=(!frameModeActive()&&synthActive)?synthCanvas:((!frameModeActive()&&bcViz)?bcCanvas:barsCanvas);
     if(!src.width||!src.height)return;
     burstBusy=true;
@@ -993,7 +1325,11 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
       var off=document.createElement('canvas');
       off.width=640;off.height=Math.round(640*src.height/src.width)||360;
       var octx=off.getContext('2d');
-      var draw=function(){octx.drawImage(src,0,0,off.width,off.height)};
+      // Synth mode composites the wallpaper video under the overlay canvas.
+      var draw=function(){
+        if(synthComposite){try{octx.drawImage(ewVideo,0,0,off.width,off.height)}catch(e){}}
+        octx.drawImage(src,0,0,off.width,off.height)
+      };
       draw();
       var pump=setInterval(draw,33);
       var mime='';

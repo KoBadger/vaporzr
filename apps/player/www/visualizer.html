@@ -6,6 +6,14 @@
 <style>
   html, body { margin: 0; height: 100%; background: #05060f; overflow: hidden; }
   #viz { width: 100%; height: 100%; display: block; }
+  /* Endless Wave wallpaper video (real VISUALDON loop) under the #ew overlay. */
+  #ew-video { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover;
+    display: none; background: #05060f; }
+  /* Endless Wave synthwave scene (VISUALDON DeLorean) — sits above butterchurn. */
+  #ew { position: fixed; inset: 0; width: 100%; height: 100%; display: none; }
+  /* Road toggle stays hidden until Endless Wave has been active this session. */
+  #btn-synth { visibility: hidden; }
+  #btn-synth.ew-revealed { visibility: visible; }
   #status { position: fixed; bottom: 12px; left: 12px; color: rgba(200,220,255,.6);
     font-family: monospace; font-size: 11px; text-shadow: 0 0 6px rgba(120,160,255,.6);
     transition: opacity .25s; }
@@ -197,6 +205,10 @@
   body.overlay #win-hide { display: flex; }
   /* Fade the whole overlay away when nothing has played for a while. */
   body.overlay-idle #viz { opacity: 0; }
+  body.overlay-idle #ew-video { opacity: 0; }
+  #ew-video { transition: opacity .8s ease; }
+  body.overlay-idle #ew { opacity: 0; }
+  #ew { transition: opacity .8s ease; }
   body.overlay-idle #theme-tint { opacity: 0; }
   #viz { transition: opacity .8s ease; }
 
@@ -221,6 +233,8 @@
 </head>
 <body class="idle">
   <canvas id="viz"></canvas>
+  <video id="ew-video" loop muted playsinline preload="auto" crossorigin="anonymous"></video>
+  <canvas id="ew"></canvas>
   <div id="theme-tint"></div>
 
   <video id="idle-video" src="./idle.mp4" muted loop autoplay playsinline preload="auto" aria-hidden="true"></video>
@@ -264,6 +278,7 @@
       <button class="ctrl-btn" id="btn-shuffle" title="Shuffle (S)">🔀</button>
       <span id="ctrl-spacer"></span>
       <button class="ctrl-btn" id="btn-preset" title="Cycle visualizer preset (P)">✨</button>
+      <button class="ctrl-btn" id="btn-synth" title="Synthwave road (Endless Wave, E)">🛣</button>
       <span id="ctrl-volume"><span>🔉</span><input id="ctrl-vol" type="range" min="0" max="100" value="50" step="1" /></span>
     </div>
     <div id="ctrl-sfx">
@@ -277,7 +292,7 @@
       <button class="ctrl-btn" id="btn-sfx-applause" title="Applause">👏</button>
       <button class="ctrl-btn" id="btn-sfx-countdown" title="Countdown">🔟</button>
     </div>
-    <div id="ctrl-hint">Space play/pause · S shuffle · P preset · ↑↓ volume · ←→ seek · Esc hide · H chrome</div>
+    <div id="ctrl-hint">Space play/pause · S shuffle · P preset · E synthwave · ↑↓ volume · ←→ seek · Esc hide · H chrome</div>
   </div>
   <button id="controls-toggle" title="Toggle controls (C)">🎛</button>
 
