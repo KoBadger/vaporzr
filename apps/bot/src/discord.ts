@@ -432,9 +432,17 @@ export class DiscordBot {
         });
       };
       // When the queue runs dry, post a friendly notice so listeners aren't left
-      // wondering why the music stopped.
+      // wondering why the music stopped. An active wave ignores the backoff here
+      // and refills right away so silence doesn't hang.
       s.playback.onQueueEnd = () => {
-        if (!s.endlessWave.active) void this.notifyQueueEnded(s.guildId);
+        if (s.endlessWave.active) {
+          this.ewRetryAfter.delete(s.guildId);
+          void this.topUpWave(s).catch((err) => {
+            console.warn(`[endlesswave] queue-end refill failed: ${err instanceof Error ? err.message : err}`);
+          });
+          return;
+        }
+        void this.notifyQueueEnded(s.guildId);
       };
       // A wave restored as active from disk needs re-arming after a restart:
       // kick off an immediate top-up so it resumes generating on its own.
@@ -573,7 +581,7 @@ export class DiscordBot {
           '`V@p <song or link>` — same thing, quick prefix\n' +
           '`/panel` — live control panel with buttons (server admins)\n' +
           '`/join` — join your VC and start streaming\n\n' +
-          'The server owner is **admin** here automatically — use `/perms` to grant roles. Every server has its own isolated queue and the queue clears automatically when the bot joins or leaves a voice channel.',
+          'The server owner is **admin** here automatically — use `/perms` to grant roles. Every server has its own isolated queue, which survives reconnects — `/leave` clears it and leaves the voice channel.',
       )
       .setColor(this.themeColor())
       .setFooter({ text: 'See /help for the full command list' });
@@ -612,11 +620,19 @@ export class DiscordBot {
         const id = interaction.customId.slice('lyrics_page:'.length);
         const stash = this.lyricPages.get(id);
         if (stash) {
-          const idx = parseInt(interaction.values[0] ?? '0', 10);
-          const page = Number.isFinite(idx) ? Math.min(stash.pages.length - 1, Math.max(0, idx)) : 0;
-          const embeds = [this.lyricsPageEmbed(stash.title, stash.artist, stash.synced, stash.pages[page], page + 1, stash.pages.length)];
-          const components = this.lyricsComponents(id, stash.pages, Boolean(stash.syncedLines?.length), page);
-          await interaction.update({ embeds, components }).catch(() => {});
+          const val = interaction.values[0] ?? '0';
+          if (val === 'full') {
+            const fullText = stash.pages.join('\n\n');
+            const embeds = [this.lyricsPageEmbed(stash.title, stash.artist, stash.synced, fullText, 1, 1)];
+            const components = this.lyricsComponents(id, stash.pages, Boolean(stash.syncedLines?.length), -1);
+            await interaction.update({ embeds, components }).catch(() => {});
+          } else {
+            const idx = parseInt(val, 10);
+            const page = Number.isFinite(idx) ? Math.min(stash.pages.length - 1, Math.max(0, idx)) : 0;
+            const embeds = [this.lyricsPageEmbed(stash.title, stash.artist, stash.synced, stash.pages[page], page + 1, stash.pages.length)];
+            const components = this.lyricsComponents(id, stash.pages, Boolean(stash.syncedLines?.length), page);
+            await interaction.update({ embeds, components }).catch(() => {});
+          }
         }
       }
       return;
@@ -2150,6 +2166,12 @@ export class DiscordBot {
         .setCustomId(`lyrics_page:${id}`)
         .setPlaceholder('Read the full lyrics…');
       const opts: StringSelectMenuOptionBuilder[] = [];
+      opts.push(
+        new StringSelectMenuOptionBuilder()
+          .setLabel('📜 Full Lyrics')
+          .setValue('full')
+          .setDefault(current === -1),
+      );
       for (let i = 0; i < pages.length && opts.length < 25; i++) {
         opts.push(
           new StringSelectMenuOptionBuilder()
@@ -2196,10 +2218,15 @@ export class DiscordBot {
     // Short lyrics fit on one page — show them straight. Otherwise show a
     // compact teaser and let the dropdown reveal the full text.
     const allLines = result.lyrics.split('\n').filter((l) => l.trim().length > 0);
-    const embeds = pages.length === 1
-      ? [this.lyricsPageEmbed(result.trackName, result.artistName, result.synced, pages[0], 1, 1)]
-      : [this.lyricsTeaserEmbed(result.trackName, result.artistName, result.synced, allLines, allLines.length, pages.length)];
-    const components = this.lyricsComponents(id, pages, Boolean(result.syncedLines?.length), 0);
+    let embeds: EmbedBuilder[];
+    let components: ActionRowBuilder<StringSelectMenuBuilder | ButtonBuilder>[];
+    if (pages.length <= 1) {
+      embeds = [this.lyricsPageEmbed(result.trackName, result.artistName, result.synced, result.lyrics, 1, 1)];
+      components = this.lyricsComponents(id, pages, Boolean(result.syncedLines?.length), 0);
+    } else {
+      embeds = [this.lyricsTeaserEmbed(result.trackName, result.artistName, result.synced, allLines, allLines.length, pages.length)];
+      components = this.lyricsComponents(id, pages, Boolean(result.syncedLines?.length), 0);
+    }
     return { embeds, components };
   }
 
@@ -2639,6 +2666,7 @@ export class DiscordBot {
       { name: '🔊 Volume', value: `${st.volume}%`, inline: true },
       { name: '🎙️ Voice', value: s.voice.isJoined() ? 'streaming' : 'not in VC', inline: true },
       { name: '🎛️ DJ', value: djEnabled ? 'on' : 'off', inline: true },
+      { name: 'Controls', value: '⏮ prev · ▶ play · ⏭ next · 🔁 repeat · 🔀 shuffle · ⏪/⏩ seek · 🔉/🔊 vol · 🎛 dj · 📝 lyrics · ⏹ stop · 📤 leave', inline: false },
     ]);
     embed.setFooter({ text: `${this.client.user?.username ?? 'Vaporzr'} · this panel updates itself` });
 
@@ -2939,11 +2967,15 @@ export class DiscordBot {
       .addFields(
         {
           name: '▶️ Playback',
-          value: '`/play` `/insert` `/yt` `/skip` `/pause` `/resume` `/toggle` `/queue` `/nowplaying` `/clear` `/remove` `/volume` `/shuffle` `/join` `/leave`',
+          value: '`/play` `/insert` `/yt` `/skip` `/pause` `/resume` `/toggle` `/queue` `/nowplaying` `/clear` `/remove` `/volume` `/shuffle` `/join` `/leave` `/file` `/ew`',
         },
         {
           name: '🎨 Visuals',
           value: '`/panel` — control panel · `/viz` — browser visualizer (MilkDrop) · `/theme` — color moods · `/wave` — waveform snapshot · `/burst` — animated clip · `/sensitivity` — beat reactivity',
+        },
+        {
+          name: '🎤 Lyrics',
+          value: '`/lyrics` — show lyrics for current/searched song · `/karaoke` — live karaoke highlight mode',
         },
         {
           name: '🎛️ DJ',
@@ -2951,11 +2983,11 @@ export class DiscordBot {
         },
         {
           name: '🔧 Admin',
-          value: '`/perms` — view / set command levels and roles · `/stats` — bot statistics · `/key rotate` — reissue web access · `/invite` — get the invite link',
+          value: '`/perms` — view / set command levels and roles · `/stats` — bot statistics · `/key rotate` — reissue web access · `/invite` — get the invite link · `/ego` — rename me in this server',
         },
         {
           name: '⌨️ Quick (prefix)',
-          value: '`V@p` play · `V@i` insert · `V@s` skip · `V@t` toggle · `V@sh` shuffle · `V@v` volume · `V@q` queue · `V@np` now playing · `V@c` clear · `V@rem` remove · `V@j` join · `V@l` leave · `V@wav` play file · `V@pan` panel · `V@viz` visualizer · `V@th` theme · `V@sens` sensitivity · `V@dj` dj · `V@sfx` effect · `V@key` access links · `V@invite` invite · `V@help` this',
+          value: '`V@p` play · `V@i` insert · `V@s` skip · `V@t` toggle · `V@sh` shuffle · `V@v` volume · `V@q` queue · `V@np` now playing · `V@c` clear · `V@rem` remove · `V@j` join · `V@l` leave · `V@wav` play file · `V@lyr` lyrics · `V@k` karaoke · `V@ew` endless wave · `V@pan` panel · `V@viz` visualizer · `V@th` theme · `V@sens` sensitivity · `V@dj` dj · `V@sfx` effect · `V@key` access links · `V@invite` invite · `V@help` this',
         },
       )
       .setFooter({ text: 'Try /play with a song name or a Spotify/YouTube link' });
@@ -3151,15 +3183,26 @@ export class DiscordBot {
     if ((this.ewRetryAfter.get(s.guildId) ?? 0) > Date.now()) return;
     if (this.ewBusy.has(s.guildId)) return;
     this.ewBusy.add(s.guildId);
+    // Hard bounds for this refill pass: a single run must never grow the queue
+    // without limit. (A cursor pinned at the tail used to make `ahead` read 0
+    // forever, re-picking the same song ~20k times in one pass.)
+    let enqueuedThisRun = 0;
+    let lastPickUri: string | null = null;
     try {
-      const AHEAD = 2;
+      const AHEAD = 3;
       for (;;) {
         if (!s.endlessWave.active) return;
+        if (enqueuedThisRun >= 3) return;
         const snap = s.queue.getSnapshot();
         const upcoming = snap.tracks.slice(snap.currentIndex + 1);
         let ahead = 0;
         for (const t of upcoming) if (t.addedBy === 'endless-wave') ahead++;
         if (ahead >= AHEAD) return;
+        // Adaptive dead-end backoff: if the buffer is nearly drained the wave is
+        // about to die, so retry quickly (~8s) rather than the long anti-storm
+        // wait. A healthy buffer keeps the long backoff so refill storms can't
+        // re-search and re-reject the same candidates every couple of seconds.
+        const deadEndBackoff = ahead <= 1 ? 8_000 : 45_000;
 
         // Context window around the current position: up to 3 recently played
         // tracks (seeds) + the next 6 upcoming (so the lookahead buffer and
@@ -3171,6 +3214,15 @@ export class DiscordBot {
           if (!s.endlessWave.active) return;
           const candidate = await EW.pickNextTrack(s.endlessWave, recent, failed, upcoming);
           if (!candidate) break;
+          if (candidate.uri === lastPickUri) {
+            // Same pick twice in one pass — dedup inputs are blind (e.g. a
+            // stale cursor), so stop instead of queueing it again forever.
+            console.warn('[endlesswave] same pick twice in one refill — backing off');
+            EW.noteWaveDeadEnd(s.endlessWave);
+            this.ewRetryAfter.set(s.guildId, Date.now() + deadEndBackoff);
+            return;
+          }
+          lastPickUri = candidate.uri;
           failed.add(candidate.uri);
           resolved = await EW.resolveCandidate(candidate);
           if (!resolved) console.log(`[endlesswave] could not resolve "${candidate.name}" — trying another`);
@@ -3183,10 +3235,14 @@ export class DiscordBot {
           // wakes up again when a new track actually plays (queue change).
           console.warn('[endlesswave] no suitable candidate right now — backing off');
           EW.noteWaveDeadEnd(s.endlessWave);
-          this.ewRetryAfter.set(s.guildId, Date.now() + 45_000);
+          this.ewRetryAfter.set(s.guildId, Date.now() + deadEndBackoff);
           return;
         }
-        s.queue.enqueue(resolved, 'endless-wave');
+        // keepCursor: background refills must not move the playing cursor
+        // (see QueueManager.enqueue) — otherwise `upcoming`/`ahead` above lie
+        // and skips land on "queue ended" at a pinned tail.
+        s.queue.enqueue(resolved, 'endless-wave', { keepCursor: true });
+        enqueuedThisRun++;
         s.endlessWave.generated++;
         EW.noteWaveQueued(s.endlessWave, resolved.artists);
         this.bridge.broadcast({ type: 'endlesswave', active: true, generated: s.endlessWave.generated });
@@ -3195,6 +3251,16 @@ export class DiscordBot {
       }
     } finally {
       this.ewBusy.delete(s.guildId);
+      // With keepCursor the refill never moves the cursor itself: walk it past
+      // already-played tracks to the first fresh one so a cold/finished queue
+      // self-resurrects instead of replaying (or sitting on) a stale entry.
+      // Untouched when the cursor already sits on something fresh/unplayed.
+      if (enqueuedThisRun > 0) {
+        let walk = s.queue.getCurrentTrack();
+        while (walk && EW.isDuplicate(s.endlessWave, walk.uri) && s.queue.next()) {
+          walk = s.queue.getCurrentTrack();
+        }
+      }
       // Kick playback only for a *new* EW track. After skip/end the cursor still
       // sits on the just-finished song — starting that again is the same-song loop.
       const st = s.queue.getState();

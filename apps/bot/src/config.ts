@@ -10,11 +10,20 @@ export const config = {
   spotifyClientId: process.env.SPOTIFY_CLIENT_ID ?? '',
   spotifyClientSecret: process.env.SPOTIFY_CLIENT_SECRET ?? '',
   port: Number(process.env.PORT ?? 4876),
+  /**
+   * Interface the control server + WS bridge bind to. Home LAN setups use
+   * 0.0.0.0. On a cloud host set BIND_ADDRESS=127.0.0.1 and SSH-tunnel the
+   * port so /panel+/viz stay off the public interface (see DEPLOY.md).
+   */
+  bindAddress: process.env.BIND_ADDRESS ?? '0.0.0.0',
   redirectUri: process.env.SPOTIFY_REDIRECT_URI ?? `http://localhost:${process.env.PORT ?? 4876}/callback`,
   ownerId: process.env.OWNER_ID ?? '',
   dataDir: process.env.DATA_DIR ?? path.join(__dirname, '..', 'data'),
   youtubeApiKey: process.env.YOUTUBE_API_KEY ?? '',
   ytDlpPath: process.env.YT_DLP_PATH ?? path.join(__dirname, '..', '..', '..', 'vendor', 'yt-dlp', 'yt-dlp.exe'),
+  /** Path to a Netscape-format cookies.txt for YouTube. Authenticated requests
+   *  avoid most 403s and throttling that cause mid-track stream cuts. */
+  youtubeCookiesPath: process.env.YOUTUBE_COOKIES_PATH ?? '',
   /** ffmpeg binary used for server-side streaming + PCM resampling. */
   ffmpegPath: process.env.FFMPEG_PATH ?? ffmpegStatic ?? 'ffmpeg',
   /** Path to the librespot binary (the server-side Spotify "device"). Empty = disabled. */

@@ -71,9 +71,11 @@ function ytDlpOnce(args: string[]): Promise<string> {
     const noProxyEnv = Object.fromEntries(
       Object.entries(process.env).filter(([k]) => !k.toLowerCase().endsWith('_proxy')),
     );
+    const flags = ['--no-check-certificates', '--socket-timeout', '10', '--retries', '1'];
+    if (config.youtubeCookiesPath) flags.push('--cookies', config.youtubeCookiesPath);
     execFile(
       config.ytDlpPath,
-      ['--no-check-certificates', '--socket-timeout', '10', '--retries', '1', ...args],
+      [...flags, ...args],
       { windowsHide: true, timeout: 45_000, maxBuffer: 4 * 1024 * 1024, env: noProxyEnv },
       (err, stdout, stderr) => {
         if (err) {
@@ -400,7 +402,25 @@ async function doSearchAndResolve(
     ]).catch(() => null);
     // Accuracy path: cheap metadata for the top 5.
     const hitsP = flatSearch(query).catch(() => [] as FlatHit[]);
-    const [fusedRaw, hits] = await Promise.all([fusedP, hitsP]);
+
+    // Ship the fused result immediately when it's playable and an obvious match
+    // — don't wait for the metadata subprocess that (in the common case) only
+    // confirms what the #1 search hit already told us. This cuts first-`/play`
+    // latency whenever the fused pass wins the race. A poor match falls through
+    // to the scored path below, so correctness is preserved.
+    const fusedRaw = await fusedP;
+    const fusedVideo = parseFused(fusedRaw, META_SEP);
+    if (fusedVideo && !isClearlyWrongMatch(fusedVideo, query, opts)) {
+      console.log(`[youtube] resolved "${fusedVideo.name}" in ${Date.now() - t0}ms (fast path)`);
+      resolveCache.set(key, { at: Date.now(), video: fusedVideo });
+      if (resolveCache.size > RESOLVE_CACHE_MAX) {
+        const oldest = [...resolveCache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+        if (oldest) resolveCache.delete(oldest[0]);
+      }
+      return fusedVideo;
+    }
+
+    const hits = await hitsP;
     if (hits.length === 0 && !fusedRaw) return null;
 
     let best = hits[0];
@@ -415,7 +435,6 @@ async function doSearchAndResolve(
 
     // Parse the fused (playable) result up-front so it can double as the
     // speed fallback when the accuracy path can't beat it within budget.
-    const fusedVideo = parseFused(fusedRaw, META_SEP);
     const fusedWinner = fusedRaw && (hits.length === 0 || best === hits[0]);
     let video: ResolvedVideo | null = fusedWinner ? fusedVideo : null;
 

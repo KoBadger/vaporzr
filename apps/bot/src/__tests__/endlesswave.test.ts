@@ -31,6 +31,7 @@ vi.mock('../youtube.js', async (importOriginal) => {
 });
 
 import {
+  DEFAULT_CONFIG,
   createState,
   activate,
   deactivate,
@@ -159,7 +160,7 @@ describe('state management', () => {
     const f = fakeFeatures({ energy: 0.8, tempo: 124 });
     s.recentFeatures = [f];
     s.avg = f;
-    s.genreDrift = 0.2;
+    s.genreDrift = 0.06;
     s.artistSet.add(' COLDPLAY ');
     const restored = restoreState(serializeState(s));
     expect(restored.active).toBe(true);
@@ -173,7 +174,7 @@ describe('state management', () => {
     expect(restored.recentArtists).toEqual(['Coldplay', 'Kavinsky']);
     expect(restored.recentFeatures[0].energy).toBe(0.8);
     expect(restored.avg.energy).toBe(0.8);
-    expect(restored.genreDrift).toBe(0.2);
+    expect(restored.genreDrift).toBe(0.06);
     expect(restored.artistSet.has('coldplay')).toBe(true);
   });
 
@@ -500,15 +501,15 @@ describe('evolution', () => {
     for (let i = 0; i < 100; i++) {
       evolveDirection(s);
     }
-    expect(s.genreDrift).toBeGreaterThanOrEqual(-0.35);
-    expect(s.genreDrift).toBeLessThanOrEqual(0.35);
+    expect(s.genreDrift).toBeGreaterThanOrEqual(-0.08);
+    expect(s.genreDrift).toBeLessThanOrEqual(0.08);
   });
 
   it('buildTargets applies drift to averages', () => {
     const s = createState();
     activate(s);
     recordFeatures(s, fakeFeatures({ energy: 0.5, tempo: 120 }));
-    s.genreDrift = 0.2;
+    s.genreDrift = 0.06;
     const targets = buildTargets(s);
     expect(targets.targetEnergy).toBeGreaterThan(0.5);
     expect(targets.targetTempo).toBeGreaterThan(120);
@@ -540,7 +541,7 @@ describe('recordFeatures', () => {
     for (let i = 0; i < 10; i++) {
       recordFeatures(s, fakeFeatures(), `Artist${i}`);
     }
-    expect(s.recentArtists.length).toBeLessThanOrEqual(5);
+    expect(s.recentArtists.length).toBeLessThanOrEqual(DEFAULT_CONFIG.artistCooldown + 2);
   });
 });
 

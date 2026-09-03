@@ -63,8 +63,8 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
     }
     console.error(`[vaporzr] server error: ${err.message}`);
   });
-  server.listen(config.port, '0.0.0.0', () => {
-    console.log(`[vaporzr] control server on http://0.0.0.0:${config.port}`);
+  server.listen(config.port, config.bindAddress, () => {
+    console.log(`[vaporzr] control server on http://${config.bindAddress}:${config.port}`);
     vizTunnel.start();
     bridge?.startLibrespot();
   });
@@ -113,6 +113,61 @@ async function handleRoute(req: http.IncomingMessage, url: URL, res: http.Server
       try {
         const file = fs.readFileSync(path.join(__dirname, '..', 'public', url.pathname.slice(1)));
         res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' });
+        res.end(file);
+        return;
+      } catch {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+    }
+    // Endless Wave wallpaper loop (real VISUALDON video) + poster. Open like
+    // /viz. Range support is required for browsers to stream/loop <video>.
+    if (url.pathname === '/ew-bg.mp4') {
+      try {
+        const filePath = path.join(__dirname, '..', 'public', 'ew-bg.mp4');
+        const stat = fs.statSync(filePath);
+        const range = req.headers.range;
+        const m = range ? /bytes=(\d*)-(\d*)/.exec(range) : null;
+        if (m) {
+          const start = m[1] ? parseInt(m[1], 10) : 0;
+          const end = Math.min(m[2] ? parseInt(m[2], 10) : stat.size - 1, stat.size - 1);
+          res.writeHead(206, {
+            'Content-Type': 'video/mp4',
+            'Content-Length': end - start + 1,
+            'Content-Range': `bytes ${start}-${end}/${stat.size}`,
+            'Accept-Ranges': 'bytes',
+            'Cache-Control': 'public, max-age=86400',
+          });
+          const stream = fs.createReadStream(filePath, { start, end });
+          stream.on('error', () => {
+            try { res.end(); } catch { /* client went away */ }
+          });
+          stream.pipe(res);
+        } else {
+          res.writeHead(200, {
+            'Content-Type': 'video/mp4',
+            'Content-Length': stat.size,
+            'Accept-Ranges': 'bytes',
+            'Cache-Control': 'public, max-age=86400',
+          });
+          const stream = fs.createReadStream(filePath);
+          stream.on('error', () => {
+            try { res.end(); } catch { /* client went away */ }
+          });
+          stream.pipe(res);
+        }
+        return;
+      } catch {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+    }
+    if (url.pathname === '/ew-bg.jpg') {
+      try {
+        const file = fs.readFileSync(path.join(__dirname, '..', 'public', 'ew-bg.jpg'));
+        res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=86400' });
         res.end(file);
         return;
       } catch {

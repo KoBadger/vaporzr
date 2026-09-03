@@ -1,9 +1,9 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
+import path from 'node:path';
 import net from 'node:net';
 import os from 'node:os';
-import path from 'node:path';
 import { config } from './config.js';
 
 /**
@@ -18,7 +18,11 @@ import { config } from './config.js';
  * os.tmpdir() is space-free on this machine (C:\Users\joshv\AppData\Local\Temp).
  */
 const BRIDGE_SRC = `const net = require('net');
-const port = Number(process.argv[2] || 0);
+// librespot's subprocess backend splits the --device value on spaces, so a
+// "node \"path\" port" command only ever passes the bare program name to the
+// sink — the port arg is dropped and the bridge never connects. Read the port
+// from an env var (librespot inherits its parent env) instead of argv.
+const port = Number(process.env.VAPORZR_BRIDGE_PORT || 0);
 let sock = null;
 let needResume = false;
 function connect() {
@@ -61,6 +65,15 @@ export class LibrespotManager {
   private restartTimer: NodeJS.Timeout | null = null;
   private restarts = 0;
   private bridgePath = '';
+  /** Periodic watchdog that detects a "zombie bridge" — a still-running librespot
+   *  whose PCM socket silently dropped after connecting. That state reports
+   *  !isRunning() and would otherwise force every Spotify track through the slow
+   *  YouTube fallback until the next natural restart. */
+  private heartbeatTimer: NodeJS.Timeout | null = null;
+  /** File descriptor for capturing librespot stderr to disk. The bot's spawn pipe
+   *  wasn't surfacing librespot's own errors, making silent exits impossible to
+   *  diagnose. A persistent log lets us see auth/session/bridge errors. */
+  private stderrFd: number | null = null;
   /**
    * The sink subprocess (bridge) may only be spawned at first playback, so a
    * never-connected socket is normal at idle. Once the bridge HAS connected,
@@ -141,7 +154,7 @@ export class LibrespotManager {
       // (id = SHA1(name)) and make Spotify route play commands to the wrong
       // session — the source of wrong-track skips and silent stalls. Bridges that
       // outlived their librespot would otherwise keep reconnecting to our PCM port.
-      await this.killStale();
+      // (killStale also runs inside spawnLibrespot on every respawn; it's idempotent.)
       await this.startTcpServer();
       this.spawnLibrespot(bridgePath);
     } catch (err) {
@@ -234,17 +247,31 @@ export class LibrespotManager {
 
   private spawnLibrespot(bridgePath: string): void {
     this.bridgeEverConnected = false;
+    // A stale librespot from a prior run (or a prior respawn that failed its
+    // Connect registration) holds the same device id = SHA1(name) and can grab
+    // play commands destined for this session — routing audio to a dead socket.
+    // Kill zombies before every spawn, not just at startup, so a respawn never
+    // inherits one. Await so the taskkill finishes before we fork.
+    void this.killStale().finally(() => {
+      if (this.stopped) return;
+      this.spawnArgv(bridgePath);
+    });
+  }
+
+  private spawnArgv(bridgePath: string): void {
     const args = [
       '--name',
       config.librespotDeviceName,
       '--backend',
       'subprocess',
       '--device',
-      // shell-words (which librespot uses to parse this) strips backslashes, so
-      // use forward slashes — Node accepts them on Windows. Quoted in case tmpdir
-      // ever contains spaces. The port is ephemeral per session so bridges left
-      // over from older processes can never connect to (and hijack) this one.
-      `node "${bridgePath.replace(/\\/g, '/')}" ${this.bridgePort}`,
+      // librespot parses this with shell_words::split. That tool strips quotes and
+      // backslashes, so a Windows path with spaces would break — hence forward
+      // slashes (Node accepts them) and quotes around the bridge path. The port is
+      // NOT passed as an arg (spaces/quoting across the split is fragile): the
+      // bridge reads it from VAPORZR_BRIDGE_PORT, which librespot inherits via
+      // spawn env below. Ephemeral per session so stale bridges can't hijack it.
+      `node "${bridgePath.replace(/\\/g, '/')}"`,
       '--format',
       's16',
       '--bitrate',
@@ -264,7 +291,22 @@ export class LibrespotManager {
         .map((a, i) => (args[i - 1] === '--password' ? '***' : a))
         .join(' ')}`
     );
-    const proc = spawn(config.librespotPath, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    // Rotate / open a persistent stderr log so librespot's own errors are
+    // visible. The Node spawn pipe wasn't surfacing them, making silent exits
+    // impossible to debug on Windows.
+    this.closeStderrFd();
+    const stderrPath = path.join(config.dataDir, 'librespot', 'stderr.log');
+    try {
+      fs.mkdirSync(path.dirname(stderrPath), { recursive: true });
+      this.stderrFd = fs.openSync(stderrPath, 'a');
+    } catch (err) {
+      console.warn(`[librespot] could not open stderr log: ${err instanceof Error ? err.message : err}`);
+    }
+    const proc = spawn(config.librespotPath, args, {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', this.stderrFd ?? 'pipe'],
+      env: { ...process.env, VAPORZR_BRIDGE_PORT: String(this.bridgePort) },
+    });
     this.proc = proc;
     proc.on('error', (err) => {
       console.warn(`[librespot] failed to start: ${err.message}`);
@@ -283,7 +325,54 @@ export class LibrespotManager {
       if (this.proc === proc) this.restarts = 0;
     }, 60_000).unref?.();
     proc.stdout?.on('data', (d) => console.log(`[librespot] ${String(d).trim()}`));
-    proc.stderr?.on('data', (d) => console.warn(`[librespot] ${String(d).trim()}`));
+    this.startHeartbeat(proc);
+  }
+
+  private closeStderrFd(): void {
+    if (this.stderrFd !== null) {
+      try {
+        fs.closeSync(this.stderrFd);
+      } catch {
+        /* ignore */
+      }
+      this.stderrFd = null;
+    }
+  }
+
+  /** Start the zombie-bridge watchdog for this librespot process. */
+  private startHeartbeat(proc: ChildProcess): void {
+    this.stopHeartbeat();
+    this.heartbeatTimer = setInterval(() => {
+      // Not ours anymore (stop() or a newer spawn replaced it).
+      if (this.proc !== proc || this.stopped) {
+        this.stopHeartbeat();
+        return;
+      }
+      // Once the bridge HAS connected, a null socket is a dead PCM path — the
+      // classic silent-stall. Recycle librespot so its exit handler respawns a
+      // fresh one; this is what restores `isRunning()` without waiting for the
+      // next track or a full process restart.
+      if (this.bridgeEverConnected && this.socket === null) {
+        console.warn('[librespot] heartbeat lost bridge — recycling librespot');
+        const p = this.proc;
+        this.proc = null;
+        this.stopHeartbeat();
+        try {
+          p?.kill();
+        } catch {
+          /* ignore */
+        }
+        this.scheduleRestart();
+      }
+    }, 5_000);
+    this.heartbeatTimer.unref?.();
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
   }
 
   /** Re-spawn librespot with capped backoff after an unexpected exit. */
@@ -306,6 +395,8 @@ export class LibrespotManager {
 
   stop(): void {
     this.stopped = true;
+    this.stopHeartbeat();
+    this.closeStderrFd();
     if (this.restartTimer) {
       clearTimeout(this.restartTimer);
       this.restartTimer = null;

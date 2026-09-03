@@ -408,8 +408,10 @@ export class VoiceManager {
     // Force consistent loudness across every source (YouTube/SoundCloud/local/
     // Apple/Suno). Without this, a hot-mastered YouTube upload can be far louder
     // than a Spotify track that already lands at ~-14 LUFS. Single-pass dynamic
-    // mode keeps latency low while still riding gain to the target.
-    args.push('-af', 'loudnorm=I=-14:TP=-1.5:LRA=11');
+    // mode keeps latency low while still riding gain to the target — but it is
+    // reactive, so the first ~1-3s pass through un-attenuated; the short fade-in
+    // stops hot intros from punching through before the gain rider catches up.
+    args.push('-af', 'loudnorm=I=-14:TP=-1.5:LRA=11,afade=t=in:st=0:d=0.4');
     args.push('-f', 's16le', 'pipe:1');
 
     const proc = spawn(config.ffmpegPath, args, {
@@ -447,15 +449,19 @@ export class VoiceManager {
         console.warn(`[voice] ffmpeg exited with code ${code}${signal ? ` (${signal})` : ''} — stream cut short`);
         const ranForMs = Date.now() - startedAt;
         const attemptsLeft = (opts.retries ?? 0) - 1;
-        if (opts.refreshUrl && attemptsLeft >= 0 && ranForMs < 8000) {
+        if (opts.refreshUrl && attemptsLeft >= 0) {
+          // A signed YouTube URL can fail after minutes of otherwise healthy
+          // playback. Refresh it and resume near the last known position rather
+          // than treating a mid-track failure as a natural end and skipping.
+          const resumeMs = (opts.seekMs ?? 0) + Math.max(0, ranForMs - 250);
           console.warn(
-            `[voice] stream failed after ${ranForMs}ms — refreshing URL and retrying (${attemptsLeft} retries left)`,
+            `[voice] stream failed after ${ranForMs}ms — refreshing URL and resuming at ${Math.round(resumeMs)}ms (${attemptsLeft} retries left)`,
           );
           this.ffmpeg = null;
           setTimeout(() => {
             opts.refreshUrl!()
               .then((newUrl) => {
-                this.playFfmpegUrl(newUrl, { ...opts, retries: attemptsLeft });
+                this.playFfmpegUrl(newUrl, { ...opts, seekMs: resumeMs, retries: attemptsLeft });
               })
               .catch((err) => {
                 const msg = err instanceof Error ? err.message : String(err);
@@ -522,7 +528,14 @@ export class VoiceManager {
       if (token !== this.streamToken) return;
       console.warn(`[voice] stream download failed: ${err instanceof Error ? err.message : err}`);
       source.destroy();
-      proc.stdin?.end();
+      // EOF can make ffmpeg exit with code 0, which looks like a natural track
+      // end and skips the song. Kill it as a failed stream so playFfmpegUrl's
+      // refresh/resume path gets a chance to recover instead.
+      try {
+        proc.kill();
+      } catch {
+        /* ignore */
+      }
     });
     source.pipe(proc.stdin!);
   }

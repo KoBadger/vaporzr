@@ -44,7 +44,7 @@ const RESAMPLE_ARGS = [
   '-ac',
   '2',
   '-af',
-  'loudnorm=I=-14:TP=-1.5:LRA=11',
+  'loudnorm=I=-14:TP=-1.5:LRA=11,afade=t=in:st=0:d=0.4',
   '-f',
   's16le',
   'pipe:1',
@@ -207,7 +207,10 @@ export class PlaybackController {
     const nextTrack = snapshot.tracks[snapshot.currentIndex + 1];
     if (!nextTrack) return;
     const nextIsYt = nextTrack.source === 'youtube' || nextTrack.source === 'suno' || nextTrack.source === 'soundcloud' || nextTrack.source === 'apple';
-    const nextIsSpotifyFallback = nextTrack.source === 'spotify' && !this.librespot?.isRunning();
+    // In prefer-YouTube mode a running librespot is irrelevant — Spotify tracks
+    // still play via YouTube, so they need the same preload warming.
+    const nextIsSpotifyFallback =
+      nextTrack.source === 'spotify' && (config.spotifyPreferYoutube || !this.librespot?.isRunning());
     if (!nextIsYt && !nextIsSpotifyFallback) return;
     const remaining = Math.max(0, durationMs - positionMs);
     if (remaining <= 0) return;
@@ -476,7 +479,9 @@ export class PlaybackController {
   /** No Spotify device available — play the track's YouTube match instead. */
   private async playYoutubeFallback(current: TrackInfo, generation: number): Promise<void> {
     const t0 = Date.now();
-    console.log(`[playback] no Spotify device — falling back to YouTube for "${current.name}"`);
+    console.log(
+      `[playback] ${config.spotifyPreferYoutube ? 'prefer-YouTube mode' : 'no Spotify device'} — resolving "${current.name}" via YouTube`,
+    );
     this.stopSpotifyFeed();
     this.stopSpotifyProgress();
     let video: ResolvedVideo | null | undefined = this.streamCache.get(current.uri);
@@ -959,7 +964,24 @@ export class PlaybackController {
       // Publish the moved cursor before async Spotify/yt-dlp resolution finishes.
       this.queue.setState({ playing: false, track: nextTrack, durationMs: nextTrack.durationMs, positionMs: 0, source: nextTrack.source });
     }
+    this.warmCacheAround(this.queue.getSnapshot().currentIndex);
     this.safePlay();
+  }
+
+  /**
+   * Warm the stream-resolution cache around a queue index so a fast manual
+   * skip / previous doesn't stall on a fresh yt-dlp resolve. The just-landed
+   * track may already be mid-resolve by play(); prefetching only fills the
+   * FOLLOWING one (the one a second skip would land on), which play() has no
+   * reason to resolve yet. Cheap no-op when the cache is already warm.
+   */
+  private warmCacheAround(index: number): void {
+    const snapshot = this.queue.getSnapshot();
+    const warm = (i: number): void => {
+      const t = snapshot.tracks[i];
+      if (t && !this.streamCache.has(t.uri)) this.prefetchStream(t);
+    };
+    warm(index + 1);
   }
 
   previous(): void {
@@ -968,6 +990,7 @@ export class PlaybackController {
     this.lastSource = this.currentSource();
     this.queue.previous();
     this.clearEndTimer();
+    this.warmCacheAround(this.queue.getSnapshot().currentIndex);
     this.safePlay();
   }
 

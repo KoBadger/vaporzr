@@ -42,9 +42,11 @@ function ytDlpOnce(args: string[]): Promise<string> {
     const noProxyEnv = Object.fromEntries(
       Object.entries(process.env).filter(([k]) => !k.toLowerCase().endsWith('_proxy')),
     );
+    const flags = ['--no-check-certificates'];
+    if (config.youtubeCookiesPath) flags.push('--cookies', config.youtubeCookiesPath);
     execFile(
       config.ytDlpPath,
-      ['--no-check-certificates', ...args],
+      [...flags, ...args],
       { windowsHide: true, timeout: 60_000, maxBuffer: 4 * 1024 * 1024, env: noProxyEnv },
       (err, stdout, stderr) => {
         if (err) {

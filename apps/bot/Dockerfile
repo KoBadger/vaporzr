@@ -12,9 +12,13 @@
 #     vaporzr-bot
 #
 # NOTES
-# - Do NOT publish -p 4876:4876. The control server + WS bridge bind to
-#   127.0.0.1:4876 and have no auth; keep them local to the VPS. To open the
-#   browser panel from your machine, SSH-tunnel the port instead.
+# - The container binds the control server + WS bridge to 127.0.0.1:4876
+#   (BIND_ADDRESS default here). Do NOT publish -p 4876:4876. To open the
+#   browser panel / visualizer from your machine, SSH-tunnel the port instead:
+#       ssh -N -L 4876:127.0.0.1:4876 user@your-vps
+#   then browse to http://127.0.0.1:4876/panel. If you DO want it reachable
+#   from the internet instead, override BIND_ADDRESS=0.0.0.0 AND set SHARE_KEY
+#   to gate /panel + /viz + the WS bridge (they are unauthenticated otherwise).
 # - Spotify linking: with SPOTIFY_PREFER_YOUTUBE=1 (multi-guild mode) and
 #   SPOTIFY_USE_ANONYMOUS=1 (default) no account link is required. If you need
 #   full-length public playlists, set SPOTIFY_SP_DC in .env. To keep an existing
@@ -44,10 +48,12 @@ RUN npm ci --omit=dev
 FROM node:20-bookworm-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates ffmpeg python3 python3-pip \
+      ca-certificates ffmpeg python3 python3-venv \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g tsx \
-    && python3 -m pip install --no-cache-dir yt-dlp
+    && python3 -m venv /opt/ytvenv \
+    && /opt/ytvenv/bin/pip install --no-cache-dir --upgrade yt-dlp \
+    && ln -s /opt/ytvenv/bin/yt-dlp /usr/local/bin/yt-dlp
 
 WORKDIR /app
 
@@ -55,10 +61,12 @@ COPY --from=build /app ./
 
 ENV NODE_ENV=production \
     PORT=4876 \
+    BIND_ADDRESS=127.0.0.1 \
     DATA_DIR=/app/data \
     YT_DLP_PATH=/usr/local/bin/yt-dlp \
     FFMPEG_PATH=/usr/bin/ffmpeg \
     LIBRESPOT_PATH= \
+    SPOTIFY_PREFER_YOUTUBE=1 \
     PLAYER_DIR=/dev/null \
     ELECTRON_PATH=/bin/true
 
