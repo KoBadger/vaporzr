@@ -59,8 +59,13 @@ docker pull "$IMAGE"
 
 docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
 echo "==> Starting container"
+# Use host networking so the control server's loopback binding (BIND_ADDRESS)
+# is directly reachable as 127.0.0.1 from the host — the docker-proxy path
+# resets connections when the app binds container-localhost. Bot-only traffic
+# is outbound; nothing needs a published port here.
 docker run -d --name "$CONTAINER" \
   --restart unless-stopped \
+  --network host \
   --env-file "$APP_DIR/.env" \
   -e BIND_ADDRESS=127.0.0.1 \
   -v vaporzr-data:/app/data \
