@@ -1,4 +1,7 @@
 import { execFile } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { config } from './config.js';
 import type { ResolvedTrack } from './spotify.js';
 
@@ -66,18 +69,51 @@ interface YtDlpMeta {
   url?: string;
 }
 
+/** Monotonic id so concurrent yt-dlp calls never share a temp cookie file. */
+let cookieCopySeq = 0;
+
+/**
+ * Copy the cookie jar to a per-call temp file. yt-dlp always DUMPS the jar
+ * back to the --cookies path on exit; on a read-only mount (the VPS ships
+ * cookies.txt :ro) that write fails, the process exits non-zero, and the
+ * caller would treat an otherwise-successful search as failed. A writable
+ * throwaway copy sidesteps the dump — and keeps concurrent calls from
+ * racing on the same file. Returns null when cookies are unavailable.
+ */
+function stageCookieCopy(): string | null {
+  if (!config.youtubeCookiesPath) return null;
+  try {
+    const file = path.join(
+      os.tmpdir(),
+      `vz-cookies-${process.pid}-${++cookieCopySeq}.txt`,
+    );
+    fs.copyFileSync(config.youtubeCookiesPath, file);
+    return file;
+  } catch {
+    return null;
+  }
+}
+
 function ytDlpOnce(args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     const noProxyEnv = Object.fromEntries(
       Object.entries(process.env).filter(([k]) => !k.toLowerCase().endsWith('_proxy')),
     );
     const flags = ['--no-check-certificates', '--socket-timeout', '10', '--retries', '1'];
-    if (config.youtubeCookiesPath) flags.push('--cookies', config.youtubeCookiesPath);
+    const cookieCopy = stageCookieCopy();
+    if (cookieCopy) flags.push('--cookies', cookieCopy);
     execFile(
       config.ytDlpPath,
       [...flags, ...args],
       { windowsHide: true, timeout: 45_000, maxBuffer: 4 * 1024 * 1024, env: noProxyEnv },
       (err, stdout, stderr) => {
+        if (cookieCopy) {
+          try {
+            fs.rmSync(cookieCopy, { force: true });
+          } catch {
+            /* best effort */
+          }
+        }
         if (err) {
           reject(new YoutubeError(`yt-dlp failed: ${(stderr || err.message).toString().slice(0, 300)}`));
           return;
@@ -102,6 +138,9 @@ const TRANSIENT_YTDLP_ERRORS = [
   'Failed to extract',
   'Sign in to confirm',
   'ETIMEDOUT',
+  // YouTube occasionally serves a degraded player response ("The page needs
+  // to be reloaded") — the same request typically succeeds on a retry.
+  'page needs to be reloaded',
 ];
 
 async function runYtDlp(args: string[], retries = 2): Promise<string> {
