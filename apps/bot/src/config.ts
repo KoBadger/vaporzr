@@ -24,6 +24,14 @@ export const config = {
   /** Path to a Netscape-format cookies.txt for YouTube. Authenticated requests
    *  avoid most 403s and throttling that cause mid-track stream cuts. */
   youtubeCookiesPath: process.env.YOUTUBE_COOKIES_PATH ?? '',
+  /**
+   * HTTP proxy for YouTube traffic (yt-dlp resolve + the googlevideo stream
+   * fetch). Datacenter IPs get SABR-flagged by YouTube (no direct stream
+   * URLs regardless of cookies/PO tokens); routing just YouTube through a
+   * residential proxy restores resolution AND playback. Format:
+   * http://[user:pass@]host:port — empty = direct.
+   */
+  youtubeProxy: process.env.YOUTUBE_PROXY ?? '',
   /** ffmpeg binary used for server-side streaming + PCM resampling. */
   ffmpegPath: process.env.FFMPEG_PATH ?? ffmpegStatic ?? 'ffmpeg',
   /** Path to the librespot binary (the server-side Spotify "device"). Empty = disabled. */

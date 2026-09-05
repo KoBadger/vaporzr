@@ -402,8 +402,14 @@ export class VoiceManager {
     // HLS playlists (SoundCloud serves .m3u8) must be demuxed by ffmpeg itself —
     // piping the playlist bytes into stdin produces noise, not audio.
     const isHls = isHttp && /\.m3u8(\?|$)/i.test(url);
+    // googlevideo stream URLs are IP-bound to the IP that resolved them, so
+    // when YouTube traffic is proxied, ffmpeg must fetch through that same
+    // proxy (node's fetch can't honor http_proxy). For those URLs ffmpeg
+    // reads the URL directly — the env below carries the proxy.
+    const useYtProxy = !!config.youtubeProxy && /googlevideo\.com\//.test(url);
+    const fetchSelf = isHttp && !isHls && !useYtProxy;
     const args = ['-hide_banner', '-loglevel', 'error'];
-    if (isHttp && !isHls) {
+    if (fetchSelf) {
       // stdin is not seekable, so a resume seek runs on the output side
       // (decode + discard); opus/aac decoding is far faster than realtime.
       args.push('-i', 'pipe:0');
@@ -423,12 +429,14 @@ export class VoiceManager {
     args.push('-af', this.audioFx ? `${baseFilter},${this.audioFx}` : baseFilter);
     args.push('-f', 's16le', 'pipe:1');
 
-    const proc = spawn(config.ffmpegPath, args, {
-      windowsHide: true,
-      env: Object.fromEntries(
-        Object.entries(process.env).filter(([k]) => !k.toLowerCase().endsWith('_proxy')),
-      ),
-    });
+    // Strip ambient proxy vars (Windows system proxies break yt-dlp/ffmpeg),
+    // then re-add ours for proxied YouTube fetches — ffmpeg's http protocol
+    // reads the lowercase `http_proxy` env and CONNECT-tunnels https.
+    const ffEnv = Object.fromEntries(
+      Object.entries(process.env).filter(([k]) => !k.toLowerCase().endsWith('_proxy')),
+    );
+    if (useYtProxy) ffEnv.http_proxy = config.youtubeProxy;
+    const proc = spawn(config.ffmpegPath, args, { windowsHide: true, env: ffEnv });
     this.ffmpeg = proc;
     this.streamStartTime = Date.now();
     this.pausedPositionMs = opts.seekMs ?? 0;
@@ -445,7 +453,7 @@ export class VoiceManager {
       if (line) console.warn(`[voice] ffmpeg: ${line.slice(0, 400)}`);
     });
     proc.stdout.pipe(stream);
-    if (isHttp && !isHls) this.fetchIntoStdin(url, proc, token);
+    if (fetchSelf) this.fetchIntoStdin(url, proc, token);
     const resource = createAudioResource(stream, { inputType: StreamType.Raw, inlineVolume: true });
     this.resource = resource;
     if (opts.volume !== undefined) this.volumePercent = opts.volume;

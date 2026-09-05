@@ -104,6 +104,10 @@ function ytDlpOnce(args: string[]): Promise<string> {
     // deprecated without one). Node ships with the bot everywhere we run
     // (dev machine + container), so point yt-dlp at it explicitly.
     flags.push('--js-runtimes', 'node');
+    // Residential proxy for YouTube: datacenter IPs are SABR-flagged (no
+    // direct stream URLs). The proxy's exit IP resolves the URL AND downloads
+    // it (ffmpeg uses the same proxy — googlevideo URLs are IP-bound).
+    if (config.youtubeProxy) flags.push('--proxy', config.youtubeProxy);
     const cookieCopy = stageCookieCopy();
     if (cookieCopy) flags.push('--cookies', cookieCopy);
     execFile(
