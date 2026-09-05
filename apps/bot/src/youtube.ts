@@ -100,6 +100,10 @@ function ytDlpOnce(args: string[]): Promise<string> {
       Object.entries(process.env).filter(([k]) => !k.toLowerCase().endsWith('_proxy')),
     );
     const flags = ['--no-check-certificates', '--socket-timeout', '10', '--retries', '1'];
+    // yt-dlp's signature/n-challenge solver needs a JS runtime (extraction is
+    // deprecated without one). Node ships with the bot everywhere we run
+    // (dev machine + container), so point yt-dlp at it explicitly.
+    flags.push('--js-runtimes', 'node');
     const cookieCopy = stageCookieCopy();
     if (cookieCopy) flags.push('--cookies', cookieCopy);
     execFile(
