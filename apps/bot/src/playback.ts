@@ -31,6 +31,8 @@ const PRELOAD_LEAD_MS = 30_000;
  *  Aligned with YouTube's signed-URL lifetime (~6h) so a stale URL never
  *  lands back in the queue. */
 const PLAYBACK_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+/** Debounce before the stream cache is flushed to `stream-cache.json`. */
+export const STREAM_CACHE_SAVE_DEBOUNCE_MS = 4000;
 /** Resample librespot's 44.1 kHz PCM to Discord's 48 kHz, plus R128 loudness
  *  normalization so Spotify and YouTube/EW tracks land at the same target. A
  *  per-session effect filter string (upbeat/slowed/bass) is appended last so
@@ -117,7 +119,7 @@ export class PlaybackController {
    * failed to carry a URL) is dropped — a restart then starts instant for
    * recently-played tracks instead of re-running yt-dlp.
    */
-  private loadStreamCache(): void {
+  loadStreamCache(): void {
     try {
       const file = path.join(config.dataDir, 'stream-cache.json');
       if (!fs.existsSync(file)) return;
@@ -141,7 +143,7 @@ export class PlaybackController {
   }
 
   /** Debounced persist of the resolved-stream cache (dedupes across a burst). */
-  private scheduleCacheSave(): void {
+  scheduleCacheSave(): void {
     if (this.cacheSaveTimer) clearTimeout(this.cacheSaveTimer);
     this.cacheSaveTimer = setTimeout(() => {
       this.cacheSaveTimer = null;
@@ -163,9 +165,14 @@ export class PlaybackController {
   }
 
   /** Set a cache entry and schedule its persistence. */
-  private cacheSet(uri: string, video: ResolvedVideo): void {
+  cacheSet(uri: string, video: ResolvedVideo): void {
     this.streamCache.set(uri, video);
     this.scheduleCacheSave();
+  }
+
+  /** Public read accessor for the resolved-stream cache (used by tests + status). */
+  cachedStream(uri: string): ResolvedVideo | undefined {
+    return this.streamCache.get(uri);
   }
 
   /** Callback fired when a track finishes (or is skipped). Useful for Endless Wave auto-queue. */

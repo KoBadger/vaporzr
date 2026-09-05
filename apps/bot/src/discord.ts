@@ -309,7 +309,7 @@ function truncate(text: string, max: number): string {
 }
 
 /** Parse a sleep-timer spec ("30m", "1h", "45s", "1h30m") into milliseconds. */
-function parseSleepSpec(spec: string): number | null {
+export function parseSleepSpec(spec: string): number | null {
   const m = /^(\d+(?:\.\d+)?)([smh])$/.exec(spec.trim().toLowerCase());
   if (!m) return null;
   const n = parseFloat(m[1]);
@@ -1436,6 +1436,9 @@ export class DiscordBot {
       sfx: 'sfx',
       sens: 'sensitivity', sensitivity: 'sensitivity',
       ew: 'endwav', endwav: 'endwav',
+      speed: 'speed',
+      bass: 'bassboost', boost: 'bassboost', bassboost: 'bassboost',
+      sleep: 'sleep', timer: 'sleep',
       help: 'help',
     };
     const canonical = alias[cmd];
@@ -1821,6 +1824,98 @@ export class DiscordBot {
           if ('send' in message.channel) {
             await message.channel.send({ content: '📊 Waveform — last ~2.4s:', files: [new AttachmentBuilder(gif, { name: 'vaporzr-wave.gif' })] });
           }
+          break;
+        }
+
+        case 'speed': {
+          if (!canUse('speed')) return void (await deny());
+          const mode = (args || '').toLowerCase();
+          const label = (spd: number): string =>
+            spd === 1 ? 'Normal (1x)' : spd > 1 ? `Nightcore (${spd.toFixed(2)}x)` : `Slowed (${spd.toFixed(2)}x)`;
+          if (mode && !['nightcore', 'slowed', 'normal'].includes(mode)) {
+            await message.reply(
+              `🎚️ \`V@speed <mode>\` — modes: \`nightcore\`, \`slowed\`, \`normal\`.\nCurrent: **${label(s.playback.getSpeed())}**`,
+            );
+            break;
+          }
+          if (!mode) {
+            await message.reply(
+              `🎚️ Current speed: **${label(s.playback.getSpeed())}**\nUsage: \`V@speed nightcore\` / \`slowed\` / \`normal\``,
+            );
+            break;
+          }
+          const factor = mode === 'nightcore' ? 1.25 : mode === 'slowed' ? 0.85 : 1;
+          s.playback.setSpeed(factor);
+          await message.reply(
+            factor === 1
+              ? '▶️ Speed back to normal.'
+              : factor > 1
+                ? `⚡ Nightcore mode — everything runs at **${factor.toFixed(2)}x**!`
+                : `🐢 Slowed down to **${factor.toFixed(2)}x** — chill vibes.`,
+          );
+          break;
+        }
+
+        case 'bass':
+        case 'bassboost': {
+          if (!canUse('bassboost')) return void (await deny());
+          const raw = (args || '').toLowerCase();
+          if (raw === 'off' || raw === '0') {
+            s.playback.setBassBoost(0);
+            await message.reply('🎛️ Bass boost off.');
+            break;
+          }
+          const db = raw ? parseInt(raw, 10) : NaN;
+          if (!raw || Number.isNaN(db) || db <= 0) {
+            const current = s.playback.getBassBoost();
+            if (current > 0) {
+              s.playback.setBassBoost(0);
+              await message.reply('🎛️ Bass boost off.');
+            } else {
+              await message.reply(
+                `🔇 Bass boost is off.\nUsage: \`V@bass <5|8|10>\` — e.g. \`V@bass 10\` (or \`V@bass off\`).`,
+              );
+            }
+            break;
+          }
+          const clamped = Math.min(12, Math.max(2, db));
+          s.playback.setBassBoost(clamped);
+          await message.reply(
+            clamped <= 5
+              ? `🎚️ Bass +${clamped} dB — subtle low shelf.`
+              : clamped <= 8
+                ? `🎚️ Bass +${clamped} dB — punchy.`
+                : `💥 Bass +${clamped} dB — the neighbors will feel it.`,
+          );
+          break;
+        }
+
+        case 'sleep':
+        case 'timer': {
+          if (!canUse('sleep')) return void (await deny());
+          if (!message.guildId) return void (await message.reply('Sleep timer only works inside a server.'));
+          const guildId = message.guildId;
+          if (!args) {
+            if (this.sleepTimers.has(guildId)) {
+              this.cancelSleepTimer(guildId);
+              await message.reply('⏰ Sleep timer cancelled.');
+            } else {
+              await message.reply('No sleep timer set. Use `V@sleep 30m` (or `1h`, `45s`) to set one.');
+            }
+            break;
+          }
+          const ms = parseSleepSpec(args);
+          if (!ms || ms <= 0) {
+            await message.reply(`Couldn't parse \`${args}\`. Try \`V@sleep 30m\`, \`1h\`, or \`45s\`.`);
+            break;
+          }
+          const when = new Date(Date.now() + ms);
+          this.setSleepTimer(s, ms, () => {
+            void this.sleepFireNotify(s);
+          });
+          await message.reply(
+            `⏰ Sleep timer set — I'll stop playing and leave at **${when.toLocaleTimeString()}**.\nUse \`V@sleep\` again to cancel.`,
+          );
           break;
         }
 
@@ -3131,7 +3226,7 @@ export class DiscordBot {
       .addFields(
         {
           name: '▶️ Playback',
-          value: '`/play` `/insert` `/yt` `/skip` `/pause` `/resume` `/toggle` `/queue` `/nowplaying` `/clear` `/remove` `/volume` `/shuffle` `/join` `/leave` `/file` `/ew`',
+          value: '`/play` `/insert` `/yt` `/skip` `/pause` `/resume` `/toggle` `/queue` `/nowplaying` `/clear` `/remove` `/volume` `/shuffle` `/join` `/leave` `/file` `/ew` `/speed` `/bassboost` `/sleep`',
         },
         {
           name: '🎨 Visuals',
@@ -3151,7 +3246,7 @@ export class DiscordBot {
         },
         {
           name: '⌨️ Quick (prefix)',
-          value: '`V@p` play · `V@i` insert · `V@s` skip · `V@t` toggle · `V@sh` shuffle · `V@v` volume · `V@q` queue · `V@np` now playing · `V@c` clear · `V@rem` remove · `V@j` join · `V@l` leave · `V@wav` play file · `V@lyr` lyrics · `V@k` karaoke · `V@ew` endless wave · `V@pan` panel · `V@viz` visualizer · `V@th` theme · `V@sens` sensitivity · `V@dj` dj · `V@sfx` effect · `V@key` access links · `V@invite` invite · `V@help` this',
+          value: '`V@p` play · `V@i` insert · `V@s` skip · `V@t` toggle · `V@sh` shuffle · `V@v` volume · `V@q` queue · `V@np` now playing · `V@c` clear · `V@rem` remove · `V@j` join · `V@l` leave · `V@wav` play file · `V@lyr` lyrics · `V@k` karaoke · `V@ew` endless wave · `V@pan` panel · `V@viz` visualizer · `V@th` theme · `V@sens` sensitivity · `V@dj` dj · `V@sfx` effect · `V@speed` speed · `V@bass` bass boost · `V@sleep` sleep timer · `V@key` access links · `V@invite` invite · `V@help` this',
         },
       )
       .setFooter({ text: 'Try /play with a song name or a Spotify/YouTube link' });
