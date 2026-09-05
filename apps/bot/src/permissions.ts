@@ -38,6 +38,9 @@ const DEFAULT_COMMAND_LEVELS: Record<string, PermissionLevel> = {
   sfx: 'user',
   endwav: 'user',
   perms: 'admin',
+  speed: 'user',
+  bassboost: 'user',
+  sleep: 'user',
 };
 
 const LEVEL_RANK: Record<PermissionLevel, number> = { user: 0, mod: 1, admin: 2 };

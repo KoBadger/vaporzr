@@ -42,6 +42,10 @@ export interface PlaybackState {
   volume: number;
   shuffle: boolean;
   repeat: boolean;
+  /** Session tempo factor (1 = normal; 1.25 = Nightcore; 0.85 = slowed). */
+  speed?: number;
+  /** Bass-boost gain in dB (0 = off). */
+  bassBoost?: number;
   source?: MediaSource;
   updatedAt: number;
 }

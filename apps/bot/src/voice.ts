@@ -59,6 +59,9 @@ export class VoiceManager {
   private stallWarnings = 0;
   /** Loudness applied to every new audio resource (0–100). */
   private volumePercent = 100;
+  /** Extra ffmpeg `-af` stage for session audio FX (e.g. nightcore/slowed/bass),
+   *  appended after loudness normalization + fade-in. Empty when neutral. */
+  private audioFx = '';
 
   /** True when the voice connection is alive but the audio stream has died
    *  (ffmpeg crashed, pipe broken, etc.) — resume should re-stream instead of unpause. */
@@ -77,6 +80,11 @@ export class VoiceManager {
 
   setPcmTap(cb: ((data: Buffer) => void) | null): void {
     this.pcmTap = cb;
+  }
+
+  /** Session audio FX (nightcore/slowed/bass) applied to the next stream. */
+  setAudioFx(fx: string): void {
+    this.audioFx = fx;
   }
 
   /** Feed the bot-side spectrum analyzer (separate slot from setPcmTap). */
@@ -411,7 +419,8 @@ export class VoiceManager {
     // mode keeps latency low while still riding gain to the target — but it is
     // reactive, so the first ~1-3s pass through un-attenuated; the short fade-in
     // stops hot intros from punching through before the gain rider catches up.
-    args.push('-af', 'loudnorm=I=-14:TP=-1.5:LRA=11,afade=t=in:st=0:d=0.4');
+    const baseFilter = 'loudnorm=I=-14:TP=-1.5:LRA=11,afade=t=in:st=0:d=0.4';
+    args.push('-af', this.audioFx ? `${baseFilter},${this.audioFx}` : baseFilter);
     args.push('-f', 's16le', 'pipe:1');
 
     const proc = spawn(config.ffmpegPath, args, {

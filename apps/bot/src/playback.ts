@@ -1,5 +1,7 @@
 import { type CommandMessage, type MediaSource, type TrackInfo } from '@vaporzr/shared';
 import { spawn, type ChildProcess } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 import { QueueManager } from './queue.js';
 import { resolveYoutubeVideo, searchAndResolveYoutube, type ResolvedVideo } from './youtube.js';
 import { resolveSuno } from './suno.js';
@@ -25,9 +27,15 @@ export type SendFn = (msg: CommandMessage) => void;
 
 /** How long before a track ends we try to pre-resolve and buffer the next one. */
 const PRELOAD_LEAD_MS = 30_000;
+/** How long a resolved stream URL stays reusable before being re-resolved.
+ *  Aligned with YouTube's signed-URL lifetime (~6h) so a stale URL never
+ *  lands back in the queue. */
+const PLAYBACK_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 /** Resample librespot's 44.1 kHz PCM to Discord's 48 kHz, plus R128 loudness
- *  normalization so Spotify and YouTube/EW tracks land at the same target. */
-const RESAMPLE_ARGS = [
+ *  normalization so Spotify and YouTube/EW tracks land at the same target. A
+ *  per-session effect filter string (upbeat/slowed/bass) is appended last so
+ *  it rides on top of the loudness normalization. */
+const RESAMPLE_ARGS = (fx: string): string[] => [
   '-hide_banner',
   '-loglevel',
   'error',
@@ -44,7 +52,7 @@ const RESAMPLE_ARGS = [
   '-ac',
   '2',
   '-af',
-  'loudnorm=I=-14:TP=-1.5:LRA=11,afade=t=in:st=0:d=0.4',
+  fx ? `loudnorm=I=-14:TP=-1.5:LRA=11,afade=t=in:st=0:d=0.4,${fx}` : 'loudnorm=I=-14:TP=-1.5:LRA=11,afade=t=in:st=0:d=0.4',
   '-f',
   's16le',
   'pipe:1',
@@ -83,6 +91,12 @@ export class PlaybackController {
   private resampler: ChildProcess | null = null;
   /** uri -> resolved video, so a preloaded next track starts instantly. */
   private streamCache = new Map<string, ResolvedVideo>();
+  /** Debounced save of streamCache to disk (restart / requeue instant start). */
+  private cacheSaveTimer: NodeJS.Timeout | null = null;
+  /** Tempo factor for /upbeat & /slowed (1 = normal; 1.25 = Nightcore, 0.85 = slowed). */
+  private speedFactor = 1;
+  /** Bass boost gain in dB (0 = off). */
+  private bassBoostDb = 0;
   /** Invalidates in-flight play() calls when skip/previous/stop changes the cursor. */
   private playGeneration = 0;
   /** Cumulative number of tracks that have started playing. */
@@ -93,7 +107,66 @@ export class PlaybackController {
     private sendVisualizer: SendFn,
     private voice: VoiceManager,
     private librespot: LibrespotManager | null = null,
-  ) {}
+  ) {
+    this.loadStreamCache();
+  }
+
+  /**
+   * Load previously resolved stream URLs from disk. YouTube stream URLs are
+   * signed and decay in a few hours, so anything older than the TTL (or that
+   * failed to carry a URL) is dropped — a restart then starts instant for
+   * recently-played tracks instead of re-running yt-dlp.
+   */
+  private loadStreamCache(): void {
+    try {
+      const file = path.join(config.dataDir, 'stream-cache.json');
+      if (!fs.existsSync(file)) return;
+      const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as Array<{
+        uri: string;
+        savedAt: number;
+        video: ResolvedVideo;
+      }>;
+      const cutoff = Date.now() - PLAYBACK_CACHE_TTL_MS;
+      let restored = 0;
+      for (const entry of raw) {
+        if (!entry || !entry.video || !entry.video.streamUrl) continue;
+        if (entry.savedAt < cutoff) continue;
+        this.streamCache.set(entry.uri, entry.video);
+        restored++;
+      }
+      if (restored > 0) console.log(`[playback] restored ${restored} cached stream URL(s)`);
+    } catch (err) {
+      console.warn(`[playback] could not load stream cache: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  /** Debounced persist of the resolved-stream cache (dedupes across a burst). */
+  private scheduleCacheSave(): void {
+    if (this.cacheSaveTimer) clearTimeout(this.cacheSaveTimer);
+    this.cacheSaveTimer = setTimeout(() => {
+      this.cacheSaveTimer = null;
+      try {
+        const cutoff = Date.now() - PLAYBACK_CACHE_TTL_MS;
+        const rows: Array<{ uri: string; savedAt: number; video: ResolvedVideo }> = [];
+        for (const [uri, video] of this.streamCache) {
+          if (!video.streamUrl) continue;
+          rows.push({ uri, savedAt: Date.now(), video });
+        }
+        // Keep the file small: only retain entries still inside the TTL.
+        const fresh = rows.filter((r) => Date.now() - r.savedAt < PLAYBACK_CACHE_TTL_MS);
+        fs.mkdirSync(config.dataDir, { recursive: true });
+        fs.writeFileSync(path.join(config.dataDir, 'stream-cache.json'), JSON.stringify(fresh));
+      } catch (err) {
+        console.warn(`[playback] could not persist stream cache: ${err instanceof Error ? err.message : err}`);
+      }
+    }, 4000);
+  }
+
+  /** Set a cache entry and schedule its persistence. */
+  private cacheSet(uri: string, video: ResolvedVideo): void {
+    this.streamCache.set(uri, video);
+    this.scheduleCacheSave();
+  }
 
   /** Callback fired when a track finishes (or is skipped). Useful for Endless Wave auto-queue. */
   onTrackEnd: ((endedTrack: TrackInfo) => void) | null = null;
@@ -132,7 +205,7 @@ export class PlaybackController {
             });
           }
         }
-        if (video) this.streamCache.set(uri, video);
+        if (video) this.cacheSet(uri, video);
       } catch {
         // Best-effort warm-up; play() resolves on demand if this fails.
       }
@@ -226,7 +299,7 @@ export class PlaybackController {
     try {
       if (track.source === 'youtube') {
         const video = await resolveYoutubeVideo(track.uri.replace('youtube:video:', ''));
-        this.streamCache.set(track.uri, video);
+        this.cacheSet(track.uri, video);
       } else if (track.source === 'spotify' || track.source === 'apple') {
         const query = `${track.name} ${(track.artists ?? []).join(' ')}`.trim();
         const video = await searchAndResolveYoutube(query, {
@@ -234,7 +307,7 @@ export class PlaybackController {
           artists: track.artists,
           durationMs: track.durationMs,
         });
-        if (video) this.streamCache.set(track.uri, video);
+        if (video) this.cacheSet(track.uri, video);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -306,6 +379,7 @@ export class PlaybackController {
   async play(): Promise<void> {
     const generation = ++this.playGeneration;
     this.clearSpotifyRetry();
+    this.applyAudioFx();
     const current = this.queue.getCurrentTrack();
     if (!current) return;
     if (!this.voice.isJoined()) {
@@ -448,7 +522,6 @@ export class PlaybackController {
       if (!video) {
         video = await resolveYoutubeVideo(current.uri.replace('youtube:video:', ''));
       }
-      this.streamCache.delete(current.uri);
       this.currentUri = current.uri;
       this.currentVideo = video;
       this.lastYoutubeVideoId = video.videoId;
@@ -575,7 +648,7 @@ export class PlaybackController {
     }
     if (!video) {
       video = await resolveSuno(current.uri.replace('suno:', ''));
-      this.streamCache.set(current.uri, video);
+      this.cacheSet(current.uri, video);
     }
     this.spotifyFallback = false;
     this.stopSpotifyFeed();
@@ -620,7 +693,7 @@ export class PlaybackController {
     }
     if (!video) {
       video = await resolveSoundcloudVideo(soundcloudUriToUrl(current.uri));
-      this.streamCache.set(current.uri, video);
+      this.cacheSet(current.uri, video);
     }
     this.spotifyFallback = false;
     this.stopSpotifyFeed();
@@ -655,7 +728,7 @@ export class PlaybackController {
         throw new Error(`No playable match found for Apple Music track "${current.name}".`);
       }
       video = match;
-      this.streamCache.set(current.uri, video);
+      this.cacheSet(current.uri, video);
     }
     this.spotifyFallback = false;
     this.stopSpotifyFeed();
@@ -758,7 +831,10 @@ export class PlaybackController {
     if (!this.librespot) return;
     let ff = this.resampler;
     if (!ff) {
-      ff = spawn(config.ffmpegPath, RESAMPLE_ARGS, { windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
+      ff = spawn(config.ffmpegPath, RESAMPLE_ARGS(this.audioFxFilter()), {
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'ignore'],
+      });
       this.resampler = ff;
       const fIn = ff.stdin!;
       const fOut = ff.stdout!;
@@ -822,6 +898,68 @@ export class PlaybackController {
         /* ignore */
       }
       this.resampler = null;
+    }
+  }
+
+  /** Build the `-af` stage for session audio FX from the current state. */
+  private audioFxFilter(): string {
+    const stages: string[] = [];
+    if (this.bassBoostDb > 0) {
+      stages.push(`bass=g=${this.bassBoostDb.toFixed(1)}:f=100`);
+    }
+    if (this.speedFactor !== 1) {
+      // asetrate shifts the sample-rate *field* only (pitch + tempo move
+      // together); pre-resample to a known 48k so the factor is exact
+      // regardless of the source's native rate, then aresample back out.
+      const shifted = Math.round(48000 * this.speedFactor);
+      stages.push(`aresample=48000,asetrate=${shifted},aresample=48000`);
+    }
+    return stages.join(',');
+  }
+
+  /** Push the current FX state into the voice layer (used on each stream start). */
+  private applyAudioFx(): void {
+    this.voice.setAudioFx(this.audioFxFilter());
+  }
+
+  /**
+   * Set tempo plus pitch for the current session (/upbeat, /slowed, /normal).
+   * Applied by re-issuing the current track after adjusting the ffmpeg chains,
+   * while preserving our playback position.
+   */
+  setSpeed(factor: number): void {
+    this.speedFactor = factor;
+    this.queue.setState({ speed: factor });
+    this.applyAudioFx();
+    this.restartCurrent();
+  }
+
+  /** Toggle-style bass boost (adds a low-shelf to the session's ffmpeg chain). */
+  setBassBoost(db: number): void {
+    this.bassBoostDb = db;
+    this.queue.setState({ bassBoost: db > 0 ? db : undefined });
+    this.applyAudioFx();
+    this.restartCurrent();
+  }
+
+  /** Re-apply audio FX by restarting the current track from its position. */
+  private restartCurrent(): void {
+    const state = this.queue.getState();
+    if (!state.track) return;
+    const pos = this.voice.getPositionMs() || state.positionMs || 0;
+    this.applyAudioFx();
+    if (this.usingServerStream()) {
+      this.seekServerStream(pos + 1); // +1ms so the decode+discard lands on the right spot
+      if (!state.playing) this.voice.pause();
+      this.queue.setState({ positionMs: pos });
+      if (state.playing) this.scheduleEnd(state.durationMs, pos);
+      this.schedulePreload(state.durationMs, pos);
+    } else if (this.currentSource() === 'spotify' && !this.spotifyFallback) {
+      // Restart the resample feed so the FX chain rebuilds with the new filter.
+      // The librespot socket keeps streaming real-time PCM, so position survives.
+      this.stopSpotifyFeed();
+      this.startSpotifyFeed();
+      if (!state.playing) this.voice.setExpectingPcm(false);
     }
   }
 
@@ -1095,6 +1233,16 @@ export class PlaybackController {
         void spotifySetShuffle(this.spotifyDeviceId, enabled).catch(() => {});
       }
     }
+  }
+
+  /** Current session tempo factor (1 = normal; 1.25 = Nightcore; 0.85 = slowed). */
+  getSpeed(): number {
+    return this.speedFactor;
+  }
+
+  /** Current bass-boost gain in dB (0 = off). */
+  getBassBoost(): number {
+    return this.bassBoostDb;
   }
 
   /** Stop everything (queue cleared). */

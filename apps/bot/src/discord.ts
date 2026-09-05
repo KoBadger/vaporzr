@@ -258,6 +258,43 @@ const COMMANDS = [
           { name: '1.50x (very reactive)', value: 1.50 },
         ),
     ),
+  new SlashCommandBuilder()
+    .setName('speed')
+    .setDescription('Change the playback speed (Nightcore / slowed / normal)')
+    .addStringOption((o) =>
+      o
+        .setName('mode')
+        .setDescription('Speed preset (omit to check current)')
+        .setRequired(false)
+        .addChoices(
+          { name: '⚡ Nightcore (1.25x, pitch up)', value: 'nightcore' },
+          { name: '🐢 Slowed (0.85x)', value: 'slowed' },
+          { name: '▶️ Normal (1x)', value: 'normal' },
+        ),
+    ),
+  new SlashCommandBuilder()
+    .setName('bassboost')
+    .setDescription('Add a low-frequency boost for the current session')
+    .addIntegerOption((o) =>
+      o
+        .setName('db')
+        .setDescription('Boost amount in dB: 5, 8, 10 (omit to check/off)')
+        .setRequired(false)
+        .addChoices(
+          { name: '5 dB (subtle)', value: 5 },
+          { name: '8 dB (punchy)', value: 8 },
+          { name: '10 dB (heavy)', value: 10 },
+        ),
+    ),
+  new SlashCommandBuilder()
+    .setName('sleep')
+    .setDescription('Stop playback and leave the voice channel after a timer')
+    .addStringOption((o) =>
+      o
+        .setName('time')
+        .setDescription('When to stop, e.g. 30m, 1h, 45s (omit to cancel)')
+        .setRequired(false),
+    ),
 ];
 
 function fmtMs(ms: number): string {
@@ -269,6 +306,16 @@ function fmtMs(ms: number): string {
 
 function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+/** Parse a sleep-timer spec ("30m", "1h", "45s", "1h30m") into milliseconds. */
+function parseSleepSpec(spec: string): number | null {
+  const m = /^(\d+(?:\.\d+)?)([smh])$/.exec(spec.trim().toLowerCase());
+  if (!m) return null;
+  const n = parseFloat(m[1]);
+  if (!(n > 0)) return null;
+  const per = m[2] === 'h' ? 3_600_000 : m[2] === 'm' ? 60_000 : 1_000;
+  return n * per;
 }
 
 /** True when an edit failure means the target message no longer exists
@@ -315,6 +362,8 @@ export class DiscordBot {
   /** messageId -> live karaoke session (synced lines + track), edited by a ticker. */
   private karaokeSessions = new Map<string, { guildId: string; channelId: string; messageId: string; title: string; artist: string; lines: SyncedLine[]; lastIdx: number }>();
   private karaokeTicker: NodeJS.Timeout | null = null;
+  /** guildId -> active sleep timer (stops playback + leaves voice when it fires). */
+  private sleepTimers = new Map<string, { timeout: NodeJS.Timeout; at: number }>();
 
   // ---- persisted panel registrations (survive restarts) ----
   private panelSaveTimer: NodeJS.Timeout | null = null;
@@ -678,6 +727,44 @@ export class DiscordBot {
       }
     }
     return 0;
+  }
+
+  /** Set or replace a guild's sleep timer. Fires once, then clears itself. */
+  private setSleepTimer(s: Session, ms: number, onFire: () => void): void {
+    this.cancelSleepTimer(s.guildId);
+    const timeout = setTimeout(() => {
+      this.sleepTimers.delete(s.guildId);
+      onFire();
+    }, ms);
+    timeout.unref?.();
+    this.sleepTimers.set(s.guildId, { timeout, at: Date.now() + ms });
+  }
+
+  private cancelSleepTimer(guildId: string): void {
+    const t = this.sleepTimers.get(guildId);
+    if (t) {
+      clearTimeout(t.timeout);
+      this.sleepTimers.delete(guildId);
+    }
+  }
+
+  /** Fired when a sleep timer elapses: stop playback, clear queue, leave voice. */
+  private async sleepFireNotify(s: Session): Promise<void> {
+    s.playback.stopAll();
+    s.queue.clear();
+    s.voice.leave();
+    const guildId = s.guildId;
+    const channelId = this.lastTextChannel.get(guildId);
+    if (channelId) {
+      try {
+        const channel = await this.client.channels.fetch(channelId);
+        if (channel && 'send' in channel) {
+          await channel.send('😴 Sleep timer up — playback stopped and I left the voice channel. Good night!');
+        }
+      } catch {
+        /* channel gone — nothing to notify */
+      }
+    }
   }
 
   private canUse(command: string, interaction: MessageComponentInteraction): boolean {
@@ -1060,6 +1147,83 @@ export class DiscordBot {
               .setFooter({ text: 'Lower smoothing = faster visual response' }),
           ],
         });
+        break;
+      }
+
+      case 'speed': {
+        if (!this.requireLevel('speed', interaction)) return this.deny(interaction);
+        const mode = interaction.options.getString('mode');
+        if (!mode) {
+          const speed = s.playback.getSpeed();
+          const label = speed === 1 ? 'Normal (1x)' : speed > 1 ? `Nightcore (${speed.toFixed(2)}x)` : `Slowed (${speed.toFixed(2)}x)`;
+          await interaction.reply(`🎚️ Current speed: **${label}** — use \`/speed mode\` to change it.`);
+          break;
+        }
+        const factor = mode === 'nightcore' ? 1.25 : mode === 'slowed' ? 0.85 : 1;
+        s.playback.setSpeed(factor);
+        await interaction.reply(
+          factor === 1
+            ? '▶️ Speed back to normal.'
+            : factor > 1
+              ? `⚡ Nightcore mode — everything runs at **${factor.toFixed(2)}x**!`
+              : `🐢 Slowed down to **${factor.toFixed(2)}x** — chill vibes.`,
+        );
+        break;
+      }
+
+      case 'bassboost': {
+        if (!this.requireLevel('bassboost', interaction)) return this.deny(interaction);
+        const db = interaction.options.getInteger('db');
+        if (!db || db <= 0) {
+          const current = s.playback.getBassBoost();
+          if (current > 0) {
+            s.playback.setBassBoost(0);
+            await interaction.reply('🎛️ Bass boost off.');
+          } else {
+            await interaction.reply('🔇 Bass boost is off. Add a `db` value (5/8/10) to dial it in.');
+          }
+          break;
+        }
+        const clamped = Math.min(12, Math.max(2, db));
+        s.playback.setBassBoost(clamped);
+        await interaction.reply(
+          clamped <= 5
+            ? `🎚️ Bass +${clamped} dB — subtle low shelf.`
+            : clamped <= 8
+              ? `🎚️ Bass +${clamped} dB — punchy.`
+              : `💥 Bass +${clamped} dB — the neighbors will feel it.`,
+        );
+        break;
+      }
+
+      case 'sleep': {
+        if (!this.requireLevel('sleep', interaction)) return this.deny(interaction);
+        if (!interaction.inGuild()) {
+          await interaction.reply({ content: 'Sleep timer only works inside a server.', flags: MessageFlags.Ephemeral });
+          break;
+        }
+        const raw = interaction.options.getString('time');
+        if (!raw) {
+          if (this.sleepTimers.has(interaction.guildId)) {
+            this.cancelSleepTimer(interaction.guildId);
+            await interaction.reply('⏰ Sleep timer cancelled.');
+          } else {
+            await interaction.reply('No sleep timer set. Use `/sleep 30m` (or `1h`, `45s`) to set one.');
+          }
+          break;
+        }
+        const ms = parseSleepSpec(raw);
+        if (!ms || ms <= 0) {
+          await interaction.reply({ content: `Couldn't parse \`${raw}\`. Try \`30m\`, \`1h\`, or \`45s\`.`, flags: MessageFlags.Ephemeral });
+          break;
+        }
+        const when = new Date(Date.now() + ms);
+        this.setSleepTimer(s, ms, () => {
+          void this.sleepFireNotify(s);
+        });
+        await interaction.reply(
+          `⏰ Sleep timer set — I'll stop playing and leave at **${when.toLocaleTimeString()}**.\nUse \`/sleep\` again to cancel.`,
+        );
         break;
       }
 
