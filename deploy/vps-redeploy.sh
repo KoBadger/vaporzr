@@ -51,6 +51,21 @@ else
   echo "==> no cookies.txt — YouTube may throttle/403 from this IP"
 fi
 
+# PO-token provider (bgutil): YouTube refuses format extraction from
+# datacenter IPs without a PO token. The provider generates them; the
+# bgutil yt-dlp plugin baked into the bot image auto-detects it at
+# http://127.0.0.1:4416. Host networking on both containers makes that
+# loopback reachable.
+if docker container inspect bgutil-provider >/dev/null 2>&1; then
+  echo "==> bgutil PO-token provider present"
+else
+  echo "==> starting bgutil PO-token provider (port 4416)"
+  docker pull brainicism/bgutil-ytdlp-pot-provider
+  docker run -d --name bgutil-provider --init --restart unless-stopped \
+    --network host \
+    brainicism/bgutil-ytdlp-pot-provider
+fi
+
 docker volume inspect vaporzr-data >/dev/null 2>&1 || docker volume create vaporzr-data
 
 echo "==> Stopping old container"

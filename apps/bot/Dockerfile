@@ -52,7 +52,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g tsx \
     && python3 -m venv /opt/ytvenv \
-    && /opt/ytvenv/bin/pip install --no-cache-dir --upgrade yt-dlp \
+    # bgutil-ytdlp-pot-provider: PO-token plugin for yt-dlp. Datacenter IPs are
+    # hard-flagged by YouTube (empty format lists / "page needs to be reloaded")
+    # without a PO token; the plugin fetches one from the bgutil provider
+    # server (deploy/vps-setup.sh runs brainicism/bgutil-ytdlp-pot-provider on
+    # the host, default http://127.0.0.1:4416 — reachable thanks to
+    # --network host).
+    && /opt/ytvenv/bin/pip install --no-cache-dir --upgrade yt-dlp bgutil-ytdlp-pot-provider \
     && ln -s /opt/ytvenv/bin/yt-dlp /usr/local/bin/yt-dlp
 
 WORKDIR /app

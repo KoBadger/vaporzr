@@ -53,6 +53,21 @@ fi
 # --- 4. Data volume --------------------------------------------------------
 docker volume inspect vaporzr-data >/dev/null 2>&1 || docker volume create vaporzr-data
 
+# --- 4b. PO-token provider (bgutil) -----------------------------------------
+# YouTube refuses format extraction from datacenter IPs without a PO token
+# ("Sign in to confirm you're not a bot" / empty format lists). The bgutil
+# provider generates them; the yt-dlp plugin baked into the bot image
+# auto-detects the server at http://127.0.0.1:4416 (host networking).
+if docker container inspect bgutil-provider >/dev/null 2>&1; then
+  echo "==> bgutil PO-token provider present"
+else
+  echo "==> starting bgutil PO-token provider (port 4416)"
+  docker pull brainicism/bgutil-ytdlp-pot-provider
+  docker run -d --name bgutil-provider --init --restart unless-stopped \
+    --network host \
+    brainicism/bgutil-ytdlp-pot-provider
+fi
+
 # --- 5. Pull + (re)start ---------------------------------------------------
 echo "==> Pulling $IMAGE"
 docker pull "$IMAGE"
