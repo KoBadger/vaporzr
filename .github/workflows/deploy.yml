@@ -30,8 +30,9 @@ jobs:
             build-essential pkg-config libasound2-dev libssl-dev libavcodec-dev libavformat-dev libmp3lame-dev libogg-dev libsndfile-dev
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
           export PATH="$HOME/.cargo/bin:$PATH"
-          git clone --depth 1 https://github.com/librespot-org/librespot.git
+          git clone https://github.com/librespot-org/librespot.git
           cd librespot
+          git fetch --depth 1 origin "refs/tags/$LIBRESPOT_VERSION:refs/tags/$LIBRESPOT_VERSION"
           git checkout "$LIBRESPOT_VERSION"
           cargo build --release --bin librespot \
             --features "subprocess-backend,pipe-backend" \
