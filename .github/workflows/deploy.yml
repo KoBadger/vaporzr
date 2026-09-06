@@ -22,12 +22,13 @@ jobs:
       - name: Build librespot for linux
         # The Dockerfile does `COPY librespot /usr/local/bin/librespot`. The
         # binary is gitignored (it's a large vendored blob). Upstream ships no
-        # prebuilt binaries, so compile the pinned tag from source with the
-        # backends the bot uses (subprocess + pipe for the TCP bridge).
+        # prebuilt binaries, so compile the pinned tag from source. As of 0.8.0
+        # the pipe + subprocess backends are built unconditionally (not
+        # feature-gated), so we trim the build to rustls TLS + libmdns which is
+        # all the bot needs for its subprocess/pipe bridge.
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config libasound2-dev libssl-dev libavcodec-dev libavformat-dev libmp3lame-dev libogg-dev libsndfile-dev
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
           export PATH="$HOME/.cargo/bin:$PATH"
           git clone https://github.com/librespot-org/librespot.git
@@ -35,11 +36,12 @@ jobs:
           git fetch --depth 1 origin "refs/tags/$LIBRESPOT_VERSION:refs/tags/$LIBRESPOT_VERSION"
           git checkout "$LIBRESPOT_VERSION"
           cargo build --release --bin librespot \
-            --features "subprocess-backend,pipe-backend" \
-            --no-default-features
+            --no-default-features \
+            --features "rustls-tls-webpki-roots,with-libmdns"
           cp target/release/librespot ../librespot
           cd ..
           test -x librespot && ./librespot --version | head -1
+          timeout 3 ./librespot --backend ? 2>&1 | grep -E 'pipe|subprocess' || true
         env:
           LIBRESPOT_VERSION: ${{ env.LIBRESPOT_VERSION }}
 
