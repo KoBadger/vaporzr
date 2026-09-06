@@ -38,8 +38,10 @@ jobs:
           cargo build --release --bin librespot \
             --no-default-features \
             --features "rustls-tls-webpki-roots,with-libmdns"
-          cp target/release/librespot ../librespot
+          cp target/release/librespot /tmp/librespot
           cd ..
+          rm -rf librespot
+          mv /tmp/librespot ./librespot
           test -x librespot && ./librespot --version | head -1
           timeout 3 ./librespot --backend ? 2>&1 | grep -E 'pipe|subprocess' || true
         env:
