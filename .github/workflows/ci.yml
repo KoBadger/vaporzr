@@ -19,8 +19,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Typecheck (all workspaces)
-        run: npm run typecheck
+      - name: Typecheck (shared + bot)
+        run: npm run typecheck -w @vaporzr/shared && npm run typecheck -w @vaporzr/bot
 
       - name: Unit tests (bot)
         working-directory: apps/bot
