@@ -8,7 +8,7 @@ on:
 
 env:
   IMAGE: ghcr.io/${{ github.repository }}/vaporzr-bot
-  LIBRESPOT_VERSION: v0.4.2
+  LIBRESPOT_VERSION: v0.8.0
 
 jobs:
   build-and-push:
@@ -19,20 +19,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download librespot for linux
+      - name: Build librespot for linux
         # The Dockerfile does `COPY librespot /usr/local/bin/librespot`. The
-        # binary is gitignored (it's a large vendored blob), so fetch the
-        # latest linux x86_64 release, extract, and rename for the Dockerfile.
+        # binary is gitignored (it's a large vendored blob). Upstream ships no
+        # prebuilt binaries, so compile the pinned tag from source with the
+        # backends the bot uses (subprocess + pipe for the TCP bridge).
         run: |
-          echo "Fetching librespot ${LIBRESPOT_VERSION}..."
-          curl -fL -o librespot.tar.gz \
-            "https://github.com/librespot-org/librespot/releases/download/${LIBRESPOT_VERSION}/librespot-linux-x86_64-${LIBRESPOT_VERSION}.tar.gz"
-          tar -xzf librespot.tar.gz
-          # The tarball extracts as `librespot`; move it aside so the Dockerfile
-          # COPY finds it at the build-context root (the tarball is already removed).
-          mv librespot librespot-tmp && mv librespot-tmp librespot
-          chmod +x librespot
-          test -f librespot || { echo "Failed to obtain librespot"; exit 1; }
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libasound2-dev libssl-dev libavcodec-dev libavformat-dev libmp3lame-dev libogg-dev libsndfile-dev
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+          export PATH="$HOME/.cargo/bin:$PATH"
+          git clone --depth 1 https://github.com/librespot-org/librespot.git
+          cd librespot
+          git checkout "$LIBRESPOT_VERSION"
+          cargo build --release --bin librespot \
+            --features "subprocess-backend,pipe-backend" \
+            --no-default-features
+          cp target/release/librespot ../librespot
+          cd ..
+          test -x librespot && ./librespot --version | head -1
+        env:
+          LIBRESPOT_VERSION: ${{ env.LIBRESPOT_VERSION }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
