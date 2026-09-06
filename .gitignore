@@ -54,3 +54,6 @@ voiceapi.txt
 
 # Personal / sensitive
 **/discord_backup_codes.txt
+
+# OpenCode config (local only)
+apps/bot/opencode/

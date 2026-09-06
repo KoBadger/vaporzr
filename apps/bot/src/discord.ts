@@ -295,6 +295,20 @@ const COMMANDS = [
         .setDescription('When to stop, e.g. 30m, 1h, 45s (omit to cancel)')
         .setRequired(false),
     ),
+  new SlashCommandBuilder()
+    .setName('cookie-refresh')
+    .setDescription('Refresh YouTube cookies from your browser (write to youtubeCookiesPath)')
+    .addBooleanOption((o) => o.setName('confirm').setDescription('Confirm you want to export cookies from your browser').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('device')
+    .setDescription('Manage the Spotify Connect device (librespot)')
+    .addSubcommand((sc) => sc.setName('list').setDescription('Show the current Spotify device status'))
+    .addSubcommand((sc) =>
+      sc
+        .setName('select')
+        .setDescription('Rename the Spotify Connect device (restarts librespot)')
+        .addStringOption((o) => o.setName('name').setDescription('New device name (max 32 chars)').setRequired(true)),
+    ),
 ];
 
 function fmtMs(ms: number): string {
@@ -1368,6 +1382,63 @@ export class DiscordBot {
 
       case 'stats': {
         await interaction.reply({ embeds: [this.statsEmbed()], flags: MessageFlags.Ephemeral });
+        break;
+      }
+
+      case 'device': {
+        const sub = interaction.options.getSubcommand(true);
+        if (sub === 'list') {
+          const info = this.bridge.librespot.getDeviceInfo();
+          const status = info.enabled
+            ? info.running
+              ? `🟢 **Running** (uptime ${fmtMs(info.uptimeMs)})`
+              : '🟡 **Down** (will restart automatically)'
+            : '⚪ **Disabled** — no LIBRESPOT_PATH configured';
+          const embed = new EmbedBuilder()
+            .setTitle('🎛️ Spotify Device')
+            .setColor(this.themeColor())
+            .setDescription(
+              `**Name:** \`${info.name}\`\n` +
+                `**ID:** \`${info.deviceId}\`\n` +
+                `**Status:** ${status}\n` +
+                `**Bitrate:** ${info.bitrate} kbps\n` +
+                `**Stderr log:** \`${info.stderrLog}\``,
+            );
+          await interaction.reply({ embeds: [embed] });
+        } else {
+          const name = interaction.options.getString('name', true);
+          const clean = name.trim().replace(/\s+/g, ' ').slice(0, 32);
+          if (!clean) {
+            await interaction.reply('Name cannot be empty.');
+            break;
+          }
+          if (clean === this.bridge.librespot.getDeviceInfo().name) {
+            await interaction.reply(`That's already the current device name.`);
+            break;
+          }
+          this.bridge.librespot.setDeviceName(clean);
+          await interaction.reply(`🔄 Renaming Spotify device to \`${clean}\` — will take effect momentarily.`);
+        }
+        break;
+      }
+
+      case 'cookie-refresh': {
+        const confirm = interaction.options.getBoolean('confirm', true);
+        if (!confirm) {
+          await interaction.reply('Cookies were NOT refreshed. Run `/cookie-refresh confirm:true` to export cookies from your browser.');
+          break;
+        }
+        await interaction.deferReply();
+        try {
+          const { refreshYoutubeCookies } = await import('./youtube.js');
+          const saved = await refreshYoutubeCookies();
+          await interaction.followUp(saved.ok
+            ? `✅ Cookies refreshed and written to \`${saved.path}\` (${saved.lines} cookies).`
+            : `⚠️ ${saved.error}`);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          await interaction.followUp(`⚠️ Cookie refresh failed: ${msg}`);
+        }
         break;
       }
 
@@ -3242,7 +3313,7 @@ export class DiscordBot {
         },
         {
           name: '🔧 Admin',
-          value: '`/perms` — view / set command levels and roles · `/stats` — bot statistics · `/key rotate` — reissue web access · `/invite` — get the invite link · `/ego` — rename me in this server',
+          value: '`/perms` — view / set command levels and roles · `/stats` — bot statistics · `/key rotate` — reissue web access · `/invite` — get the invite link · `/ego` — rename me in this server · `/device` — manage the Spotify device · `/cookie-refresh` — re-export YouTube cookies',
         },
         {
           name: '⌨️ Quick (prefix)',

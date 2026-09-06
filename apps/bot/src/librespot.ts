@@ -65,6 +65,8 @@ export class LibrespotManager {
   private restartTimer: NodeJS.Timeout | null = null;
   private restarts = 0;
   private bridgePath = '';
+  /** Monotonic timestamp of the last successful spawn (for /device uptime). */
+  private startedAt = 0;
   /** Periodic watchdog that detects a "zombie bridge" — a still-running librespot
    *  whose PCM socket silently dropped after connecting. That state reports
    *  !isRunning() and would otherwise force every Spotify track through the slow
@@ -95,6 +97,55 @@ export class LibrespotManager {
       !this.proc.killed &&
       (!this.bridgeEverConnected || this.socket !== null)
     );
+  }
+
+  /** Snapshot of the Spotify Connect device this bot registers as. */
+  getDeviceInfo(): {
+    name: string;
+    deviceId: string;
+    running: boolean;
+    enabled: boolean;
+    uptimeMs: number;
+    bitrate: number;
+    stderrLog: string;
+  } {
+    const name = config.librespotDeviceName;
+    return {
+      name,
+      deviceId: librespotDeviceId(name),
+      running: this.isRunning(),
+      enabled: this.enabled,
+      uptimeMs: this.isRunning() && this.startedAt > 0 ? Date.now() - this.startedAt : 0,
+      bitrate: config.librespotBitrate,
+      stderrLog: path.join(config.dataDir, 'librespot', 'stderr.log'),
+    };
+  }
+
+  /**
+   * Change the Connect device name (restarts librespot so Spotify re-registers
+   * it under the new name). Useful when multiple bots share an account, or to
+   * surface a friendlier name in the user's Spotify client. Persists for the
+   * process lifetime only — set LIBRESPOT_DEVICE_NAME in .env to make it stick.
+   */
+  setDeviceName(name: string): void {
+    const clean = name.trim().replace(/\s+/g, ' ').slice(0, 32);
+    if (!clean || clean === config.librespotDeviceName) return;
+    config.librespotDeviceName = clean;
+    // Force a fresh registration. If we're mid-playback, the running session
+    // keeps streaming to its existing socket; the rename applies server-side.
+    this.restarts = 0;
+    if (this.proc) {
+      const old = this.proc;
+      this.proc = null;
+      try {
+        old.kill();
+      } catch {
+        /* ignore */
+      }
+      this.scheduleRestart();
+    } else if (this.bridgePath) {
+      this.spawnLibrespot(this.bridgePath);
+    }
   }
 
   /** The consumer that receives raw 44.1 kHz stereo S16 PCM. Set to null when not playing. */
@@ -307,6 +358,7 @@ export class LibrespotManager {
       stdio: ['ignore', 'pipe', this.stderrFd ?? 'pipe'],
       env: { ...process.env, VAPORZR_BRIDGE_PORT: String(this.bridgePort) },
     });
+    this.startedAt = Date.now();
     this.proc = proc;
     proc.on('error', (err) => {
       console.warn(`[librespot] failed to start: ${err.message}`);

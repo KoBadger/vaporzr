@@ -612,3 +612,40 @@ export async function searchYoutube(query: string, limit = 5): Promise<ResolvedT
     })
     .filter((t): t is ResolvedTrack => t !== null);
 }
+
+/**
+ * Refresh the YouTube cookie jar by extracting cookies from a browser and
+ * writing them to the configured YOUTUBE_COOKIES_PATH. Uses yt-dlp's
+ * --cookies-from-browser so the exported jar stays in the Netscape format
+ * the rest of the code expects.
+ *
+ * Browser options, in order of preference: chrome, chromium, edge, firefox.
+ * Returns { ok: true, path, lines } on success, { ok: false, error } on failure.
+ */
+export async function refreshYoutubeCookies(
+  browser: 'chrome' | 'chromium' | 'edge' | 'firefox' = 'chrome',
+): Promise<{ ok: true; path: string; lines: number } | { ok: false; error: string }> {
+  const target = config.youtubeCookiesPath || path.join(config.dataDir, 'youtube-cookies.txt');
+  const browsers = [browser, 'chrome', 'chromium', 'edge', 'firefox'];
+  for (const b of [...new Set(browsers)]) {
+    try {
+      await fs.promises.mkdir(path.dirname(target), { recursive: true });
+      await new Promise<void>((resolve, reject) => {
+        execFile(
+          config.ytDlpPath,
+          ['--cookies-from-browser', b, '--cookies', target, '--skip-download', '--no-warnings', 'ytsearch1:test'],
+          { windowsHide: true, timeout: 60_000, maxBuffer: 4 * 1024 * 1024 },
+          (err) => (err ? reject(new YoutubeError(`yt-dlp cookie export from "${b}" failed: ${(err as Error).message.slice(0, 200)}`)) : resolve()),
+        );
+      });
+      const raw = await fs.promises.readFile(target, 'utf8');
+      const lines = raw.split('\n').filter((l) => l && !l.startsWith('#')).length;
+      return { ok: true, path: target, lines };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (b === browsers[browsers.length - 1]) return { ok: false, error: msg };
+      continue;
+    }
+  }
+  return { ok: false, error: 'No browser cookie export succeeded.' };
+}

@@ -9,6 +9,28 @@ tunnel, so the bot runs independently of your home network.
 > fresh Debian 12 / Ubuntu 22.04+ box. `scp` it up with your `.env` (and
 > optional `cookies.txt`), run it, done — it performs every step below.
 
+## CI/CD (optional, GitHub Actions)
+
+The repo ships two workflows:
+
+- **`.github/workflows/ci.yml`** — typecheck + unit tests on every push/PR.
+- **`.github/workflows/deploy.yml`** — on push to `main` (or a `v*` tag):
+  1. downloads the `librespot` linux binary,
+  2. builds `apps/bot/Dockerfile` and pushes to GHCR,
+  3. SSHes into the VPS, pulls the image, and recreates the `vaporzr` container.
+
+The deploy job needs three **repository secrets** (Settings → Secrets → Actions):
+
+| Secret | Value |
+|---|---|
+| `VPS_HOST` | your server IP / hostname |
+| `VPS_USER` | ssh user (e.g. root) |
+| `VPS_SSH_KEY` | private key for that user (set up `authorized_keys` first) |
+
+The `.env` on the VPS stays at `/opt/vaporzr/.env`; the workflow only swaps the
+image. Add a `:production` GitHub *environment* if you want an approval gate
+before deploys.
+
 ## Quick provider pick
 
 For a personal bot, the cheapest reliable option is **Hetzner Cloud CX11**
@@ -24,16 +46,12 @@ few guilds, but 2 GB gives headroom for yt-dlp spikes. Alternatives:
 
 - The **bot process** (Discord gateway, voice, streaming, HTTP server) runs on
   the VPS. Nothing routes through your PC or LAN.
-- **Playback** uses the YouTube/yt-dlp + ffmpeg path — the same posture as
-  Jockie Music (the #1 music bot): Spotify links are resolved as *metadata*
-  and streamed from YouTube, never directly from Spotify's servers.
-  `SPOTIFY_PREFER_YOUTUBE=1` is the container default. `LIBRESPOT_PATH=` stays
-  empty; you can still enable librespot yourself (see "Enabling librespot").
+- **Playback** uses **native Spotify via a bundled `librespot` device** by
+  default (`SPOTIFY_PREFER_YOUTUBE=0`, `LIBRESPOT_PATH=/usr/local/bin/librespot`
+  in the Dockerfile). YouTube/yt-dlp + ffmpeg remains the fallback for
+  non-Spotify sources (SoundCloud, Apple Music links, raw YouTube URLs).
 - The only thing still tied to *you* is Discord credentials + optional Spotify
   OAuth, which are plain env values — not your network.
-- **YouTube cookies are strongly recommended** on a VPS datacenter IP. They
-  avoid the 403s and throttling that cause mid-track stream cuts. See
-  "YouTube cookies" below.
 
 ## 1. Prereqs on the VPS
 
@@ -64,13 +82,17 @@ OWNER_ID=<discord user id>
 The container already sets these cloud-appropriate defaults (see Dockerfile):
 
 - `BIND_ADDRESS=127.0.0.1` — control server is NOT exposed to the internet.
-- `LIBRESPOT_PATH=` — Spotify device disabled; Spotify tracks use YouTube.
+- `LIBRESPOT_PATH=/usr/local/bin/librespot` — native Spotify device; the binary
+  is baked into the image (librespot's OAuth credentials must live in the data
+  volume — see "Enabling librespot" below, then authorize once).
 - `YT_DLP_PATH=/usr/local/bin/yt-dlp`, `FFMPEG_PATH=/usr/bin/ffmpeg`, and
   `python3` are installed in the runtime stage.
 - `PLAYER_DIR=/dev/null`, `ELECTRON_PATH=/bin/true` — desktop overlay stubs.
+- `SPOTIFY_PREFER_YOUTUBE=0` — Spotify tracks stream natively via librespot.
 
-`SPOTIFY_PREFER_YOUTUBE=1` and `SPOTIFY_USE_ANONYMOUS=1` (defaults) mean no
-user has to link an account. Set a `SHARE_KEY` if you ever expose the panel.
+`SPOTIFY_PREFER_YOUTUBE=0` + `SPOTIFY_USE_ANONYMOUS=1` (default) means no user
+has to link an account for Spotify playback. Set a `SHARE_KEY` if you ever
+expose the panel.
 
 ## YouTube cookies (strongly recommended)
 
@@ -93,19 +115,11 @@ YOUTUBE_COOKIES_PATH=/app/data/cookies.txt
 -v /opt/vaporzr/cookies.txt:/app/data/cookies.txt:ro
 ```
 
-## Enabling librespot on the VPS (optional)
+## Enabling librespot on the VPS (required for native Spotify)
 
-By default the image leaves `LIBRESPOT_PATH=` empty so Spotify tracks resolve
-through YouTube. If you want native Spotify streaming and it is **your own
-Premium account**, you can enable librespot in the container:
-
-```env
-LIBRESPOT_PATH=/usr/local/bin/librespot
-LIBRESPOT_DEVICE_NAME=Vaporzr
-LIBRESPOT_BITRATE=320
-```
-
-You must authorize librespot once so credentials are cached in the volume:
+The image ships librespot and points `LIBRESPOT_PATH` at it, but you must
+authorize it **once** so Spotify's OAuth credentials are cached in the volume
+(this cmd runs your own Premium account through librespot's OAuth flow):
 
 ```bash
 docker exec -it vaporzr librespot \
@@ -115,6 +129,10 @@ docker exec -it vaporzr librespot \
 Follow the browser OAuth flow, then restart the container. On Linux the
 subprocess sink is more reliable than on Windows, so this is often the cleanest
 way to eliminate Spotify→YouTube fallback stalls.
+
+In a multi-guild setup the device is shared — every server's Spotify playback
+routes through this one librespot instance (see the Dockerfile note about
+`SPOTIFY_PREFER_YOUTUBE=0`). Rename the device with `/device select <name>`.
 
 ## 4. Run
 

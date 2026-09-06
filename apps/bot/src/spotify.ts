@@ -68,6 +68,10 @@ async function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Re
 const CACHE_FILE = path.join(config.dataDir, 'spotify-cache.json');
 const RESOLVE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const SEARCH_TTL_MS = 12 * 60 * 60 * 1000;
+/** Max cache entries to prevent unbounded memory growth. */
+const CACHE_MAX_ENTRIES = 5000;
+/** How often to prune expired/old entries (ms). */
+const CACHE_PRUNE_INTERVAL_MS = 5 * 60 * 1000;
 
 interface CacheEntry {
   at: number;
@@ -79,6 +83,7 @@ interface CacheEntry {
 const cache = new Map<string, CacheEntry>();
 let cacheLoaded = false;
 let cacheWriteTimer: NodeJS.Timeout | null = null;
+let cachePruneTimer: NodeJS.Timeout | null = null;
 
 async function loadCache(): Promise<void> {
   if (cacheLoaded) return;
@@ -93,6 +98,9 @@ async function loadCache(): Promise<void> {
   } catch {
     // First run (or corrupt file) — start empty.
   }
+  // Start periodic prune to bound memory and disk usage.
+  cachePruneTimer = setInterval(() => pruneCache(), CACHE_PRUNE_INTERVAL_MS);
+  cachePruneTimer.unref?.();
 }
 
 function cacheGet<T>(key: string): T | null {
@@ -106,9 +114,48 @@ function cacheGet<T>(key: string): T | null {
 }
 
 function cacheSet(key: string, value: unknown, ttlMs = RESOLVE_TTL_MS): void {
+  // Enforce max entries by evicting oldest non-expired entries.
+  if (cache.size >= CACHE_MAX_ENTRIES) {
+    const now = Date.now();
+    let evicted = 0;
+    for (const [k, entry] of cache.entries()) {
+      if (now - entry.at >= entry.ttlMs) {
+        cache.delete(k);
+        evicted++;
+      }
+      if (evicted >= 50) break;
+    }
+    // If still full, evict oldest regardless of TTL.
+    if (cache.size >= CACHE_MAX_ENTRIES) {
+      const oldest = cache.keys().next().value;
+      if (oldest) cache.delete(oldest);
+    }
+  }
   cache.set(key, { at: Date.now(), ttlMs, value });
   if (cacheWriteTimer) clearTimeout(cacheWriteTimer);
   cacheWriteTimer = setTimeout(() => void persistCache(), 2000);
+}
+
+function pruneCache(): void {
+  const now = Date.now();
+  let removed = 0;
+  for (const [key, entry] of cache.entries()) {
+    if (now - entry.at >= entry.ttlMs) {
+      cache.delete(key);
+      removed++;
+    }
+  }
+  // If still over limit, evict oldest entries.
+  while (cache.size > CACHE_MAX_ENTRIES) {
+    const oldest = cache.keys().next().value;
+    if (!oldest) break;
+    cache.delete(oldest);
+    removed++;
+  }
+  if (removed > 0) {
+    console.log(`[spotify] cache pruned: removed ${removed} entries, ${cache.size} remain`);
+    void persistCache();
+  }
 }
 
 async function persistCache(): Promise<void> {
@@ -120,6 +167,66 @@ async function persistCache(): Promise<void> {
   }
 }
 
+// ---------- Per-endpoint token-bucket rate limiter ----------
+/**
+ * Token bucket per API surface so search/album/track recommendations don't
+ * cascade into a single 429 lock on the dev-mode app quota.
+ */
+class RateLimiter {
+  private buckets: Map<string, { tokens: number; lastRefill: number }>;
+  private readonly refillRate = 1; // token per second
+  private readonly bucketSize = 5; // max tokens per bucket
+
+  constructor() {
+    this.buckets = new Map();
+  }
+
+  /** Get (or create) a bucket for the given endpoint key. */
+  private bucket(key: string): { tokens: number; lastRefill: number } {
+    let b = this.buckets.get(key);
+    if (!b) {
+      b = { tokens: this.bucketSize, lastRefill: Date.now() };
+      this.buckets.set(key, b);
+    }
+    return b;
+  }
+
+  /** Refill tokens based on elapsed time. */
+  private refill(b: { tokens: number; lastRefill: number }): void {
+    const now = Date.now();
+    const elapsed = (now - b.lastRefill) / 1000; // seconds
+    if (elapsed > 0) {
+      const refillCount = Math.min(this.bucketSize - b.tokens, Math.floor(elapsed * this.refillRate));
+      b.tokens = Math.min(this.bucketSize, b.tokens + refillCount);
+      b.lastRefill = now;
+    }
+  }
+
+  /** Wait until a token is available, then consume one. Returns waitMs (0 if immediate). */
+  async wait(key: string): Promise<number> {
+    const b = this.bucket(key);
+    this.refill(b);
+    if (b.tokens > 0) {
+      b.tokens--;
+      return 0;
+    }
+    // Calculate how long until a token refills.
+    const waitSec = 1 / this.refillRate; // 1 second per token
+    const waitMs = Math.ceil(waitSec * 1000);
+    await new Promise((r) => setTimeout(r, waitMs));
+    // Retry after waiting.
+    return await this.wait(key);
+  }
+}
+
+export const rateLimit = new RateLimiter();
+/** Live size of the persistent resolve/search cache (for /health metrics). */
+export function spotifyCacheSize(): number {
+  return cache.size;
+}
+//
+// End rate limiter.
+//
 export async function getAccessToken(forceRefresh = false): Promise<string> {
   if (cachedAccessToken && Date.now() / 1000 < cachedExpiresAt - 60 && !forceRefresh) {
     return cachedAccessToken;
@@ -293,6 +400,8 @@ function scorePlayResult(track: ResolvedTrack, query: string): number {
 
 /** GET helper that transparently retries once on 401 after refreshing the token. */
 async function apiGet<T>(path: string, token: string): Promise<T> {
+  const waitMs = await rateLimit.wait(`get:${path}`);
+  if (waitMs > 0) await new Promise((r) => setTimeout(r, waitMs));
   throwIfSpotifyCooling();
   const doGet = async (tok: string) =>
     fetchWithTimeout(`${API_URL}${path}`, { headers: { Authorization: `Bearer ${tok}` } });
@@ -304,6 +413,8 @@ async function apiGet<T>(path: string, token: string): Promise<T> {
   }
   if (res.status === 429) {
     const wait = noteSpotifyRateLimit(res);
+    // Also update the per-endpoint bucket so it stays in sync.
+    await rateLimit.wait(`get:${path}`);
     throw new SpotifyError(`Spotify API rate-limited — try again in about ${Math.max(1, Math.ceil(wait / 60))} min.`, 429, wait);
   }
   if (!res.ok) throw new SpotifyError(`Spotify API error (${res.status})`, res.status);
@@ -723,6 +834,8 @@ async function resolvePlaylistWeb(id: string): Promise<ResolvedTrack[] | null> {
 
 /** Raw Spotify Web API call for a device (uses the account token). */
 async function apiRaw(method: 'GET' | 'PUT' | 'POST', path: string, body?: unknown): Promise<Response> {
+  const waitMs = await rateLimit.wait(`raw:${path}`);
+  if (waitMs > 0) await new Promise((r) => setTimeout(r, waitMs));
   throwIfSpotifyCooling();
   const token = await getAccessToken();
   const res = await fetchWithTimeout(`${API_URL}${path}`, {
@@ -731,6 +844,8 @@ async function apiRaw(method: 'GET' | 'PUT' | 'POST', path: string, body?: unkno
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (res.status === 429) noteSpotifyRateLimit(res);
+  // Keep the per-endpoint bucket in sync.
+  await rateLimit.wait(`raw:${path}`);
   return res;
 }
 

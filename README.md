@@ -55,7 +55,7 @@ The web tier is two-level: **viewing is open** (landing page, `/viz`, and a view
 
 Per-command levels are adjustable per guild (`/perms setlevel <command> <level>`).
 
-**Health check:** `GET /health` → `{ ok, uptimeSec, guilds, playing, sessions }` (open, metadata only).
+**Health check:** `GET /health` → `{ ok, uptimeSec, guilds, playing, sessions, librespot, spotifyApi, memory, cache }` (open, metadata only).
 
 ## Commands
 
@@ -63,6 +63,8 @@ Per-command levels are adjustable per guild (`/perms setlevel <command> <level>`
 
 Playback: `/play` `/insert` `/skip` `/pause` `/queue` `/nowplaying` `/volume` …
 Visuals: `/panel` `/viz` `/burst` `/theme` `/sensitivity` `/wave` …
+Device: `/device list` (Spotify Connect status) `/device select <name>` (rename, restarts librespot)
+Maintenance: `/cookie-refresh` (re-export YouTube cookies from a browser) — admin
 Access: `/key give` `/key rotate` `/perms` (admin) — `/nickname` (🥚)
 
 ## Workspaces

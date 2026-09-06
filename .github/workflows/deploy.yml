@@ -1,0 +1,85 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}/vaporzr-bot
+  LIBRESPOT_VERSION: v0.4.2
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download librespot for linux
+        # The Dockerfile does `COPY librespot /usr/local/bin/librespot`. The
+        # binary is gitignored (it's a large vendored blob), so fetch the
+        # latest linux x86_64 release, extract, and rename for the Dockerfile.
+        run: |
+          echo "Fetching librespot ${LIBRESPOT_VERSION}..."
+          curl -fL -o librespot.tar.gz \
+            "https://github.com/librespot-org/librespot/releases/download/${LIBRESPOT_VERSION}/librespot-linux-x86_64-${LIBRESPOT_VERSION}.tar.gz"
+          tar -xzf librespot.tar.gz
+          # The tarball extracts as `librespot`; move it aside so the Dockerfile
+          # COPY finds it at the build-context root (the tarball is already removed).
+          mv librespot librespot-tmp && mv librespot-tmp librespot
+          chmod +x librespot
+          test -f librespot || { echo "Failed to obtain librespot"; exit 1; }
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/bot/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy-vps:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    environment: production
+    steps:
+      - name: Deploy to VPS via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -e
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            docker pull ghcr.io/${{ github.repository }}/vaporzr-bot:latest
+            docker stop vaporzr || true
+            docker rm vaporzr || true
+            docker run -d --name vaporzr \
+              --restart unless-stopped \
+              --env-file /opt/vaporzr/.env \
+              -e BIND_ADDRESS=127.0.0.1 \
+              -v vaporzr-data:/app/data \
+              ghcr.io/${{ github.repository }}/vaporzr-bot:latest
+            docker image prune -f
+            sleep 5
+            docker exec vaporzr node -e "const h=require('http');h.get('http://127.0.0.1:'+(process.env.PORT||4876)+'/health',s=>{process.exit(s.statusCode===200?0:1)}).on('error',()=>process.exit(1))" || echo "WARN: /health not reachable after deploy"

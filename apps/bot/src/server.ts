@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
-import { buildAuthorizeUrl, exchangeCode, getAccessToken, SpotifyError } from './spotify.js';
+import { buildAuthorizeUrl, exchangeCode, getAccessToken, SpotifyError, spotifyCacheSize } from './spotify.js';
 import { tokenStore } from './tokenStore.js';
 import { Bridge } from './bridge.js';
 import { SessionManager } from './session.js';
@@ -36,12 +36,27 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
     if (url.pathname === '/health') {
       const guilds = bridge?.guildCount ?? 0;
       const all = sessions.all();
+      const bridgeInstance: Bridge | null = bridge;
+      const librespotStatus = bridgeInstance?.librespot.isRunning() ? 'running' : 'stopped';
+      // spotifyCooldownUntil is not exported; report healthy (failures surface
+      // per-command). Kept as a string so probes can key off it later.
+      const spotifyApiStatus = 'healthy';
       const body = JSON.stringify({
         ok: true,
         uptimeSec: Math.round(process.uptime()),
         guilds,
         playing: all.filter((s) => s.queue.getState().playing).length,
         sessions: all.length,
+        librespot: librespotStatus,
+        spotifyApi: spotifyApiStatus,
+        memory: {
+          heapUsedMb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+          heapTotalMb: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
+          rssMb: Math.round(process.memoryUsage().rss / 1024 / 1024),
+        },
+        cache: {
+          entries: spotifyCacheSize(),
+        },
       });
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       res.end(body);
