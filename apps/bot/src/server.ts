@@ -262,7 +262,7 @@ async function handleRoute(req: http.IncomingMessage, url: URL, res: http.Server
         // The Spotify OAuth access token is sensitive — only expose it to key
         // holders (the same gate that protects /panel). Without this, anyone
         // who learns the public tunnel URL could GET the operator's token.
-        if (config.shareKey && !hasShareAccess(req, url)) {
+        if (!config.shareKey || !hasShareAccess(req, url)) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'unauthorized' }));
           return;

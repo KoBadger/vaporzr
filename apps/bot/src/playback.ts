@@ -93,6 +93,7 @@ export class PlaybackController {
   private resampler: ChildProcess | null = null;
   /** uri -> resolved video, so a preloaded next track starts instantly. */
   private streamCache = new Map<string, ResolvedVideo>();
+  private static readonly STREAM_CACHE_MAX = 500;
   /** Debounced save of streamCache to disk (restart / requeue instant start). */
   private cacheSaveTimer: NodeJS.Timeout | null = null;
   /** Tempo factor for /upbeat & /slowed (1 = normal; 1.25 = Nightcore, 0.85 = slowed). */
@@ -167,6 +168,10 @@ export class PlaybackController {
   /** Set a cache entry and schedule its persistence. */
   cacheSet(uri: string, video: ResolvedVideo): void {
     this.streamCache.set(uri, video);
+    if (this.streamCache.size > PlaybackController.STREAM_CACHE_MAX) {
+      const firstKey = this.streamCache.keys().next().value;
+      if (firstKey !== undefined) this.streamCache.delete(firstKey);
+    }
     this.scheduleCacheSave();
   }
 
@@ -213,8 +218,8 @@ export class PlaybackController {
           }
         }
         if (video) this.cacheSet(uri, video);
-      } catch {
-        // Best-effort warm-up; play() resolves on demand if this fails.
+      } catch (err) {
+        console.warn(`[playback] prefetch failed for ${uri}:`, err instanceof Error ? err.message : err);
       }
     })();
   }
@@ -247,12 +252,19 @@ export class PlaybackController {
   /** Keep the panel progress in sync while a server-side stream is playing. */
   private startPositionTracker(): void {
     this.stopPositionTracker();
+    const currentUri = this.queue.getState().track?.uri;
     this.positionTimer = setInterval(() => {
       if (!this.usingServerStream()) {
         this.stopPositionTracker();
         return;
       }
-      if (!this.queue.getState().playing) return;
+      const state = this.queue.getState();
+      if (!state.playing) return;
+      if (state.track?.uri !== currentUri) {
+        // Track changed, stop this tracker (a new one will start for the new track)
+        this.stopPositionTracker();
+        return;
+      }
       this.queue.setState({ positionMs: this.voice.getPositionMs() });
     }, 2000);
   }
@@ -847,8 +859,16 @@ export class PlaybackController {
       const fOut = ff.stdout!;
       // ffmpeg can be killed or crash mid-stream (e.g. during a skip); without
       // error handlers a broken-pipe write here would take down the whole bot.
-      fIn.on('error', () => {});
-      fOut.on('error', () => {});
+      fIn.on('error', (err) => {
+        console.warn(`[playback] resampler stdin error: ${err instanceof Error ? err.message : err}`);
+        if (this.resampler === ff) this.resampler = null;
+        this.librespot?.pauseSocket();
+      });
+      fOut.on('error', (err) => {
+        console.warn(`[playback] resampler stdout error: ${err instanceof Error ? err.message : err}`);
+        if (this.resampler === ff) this.resampler = null;
+        this.librespot?.pauseSocket();
+      });
       fIn.on('drain', () => this.librespot?.resumeSocket());
       fOut.on('data', (d) => {
         const ok = this.voice.feedPcm(d);

@@ -371,10 +371,14 @@ export class DiscordBot {
    *  prevents overlapping state-change calls from posting duplicate strips. */
   private miniNpBusy = new Set<string>();
   private panelRefreshQueued = false;
-  /** id -> chunked plain-lyrics pages (for the jump-to-part dropdown). */
-  private lyricPages = new Map<string, { title: string; artist: string; synced: boolean; pages: string[]; syncedLines?: SyncedLine[] }>();
   /** messageId -> live karaoke session (synced lines + track), edited by a ticker. */
-  private karaokeSessions = new Map<string, { guildId: string; channelId: string; messageId: string; title: string; artist: string; lines: SyncedLine[]; lastIdx: number }>();
+  private static readonly KARAOKE_MAX_SESSIONS = 200;
+  private static readonly KARAOKE_TTL_MS = 30 * 60 * 1000; // 30 min
+  private static readonly LYRIC_PAGES_MAX = 500;
+  private static readonly LYRIC_PAGES_TTL_MS = 60 * 60 * 1000; // 1 hour
+  private karaokeSessions = new Map<string, { guildId: string; channelId: string; messageId: string; title: string; artist: string; lines: SyncedLine[]; lastIdx: number; createdAt: number }>();
+  private lyricPages = new Map<string, { title: string; artist: string; synced: boolean; pages: string[]; syncedLines?: SyncedLine[]; createdAt: number }>();
+  private lyricPagesTicker: NodeJS.Timeout | null = null;
   private karaokeTicker: NodeJS.Timeout | null = null;
   /** guildId -> active sleep timer (stops playback + leaves voice when it fires). */
   private sleepTimers = new Map<string, { timeout: NodeJS.Timeout; at: number }>();
@@ -403,7 +407,9 @@ export class DiscordBot {
       for (const [k, v] of Object.entries(d.lastTextChannel ?? {})) this.lastTextChannel.set(k, v);
       const n = this.panels.size + this.npMessages.size + this.miniNp.size;
       if (n) console.log(`[vaporzr] restored ${n} panel/now-playing registration(s) from disk`);
-    } catch { /* none yet */ }
+    } catch (err) {
+      console.warn('[vaporzr] failed to load panel registrations:', err instanceof Error ? err.message : err);
+    }
   }
 
   private scheduleSavePanels(): void {
@@ -527,42 +533,47 @@ export class DiscordBot {
     this.client.on('clientReady', async () => {
       console.log(`[vaporzr] logged in as ${this.client.user?.tag}`);
       void this.loadPanelRegistrations();
-      if (!config.ownerId) {// Auto-detect owner from the application record. This fetch can fail
-        // on a flaky network at boot, so retry with backoff, then keep
-        // re-checking periodically — owner rank must never silently vanish.
-        let attempts = 0;
-        const detect = async (): Promise<void> => {
-          if (this.perms.hasOwner) return;
-          attempts++;
-          try {
-            const app = await this.client.application?.fetch();
-            const owner = app?.owner;
-            const ownerId = owner
-              ? 'ownerId' in owner
-                ? (owner as { ownerId?: string }).ownerId
-                : (owner as { id: string }).id
-              : null;
-            if (ownerId) {
-              this.perms.setOwner(ownerId);
-              console.log(`[vaporzr] auto-detected owner: ${ownerId} (set OWNER_ID in .env to pin it)`);
-              return;
+      if (!config.ownerId) {
+          // Auto-detect owner from the application record. This fetch can fail
+          // on a flaky network at boot, so retry with backoff, then keep
+          // re-checking periodically — owner rank must never silently vanish.
+          let attempts = 0;
+          const MAX_RETRIES = 10;
+          const detect = async (): Promise<void> => {
+            if (this.perms.hasOwner) return;
+            attempts++;
+            try {
+              const app = await this.client.application?.fetch();
+              const owner = app?.owner;
+              const ownerId = owner
+                ? 'ownerId' in owner
+                  ? (owner as { ownerId?: string }).ownerId
+                  : (owner as { id: string }).id
+                : null;
+              if (ownerId) {
+                this.perms.setOwner(ownerId);
+                console.log(`[vaporzr] auto-detected owner: ${ownerId} (set OWNER_ID in .env to pin it)`);
+                return;
+              }
+              throw new Error('no owner in application record');
+            } catch (err) {
+              console.warn(`[vaporzr] owner auto-detect attempt ${attempts} failed:`, err instanceof Error ? err.message : err);
+              if (attempts < 6) {
+                setTimeout(() => void detect(), 5000 * attempts);
+              } else if (attempts < MAX_RETRIES) {
+                // Slow periodic re-check with max retry limit.
+                const t = setInterval(() => {
+                  if (this.perms.hasOwner) { clearInterval(t); return; }
+                  void detect();
+                }, 15 * 60 * 1000);
+                t.unref?.();
+              } else {
+                console.warn(`[vaporzr] owner auto-detect giving up after ${MAX_RETRIES} attempts`);
+              }
             }
-            throw new Error('no owner in application record');
-          } catch (err) {
-            console.warn(`[vaporzr] owner auto-detect attempt ${attempts} failed:`, err instanceof Error ? err.message : err);
-            if (attempts < 6) setTimeout(() => void detect(), 5000 * attempts);
-            else {
-              // Slow periodic re-check until it sticks.
-              const t = setInterval(() => {
-                if (this.perms.hasOwner) { clearInterval(t); return; }
-                void detect();
-              }, 15 * 60 * 1000);
-              t.unref?.();
-            }
-          }
-        };
-        void detect();
-      }
+          };
+          void detect();
+        }
       const guilds = await this.client.guilds.fetch();
       console.log(
         `[vaporzr] in ${guilds.size} guild(s): ${guilds.map((g) => `${g.name} (${g.id})`).join(', ') || 'none'}`,
@@ -578,7 +589,10 @@ export class DiscordBot {
     this.client.on('guildCreate', () => void this.registerCommands());
     this.client.on('guildCreate', () => this.syncPrimaryGuild());
     this.client.on('guildCreate', (g) => void this.handleGuildCreate(g));
-    this.client.on('guildDelete', () => this.syncPrimaryGuild());
+    this.client.on('guildDelete', (g) => {
+      this.cancelSleepTimer(g.id);
+      this.syncPrimaryGuild();
+    });
     await this.client.login(config.discordToken);
     this.startPresenceTicker();
   }
@@ -2533,18 +2547,19 @@ export class DiscordBot {
     if (!result) return { error: `📝 No lyrics found for **${truncate(track.name, 60)}** — works best with title + artist.` };
     const pages = this.lyricsChunks(result.lyrics);
     const id = randomBytes(4).toString('hex');
+    if (this.lyricPages.size >= DiscordBot.LYRIC_PAGES_MAX) {
+      const oldestKey = this.lyricPages.keys().next().value;
+      if (oldestKey !== undefined) this.lyricPages.delete(oldestKey);
+    }
     this.lyricPages.set(id, {
       title: result.trackName,
       artist: result.artistName,
       synced: result.synced,
       pages,
       syncedLines: result.syncedLines,
+      createdAt: Date.now(),
     });
-    // Prune old lyric stashes to avoid unbounded growth.
-    if (this.lyricPages.size > 200) {
-      const oldest = [...this.lyricPages.keys()].sort(() => 0)[0];
-      if (oldest) this.lyricPages.delete(oldest);
-    }
+    this.ensureLyricPagesTicker();
     // Short lyrics fit on one page — show them straight. Otherwise show a
     // compact teaser and let the dropdown reveal the full text.
     const allLines = result.lyrics.split('\n').filter((l) => l.trim().length > 0);
@@ -2583,6 +2598,10 @@ export class DiscordBot {
   private registerKaraoke(s: Session, messageId: string, guildId: string, channelId: string, title: string, artist: string, lines: SyncedLine[]): void {
     const st = s.queue.getState();
     const pos = st.positionMs + (st.playing ? Math.max(0, Date.now() - (st.updatedAt || Date.now())) : 0);
+    if (this.karaokeSessions.size >= DiscordBot.KARAOKE_MAX_SESSIONS) {
+      const oldestKey = this.karaokeSessions.keys().next().value;
+      if (oldestKey !== undefined) this.karaokeSessions.delete(oldestKey);
+    }
     this.karaokeSessions.set(messageId, {
       guildId,
       channelId,
@@ -2591,6 +2610,7 @@ export class DiscordBot {
       artist,
       lines,
       lastIdx: this.syncedLineIndex(lines, pos),
+      createdAt: Date.now(),
     });
     this.ensureKaraokeTicker();
   }
@@ -2639,6 +2659,27 @@ export class DiscordBot {
     this.karaokeTicker = setInterval(() => void this.tickKaraoke(), 1500);
   }
 
+  private ensureLyricPagesTicker(): void {
+    if (this.lyricPagesTicker) return;
+    this.lyricPagesTicker = setInterval(() => void this.pruneLyricPages(), 60000);
+  }
+
+  private pruneLyricPages(): void {
+    const now = Date.now();
+    let pruned = 0;
+    for (const [id, page] of this.lyricPages) {
+      if (now - page.createdAt > DiscordBot.LYRIC_PAGES_TTL_MS) {
+        this.lyricPages.delete(id);
+        pruned++;
+      }
+    }
+    if (pruned) console.log(`[vaporzr] pruned ${pruned} expired lyric page(s)`);
+    if (this.lyricPages.size === 0 && this.lyricPagesTicker) {
+      clearInterval(this.lyricPagesTicker);
+      this.lyricPagesTicker = null;
+    }
+  }
+
   private async tickKaraoke(): Promise<void> {
     if (this.karaokeSessions.size === 0) {
       if (this.karaokeTicker) {
@@ -2647,7 +2688,13 @@ export class DiscordBot {
       }
       return;
     }
+    const now = Date.now();
     for (const [messageId, sess] of this.karaokeSessions) {
+      // Clean up expired sessions (TTL)
+      if (now - sess.createdAt > DiscordBot.KARAOKE_TTL_MS) {
+        this.karaokeSessions.delete(messageId);
+        continue;
+      }
       const s = this.sessionFor(sess.guildId);
       if (!s) {
         this.karaokeSessions.delete(messageId);

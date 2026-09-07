@@ -20,23 +20,23 @@ export const config = {
   ownerId: process.env.OWNER_ID ?? '',
   dataDir: process.env.DATA_DIR ?? path.join(__dirname, '..', 'data'),
   youtubeApiKey: process.env.YOUTUBE_API_KEY ?? '',
-  ytDlpPath: process.env.YT_DLP_PATH ?? path.join(__dirname, '..', '..', '..', 'vendor', 'yt-dlp', 'yt-dlp.exe'),
-  /** Path to a Netscape-format cookies.txt for YouTube. Authenticated requests
-   *  avoid most 403s and throttling that cause mid-track stream cuts. */
-  youtubeCookiesPath: process.env.YOUTUBE_COOKIES_PATH ?? '',
-  /**
-   * HTTP proxy for YouTube traffic (yt-dlp resolve + the googlevideo stream
-   * fetch). Datacenter IPs get SABR-flagged by YouTube (no direct stream
-   * URLs regardless of cookies/PO tokens); routing just YouTube through a
-   * residential proxy restores resolution AND playback. Format:
-   * http://[user:pass@]host:port — empty = direct.
-   */
-  youtubeProxy: process.env.YOUTUBE_PROXY ?? '',
-  /** ffmpeg binary used for server-side streaming + PCM resampling. */
-  ffmpegPath: process.env.FFMPEG_PATH ?? ffmpegStatic ?? 'ffmpeg',
-  /** Path to the librespot binary (the server-side Spotify "device"). Empty = disabled. */
-  librespotPath:
-    process.env.LIBRESPOT_PATH ?? path.join(__dirname, '..', '..', '..', 'vendor', 'librespot', 'librespot.exe'),
+ytDlpPath: process.env.YT_DLP_PATH ?? path.join(__dirname, '..', '..', '..', 'vendor', 'yt-dlp', 'yt-dlp'),
+   /** Path to a Netscape-format cookies.txt for YouTube. Authenticated requests
+    *  avoid most 403s and throttling that cause mid-track stream cuts. */
+   youtubeCookiesPath: process.env.YOUTUBE_COOKIES_PATH ?? '',
+   /**
+    * HTTP proxy for YouTube traffic (yt-dlp resolve + the googlevideo stream
+    * fetch). Datacenter IPs get SABR-flagged by YouTube (no direct stream
+    * URLs regardless of cookies/PO tokens); routing just YouTube through a
+    * residential proxy restores resolution AND playback. Format:
+    * http://[user:pass@]host:port — empty = direct.
+    */
+   youtubeProxy: process.env.YOUTUBE_PROXY ?? '',
+   /** ffmpeg binary used for server-side streaming + PCM resampling. */
+   ffmpegPath: process.env.FFMPEG_PATH ?? ffmpegStatic ?? 'ffmpeg',
+   /** Path to the librespot binary (the server-side Spotify "device"). Empty = disabled. */
+   librespotPath:
+     process.env.LIBRESPOT_PATH ?? path.join(__dirname, '..', '..', '..', 'vendor', 'librespot', 'librespot'),
   /** Name librespot registers with Spotify — used to find it as a playback device. */
   librespotDeviceName: process.env.LIBRESPOT_DEVICE_NAME ?? 'Vaporzr',
   /** Local TCP port librespot streams raw PCM to (must be space-free in the bridge command). */
@@ -47,9 +47,9 @@ export const config = {
    */
   publicHost: process.env.PUBLIC_HOST ?? '',
   /** cloudflared binary used to expose an HTTPS quick tunnel for /viz + /panel links. */
-  cloudflaredPath:
-    process.env.CLOUDFLARED_PATH ??
-    path.join(__dirname, '..', '..', '..', 'vendor', 'cloudflared', 'cloudflared.exe'),
+cloudflaredPath:
+     process.env.CLOUDFLARED_PATH ??
+     path.join(__dirname, '..', '..', '..', 'vendor', 'cloudflared', 'cloudflared'),
   /** Set VIZ_TUNNEL=off to disable the automatic HTTPS secure-link tunnel. */
   vizTunnel: process.env.VIZ_TUNNEL !== 'off' && process.env.VIZ_TUNNEL !== '0',
   /** Cloudflare named-tunnel token (dashboard "install connector" token). Enables your own branded domain, e.g. viz.vaporzr.app. Empty = ephemeral trycloudflare.com URL. */
@@ -83,6 +83,6 @@ export const config = {
   spotifyTotpVer: process.env.SPOTIFY_TOTP_VER ?? '5',
   /** Player app directory (Electron) and binary used to open the player window. */
   playerDir: process.env.PLAYER_DIR ?? path.join(__dirname, '..', '..', 'player'),
-  electronPath:
-    process.env.ELECTRON_PATH ?? path.join(__dirname, '..', '..', '..', 'node_modules', 'electron', 'dist', 'electron.exe'),
+electronPath:
+     process.env.ELECTRON_PATH ?? path.join(__dirname, '..', '..', '..', 'node_modules', 'electron', 'dist', 'electron'),
 };

@@ -58,7 +58,7 @@ async function main(): Promise<void> {
   const discord = new DiscordBot(sessions, perms, bridge);
   await discord.start();
 
-  // Without this, a tsx restart or Ctrl+C leaves librespot.exe running and it
+  // Without this, a tsx restart or Ctrl+C leaves librespot running and it
   // stays registered as the Connect device — later play commands route to it
   // instead of the fresh session (wrong track / silent stall).
   const shutdown = (): void => {

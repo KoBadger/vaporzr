@@ -106,7 +106,11 @@ export class Bridge {
       }
       socket.on('message', (data) => this.handleMessage(socket, data));
       socket.on('close', () => this.handleClose(socket));
-      socket.on('error', () => this.handleClose(socket));
+      socket.on('error', () => {
+        // Guard: set a flag so any in-flight message handlers can check it.
+        (socket as any).__vz_closing = true;
+        this.handleClose(socket);
+      });
     });
   }
 
@@ -197,6 +201,7 @@ export class Bridge {
   }
 
   private handleMessage(socket: WebSocket, raw: WebSocket.RawData): void {
+    if ((socket as any).__vz_closing) return;
     let msg: InboundMessage;
     try {
       msg = JSON.parse(raw.toString()) as InboundMessage;

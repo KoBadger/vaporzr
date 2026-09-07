@@ -28,7 +28,7 @@ A Discord music bot with a branded web control panel and a browser-based MilkDro
 git clone https://github.com/KoBadger/vaporzr.git
 cd vaporzr
 npm install
-Copy-Item apps/bot/.env.example apps/bot/.env   # fill in DISCORD_TOKEN, SPOTIFY_CLIENT_ID/SECRET
+cp apps/bot/.env.example apps/bot/.env   # fill in DISCORD_TOKEN, SPOTIFY_CLIENT_ID/SECRET
 npm run dev -w @vaporzr/bot
 ```
 
@@ -76,7 +76,7 @@ Access: `/key give` `/key rotate` `/perms` (admin) — `/nickname` (🥚)
 
 ## Notes
 
-- Vendor binaries (`yt-dlp`, `librespot`, `cloudflared`) are downloaded separately into `vendor/` (gitignored). Keep `yt-dlp` updated (`vendor\yt-dlp\yt-dlp.exe -U`) — extractors rot against site changes.
+- Vendor binaries (`yt-dlp`, `librespot`, `cloudflared`) are downloaded separately into `vendor/` (gitignored). Keep `yt-dlp` updated (`vendor/yt-dlp/yt-dlp -U` on Linux/macOS, `vendor\yt-dlp\yt-dlp.exe -U` on Windows) — extractors rot against site changes.
 - Every guild's queue persists across restarts (`apps/bot/data/queues/`), restored paused. Panel/now-playing registrations persist too (`apps/bot/data/panels.json`).
 - Set `OWNER_ID=<your Discord user id>` in `apps/bot/.env` to pin owner rank (otherwise auto-detected from the app record, with retries).
 - Docker: `docker build -f apps/bot/Dockerfile -t vaporzr-bot .` (see Dockerfile header for caveats).

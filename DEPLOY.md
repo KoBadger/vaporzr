@@ -14,8 +14,8 @@ tunnel, so the bot runs independently of your home network.
 The repo ships two workflows:
 
 - **`.github/workflows/ci.yml`** — typecheck + unit tests on every push/PR.
-- **`.github/workflows/deploy.yml`** — on push to `main` (or a `v*` tag):
-  1. downloads the `librespot` linux binary,
+- **`.github/workflows/deploy.yml`** — on push to `master` (or a `v*` tag):
+  1. builds `librespot` from the pinned official source tag (v0.8.0),
   2. builds `apps/bot/Dockerfile` and pushes to GHCR,
   3. SSHes into the VPS, pulls the image, and recreates the `vaporzr` container.
 
@@ -115,24 +115,18 @@ YOUTUBE_COOKIES_PATH=/app/data/cookies.txt
 -v /opt/vaporzr/cookies.txt:/app/data/cookies.txt:ro
 ```
 
-## Enabling librespot on the VPS (required for native Spotify)
+## Enabling librespot on the VPS (optional — native Spotify)
 
-The image ships librespot and points `LIBRESPOT_PATH` at it, but you must
-authorize it **once** so Spotify's OAuth credentials are cached in the volume
-(this cmd runs your own Premium account through librespot's OAuth flow):
+The image ships librespot and points `LIBRESPOT_PATH` at it. **Anonymous playback works by default** (`SPOTIFY_PREFER_YOUTUBE=0` + `SPOTIFY_USE_ANONYMOUS=1`), so no account linking is required for most use cases. To enable native Spotify playback via librespot (can improve quality/reliability and enables the `/device` commands), authorize it **once** so Spotify's OAuth credentials are cached in the volume (this cmd runs your own Premium account through librespot's OAuth flow):
 
 ```bash
 docker exec -it vaporzr librespot \
   --cache /app/data/librespot --enable-oauth
 ```
 
-Follow the browser OAuth flow, then restart the container. On Linux the
-subprocess sink is more reliable than on Windows, so this is often the cleanest
-way to eliminate Spotify→YouTube fallback stalls.
+Follow the browser OAuth flow, then restart the container. On Linux the subprocess sink is more reliable than on Windows, so this is often the cleanest way to eliminate Spotify→YouTube fallback stalls.
 
-In a multi-guild setup the device is shared — every server's Spotify playback
-routes through this one librespot instance (see the Dockerfile note about
-`SPOTIFY_PREFER_YOUTUBE=0`). Rename the device with `/device select <name>`.
+In a multi-guild setup the device is shared — every server's Spotify playback routes through this one librespot instance (see the Dockerfile note about `SPOTIFY_PREFER_YOUTUBE=0`). Rename the device with `/device select <name>`.
 
 ## 4. Run
 
@@ -147,7 +141,7 @@ docker run -d --name vaporzr \
   -e BIND_ADDRESS=127.0.0.1 \
   -v vaporzr-data:/app/data \
   -v /opt/vaporzr/cookies.txt:/app/data/cookies.txt:ro \
-  kobadger/vaporzr-bot:latest
+  ghcr.io/kobadger/vaporzr/vaporzr-bot:latest
 ```
 
 > Do NOT publish `-p 4876:4876`. The control server + WS bridge have **no

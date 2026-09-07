@@ -450,7 +450,14 @@ export class VoiceManager {
     // were previously swallowed and every stream looked like a generic "cut short".
     proc.stderr.on('data', (d) => {
       const line = d.toString().trim();
-      if (line) console.warn(`[voice] ffmpeg: ${line.slice(0, 400)}`);
+      if (!line) return;
+      console.warn(`[voice] ffmpeg: ${line.slice(0, 800)}`);
+      // Detect critical errors and trigger retry/refresh if applicable.
+      const l = line.toLowerCase();
+      if ((l.includes('403') || l.includes('429') || l.includes('connection refused') || l.includes('connection reset') || l.includes('http error')) && token === this.streamToken) {
+        console.warn('[voice] critical ffmpeg error detected — will attempt stream refresh on exit');
+        proc.emit('ffmpeg-critical-error');
+      }
     });
     proc.stdout.pipe(stream);
     if (fetchSelf) this.fetchIntoStdin(url, proc, token);
@@ -496,8 +503,18 @@ export class VoiceManager {
     proc.on('error', (err) => {
       console.warn(`[voice] ffmpeg failed to start: ${err.message}`);
       if (token !== this.streamToken) return;
+      if (this.ffmpeg !== proc) return; // already replaced
       this.ffmpeg = null;
       if (opts.onEnd) opts.onEnd();
+    });
+    // If stderr detected a critical error, attempt refresh immediately on exit
+    // rather than waiting for the exit handler to decide.
+    proc.on('ffmpeg-critical-error', () => {
+      if (token !== this.streamToken) return;
+      if (this.ffmpeg !== proc) return;
+      if (opts.refreshUrl && (opts.retries ?? 0) > 0) {
+        proc.kill('SIGTERM'); // will trigger exit handler with retry logic
+      }
     });
   }
 

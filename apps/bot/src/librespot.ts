@@ -161,6 +161,13 @@ export class LibrespotManager {
     }
   }
 
+  /** Pause the PCM socket (e.g. when downstream errors occur). */
+  pauseSocket(): void {
+    if (this.socket && !this.socket.isPaused()) {
+      this.socket.pause();
+    }
+  }
+
   /** Total raw PCM bytes received so far (used for position + end-of-track detection). */
   getPcmBytes(): number {
     return this.pcmBytes;
@@ -200,7 +207,7 @@ export class LibrespotManager {
       const bridgePath = path.join(this.bridgeDir, 'bridge.cjs');
       fs.writeFileSync(bridgePath, BRIDGE_SRC);
       this.bridgePath = bridgePath;
-      // A previous bot run (crash or tsx restart) can leave librespot.exe and its
+      // A previous bot run (crash or tsx restart) can leave librespot and its
       // bridge orphaned. Stale librespots all register the same Connect device
       // (id = SHA1(name)) and make Spotify route play commands to the wrong
       // session — the source of wrong-track skips and silent stalls. Bridges that
@@ -245,9 +252,8 @@ export class LibrespotManager {
       });
     // Bridges first: their librespot may still be alive, and killing them forces
     // librespot's subprocess sink to give up too.
-    const ps = `Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object CommandLine -like '*bridge.cjs*' | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force }`;
-    await run('powershell', ['-NoProfile', '-Command', ps]);
-    await run('taskkill', ['/IM', 'librespot.exe', '/F']);
+    await run('pkill', ['-f', 'bridge.cjs']);
+    await run('pkill', ['-f', 'librespot']);
   }
 
   private startTcpServer(): Promise<void> {
