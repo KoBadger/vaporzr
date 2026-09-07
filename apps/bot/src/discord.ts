@@ -559,7 +559,8 @@ export class DiscordBot {
             } catch (err) {
               console.warn(`[vaporzr] owner auto-detect attempt ${attempts} failed:`, err instanceof Error ? err.message : err);
               if (attempts < 6) {
-                setTimeout(() => void detect(), 5000 * attempts);
+                const dt = setTimeout(() => void detect(), 5000 * attempts);
+                dt.unref?.();
               } else if (attempts < MAX_RETRIES) {
                 // Slow periodic re-check with max retry limit.
                 const t = setInterval(() => {
@@ -579,14 +580,20 @@ export class DiscordBot {
         `[vaporzr] in ${guilds.size} guild(s): ${guilds.map((g) => `${g.name} (${g.id})`).join(', ') || 'none'}`,
       );
       this.syncPrimaryGuild();
-      void this.registerCommands();
+      void this.registerCommands().catch((err) =>
+        console.error('[vaporzr] registerCommands failed:', err instanceof Error ? err.message : err),
+      );
       void this.ensurePanelEmojis();
       void this.syncBotAvatar();
       void this.loadKeyedGuilds();
     });
     this.client.on('interactionCreate', (i) => void this.onInteraction(i));
     this.client.on('messageCreate', (m) => void this.handleMessageCommand(m));
-    this.client.on('guildCreate', () => void this.registerCommands());
+    this.client.on('guildCreate', () =>
+      void this.registerCommands().catch((err) =>
+        console.error('[vaporzr] registerCommands on guildCreate failed:', err instanceof Error ? err.message : err),
+      ),
+    );
     this.client.on('guildCreate', () => this.syncPrimaryGuild());
     this.client.on('guildCreate', (g) => void this.handleGuildCreate(g));
     this.client.on('guildDelete', (g) => {
@@ -2657,11 +2664,13 @@ export class DiscordBot {
   private ensureKaraokeTicker(): void {
     if (this.karaokeTicker) return;
     this.karaokeTicker = setInterval(() => void this.tickKaraoke(), 1500);
+    this.karaokeTicker.unref?.();
   }
 
   private ensureLyricPagesTicker(): void {
     if (this.lyricPagesTicker) return;
     this.lyricPagesTicker = setInterval(() => void this.pruneLyricPages(), 60000);
+    this.lyricPagesTicker.unref?.();
   }
 
   private pruneLyricPages(): void {
@@ -3465,6 +3474,7 @@ export class DiscordBot {
         this.bridge.onBurstData = null;
         resolve(null);
       }, timeoutMs);
+      timer.unref?.();
       this.bridge.onBurstData = (data: string) => {
         clearTimeout(timer);
         this.bridge.onBurstData = null;
@@ -3499,15 +3509,14 @@ export class DiscordBot {
     if (!s.endlessWave.active) return;
     const t = this.ewTopUpTimers.get(s.guildId);
     if (t) clearTimeout(t);
-    this.ewTopUpTimers.set(
-      s.guildId,
-      setTimeout(() => {
-        this.ewTopUpTimers.delete(s.guildId);
-        void this.topUpWave(s).catch((err) =>
-          console.warn(`[endlesswave] top-up failed: ${err instanceof Error ? err.message : err}`),
-        );
-      }, 700),
-    );
+    const wt = setTimeout(() => {
+      this.ewTopUpTimers.delete(s.guildId);
+      void this.topUpWave(s).catch((err) =>
+        console.warn(`[endlesswave] top-up failed: ${err instanceof Error ? err.message : err}`),
+      );
+    }, 700);
+    wt.unref?.();
+    this.ewTopUpTimers.set(s.guildId, wt);
   }
 
   /** Shared Endless Wave activation — used by both `V@ew on` and the panel. */
@@ -3707,6 +3716,7 @@ function runFfmpeg(args: string[]): Promise<boolean> {
       }
       resolve(false);
     }, 15000);
+    timer.unref?.();
     proc.on('exit', (code) => {
       clearTimeout(timer);
       resolve(code === 0);

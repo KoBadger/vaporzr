@@ -163,6 +163,7 @@ export class PlaybackController {
         console.warn(`[playback] could not persist stream cache: ${err instanceof Error ? err.message : err}`);
       }
     }, 4000);
+    this.cacheSaveTimer!.unref?.();
   }
 
   /** Set a cache entry and schedule its persistence. */
@@ -1049,7 +1050,7 @@ export class PlaybackController {
     );
     this.spotifyRetry = setTimeout(async () => {
       this.spotifyRetry = null;
-       if (this.currentUri !== current.uri || this.playGeneration !== generation) return;
+      if (this.currentUri !== current.uri || this.playGeneration !== generation) return;
       try {
         await spotifyPlay(deviceId, [current.uri]);
       } catch (err) {
@@ -1077,6 +1078,7 @@ export class PlaybackController {
       this.startSpotifyProgress();
       console.log(`[playback] started "${current.name}" after rate-limit wait`);
     }, waitSec * 1000);
+    this.spotifyRetry!.unref?.();
   }
 
   private clearSpotifyRetry(): void {
@@ -1309,6 +1311,7 @@ function probeLocalDuration(filePath: string): Promise<number | null> {
       done();
       resolve(parseDuration(stderr));
     }, 5000);
+    timer.unref?.();
     proc.stderr.on('data', (d) => {
       stderr += d.toString();
       const ms = parseDuration(stderr);

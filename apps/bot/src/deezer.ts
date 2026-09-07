@@ -41,6 +41,7 @@ async function getJson<T>(path: string): Promise<T | null> {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    timer.unref?.();
     const res = await fetch(`${API}${path}`, { signal: controller.signal });
     clearTimeout(timer);
     if (!res.ok) return null;

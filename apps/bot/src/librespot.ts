@@ -238,6 +238,7 @@ export class LibrespotManager {
             }
             resolve();
           }, 3000);
+          timer.unref?.();
           p.on('exit', () => {
             clearTimeout(timer);
             resolve();

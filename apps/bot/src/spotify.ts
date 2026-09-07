@@ -53,6 +53,7 @@ const FETCH_TIMEOUT_MS = 10_000;
 async function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  timer.unref?.();
   try {
     return await fetch(url, { ...init, signal: controller.signal });
   } catch (err) {
@@ -134,6 +135,7 @@ function cacheSet(key: string, value: unknown, ttlMs = RESOLVE_TTL_MS): void {
   cache.set(key, { at: Date.now(), ttlMs, value });
   if (cacheWriteTimer) clearTimeout(cacheWriteTimer);
   cacheWriteTimer = setTimeout(() => void persistCache(), 2000);
+  cacheWriteTimer!.unref?.();
 }
 
 function pruneCache(): void {

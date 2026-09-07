@@ -44,6 +44,7 @@ function probeDuration(url: string): Promise<number | null> {
         /* ignore */
       }
     }, 15000);
+    timer.unref?.();
     proc.on('exit', () => {
       clearTimeout(timer);
       const m = stderr.match(/Duration:\s*(\d+):(\d+):(\d+\.?\d*)/);

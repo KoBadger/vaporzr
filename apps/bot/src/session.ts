@@ -90,7 +90,9 @@ export class SessionManager {
   private schedulePersist(guildId: string): void {
     const timer = this.saveTimers.get(guildId);
     if (timer) clearTimeout(timer);
-    this.saveTimers.set(guildId, setTimeout(() => this.persist(guildId), 3000));
+    const t = setTimeout(() => this.persist(guildId), 3000);
+    t.unref?.();
+    this.saveTimers.set(guildId, t);
   }
 
   private restore(guildId: string, s: Session): void {

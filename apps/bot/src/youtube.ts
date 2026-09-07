@@ -566,6 +566,7 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
   if (ms <= 0) return Promise.resolve(null);
   return new Promise((resolve) => {
     const timer = setTimeout(() => resolve(null), ms);
+    timer.unref?.();
     p.then(
       (v) => { clearTimeout(timer); resolve(v); },
       () => { clearTimeout(timer); resolve(null); },

@@ -84,7 +84,7 @@ jobs:
           script: |
             set -e
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            docker pull ${{ env.IMAGE }}:latest
+            docker pull ${{ env.IMAGE }}:${{ github.sha }}
             docker stop vaporzr || true
             docker rm vaporzr || true
             docker run -d --name vaporzr \
@@ -92,7 +92,7 @@ jobs:
               --env-file /opt/vaporzr/.env \
               -e BIND_ADDRESS=127.0.0.1 \
               -v vaporzr-data:/app/data \
-              ${{ env.IMAGE }}:latest
+              ${{ env.IMAGE }}:${{ github.sha }}
             docker image prune -f
             sleep 5
             docker exec vaporzr node -e "const h=require('http');h.get('http://127.0.0.1:'+(process.env.PORT||4876)+'/health',s=>{process.exit(s.statusCode===200?0:1)}).on('error',()=>process.exit(1))" || echo "WARN: /health not reachable after deploy"

@@ -157,6 +157,7 @@ export class VoiceManager {
         // Discord's voice gateway can be slow when the machine's DNS/network is
         // flaky, so give it a generous window and retry once below.
         const timer = setTimeout(() => reject(new Error('Timed out joining the voice channel.')), 20_000);
+        timer.unref?.();
         connection.once(VoiceConnectionStatus.Ready, () => {
           clearTimeout(timer);
           resolve();
@@ -184,7 +185,7 @@ export class VoiceManager {
         } catch {
           /* ignore */
         }
-        await new Promise((resolve) => setTimeout(resolve, 1500));
+        await new Promise((resolve) => { const t = setTimeout(resolve, 1500); t.unref?.(); });
         connection = connect();
       }
     }
@@ -482,7 +483,7 @@ export class VoiceManager {
             `[voice] stream failed after ${ranForMs}ms — refreshing URL and resuming at ${Math.round(resumeMs)}ms (${attemptsLeft} retries left)`,
           );
           this.ffmpeg = null;
-          setTimeout(() => {
+          const rt = setTimeout(() => {
             opts.refreshUrl!()
               .then((newUrl) => {
                 this.playFfmpegUrl(newUrl, { ...opts, seekMs: resumeMs, retries: attemptsLeft });
@@ -494,6 +495,7 @@ export class VoiceManager {
                 if (opts.onEnd) opts.onEnd();
               });
           }, 1500);
+          rt.unref?.();
           return;
         }
       }
