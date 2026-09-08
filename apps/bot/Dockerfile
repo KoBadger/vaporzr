@@ -12,13 +12,15 @@
 #     vaporzr-bot
 #
 # NOTES
-# - The container binds the control server + WS bridge to 127.0.0.1:4876
-#   (BIND_ADDRESS default here). Do NOT publish -p 4876:4876. To open the
-#   browser panel / visualizer from your machine, SSH-tunnel the port instead:
+# - The container binds the control server + WS bridge to 0.0.0.0:4876
+#   (BIND_ADDRESS default here) so Docker's port mapping can reach it. The
+#   port is only ever published to the host's loopback (-p 127.0.0.1:4876:4876),
+#   never to the internet. To open the browser panel / visualizer from your
+#   machine, SSH-tunnel the port instead:
 #       ssh -N -L 4876:127.0.0.1:4876 user@your-vps
 #   then browse to http://127.0.0.1:4876/panel. If you DO want it reachable
-#   from the internet instead, override BIND_ADDRESS=0.0.0.0 AND set SHARE_KEY
-#   to gate /panel + /viz + the WS bridge (they are unauthenticated otherwise).
+#   from the internet instead, publish it AND set SHARE_KEY to gate /panel +
+#   /viz + the WS bridge (they are unauthenticated otherwise).
 # - Spotify linking: with SPOTIFY_PREFER_YOUTUBE=0 (multi-guild mode) and
 #   SPOTIFY_USE_ANONYMOUS=1 (default) no account link is required. If you need
 #   full-length public playlists, set SPOTIFY_SP_DC in .env. To keep an existing
@@ -58,7 +60,7 @@ COPY librespot /usr/local/bin/librespot
 
 ENV NODE_ENV=production \
     PORT=4876 \
-    BIND_ADDRESS=127.0.0.1 \
+    BIND_ADDRESS=0.0.0.0 \
     DATA_DIR=/app/data \
     YT_DLP_PATH=/usr/local/bin/yt-dlp \
     FFMPEG_PATH=/usr/bin/ffmpeg \

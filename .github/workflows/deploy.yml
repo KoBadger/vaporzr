@@ -90,7 +90,7 @@ jobs:
             docker run -d --name vaporzr \
               --restart unless-stopped \
               --env-file /opt/vaporzr/.env \
-              -e BIND_ADDRESS=127.0.0.1 \
+              -p 127.0.0.1:4876:4876 \
               -v vaporzr-data:/app/data \
               ${{ env.IMAGE }}:${{ github.sha }}
             docker image prune -f
