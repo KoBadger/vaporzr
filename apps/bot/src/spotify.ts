@@ -236,7 +236,8 @@ export async function getAccessToken(forceRefresh = false): Promise<string> {
 
   const stored = tokenStore.load();
   if (!stored?.refresh_token) {
-    throw new SpotifyError('No Spotify account linked. Visit http://localhost:PORT/login to authorize.');
+    const loginUrl = config.staticBaseUrl ? `${config.staticBaseUrl}/login` : 'http://localhost:' + (process.env.PORT || 4876) + '/login';
+    throw new SpotifyError(`No Spotify account linked. Visit ${loginUrl} to authorize.`);
   }
 
   const body = new URLSearchParams({

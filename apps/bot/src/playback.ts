@@ -466,11 +466,15 @@ export class PlaybackController {
           return;
         }
         if (err instanceof SpotifyError && err.status === 429) {
-          // Spotify's app quota can remain exhausted well beyond the advertised
-          // Retry-After window. Do not make the user wait or leave a retry timer
-          // fighting EW; play the already-resolved track through YouTube instead.
           this.spotifyDeviceId = undefined;
           console.warn(`[playback] Spotify app quota is rate-limited — using YouTube fallback for "${current.name}"`);
+          await this.playYoutubeFallback(current, generation);
+          return;
+        }
+        if (err instanceof SpotifyError && !err.status) {
+          console.warn(`[playback] no Spotify OAuth token — using YouTube fallback for "${current.name}"`);
+          this.spotifyDeviceId = undefined;
+          this.spotifyPlaybackBlockedUntil = Date.now() + 60 * 60 * 1000;
           await this.playYoutubeFallback(current, generation);
           return;
         }
@@ -1062,6 +1066,12 @@ export class PlaybackController {
         if (err instanceof SpotifyError && err.status === 404) {
           this.spotifyDeviceId = undefined;
            await this.playYoutubeFallback(current, generation).catch(() => {});
+          return;
+        }
+        if (err instanceof SpotifyError && !err.status) {
+          console.warn(`[playback] deferred Spotify start: no OAuth token — using YouTube fallback for "${current.name}"`);
+          this.spotifyDeviceId = undefined;
+          await this.playYoutubeFallback(current, generation).catch(() => {});
           return;
         }
         console.warn(`[playback] deferred Spotify start failed: ${err instanceof Error ? err.message : String(err)}`);
