@@ -151,6 +151,15 @@ export class VoiceManager {
       const connection = joinVoiceChannel({ channelId, guildId, adapterCreator, selfDeaf: true });
       this.connection = connection;
       this.channelId = channelId;
+      connection.on('stateChange', (oldS, newS) => {
+        if (newS.status === oldS.status) return;
+        const reason = newS.status === VoiceConnectionStatus.Disconnected
+          ? (newS as unknown as { reason?: string }).reason
+          : undefined;
+        console.log(
+          `[voice] conn ${oldS.status} → ${newS.status}${reason ? ` (reason=${reason})` : ''}`,
+        );
+      });
       return connection;
     };
     const waitForReady = (connection: VoiceConnection): Promise<void> =>
@@ -310,7 +319,8 @@ export class VoiceManager {
       this.connection = null;
     }
     this.channelId = null;
-    console.log('[voice] left voice channel');
+    const caller = new Error().stack?.split('\n').slice(2, 4).join(' | ').trim() ?? 'unknown';
+    console.log(`[voice] left voice channel (via: ${caller})`);
   }
 
   /** Create a fresh streaming resource. Safe to call repeatedly. */
@@ -425,6 +435,9 @@ export class VoiceManager {
     this.stopStream();
     const token = this.streamToken;
     const startedAt = Date.now();
+    console.log(
+      `[voice] stream start ${opts.seekMs !== undefined ? `(resume ${opts.seekMs}ms) ` : ''}retries=${opts.retries ?? 0} refresh=${opts.refreshUrl ? 'yes' : 'no'} · ${String(url).slice(0, 96).replace(/\s+/g, ' ')}`,
+    );
     const isHttp = /^https?:\/\//i.test(url);
     // HLS playlists (SoundCloud serves .m3u8) must be demuxed by ffmpeg itself —
     // piping the playlist bytes into stdin produces noise, not audio.
@@ -495,7 +508,10 @@ export class VoiceManager {
     this.player.play(resource);
     this.paused = false;
     proc.on('exit', (code, signal) => {
-      if (token !== this.streamToken) return;
+      if (token !== this.streamToken) {
+        console.warn(`[voice] stale ffmpeg exit ignored (code ${code}${signal ? ` ${signal}` : ''})`);
+        return;
+      }
       if (code !== 0) {
         console.warn(`[voice] ffmpeg exited with code ${code}${signal ? ` (${signal})` : ''} — stream cut short`);
         const ranForMs = Date.now() - startedAt;
