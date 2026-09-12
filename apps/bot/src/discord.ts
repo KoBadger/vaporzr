@@ -892,9 +892,7 @@ export class DiscordBot {
       case 'skip': {
         if (!this.requireLevel('skip', interaction)) return this.deny(interaction);
         s.playback.next();
-        const np = this.nowPlayingEmbed(s, '⏭️ Skipped');
-        if (np) await interaction.reply({ embeds: [np] });
-        else await interaction.reply('⏭️ Skipped — queue ended');
+        await interaction.reply('⏭️ Skipped');
         break;
       }
 
@@ -1582,9 +1580,7 @@ export class DiscordBot {
           if (!canUse('skip')) return void (await deny());
           s.playback.next();
           this.scheduleWaveTopUp(s);
-          const np = this.nowPlayingEmbed(s, '⏭️ Skipped');
-          if (np) await message.reply({ embeds: [np] });
-          else await message.reply('⏭️ Skipped — queue ended');
+          await message.reply('⏭️ Skipped');
           break;
         }
 
