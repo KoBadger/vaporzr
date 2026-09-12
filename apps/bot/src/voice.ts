@@ -3,6 +3,7 @@ import {
   AudioPlayerStatus,
   createAudioPlayer,
   createAudioResource,
+  entersState,
   joinVoiceChannel,
   NoSubscriberBehavior,
   StreamType,
@@ -192,6 +193,31 @@ export class VoiceManager {
 
     this.player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Pause } });
     connection.subscribe(this.player);
+    // A ready connection is otherwise never watched again: a mid-play UDP drop
+    // leaves @discordjs/voice stranded in Disconnected, every subsequent
+    // ffmpeg muxer write fails, and the queue "skips" through the rest of the
+    // playlist. Try to ride out the reconnect; tear down only if it can't.
+    connection.on(VoiceConnectionStatus.Disconnected, () => {
+      if (this.connection !== connection) return;
+      void (async () => {
+        try {
+          await Promise.race([
+            entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
+            entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
+          ]);
+        } catch {
+          console.warn('[voice] voice connection dropped — cleaning up');
+          connection.destroy();
+          if (this.connection === connection) {
+            this.connection = null;
+            this.channelId = null;
+            this.stopStream();
+            this.player?.stop();
+            this.clearIdleTimer();
+          }
+        }
+      })();
+    });
     this.player.on('error', (e) => {
       // A killed ffmpeg's tail packet can still hit the player after a
       // skip/stop. If the errored resource is not the current one, the

@@ -651,6 +651,8 @@ export class PlaybackController {
     this.voice.playFfmpegUrl(filePath, {
       volume: this.queue.getState().volume,
       onEnd: this.serverStreamOnEnd(),
+      retries: 2,
+      refreshUrl: () => Promise.resolve(filePath),
     });
     this.scheduleEnd(durationMs, 0);
     this.schedulePreload(durationMs, 0);
@@ -677,6 +679,8 @@ export class PlaybackController {
     this.voice.playFfmpegUrl(current.streamUrl, {
       volume: this.queue.getState().volume,
       onEnd: this.serverStreamOnEnd(),
+      retries: 2,
+      refreshUrl: () => Promise.resolve(current.streamUrl!),
     });
     this.scheduleEnd(durationMs, 0);
     this.schedulePreload(durationMs, 0);

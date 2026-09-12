@@ -2431,7 +2431,18 @@ export class DiscordBot {
         // Re-anchor: delete the old strip so the fresh one sits at the bottom.
         try {
           const old = await channel.messages.fetch(existing.messageId);
-          await old.delete();
+          try {
+            await old.delete();
+          } catch {
+            // Can't delete (perms/rate limits) — update in place instead of
+            // leaving a second strip behind on every rapid track change.
+            const payload = this.miniNpPayload(this.sessionFor(guildId));
+            await old.edit({ embeds: [payload] });
+            this.miniNp.set(guildId, existing);
+            this.miniTrackUri.set(guildId, uri);
+            this.scheduleSavePanels();
+            return;
+          }
         } catch { /* already gone */ }
       }
       const msg = await channel.send({ embeds: [this.miniNpPayload(this.sessionFor(guildId))] });
