@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { QueueManager } from './queue.js';
 import { resolveYoutubeVideo, searchAndResolveYoutube, type ResolvedVideo } from './youtube.js';
-import { resolveSuno } from './suno.js';
+import { resolveSuno, probeDuration } from './suno.js';
 import { resolveSoundcloudVideo, soundcloudUriToUrl } from './soundcloud.js';
 import { resolveApplePlayback } from './apple.js';
 import { dj, sfxById, type SfxSound } from './soundboard.js';
@@ -372,7 +372,7 @@ export class PlaybackController {
   /** True while audio is coming through the bot's own ffmpeg stream. */
   private usingServerStream(): boolean {
     const src = this.currentSource();
-    return src === 'youtube' || src === 'local' || src === 'suno' || src === 'soundcloud' || src === 'apple' || this.spotifyFallback;
+    return src === 'youtube' || src === 'local' || src === 'direct' || src === 'suno' || src === 'soundcloud' || src === 'apple' || this.spotifyFallback;
   }
 
   /** Advance to the next track once a server-side stream naturally ends. */
@@ -414,6 +414,11 @@ export class PlaybackController {
 
     if (current.source === 'local') {
       await this.playLocal(current);
+      return;
+    }
+
+    if (current.source === 'direct') {
+      await this.playDirect(current);
       return;
     }
 
@@ -644,6 +649,32 @@ export class PlaybackController {
       source: 'local',
     });
     this.voice.playFfmpegUrl(filePath, {
+      volume: this.queue.getState().volume,
+      onEnd: this.serverStreamOnEnd(),
+    });
+    this.scheduleEnd(durationMs, 0);
+    this.schedulePreload(durationMs, 0);
+    this.startPositionTracker();
+    this.sendVisualizer({ type: 'cmd', command: 'stop' });
+  }
+
+  /** Server-side playback of a direct audio/video file URL via ffmpeg. */
+  private async playDirect(current: TrackInfo): Promise<void> {
+    if (!current.streamUrl) throw new Error(`No stream URL for "${current.name}".`);
+    this.spotifyFallback = false;
+    this.stopSpotifyFeed();
+    this.stopSpotifyProgress();
+    if (this.spotifyDeviceId) void spotifyPause(this.spotifyDeviceId).catch(() => {});
+    const durationMs = (await probeDuration(current.streamUrl)) ?? current.durationMs;
+    this.currentUri = current.uri;
+    this.queue.setState({
+      playing: true,
+      track: current,
+      durationMs,
+      positionMs: 0,
+      source: 'direct',
+    });
+    this.voice.playFfmpegUrl(current.streamUrl, {
       volume: this.queue.getState().volume,
       onEnd: this.serverStreamOnEnd(),
     });

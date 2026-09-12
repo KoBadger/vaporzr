@@ -30,7 +30,7 @@ function parseArtistFromTitle(title: string): string | null {
 }
 
 /** Probe a remote audio URL's duration via ffmpeg (reads headers only). */
-function probeDuration(url: string): Promise<number | null> {
+export function probeDuration(url: string): Promise<number | null> {
   return new Promise((resolve) => {
     const proc = spawn(config.ffmpegPath, ['-hide_banner', '-i', url], { windowsHide: true });
     let stderr = '';

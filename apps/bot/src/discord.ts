@@ -3731,13 +3731,65 @@ function runFfmpeg(args: string[]): Promise<boolean> {
 function srcEmoji(source: string | undefined): string {
   if (source === 'youtube') return '▶️';
   if (source === 'local') return '📂';
+  if (source === 'direct') return '🔗';
   if (source === 'suno') return '✨';
   if (source === 'soundcloud') return '🎧';
   if (source === 'apple') return '🍎';
   return '🎵';
 }
 
+/** Recognized direct media file extensions a playable URL may point at. */
+const DIRECT_MEDIA_EXT_RE = /\.(wav|mp3|flac|ogg|opus|oga|m4a|aac|mp4|m4v|mkv|webm|aiff|wma)$/i;
+
+/** True when the input is an http(s) URL to a bare audio/video file. */
+export function isDirectMediaUrl(input: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(input);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+  return DIRECT_MEDIA_EXT_RE.test(u.pathname);
+}
+
+/** Resolve a direct audio/video file URL into a playable track (streamed via ffmpeg). */
+export async function resolveDirectMediaUrl(url: string): Promise<ResolvedTrack> {
+  let name = 'Direct file';
+  try {
+    const file = new URL(url).pathname.split('/').filter(Boolean).pop();
+    if (file) name = file.replace(DIRECT_MEDIA_EXT_RE, '');
+  } catch {
+    /* keep fallback name */
+  }
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'HEAD',
+      redirect: 'follow',
+      headers: { 'user-agent': 'Mozilla/5.0 (compatible; Vaporzr/1.0)' },
+    });
+  } catch {
+    throw new YoutubeError('Could not reach the media URL — it may be down or private.');
+  }
+  if (!res.ok) {
+    throw new YoutubeError(`The media URL returned HTTP ${res.status} — check the link.`);
+  }
+  return {
+    uri: `direct:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+    name: name || 'Direct file',
+    artists: ['Direct link'],
+    album: 'Web',
+    durationMs: 0,
+    source: 'direct',
+    streamUrl: url,
+  };
+}
+
 async function resolvePlayInput(query: string): Promise<ResolvedTrack[]> {
+  if (isDirectMediaUrl(query)) {
+    return [await resolveDirectMediaUrl(query)];
+  }
   if (isYoutubePlaylistUrl(query)) {
     return resolveYoutubePlaylist(query);
   }
