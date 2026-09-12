@@ -58,6 +58,13 @@ export class VoiceManager {
   /** Called after repeated stall warnings to try un-sticking the feed chain. */
   private onStallRecovery: (() => void) | null = null;
   private stallWarnings = 0;
+  /** Called by playback when the voice link recovers to a Ready state. */
+  private onVoiceReconnect: (() => void) | null = null;
+  /** Periodic supervisor that force-rejoins a stuck voice link (bounded). */
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private reconnectStrikes = 0;
+  private forcedRejoins = 0;
+  private voiceLinkDown = false;
   /** Loudness applied to every new audio resource (0–100). */
   private volumePercent = 100;
   /** Extra ffmpeg `-af` stage for session audio FX (e.g. nightcore/slowed/bass),
@@ -151,15 +158,6 @@ export class VoiceManager {
       const connection = joinVoiceChannel({ channelId, guildId, adapterCreator, selfDeaf: true });
       this.connection = connection;
       this.channelId = channelId;
-      connection.on('stateChange', (oldS, newS) => {
-        if (newS.status === oldS.status) return;
-        const reason = newS.status === VoiceConnectionStatus.Disconnected
-          ? (newS as unknown as { reason?: string }).reason
-          : undefined;
-        console.log(
-          `[voice] conn ${oldS.status} → ${newS.status}${reason ? ` (reason=${reason})` : ''}`,
-        );
-      });
       return connection;
     };
     const waitForReady = (connection: VoiceConnection): Promise<void> =>
@@ -202,31 +200,7 @@ export class VoiceManager {
 
     this.player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Pause } });
     connection.subscribe(this.player);
-    // A ready connection is otherwise never watched again: a mid-play UDP drop
-    // leaves @discordjs/voice stranded in Disconnected, every subsequent
-    // ffmpeg muxer write fails, and the queue "skips" through the rest of the
-    // playlist. Try to ride out the reconnect; tear down only if it can't.
-    connection.on(VoiceConnectionStatus.Disconnected, () => {
-      if (this.connection !== connection) return;
-      void (async () => {
-        try {
-          await Promise.race([
-            entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
-            entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
-          ]);
-        } catch {
-          console.warn('[voice] voice connection dropped — cleaning up');
-          connection.destroy();
-          if (this.connection === connection) {
-            this.connection = null;
-            this.channelId = null;
-            this.stopStream();
-            this.player?.stop();
-            this.clearIdleTimer();
-          }
-        }
-      })();
-    });
+    this.attachHandlers(connection);
     this.player.on('error', (e) => {
       // A killed ffmpeg's tail packet can still hit the player after a
       // skip/stop. If the errored resource is not the current one, the
@@ -255,7 +229,126 @@ export class VoiceManager {
     console.log(`[voice] joined voice channel ${channelId}`);
     this.armIdleLeave();
     this.startWatchdog();
+    this.armReconnectSupervisor(guildId, channelId, adapterCreator);
     return true;
+  }
+
+  /** Playback registers this to be told when a downed voice link recovers to Ready. */
+  setOnVoiceReconnect(cb: (() => void) | null): void {
+    this.onVoiceReconnect = cb;
+  }
+
+  /**
+   * Watches the live connection. Logs state transitions and, on a recovery to
+   * Ready, notifies playback so an interrupted track can resume instead of the
+   * queue silently skipping. Also rides out Disconnected; tears down only when
+   * the library's own reconnect attempts fizzle.
+   */
+  private attachHandlers(connection: VoiceConnection): void {
+    connection.on('stateChange', (oldS, newS) => {
+      if (newS.status === oldS.status) return;
+      const reason = newS.status === VoiceConnectionStatus.Disconnected
+        ? (newS as unknown as { reason?: string }).reason
+        : undefined;
+      console.log(
+        `[voice] conn ${oldS.status} → ${newS.status}${reason ? ` (reason=${reason})` : ''}`,
+      );
+      if (newS.status === VoiceConnectionStatus.Ready && oldS.status !== VoiceConnectionStatus.Ready) {
+        if (this.voiceLinkDown) {
+          this.voiceLinkDown = false;
+          this.forcedRejoins = 0;
+          this.reconnectStrikes = 0;
+          console.log('[voice] voice link recovered');
+          this.onVoiceReconnect?.();
+        }
+      }
+    });
+    connection.on(VoiceConnectionStatus.Disconnected, () => {
+      if (this.connection !== connection) return;
+      void (async () => {
+        try {
+          await Promise.race([
+            entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
+            entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
+          ]);
+        } catch {
+          console.warn('[voice] voice connection dropped — cleaning up');
+          connection.destroy();
+          if (this.connection === connection) {
+            this.connection = null;
+            this.channelId = null;
+            this.stopStream();
+            this.player?.stop();
+            this.clearIdleTimer();
+            this.stopReconnectSupervisor();
+          }
+        }
+      })();
+    });
+  }
+
+  /**
+   * A ready connection is otherwise never watched again: a mid-play UDP drop
+   * leaves @discordjs/voice stuck flapping between Signalling and Connecting
+   * forever — every stream fails, the queue "skips" through the playlist, and
+   * the bot sits in VC producing nothing. If the link hasn't reached Ready in
+   * ~30s this forces a brand-new voice session; after several forced attempts
+   * it gives up, leaves, and notifies playback via voice:update panels.
+   */
+  private armReconnectSupervisor(
+    guildId: string,
+    channelId: string,
+    adapterCreator: DiscordGatewayAdapterCreator,
+  ): void {
+    this.clearReconnectChecks();
+    this.reconnectStrikes = 0;
+    this.forcedRejoins = 0;
+    this.reconnectTimer = setInterval(() => {
+      const c = this.connection;
+      if (!c || c.state.status === VoiceConnectionStatus.Destroyed) {
+        this.stopReconnectSupervisor();
+        return;
+      }
+      const st = c.state.status;
+      if (st === VoiceConnectionStatus.Ready) {
+        this.reconnectStrikes = 0;
+        this.voiceLinkDown = false;
+        return;
+      }
+      this.voiceLinkDown = true;
+      this.reconnectStrikes++;
+      if (this.reconnectStrikes < 6) return; // give the library's own reconnect ~30s
+      this.reconnectStrikes = 0;
+      if (this.forcedRejoins >= 4) {
+        console.warn('[voice] voice link unrecoverable after repeated rejoins — leaving');
+        this.leave();
+        return;
+      }
+      this.forcedRejoins++;
+      console.warn(`[voice] voice link stuck — forcing fresh voice session (attempt ${this.forcedRejoins}/4)`);
+      try {
+        c.destroy();
+      } catch {
+        /* ignore */
+      }
+      const conn = joinVoiceChannel({ channelId, guildId, adapterCreator, selfDeaf: true });
+      this.connection = conn;
+      this.channelId = channelId;
+      this.attachHandlers(conn);
+      if (this.player) conn.subscribe(this.player);
+    }, 5_000);
+    this.reconnectTimer.unref?.();
+  }
+
+  private stopReconnectSupervisor(): void {
+    this.clearReconnectChecks();
+  }
+
+  private clearReconnectChecks(): void {
+    if (this.reconnectTimer) {
+      clearInterval(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
   }
 
   private startWatchdog(): void {
@@ -304,6 +397,8 @@ export class VoiceManager {
   leave(): void {
     this.clearIdleTimer();
     this.clearWatchdog();
+    this.stopReconnectSupervisor();
+    this.voiceLinkDown = false;
     this.stopStream();
     this.onVoiceChange?.(false, null);
     if (this.player) {

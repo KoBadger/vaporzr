@@ -112,6 +112,36 @@ export class PlaybackController {
     private librespot: LibrespotManager | null = null,
   ) {
     this.loadStreamCache();
+    // When the voice link drops mid-track and comes back, resume the current
+    // track where it left off instead of letting the queue silently skip it.
+    this.voice.setOnVoiceReconnect(() => {
+      void this.resumeAfterReconnect();
+    });
+  }
+
+  /**
+   * Called by VoiceManager once the voice link recovers. If a server-side
+   * stream died while the link was down, re-play the current track from the
+   * last known position. Bounded: only acts when no stream is actively flowing
+   * and the track isn't about to finish anyway.
+   */
+  private async resumeAfterReconnect(): Promise<void> {
+    const state = this.queue.getState();
+    if (!state.playing) return;
+    const track = state.track;
+    if (!track) return;
+    if (!this.usingServerStream()) return;
+    if (!this.voice.isStalled()) return;
+    const pos = state.positionMs ?? 0;
+    if (track.durationMs && pos >= track.durationMs - 1500) return;
+    console.log(`[playback] voice link recovered — resuming "${track.name}" from ${Math.round(pos / 1000)}s`);
+    this.sendVisualizer({ type: 'cmd', command: 'stop' });
+    try {
+      await this.play();
+      if (pos > 0) this.seek(pos);
+    } catch (err) {
+      console.warn(`[playback] resume after reconnect failed: ${err instanceof Error ? err.message : err}`);
+    }
   }
 
   /**
