@@ -27,6 +27,7 @@ import {
   type Interaction,
   type Message,
   type MessageComponentInteraction,
+  type TextBasedChannel,
 } from 'discord.js';
 import { config } from './config.js';
 import { resolveTracks, SpotifyError, type ResolvedTrack } from './spotify.js';
@@ -2445,10 +2446,42 @@ export class DiscordBot {
       this.miniNp.set(guildId, { channelId, messageId: msg.id });
       this.miniTrackUri.set(guildId, uri);
       this.scheduleSavePanels();
+      // Sweep the channel for older Vaporzr strips so a track change never
+      // leaves stale now-playing mini embeds piling up next to the fresh one.
+      void this.sweepStaleMiniNp(channel, msg.id);
     } catch {
       /* no access to that channel — will retry on next state change */
     } finally {
       this.miniNpBusy.delete(guildId);
+    }
+  }
+
+  /**
+   * Deletes any pre-existing Vaporzr mini now-playing strips in the channel
+   * (identified by their ▰▱ progress bar — the panel and /nowplaying embeds
+   * use a different bar and are left alone) except the freshly posted one.
+   */
+  private async sweepStaleMiniNp(channel: TextBasedChannel, keepMessageId: string): Promise<void> {
+    if (!this.client.user) return;
+    let beforeId: string | undefined;
+    for (let page = 0; page < 3; page++) {
+      const found = await channel.messages
+        .fetch({ limit: 25, ...(beforeId ? { before: beforeId } : {}) })
+        .catch(() => null);
+      if (!found || found.size === 0) break;
+      for (const msg of found.values()) {
+        if (msg.id === keepMessageId) continue;
+        if (msg.author.id !== this.client.user.id) continue;
+        const isMini = msg.embeds.some(
+          (e) =>
+            !!e.description &&
+            ((e.description.includes('▰') && e.description.includes('▱')) ||
+              e.description.startsWith('⏸️ **Idle**')),
+        );
+        if (isMini) void msg.delete().catch(() => {});
+      }
+      beforeId = found.last()?.id;
+      if (found.size < 25) break;
     }
   }
 
