@@ -89,8 +89,8 @@ jobs:
             docker rm vaporzr || true
             docker run -d --name vaporzr \
               --restart unless-stopped \
+              --network host \
               --env-file /opt/vaporzr/.env \
-              -p 127.0.0.1:4876:4876 \
               -v vaporzr-data:/app/data \
               ${{ env.IMAGE }}:${{ github.sha }}
             docker image prune -f
