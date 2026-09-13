@@ -356,14 +356,15 @@ export class VoiceManager {
     this.watchdog = setInterval(() => {
       if (!this.isJoined()) return;
       if (this.chunksSinceLog > 0) {
+        const hadStall = this.stallWarnings > 0;
         const mb = (this.bytesSinceLog / (1024 * 1024)).toFixed(2);
-        console.log(
-          `[voice] streaming OK — ${this.chunksSinceLog} chunks / ${mb} MB since last report`,
-        );
         this.chunksSinceLog = 0;
         this.bytesSinceLog = 0;
         this.lastChunkAt = Date.now();
         this.stallWarnings = 0;
+        if (hadStall) {
+          console.log(`[voice] streaming OK (recovered) — ${mb} MB since stall`);
+        }
       } else if (this.ffmpeg) {
         // Server-side stream: silence is normal between tracks; don't warn.
       } else if (this.expectingPcm && Date.now() - this.lastChunkAt > 8000) {

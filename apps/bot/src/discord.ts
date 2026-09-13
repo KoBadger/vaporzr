@@ -893,27 +893,28 @@ export class DiscordBot {
       case 'skip': {
         if (!this.requireLevel('skip', interaction)) return this.deny(interaction);
         s.playback.next();
-        await interaction.reply('⏭️ Skipped');
+        const r1 = await interaction.reply('⏭️ Skipped');
+        this.autoExpire(r1);
         break;
       }
 
       case 'pause':
         if (!this.requireLevel('pause', interaction)) return this.deny(interaction);
         s.playback.pause();
-        await interaction.reply('⏸️ Paused');
+        { const r2 = await interaction.reply('⏸️ Paused'); this.autoExpire(r2); }
         break;
 
       case 'resume':
         if (!this.requireLevel('resume', interaction)) return this.deny(interaction);
         await s.playback.resume();
-        await interaction.reply('▶️ Resumed');
+        { const r3 = await interaction.reply('▶️ Resumed'); this.autoExpire(r3); }
         break;
 
       case 'clear':
         if (!this.requireLevel('clear', interaction)) return this.deny(interaction);
         s.playback.stopAll();
         s.queue.clear();
-        await interaction.reply('🗑️ Queue cleared');
+        { const r4 = await interaction.reply('🗑️ Queue cleared'); this.autoExpire(r4); }
         break;
 
       case 'remove': {
@@ -1581,7 +1582,7 @@ export class DiscordBot {
           if (!canUse('skip')) return void (await deny());
           s.playback.next();
           this.scheduleWaveTopUp(s);
-          await message.reply('⏭️ Skipped');
+          { const m1 = await message.reply('⏭️ Skipped'); this.autoExpire(m1); }
           break;
         }
 
@@ -1589,7 +1590,7 @@ export class DiscordBot {
         case 'pause': {
           if (!canUse('pause')) return void (await deny());
           s.playback.pause();
-          await message.reply('⏸️ Paused');
+          { const m2 = await message.reply('⏸️ Paused'); this.autoExpire(m2); }
           break;
         }
 
@@ -1597,7 +1598,7 @@ export class DiscordBot {
         case 'resume': {
           if (!canUse('resume')) return void (await deny());
           await s.playback.resume();
-          await message.reply('▶️ Resumed');
+          { const m3 = await message.reply('▶️ Resumed'); this.autoExpire(m3); }
           break;
         }
 
@@ -1659,7 +1660,7 @@ export class DiscordBot {
           if (!canUse('clear')) return void (await deny());
           s.playback.stopAll();
           s.queue.clear();
-          await message.reply('🗑️ Queue cleared');
+          { const m4 = await message.reply('🗑️ Queue cleared'); this.autoExpire(m4); }
           break;
         }
 
@@ -3050,9 +3051,15 @@ export class DiscordBot {
       .setAuthor({ name: 'NOW PLAYING', iconURL: this.client.user?.displayAvatarURL() })
       .setTitle(`${srcEmoji(t.source)} ${t.name}`)
       .setDescription(`${truncate((t.artists ?? []).join(', '), 80)}\n\n\`${bar}\`\n▶️ \`0:00 / ${fmtMs(dur)}\``)
-      .setFooter({ text: `${action} · this panel updates itself` });
+      .setFooter({ text: action });
     if (t.image) embed.setThumbnail(t.image);
     return embed;
+  }
+
+  /** Short-lived command confirmation — delete it after a few seconds so rapid
+   *  commands don't leave a wall of one-line replies in the channel. */
+  private autoExpire(msg: { delete(): Promise<unknown> }, ms = 6000): void {
+    setTimeout(() => { msg.delete().catch(() => {}); }, ms);
   }
 
   private panelPayload(s: Session): { embeds: EmbedBuilder[]; components: ActionRowBuilder<ButtonBuilder>[] } {
