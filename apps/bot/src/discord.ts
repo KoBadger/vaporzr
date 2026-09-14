@@ -1479,6 +1479,7 @@ export class DiscordBot {
     if (this.processedMessages.has(message.id)) return;
     this.processedMessages.add(message.id);
     setTimeout(() => this.processedMessages.delete(message.id), 30_000);
+    if (!message.content.startsWith('v@') && !message.content.startsWith('V@')) return;
     if (message.guildId && message.channelId) {
       this.lastTextChannel.set(message.guildId, message.channelId);
       this.scheduleSavePanels();
