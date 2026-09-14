@@ -1616,11 +1616,11 @@ export class DiscordBot {
           if (!canUse('volume')) return void (await deny());
           const n = Number(args);
           if (!args || Number.isNaN(n)) {
-            await message.reply(`🔊 Current volume is **${s.queue.getState().volume}%**`);
+            { const m = await message.reply(`🔊 Current volume is **${s.queue.getState().volume}%**`); this.autoExpire(m); }
             break;
           }
           s.playback.volume(Math.max(0, Math.min(100, n)));
-          await message.reply(`🔊 Volume set to ${n}%`);
+          { const m = await message.reply(`🔊 Volume set to ${n}%`); this.autoExpire(m); }
           break;
         }
 
