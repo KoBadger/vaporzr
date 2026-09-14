@@ -1475,7 +1475,6 @@ export class DiscordBot {
 
   private async handleMessageCommand(message: Message): Promise<void> {
     if (message.author.bot) return;
-    console.log(`[dbg] messageCreate id=${message.id} by=${message.author.id} content="${message.content.slice(0, 60)}"`);
     if (this.processedMessages.has(message.id)) return;
     this.processedMessages.add(message.id);
     setTimeout(() => this.processedMessages.delete(message.id), 30_000);
@@ -2107,7 +2106,6 @@ export class DiscordBot {
     const s = this.sessionFor(message.guildId);
     const first = tracks[0];
     const requestedBy = message.author.username;
-    console.log(`[dbg] addToQueueMsg msg=${message.id} guild=${message.guildId} tracks=${tracks.length}`);
     s.queue.enqueueMany(tracks, requestedBy);
     if (first) s.playback.prefetchStream(first);
     let playbackFailed: string | null = null;
@@ -2428,7 +2426,6 @@ export class DiscordBot {
     this.miniNpBusy.add(guildId);
     try {
       const uri = st.track.uri;
-      console.log(`[dbg] maybeAutoMiniNp guild=${guildId} uri=${uri} hasMini=${this.miniNp.has(guildId)} sameUri=${this.miniTrackUri.get(guildId) === uri}`);
       if (this.miniTrackUri.get(guildId) === uri && this.miniNp.has(guildId)) return;
       const channel = await this.client.channels.fetch(channelId);
       if (!channel || !('send' in channel)) return;
@@ -2452,7 +2449,6 @@ export class DiscordBot {
         } catch { /* already gone */ }
       }
       const msg = await channel.send({ embeds: [this.miniNpPayload(this.sessionFor(guildId))] });
-      console.log(`[dbg] miniNp POSTED new msg=${msg.id} guild=${guildId}`);
       this.miniNp.set(guildId, { channelId, messageId: msg.id });
       this.miniTrackUri.set(guildId, uri);
       this.scheduleSavePanels();
