@@ -371,6 +371,8 @@ export class DiscordBot {
   /** Guilds currently re-anchoring their mini now-playing strip — a lock that
    *  prevents overlapping state-change calls from posting duplicate strips. */
   private miniNpBusy = new Set<string>();
+  /** Message IDs already processed — guards against Discord retrying messageCreate. */
+  private processedMessages = new Set<string>();
   private panelRefreshQueued = false;
   /** messageId -> live karaoke session (synced lines + track), edited by a ticker. */
   private static readonly KARAOKE_MAX_SESSIONS = 200;
@@ -1473,6 +1475,9 @@ export class DiscordBot {
 
   private async handleMessageCommand(message: Message): Promise<void> {
     if (message.author.bot) return;
+    if (this.processedMessages.has(message.id)) return;
+    this.processedMessages.add(message.id);
+    setTimeout(() => this.processedMessages.delete(message.id), 30_000);
     if (!message.content.startsWith('v@') && !message.content.startsWith('V@')) return;
     if (message.guildId && message.channelId) {
       this.lastTextChannel.set(message.guildId, message.channelId);
