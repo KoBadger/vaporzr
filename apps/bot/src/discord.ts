@@ -4462,10 +4462,15 @@ export class DiscordBot {
 
   /** Interactive picker for a free-text search (top matches as a dropdown). */
   private async presentSearch(target: Message | ChatInputCommandInteraction, query: string): Promise<void> {
-    let candidates = await searchCandidates(query, 5);
+    let candidates: ResolvedTrack[] = [];
     const isMsg = 'author' in target;
-    // Spotify found nothing (or is quota-limited) — fall back to YouTube search
-    // so every source stays reachable from a plain `V@p <text>`.
+    // Spotify search first (best metadata); on ANY failure (no account, quota,
+    // etc.) fall through to YouTube so plain `V@p <text>` always works.
+    try {
+      candidates = await searchCandidates(query, 5);
+    } catch {
+      candidates = [];
+    }
     if (candidates.length === 0) {
       try {
         candidates = await searchYoutube(query, 5);
@@ -5497,9 +5502,11 @@ async function resolvePlayInput(query: string): Promise<ResolvedTrack[]> {
   try {
     return await resolveTracks(query);
   } catch (err) {
-    // Spotify's Developer Mode quota can be locked for hours. Keep ordinary
-    // free-text play usable through YouTube instead of surfacing a hard 429.
-    if (err instanceof SpotifyError && err.status === 429 && !/^(spotify:|https?:\/\/(open|play|embed)\.spotify\.com\/)/i.test(query)) {
+    // Spotify can fail for many reasons (no account linked, quota locked, web
+    // token missing). Keep ordinary free-text play working through YouTube
+    // instead of surfacing a hard error.
+    const isSpotifyLink = /^(spotify:|https?:\/\/(open|play|embed)\.spotify\.com\/)/i.test(query);
+    if (err instanceof SpotifyError && !isSpotifyLink) {
       const hit = await searchAndResolveYoutube(query);
       if (hit) return [hit];
     }
