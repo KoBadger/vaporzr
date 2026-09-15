@@ -797,6 +797,10 @@ export class DiscordBot {
     if (interaction.isButton()) {
       if (interaction.customId.startsWith('lyrics_karaoke:')) {
         await this.startLyricsKaraoke(interaction);
+      } else if (interaction.customId.startsWith('vzhelp:')) {
+        const id = interaction.customId.slice('vzhelp:'.length);
+        const embed = this.helpCategoryEmbed(id);
+        if (embed) await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral }).catch(() => {});
       } else {
         await this.handleButton(interaction);
       }
@@ -1606,7 +1610,7 @@ export class DiscordBot {
       }
 
       case 'help': {
-        await interaction.reply({ embeds: [this.helpEmbed()], flags: MessageFlags.Ephemeral });
+        await interaction.reply({ embeds: [this.helpEmbed()], components: this.helpButtons() });
         break;
       }
 
@@ -2413,7 +2417,16 @@ export class DiscordBot {
         }
 
         case 'help': {
-          await message.reply({ embeds: [this.helpEmbed()] });
+          const cat = args ? this.helpCategoryEmbed(args) : null;
+          if (args && !cat) {
+            await message.reply(
+              `Unknown category \`${args}\`. Try: ${HELP_CATEGORIES.map((c) => `\`${c.id}\``).join(', ')}.`,
+            );
+          } else if (cat) {
+            await message.reply({ embeds: [cat], components: this.helpButtons() });
+          } else {
+            await message.reply({ embeds: [this.helpEmbed()], components: this.helpButtons() });
+          }
           break;
         }
 
@@ -4071,37 +4084,41 @@ export class DiscordBot {
     const vizLine = link.secure
       ? `**Web visualizer:** <${link.url}> 🔒`
       : '**Web visualizer:** run `/viz` for the secure link';
+    const catLines = HELP_CATEGORIES.map((c) => `${c.emoji} **${c.name}** — ${c.blurb}`).join('\n');
     return new EmbedBuilder()
-      .setTitle('🎧 Vaporzr')
-      .setDescription(`Music & visualizer bot — play, queue, and vibe.\n\n${vizLine}`)
-      .setColor(this.themeColor())
-      .addFields(
-        {
-          name: '▶️ Playback',
-          value: '`/play` `/insert` `/yt` `/skip` `/pause` `/resume` `/toggle` `/queue` `/nowplaying` `/clear` `/remove` `/volume` `/shuffle` `/join` `/leave` `/file` `/ew` `/speed` `/bassboost` `/sleep`',
-        },
-        {
-          name: '🎨 Visuals',
-          value: '`/panel` — control panel · `/viz` — browser visualizer (MilkDrop) · `/theme` — color moods · `/wave` — waveform snapshot · `/burst` — animated clip · `/sensitivity` — beat reactivity',
-        },
-        {
-          name: '🎤 Lyrics',
-          value: '`/lyrics` — show lyrics for current/searched song · `/karaoke` — live karaoke highlight mode',
-        },
-        {
-          name: '🎛️ DJ',
-          value: '`/sfx` — play a sound effect · `/dj` — enable the soundboard (mod)',
-        },
-        {
-          name: '🔧 Admin',
-          value: '`/perms` — view / set command levels and roles · `/stats` — bot statistics · `/key rotate` — reissue web access · `/invite` — get the invite link · `/ego` — rename me in this server · `/device` — manage the Spotify device · `/cookie-refresh` — re-export YouTube cookies',
-        },
-        {
-          name: '⌨️ Quick (prefix)',
-          value: '`V@p` play · `V@i` insert · `V@s` skip · `V@t` toggle · `V@sh` shuffle · `V@v` volume · `V@q` queue · `V@np` now playing · `V@c` clear · `V@rem` remove · `V@j` join · `V@l` leave · `V@wav` play file · `V@lyr` lyrics · `V@k` karaoke · `V@ew` endless wave · `V@pan` panel · `V@viz` visualizer · `V@th` theme · `V@sens` sensitivity · `V@dj` dj · `V@sfx` effect · `V@speed` speed · `V@bass` bass boost · `V@sleep` sleep timer · `V@key` access links · `V@invite` invite · `V@help` this',
-        },
+      .setTitle('🎧 Vaporzr — Command Center')
+      .setDescription(
+        `Music, autoplay & visuals for your server.\n\n${vizLine}\n\n${catLines}\n\n` +
+          'Tap a category below, or type `V@help <category>`.',
       )
-      .setFooter({ text: 'Try /play with a song name or a Spotify/YouTube link' });
+      .setColor(this.themeColor())
+      .setFooter({ text: 'Every / command has a V@ prefix shortcut (e.g. /play → V@p).' });
+  }
+
+  /** Category buttons for the help overview (max 5 per row). */
+  private helpButtons(): ActionRowBuilder<ButtonBuilder>[] {
+    const rows: ActionRowBuilder<ButtonBuilder>[] = [];
+    for (let i = 0; i < HELP_CATEGORIES.length; i += 5) {
+      const row = new ActionRowBuilder<ButtonBuilder>();
+      for (const c of HELP_CATEGORIES.slice(i, i + 5)) {
+        row.addComponents(
+          new ButtonBuilder().setCustomId(`vzhelp:${c.id}`).setLabel(c.name).setEmoji(c.emoji).setStyle(ButtonStyle.Secondary),
+        );
+      }
+      rows.push(row);
+    }
+    return rows;
+  }
+
+  /** Detailed embed for one help category (or null if unknown). */
+  private helpCategoryEmbed(id: string): EmbedBuilder | null {
+    const c = HELP_CATEGORIES.find((x) => x.id === id || x.name.toLowerCase() === id.toLowerCase());
+    if (!c) return null;
+    return new EmbedBuilder()
+      .setTitle(`${c.emoji} ${c.name}`)
+      .setDescription(c.lines.join('\n'))
+      .setColor(this.themeColor())
+      .setFooter({ text: 'Type V@help for the full menu · V@help <category> to jump' });
   }
 
   private statsEmbed(): EmbedBuilder {
@@ -4520,6 +4537,132 @@ export async function resolveDirectMediaUrl(url: string): Promise<ResolvedTrack>
     streamUrl: url,
   };
 }
+
+/** Categorized command reference powering the interactive `/help` / `V@help`. */
+const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: string; lines: string[] }> = [
+  {
+    id: 'playback',
+    emoji: '🎵',
+    name: 'Playback',
+    blurb: 'start, pause, skip and control the music',
+    lines: [
+      '`/play <name|link>` · `V@p` — play a song (a text search opens a picker)',
+      '`/insert <name|link>` · `V@i` — play next',
+      '`/yt <link|search>` — play from YouTube',
+      '`/wav` · `V@wav` — play an uploaded audio/video file',
+      '`/pause` · `V@pau` — pause',
+      '`/resume` · `V@r` — resume',
+      '`/toggle` · `V@t` — pause/resume',
+      '`/skip` · `V@s` — skip (non-DJs start a vote)',
+      '`/nowplaying` · `V@np` — what\'s playing',
+      '`/volume <0-100>` · `V@v` — set the volume',
+      '`/clear` · `V@c` — stop and clear the queue',
+    ],
+  },
+  {
+    id: 'queue',
+    emoji: '📜',
+    name: 'Queue',
+    blurb: 'view and rearrange what\'s coming up',
+    lines: [
+      '`/queue` · `V@q` — view the queue (paged)',
+      '`/shuffle` · `V@sh` — shuffle the queue',
+      '`/remove <#>` · `V@rem <#>` — remove a queued track',
+    ],
+  },
+  {
+    id: 'autoplay',
+    emoji: '🌊',
+    name: 'Autoplay',
+    blurb: 'keep the music going after the queue ends',
+    lines: [
+      '`/autoplay` · `V@autoplay` (`V@ap`) — show the current mode',
+      '`/autoplay mode:off|basic|smart` — set the mode',
+      '  · **basic** — queue a related track (light & fast)',
+      '  · **smart** — Endless Wave: evolves with the vibe',
+      '`/autoplay now:true` — queue one more track right now',
+      '`/autoplay count:<1-10>` — how many tracks to buffer ahead',
+      '`/endwav on|off|status` · `V@ew` — Endless Wave shortcut',
+    ],
+  },
+  {
+    id: 'voice',
+    emoji: '🔊',
+    name: 'Voice',
+    blurb: 'join, leave and manage the audio device',
+    lines: [
+      '`/join` · `V@j` — pull me into your voice channel',
+      '`/leave` · `V@l` — leave and clear the queue',
+      '`/device list|select <name>` — manage the Spotify Connect device',
+    ],
+  },
+  {
+    id: 'library',
+    emoji: '💾',
+    name: 'Library',
+    blurb: 'save and load your own playlists',
+    lines: [
+      '`/playlist save <name>` · `V@save <name>` — save the current queue',
+      '`/playlist load <name>` · `V@load <name>` — load a saved playlist',
+      '`/playlist list` · `V@playlists` — list saved playlists',
+      '`/playlist delete <name>` · `V@del <name>` — delete a playlist',
+    ],
+  },
+  {
+    id: 'fx',
+    emoji: '🎛️',
+    name: 'FX & DJ',
+    blurb: 'sound effects, speed, bass and DJ controls',
+    lines: [
+      '`/speed <mode>` · `V@speed` — nightcore / slowed / normal',
+      '`/bassboost <5|8|10>` · `V@bass` — bass boost',
+      '`/sfx <id>` · `V@sfx` — play a sound effect',
+      '`/dj` · `V@dj` — toggle the soundboard (mod)',
+      '`/djrole @role` · `V@djrole` — set the DJ role (mod) — DJs skip without a vote',
+    ],
+  },
+  {
+    id: 'lyrics',
+    emoji: '🎤',
+    name: 'Lyrics',
+    blurb: 'read along with the music',
+    lines: [
+      '`/lyrics [query]` · `V@lyr` — lyrics for the current or searched song',
+      '`/karaoke` · `V@k` — live karaoke highlight mode',
+    ],
+  },
+  {
+    id: 'visuals',
+    emoji: '🎨',
+    name: 'Visuals',
+    blurb: 'panels, themes and the MilkDrop visualizer',
+    lines: [
+      '`/panel` · `V@pan` — post the control panel',
+      '`/viz` · `V@viz` — open the web visualizer (MilkDrop)',
+      '`/theme` · `V@th` — pick a color mood',
+      '`/wave` — waveform snapshot · `/burst` — animated clip',
+      '`/screensaver` · `V@sc` — idle screensaver',
+      '`/sensitivity <0.5-1.5>` · `V@sens` — beat reactivity',
+    ],
+  },
+  {
+    id: 'system',
+    emoji: '🛠️',
+    name: 'System',
+    blurb: 'stats, diagnostics and admin tools',
+    lines: [
+      '`/diag` · `V@diag` — diagnostics (gateway, voice, librespot)',
+      '`/stats` — bot statistics',
+      '`/sleep <30m|1h>` · `V@sleep` — sleep timer',
+      '`/help` · `V@help` — this menu',
+      '`/invite` · `V@invite` — add Vaporzr to a server',
+      '`/key rotate` · `V@key` — web access links (admin)',
+      '`/perms` — command levels & roles (admin)',
+      '`/cookie-refresh` — re-export YouTube cookies (admin)',
+      '`/player` · `V@player` — desktop player window (admin)',
+    ],
+  },
+];
 
 /** True when the play input is a direct link (resolve it) rather than a text
  *  search (which should open the interactive picker instead). */
