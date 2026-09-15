@@ -126,6 +126,8 @@ export interface CommandMessage {
   djEnabled?: boolean;
   /** Endless Wave enabled state for command: 'endlesswave'. */
   active?: boolean;
+  /** Autoplay mode (off | basic | smart) for command: 'endlesswave'. */
+  mode?: 'off' | 'basic' | 'smart';
   /** Guild to switch to for command: 'switchGuild'. */
   guildId?: string;
   /** Beat-reactivity multiplier (0.5–1.5) for command: 'sensitivity'. */
@@ -157,7 +159,7 @@ export type InboundMessage =
   | CommandMessage;
 
 export type OutboundMessage =
-  | { type: 'snapshot'; state: PlaybackState; queue: QueueSnapshot; permissions?: PermissionSnapshot; voice?: { joined: boolean; channelId?: string }; theme?: VaporzrTheme; djEnabled?: boolean; primaryGuildId?: string; guilds?: Array<{ id: string; name: string }>; sensitivity?: number; guest?: boolean; endlesswave?: boolean }
+  | { type: 'snapshot'; state: PlaybackState; queue: QueueSnapshot; permissions?: PermissionSnapshot; voice?: { joined: boolean; channelId?: string }; theme?: VaporzrTheme; djEnabled?: boolean; primaryGuildId?: string; guilds?: Array<{ id: string; name: string }>; sensitivity?: number; guest?: boolean; endlesswave?: boolean; endlesswaveMode?: 'off' | 'basic' | 'smart' }
   | { type: 'state:update'; state: PlaybackState; guildId?: string }
   | { type: 'queue:update'; queue: QueueSnapshot }
   | { type: 'perm:update'; permissions: PermissionSnapshot }
@@ -175,7 +177,7 @@ export type OutboundMessage =
   | { type: 'panel:notice'; level: 'info' | 'success' | 'error'; text: string }
   /** Asks a visualizer window to capture a short clip and return burst:data. */
   | { type: 'burst:start'; durationMs?: number }
-  | { type: 'endlesswave'; active: boolean; generated: number }
+  | { type: 'endlesswave'; active: boolean; generated: number; mode?: 'off' | 'basic' | 'smart' }
   | { type: 'ready'; ok: boolean }
   | { type: 'error'; message: string }
   | CommandMessage;

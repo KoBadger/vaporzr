@@ -314,6 +314,31 @@ const COMMANDS = [
   new SlashCommandBuilder()
     .setName('diag')
     .setDescription('Show bot diagnostics (gateway, voice/DAVE, librespot, sessions)'),
+  new SlashCommandBuilder()
+    .setName('autoplay')
+    .setDescription('Keep the music going after the queue ends (off / basic / smart)')
+    .addStringOption((o) =>
+      o
+        .setName('mode')
+        .setDescription('Autoplay mode (omit to see the current mode)')
+        .setRequired(false)
+        .addChoices(
+          { name: 'Off — stop when the queue ends', value: 'off' },
+          { name: 'Basic — keep music going (light & fast)', value: 'basic' },
+          { name: 'Smart — Endless Wave (evolves with the vibe)', value: 'smart' },
+        ),
+    )
+    .addBooleanOption((o) =>
+      o.setName('now').setDescription('Queue one more track right now').setRequired(false),
+    )
+    .addIntegerOption((o) =>
+      o
+        .setName('count')
+        .setDescription('How many tracks to keep buffered ahead (1–10)')
+        .setRequired(false)
+        .setMinValue(1)
+        .setMaxValue(10),
+    ),
 ];
 
 function fmtMs(ms: number): string {
@@ -363,6 +388,8 @@ export class DiscordBot {
   /** URI of the most recently started track per guild, so markPlayed is only
    *  called once per track (on start) instead of on every queue/state change. */
   private ewStartedUri = new Map<string, string>();
+  /** guildId -> how many autoplay tracks to keep buffered (1–10). Unset = default per mode. */
+  private ewAheadOverride = new Map<string, number>();
   /** guildId -> panel message location. */
   private panels = new Map<string, { channelId: string; messageId: string }>();
   private npMessages = new Map<string, { channelId: string; messageId: string }>();
@@ -505,7 +532,7 @@ export class DiscordBot {
         },
       });
       s.playback.onTrackEnd = (ended) => {
-        if (!s.endlessWave.active) return;
+        if (!EW.isAutoActive(s.endlessWave)) return;
         void this.waveTrackEnded(s, ended).catch((err) => {
           console.warn(`[endlesswave] on-end failed: ${err instanceof Error ? err.message : err}`);
         });
@@ -514,7 +541,7 @@ export class DiscordBot {
       // wondering why the music stopped. An active wave ignores the backoff here
       // and refills right away so silence doesn't hang.
       s.playback.onQueueEnd = () => {
-        if (s.endlessWave.active) {
+        if (EW.isAutoActive(s.endlessWave)) {
           this.ewRetryAfter.delete(s.guildId);
           void this.topUpWave(s).catch((err) => {
             console.warn(`[endlesswave] queue-end refill failed: ${err instanceof Error ? err.message : err}`);
@@ -525,7 +552,7 @@ export class DiscordBot {
       };
       // A wave restored as active from disk needs re-arming after a restart:
       // kick off an immediate top-up so it resumes generating on its own.
-      if (s.endlessWave.active) {
+      if (EW.isAutoActive(s.endlessWave)) {
         this.ewRetryAfter.delete(s.guildId);
         void this.topUpWave(s).catch((err) => {
           console.warn(`[endlesswave] post-restart top-up failed: ${err instanceof Error ? err.message : err}`);
@@ -1158,36 +1185,50 @@ export class DiscordBot {
         const s = this.sessionFor(interaction.guildId);
         const sub = interaction.options.getSubcommand();
         if (sub === 'on') {
-          if (s.endlessWave.active) {
-            await interaction.reply({ content: '🌊 Endless Wave is already active.', flags: MessageFlags.Ephemeral });
-            break;
-          }
-          this.activateWave(s);
-          const current = s.queue.getCurrentTrack();
-          const ewOnMsg = '🌊 **Endless Wave activated** — I\'ll keep the vibes flowing with AI-curated tracks that evolve with your session.';
+          this.setAutoplayMode(s, 'smart');
           await interaction.reply({
-            content: current ? ewOnMsg : `${ewOnMsg}\nQueue up a track to set the vibe — I'll take it from there.`,
+            content: this.autoplayStatus(s, '🌊 **Endless Wave enabled** — I\'ll keep the vibes flowing with AI-curated tracks that evolve with your session.'),
             flags: MessageFlags.Ephemeral,
           });
         } else if (sub === 'off') {
-          if (!s.endlessWave.active) {
-            await interaction.reply({ content: 'Endless Wave isn\'t active right now.', flags: MessageFlags.Ephemeral });
-            break;
-          }
-          this.deactivateWave(s);
+          const wasOff = EW.modeOf(s.endlessWave) === 'off';
+          this.setAutoplayMode(s, 'off');
           await interaction.reply({
-            content: `🌊 **Endless Wave deactivated** — ${s.endlessWave.generated} tracks were auto-curated this session.`,
+            content: wasOff
+              ? 'Autoplay is already off.'
+              : `🌊 **Autoplay off** — ${s.endlessWave.generated} tracks were auto-curated this session.`,
             flags: MessageFlags.Ephemeral,
           });
         } else {
-          const snap = EW.snapshot(s.endlessWave);
-          await interaction.reply({
-            content: snap.active
-              ? `🌊 **Endless Wave is active** — ${snap.generated} tracks generated, ${snap.playedCount} unique tracks played.`
-              : 'Endless Wave is not active. Use `/endwav on` to start.',
-            flags: MessageFlags.Ephemeral,
-          });
+          await interaction.reply({ content: this.autoplayStatus(s), flags: MessageFlags.Ephemeral });
         }
+        break;
+      }
+
+      case 'autoplay': {
+        if (!this.requireLevel('autoplay', interaction)) return this.deny(interaction);
+        if (!interaction.guildId) return void (await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral }));
+        const s = this.sessionFor(interaction.guildId);
+        const mode = interaction.options.getString('mode') as EW.AutoplayMode | null;
+        const forceNow = interaction.options.getBoolean('now') ?? false;
+        const count = interaction.options.getInteger('count');
+        if (mode) this.setAutoplayMode(s, mode);
+        if (count) this.ewAheadOverride.set(interaction.guildId, count);
+        if (forceNow) {
+          this.ewRetryAfter.delete(s.guildId);
+          await this.topUpWave(s);
+        }
+        await interaction.reply({
+          content: this.autoplayStatus(
+            s,
+            count
+              ? `Autoplay buffer set to **${count}** track(s).`
+              : mode
+                ? `Autoplay set to **${mode.toUpperCase()}**.`
+                : undefined,
+          ),
+          flags: MessageFlags.Ephemeral,
+        });
         break;
       }
 
@@ -1566,6 +1607,7 @@ export class DiscordBot {
       sfx: 'sfx',
       sens: 'sensitivity', sensitivity: 'sensitivity',
       ew: 'endwav', endwav: 'endwav',
+      autoplay: 'autoplay', ap: 'autoplay', auto: 'autoplay',
       speed: 'speed',
       bass: 'bassboost', boost: 'bassboost', bassboost: 'bassboost',
       sleep: 'sleep', timer: 'sleep',
@@ -1883,42 +1925,49 @@ export class DiscordBot {
         }
 
         case 'ew':
-        case 'endwav': {
-          if (!canUse('endwav')) return void (await deny());
+        case 'endwav':
+        case 'autoplay':
+        case 'ap':
+        case 'auto': {
+          const isAp = cmd === 'autoplay' || cmd === 'ap' || cmd === 'auto';
+          if (!canUse(isAp ? 'autoplay' : 'endwav')) return void (await deny());
           if (!message.guildId) return void (await message.reply('Must be used in a server.'));
           const ewS = this.sessionFor(message.guildId);
-          const subCmd = (args || 'status').toLowerCase();
-          if (subCmd === 'on' || subCmd === 'activate') {
-            if (ewS.endlessWave.active) return void (await message.reply('🌊 Endless Wave is already active.'));
-            this.activateWave(ewS);
-            const cur = ewS.queue.getCurrentTrack();
-            const ewPrefixMsg = '🌊 **Endless Wave activated** — I\'ll keep the vibes flowing with AI-curated tracks that evolve with your session.';
-            await message.reply(cur ? ewPrefixMsg : `${ewPrefixMsg}\nQueue up a track to set the vibe — I'll take it from there.`);
-          } else if (subCmd === 'off' || subCmd === 'deactivate') {
-            if (!ewS.endlessWave.active) return void (await message.reply('Endless Wave isn\'t active right now.'));
-            this.deactivateWave(ewS);
-            await message.reply(`🌊 **Endless Wave deactivated** — ${ewS.endlessWave.generated} tracks were auto-curated this session.`);
-          } else {
-            const snap = EW.snapshot(ewS.endlessWave);
-            if (!snap.active) {
-              await message.reply('Endless Wave is not active. Use `V@ew on` to start.');
-              break;
+          const arg = (args || '').toLowerCase().trim();
+          if (isAp && (arg === 'now' || arg === 'next')) {
+            this.ewRetryAfter.delete(message.guildId);
+            await this.topUpWave(ewS);
+            await message.reply({ content: this.autoplayStatus(ewS, '➕ Queued one more via autoplay.') });
+          } else if (isAp && /^count\b/.test(arg)) {
+            const n = parseInt(arg.replace(/^count\s*/, ''), 10);
+            if (!Number.isFinite(n) || n < 1 || n > 10) {
+              await message.reply('Usage: `V@autoplay count <1-10>`.');
+            } else {
+              this.ewAheadOverride.set(message.guildId, n);
+              await message.reply({ content: this.autoplayStatus(ewS, `Autoplay buffer set to **${n}** track(s).`) });
             }
+          } else if (arg === 'on' || arg === 'activate' || arg === 'smart' || arg === 'high') {
+            this.setAutoplayMode(ewS, 'smart');
             await message.reply({
-              embeds: [
-                new EmbedBuilder()
-                  .setTitle('🌊 Endless Wave — session stats')
-                  .setColor(this.themeColor())
-                  .setDescription([
-                    `🎶 **Tracks generated:** ${snap.generated}`,
-                    `✅ **Unique tracks played:** ${snap.playedCount}`,
-                    `🔁 **Longest uninterrupted run:** ${snap.longestRun}`,
-                    `⏳ **Current run streak:** ${snap.runStreak}`,
-                    `🚫 **Dead-end resets:** ${snap.deadEnds}`,
-                    `🎤 **Distinct artists auto-queued:** ${snap.artistCount}`,
-                  ].join('\n')),
-              ],
+              content: this.autoplayStatus(ewS, '🌊 **Endless Wave (smart autoplay) enabled** — I\'ll keep the vibes flowing with AI-curated tracks.'),
             });
+          } else if (arg === 'basic' || arg === 'light' || arg === 'low') {
+            this.setAutoplayMode(ewS, 'basic');
+            await message.reply({
+              content: this.autoplayStatus(ewS, '🎵 **Basic autoplay enabled** — I\'ll queue a related track whenever the queue ends.'),
+            });
+          } else if (arg === 'off' || arg === 'deactivate' || arg === 'stop') {
+            const wasOff = EW.modeOf(ewS.endlessWave) === 'off';
+            this.setAutoplayMode(ewS, 'off');
+            await message.reply({
+              content: wasOff
+                ? 'Autoplay is already off.'
+                : `⏹️ **Autoplay off** — ${ewS.endlessWave.generated} tracks were auto-curated this session.`,
+            });
+          } else if (isAp && arg && arg !== 'status') {
+            await message.reply('Usage: `V@autoplay off|basic|smart|now|count <1-10>` (or `V@autoplay` for status).');
+          } else {
+            await message.reply({ content: this.autoplayStatus(ewS) });
           }
           break;
         }
@@ -2901,10 +2950,13 @@ export class DiscordBot {
   private miniNpPayload(s: Session): EmbedBuilder {
     const st = s.queue.getState();
     const track = st.track;
+    const mode = EW.modeOf(s.endlessWave);
+    const modeLabel = mode === 'smart' ? '🌊 Autoplay: smart' : mode === 'basic' ? '🎵 Autoplay: basic' : 'Autoplay: off';
     if (!track) {
       return new EmbedBuilder()
         .setColor(this.themeColor())
-        .setDescription('⏸️ **Idle** — queue something with `/play` or `V@p`');
+        .setDescription('⏸️ **Idle** — queue something with `/play` or `V@p`')
+        .setFooter({ text: modeLabel });
     }
     const dur = st.durationMs || track.durationMs || 0;
     const livePos = st.positionMs + (st.playing ? Math.max(0, Date.now() - (st.updatedAt || Date.now())) : 0);
@@ -2915,6 +2967,7 @@ export class DiscordBot {
     const status = st.playing ? '▶️' : '⏸';
     const snap = s.queue.getSnapshot();
     const upNext = snap.tracks.find((x, i) => i > snap.tracks.findIndex((y) => y.current));
+    const queued = Math.max(0, snap.tracks.length - (snap.currentIndex + 1));
     const embed = new EmbedBuilder()
       .setColor(this.themeColor())
       .setDescription(
@@ -2922,7 +2975,8 @@ export class DiscordBot {
           `${truncate((track.artists ?? []).join(', ') || track.album, 80)}\n` +
           `\`${bar}\` \`${fmtMs(pos)}\`/\`${fmtMs(dur)}\`` +
           (upNext ? `\n⏭ ${truncate(upNext.name, 42)}` : ''),
-      );
+      )
+      .setFooter({ text: `${modeLabel} · ${queued} queued` });
     if (track.image) embed.setThumbnail(track.image);
     return embed;
   }
@@ -3535,6 +3589,28 @@ export class DiscordBot {
       });
   }
 
+  /** Human-readable autoplay status block shared by `/autoplay`, `/endwav`, `V@autoplay`, `V@ew`. */
+  private autoplayStatus(s: Session, head?: string): string {
+    const snap = EW.snapshot(s.endlessWave);
+    const label = snap.mode === 'smart' ? 'SMART 🌊 (Endless Wave)' : snap.mode === 'basic' ? 'BASIC 🎵' : 'OFF ⏹️';
+    const lines: string[] = [];
+    if (head) lines.push(head);
+    lines.push(`🎛️ Autoplay: **${label}**`);
+    if (snap.mode === 'off') {
+      lines.push('The queue will stop when it ends.');
+    } else {
+      const ahead = this.ewAheadOverride.get(s.guildId ?? '') ?? (snap.mode === 'smart' ? 3 : 1);
+      lines.push(`• generated this session: ${snap.generated}`);
+      lines.push(`• lookahead: ${ahead} track${ahead === 1 ? '' : 's'}`);
+      if (snap.mode === 'smart') {
+        lines.push(`• unique artists: ${snap.artistCount} · run streak ${snap.runStreak} (best ${snap.longestRun})`);
+        if (snap.deadEnds) lines.push(`• dead-ends: ${snap.deadEnds}`);
+      }
+    }
+    lines.push('Change with `V@autoplay off|basic|smart` · `V@autoplay count 5` · `/autoplay`.');
+    return lines.join('\n');
+  }
+
   /** Shared reference for both `/help` and `V@help`. */
   private helpEmbed(): EmbedBuilder {
     const link = vizTunnel.vizLink();
@@ -3682,9 +3758,12 @@ export class DiscordBot {
 
   /** Endless Wave: record features for the ended track and refill the buffer. */
   private async waveTrackEnded(s: Session, ended: TrackInfo): Promise<void> {
-    if (!s.endlessWave.active) return;
-    const features = await EW.fetchFeatures(ended);
-    if (features) EW.recordFeatures(s.endlessWave, features);
+    if (!EW.isAutoActive(s.endlessWave)) return;
+    // Vibe analysis only matters for smart mode — basic stays cheap.
+    if (s.endlessWave.active) {
+      const features = await EW.fetchFeatures(ended);
+      if (features) EW.recordFeatures(s.endlessWave, features);
+    }
     EW.markPlayed(s.endlessWave, ended.uri, ended.name, ended.artists);
     await this.topUpWave(s);
   }
@@ -3693,7 +3772,7 @@ export class DiscordBot {
    *  immediately excludes it from future picks — critical for the lookahead
    *  buffer to not re-pick the currently playing song's variants. */
   private markWaveStarted(s: Session, track: TrackInfo): void {
-    if (!s.endlessWave.active) return;
+    if (!EW.isAutoActive(s.endlessWave)) return;
     if (this.ewStartedUri.get(s.guildId) === track.uri) return;
     this.ewStartedUri.set(s.guildId, track.uri);
     EW.markPlayed(s.endlessWave, track.uri, track.name, track.artists);
@@ -3702,7 +3781,7 @@ export class DiscordBot {
   /** Debounced trigger for topUpWave — fires 700ms after any queue/state change
    *  so rapid skips or manual adds collapse into a single refill pass. */
   private scheduleWaveTopUp(s: Session): void {
-    if (!s.endlessWave.active) return;
+    if (!EW.isAutoActive(s.endlessWave)) return;
     const t = this.ewTopUpTimers.get(s.guildId);
     if (t) clearTimeout(t);
     const wt = setTimeout(() => {
@@ -3715,66 +3794,66 @@ export class DiscordBot {
     this.ewTopUpTimers.set(s.guildId, wt);
   }
 
-  /** Shared Endless Wave activation — used by both `V@ew on` and the panel. */
-  private activateWave(s: Session): void {
+  /** Set the autoplay mode (off | basic | smart). Shared by commands + panel. */
+  private setAutoplayMode(s: Session, mode: EW.AutoplayMode): void {
     const gid = s.guildId;
-    EW.activate(s.endlessWave);
-    this.ewRetryAfter.delete(gid);
-    const cur = s.queue.getCurrentTrack();
-    if (cur) EW.markPlayed(s.endlessWave, cur.uri, cur.name, cur.artists);
-    this.bridge.broadcast({ type: 'endlesswave', active: true, generated: 0 });
-    if (cur) {
-      void EW.fetchFeatures(cur)
-        .then((af) => { if (af) EW.recordFeatures(s.endlessWave, af); })
-        .catch(() => {});
-    }
-    void this.topUpWave(s).catch((err) => {
-      console.warn(`[endlesswave] initial top-up failed: ${err instanceof Error ? err.message : err}`);
-    });
-  }
-
-  /** Shared Endless Wave deactivation — used by both `V@ew off` and the panel. */
-  private deactivateWave(s: Session): void {
-    const gid = s.guildId;
-    EW.deactivate(s.endlessWave);
+    EW.setMode(s.endlessWave, mode);
     this.ewRetryAfter.delete(gid);
     const t = this.ewTopUpTimers.get(gid);
     if (t) clearTimeout(t);
     this.ewTopUpTimers.delete(gid);
     this.ewStartedUri.delete(gid);
-    this.bridge.broadcast({ type: 'endlesswave', active: false, generated: s.endlessWave.generated });
+    this.bridge.broadcast({
+      type: 'endlesswave',
+      active: mode !== 'off',
+      generated: mode === 'off' ? s.endlessWave.generated : 0,
+      mode,
+    });
+    if (mode === 'off') return;
+    const cur = s.queue.getCurrentTrack();
+    if (cur) EW.markPlayed(s.endlessWave, cur.uri, cur.name, cur.artists);
+    if (mode === 'smart' && cur) {
+      void EW.fetchFeatures(cur)
+        .then((af) => { if (af) EW.recordFeatures(s.endlessWave, af); })
+        .catch(() => {});
+    }
+    void this.topUpWave(s).catch((err) => {
+      console.warn(`[autoplay] initial top-up failed: ${err instanceof Error ? err.message : err}`);
+    });
   }
 
-  /** Panel/visualizer-initiated Endless Wave toggle (via the browser). */
+  /** Panel/visualizer-initiated autoplay toggle (via the browser): on = smart. */
   private async panelSetEndlessWave(guildId: string, active: boolean): Promise<void> {
     const s = this.sessionFor(guildId);
     if (!s) return;
-    if (active) {
-      if (s.endlessWave.active) return;
-      this.activateWave(s);
-    } else {
-      if (!s.endlessWave.active) return;
-      this.deactivateWave(s);
-    }
+    const current = EW.modeOf(s.endlessWave);
+    if (active && current !== 'off') return;
+    if (!active && current === 'off') return;
+    this.setAutoplayMode(s, active ? 'smart' : 'off');
   }
 
   /** Keep a lookahead buffer of 2 EW-picked tracks at the tail of the queue.
    *  They're ordinary queue entries, so skips/manual adds interleave naturally;
    *  any queue or state change re-tops the buffer. */
-  private async topUpWave(s: Session): Promise<void> {    if (!s.endlessWave.active) return;
+  private async topUpWave(s: Session): Promise<void> {
+    if (!EW.isAutoActive(s.endlessWave)) return;
     if ((this.ewRetryAfter.get(s.guildId) ?? 0) > Date.now()) return;
     if (this.ewBusy.has(s.guildId)) return;
     this.ewBusy.add(s.guildId);
+    const smart = s.endlessWave.active;
+    // Smart keeps a 3-track lookahead; basic just needs the next track ready.
+    // A per-guild override (V@autoplay count N) wins when set.
+    const AHEAD = this.ewAheadOverride.get(s.guildId) ?? (smart ? 3 : 1);
+    const MAX_PER_RUN = smart ? 3 : 1;
     // Hard bounds for this refill pass: a single run must never grow the queue
     // without limit. (A cursor pinned at the tail used to make `ahead` read 0
     // forever, re-picking the same song ~20k times in one pass.)
     let enqueuedThisRun = 0;
     let lastPickUri: string | null = null;
     try {
-      const AHEAD = 3;
       for (;;) {
-        if (!s.endlessWave.active) return;
-        if (enqueuedThisRun >= 3) return;
+        if (!EW.isAutoActive(s.endlessWave)) return;
+        if (enqueuedThisRun >= MAX_PER_RUN) return;
         const snap = s.queue.getSnapshot();
         const upcoming = snap.tracks.slice(snap.currentIndex + 1);
         let ahead = 0;
@@ -3793,8 +3872,10 @@ export class DiscordBot {
         const failed = new Set<string>();
         let resolved: TrackInfo | null = null;
         for (let attempt = 0; attempt < 3 && !resolved; attempt++) {
-          if (!s.endlessWave.active) return;
-          const candidate = await EW.pickNextTrack(s.endlessWave, recent, failed, upcoming);
+          if (!EW.isAutoActive(s.endlessWave)) return;
+          const candidate = smart
+            ? await EW.pickNextTrack(s.endlessWave, recent, failed, upcoming)
+            : await EW.pickBasicTrack(s.endlessWave, recent, failed, upcoming);
           if (!candidate) break;
           if (candidate.uri === lastPickUri) {
             // Same pick twice in one pass — dedup inputs are blind (e.g. a
@@ -3827,8 +3908,13 @@ export class DiscordBot {
         enqueuedThisRun++;
         s.endlessWave.generated++;
         EW.noteWaveQueued(s.endlessWave, resolved.artists);
-        this.bridge.broadcast({ type: 'endlesswave', active: true, generated: s.endlessWave.generated });
-        console.log(`[endlesswave] queued: "${resolved.name}" — ${truncate(resolved.artists.join(', '), 80)} (#${s.endlessWave.generated})`);
+        this.bridge.broadcast({
+          type: 'endlesswave',
+          active: true,
+          generated: s.endlessWave.generated,
+          mode: EW.modeOf(s.endlessWave),
+        });
+        console.log(`[autoplay] queued: "${resolved.name}" — ${truncate(resolved.artists.join(', '), 80)} (#${s.endlessWave.generated})`);
         this.ewRetryAfter.delete(s.guildId);
       }
     } finally {
@@ -3848,7 +3934,7 @@ export class DiscordBot {
       const st = s.queue.getState();
       const cur = s.queue.getCurrentTrack();
       if (
-        s.endlessWave.active &&
+        EW.isAutoActive(s.endlessWave) &&
         !st.playing &&
         cur &&
         s.voice.isJoined() &&

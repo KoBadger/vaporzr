@@ -568,6 +568,7 @@ export class Bridge {
     const guildsForClient = current
       ? [authed ? current : { id: current.id, name: 'Server' }]
       : [];
+    const primaryEw = this.primaryGuildId ? this.sessions.get(this.primaryGuildId)?.endlessWave : undefined;
     const out: OutboundMessage = {
       type: 'snapshot',
       state: this.lastState,
@@ -582,7 +583,14 @@ export class Bridge {
       guilds: guildsForClient.length > 0 ? guildsForClient : undefined,
       sensitivity: this.sensitivity,
       guest: config.shareKey ? !authed : undefined,
-      endlesswave: this.primaryGuildId ? this.sessions.get(this.primaryGuildId)?.endlessWave.active : undefined,
+      endlesswave: primaryEw ? primaryEw.active : undefined,
+      endlesswaveMode: primaryEw
+        ? primaryEw.active
+          ? 'smart'
+          : primaryEw.basic
+            ? 'basic'
+            : 'off'
+        : undefined,
     };
     this.sendToSocket(socket, out);
   }

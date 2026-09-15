@@ -37,6 +37,7 @@ const DEFAULT_COMMAND_LEVELS: Record<string, PermissionLevel> = {
   dj: 'mod',
   sfx: 'user',
   endwav: 'user',
+  autoplay: 'user',
   perms: 'admin',
   speed: 'user',
   bassboost: 'user',

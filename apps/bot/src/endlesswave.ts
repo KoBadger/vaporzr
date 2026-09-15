@@ -17,6 +17,8 @@ export type { AudioFeatures } from './spotify.js';
 
 export interface EndlessWaveState {
   active: boolean;
+  /** Lightweight "keep the music going" autoplay (related track, no vibe analysis). */
+  basic: boolean;
   /** URI set of every track queued during this EW session — prevents exact repeats. */
   playedUris: Set<string>;
   /** Normalized names of tracks played (for remix/cover detection). */
@@ -43,6 +45,7 @@ export interface EndlessWaveState {
 
 export interface EndlessWaveSnapshot {
   active: boolean;
+  mode: AutoplayMode;
   generated: number;
   playedCount: number;
   deadEnds: number;
@@ -99,6 +102,7 @@ const DEFAULT_AVG: AudioFeatures = {
 export function createState(overrides?: Partial<EWConfig>): EndlessWaveState {
   return {
     active: false,
+    basic: false,
     playedUris: new Set(),
     playedNames: new Set(),
     recentArtists: [],
@@ -115,6 +119,18 @@ export function createState(overrides?: Partial<EWConfig>): EndlessWaveState {
 
 export function activate(state: EndlessWaveState): void {
   state.active = true;
+  state.basic = false;
+  resetSession(state);
+}
+
+/** Lightweight autoplay: keep music going without the vibe-analysis engine. */
+export function activateBasic(state: EndlessWaveState): void {
+  state.active = false;
+  state.basic = true;
+  resetSession(state);
+}
+
+function resetSession(state: EndlessWaveState): void {
   state.playedUris.clear();
   state.playedNames.clear();
   state.recentArtists = [];
@@ -130,11 +146,32 @@ export function activate(state: EndlessWaveState): void {
 
 export function deactivate(state: EndlessWaveState): void {
   state.active = false;
+  state.basic = false;
+}
+
+/** The single autoplay knob. `off` stops at the end; `basic` keeps music going
+ *  with a light related-track picker; `smart` is the full evolving Endless Wave. */
+export type AutoplayMode = 'off' | 'basic' | 'smart';
+
+export function modeOf(state: EndlessWaveState): AutoplayMode {
+  return state.active ? 'smart' : state.basic ? 'basic' : 'off';
+}
+
+export function setMode(state: EndlessWaveState, mode: AutoplayMode): void {
+  if (mode === 'smart') activate(state);
+  else if (mode === 'basic') activateBasic(state);
+  else deactivate(state);
+}
+
+/** True while autoplay should keep the queue topped up (basic or smart). */
+export function isAutoActive(state: EndlessWaveState): boolean {
+  return state.active || state.basic;
 }
 
 export function snapshot(state: EndlessWaveState): EndlessWaveSnapshot {
   return {
     active: state.active,
+    mode: modeOf(state),
     generated: state.generated,
     playedCount: state.playedUris.size,
     deadEnds: state.deadEnds,
@@ -165,6 +202,7 @@ export function noteWaveDeadEnd(state: EndlessWaveState): void {
 /** JSON-safe shape of an EndlessWaveState (Sets are converted to arrays). */
 export interface EndlessWavePersist {
   active: boolean;
+  basic: boolean;
   playedUris: string[];
   playedNames: string[];
   recentArtists: string[];
@@ -182,6 +220,7 @@ export interface EndlessWavePersist {
 export function serializeState(state: EndlessWaveState): EndlessWavePersist {
   return {
     active: state.active,
+    basic: state.basic,
     playedUris: [...state.playedUris],
     playedNames: [...state.playedNames],
     recentArtists: state.recentArtists,
@@ -200,6 +239,9 @@ export function serializeState(state: EndlessWaveState): EndlessWavePersist {
 export function restoreState(data: Partial<EndlessWavePersist>): EndlessWaveState {
   const s = createState();
   if (typeof data.active === 'boolean') s.active = data.active;
+  if (typeof data.basic === 'boolean') s.basic = data.basic;
+  // Single-mode invariant: smart (active) wins if both somehow persisted.
+  if (s.active) s.basic = false;
   for (const u of data.playedUris ?? []) s.playedUris.add(u);
   for (const n of data.playedNames ?? []) s.playedNames.add(n);
   s.recentArtists = Array.isArray(data.recentArtists) ? [...data.recentArtists] : [];
@@ -770,6 +812,88 @@ export async function pickNextTrack(
   }
 
   return null;
+}
+
+/* ---------- Basic autoplay picker ---------- */
+
+/**
+ * Lightweight "keep the music going" pick: one related track by the seed
+ * artist, with the same repeat/cooldown guards as the wave but no audio-feature
+ * analysis, recommendations call, or evolving-target scoring. Cheap and fast —
+ * used by `V@autoplay basic`. Returns null when nothing suitable is found.
+ */
+export async function pickBasicTrack(
+  state: EndlessWaveState,
+  recentTracks: TrackInfo[],
+  excludeUris?: ReadonlySet<string>,
+  upcoming?: TrackInfo[],
+): Promise<ResolvedTrack | null> {
+  if (recentTracks.length === 0) return null;
+  const last = recentTracks[recentTracks.length - 1];
+  const seed = (similarArtistSeed(state) || last.artists[0] || last.name || '').trim();
+  if (!seed) return null;
+
+  const upTracks = upcoming ?? recentTracks;
+  const upcomingUris = new Set(upTracks.map((t) => t.uri));
+  const cooldown = new Set(
+    state.recentArtists.slice(-DEFAULT_CONFIG.artistCooldown).map((a) => a.toLowerCase().trim()),
+  );
+  for (const t of upTracks) {
+    for (const a of t.artists) {
+      const norm = a.toLowerCase().trim();
+      if (norm.length >= 3) cooldown.add(norm);
+    }
+  }
+  const ok = (c: ResolvedTrack): boolean => {
+    if (isLongFormMix(c)) return false;
+    if (isDuplicate(state, c.uri)) return false;
+    if (upcomingUris.has(c.uri)) return false;
+    if (excludeUris?.has(c.uri)) return false;
+    if (isRemixOrCover(state, c.name, c.artists)) return false;
+    const main = (c.artists[0] ?? '').toLowerCase().trim();
+    if (main && cooldown.has(main)) return false;
+    if (!c.name || c.name.trim().length < 2) return false;
+    return true;
+  };
+
+  let survivors: ResolvedTrack[] = [];
+  try {
+    survivors = (await searchTracks(seed, 20)).filter(ok);
+  } catch {
+    survivors = [];
+  }
+  if (survivors.length === 0) {
+    try {
+      survivors = (await deezerRelatedTracks(seed)).filter(ok);
+    } catch {
+      /* best-effort */
+    }
+  }
+  if (survivors.length === 0) {
+    try {
+      const video = await searchAndResolveYoutube(seed);
+      if (video) {
+        const c: ResolvedTrack = {
+          uri: video.uri || `yt:${video.name}`,
+          name: video.name,
+          artists: video.artists,
+          album: video.album,
+          durationMs: video.durationMs,
+          image: video.image,
+          source: 'youtube',
+          streamUrl: video.streamUrl,
+        };
+        if (ok(c)) survivors = [c];
+      }
+    } catch {
+      /* best-effort */
+    }
+  }
+  if (survivors.length === 0) return null;
+  // No vibe scoring — just a mild random pick among the shortest few candidates.
+  survivors.sort((a, b) => (a.durationMs || 0) - (b.durationMs || 0));
+  const pool = survivors.slice(0, Math.min(3, survivors.length));
+  return pool[Math.floor(Math.random() * pool.length)];
 }
 
 /* ---------- Resolve helper ---------- */
