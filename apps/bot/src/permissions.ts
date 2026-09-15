@@ -41,6 +41,7 @@ const DEFAULT_COMMAND_LEVELS: Record<string, PermissionLevel> = {
   speed: 'user',
   bassboost: 'user',
   sleep: 'user',
+  diag: 'user',
 };
 
 const LEVEL_RANK: Record<PermissionLevel, number> = { user: 0, mod: 1, admin: 2 };

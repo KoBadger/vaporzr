@@ -48,7 +48,11 @@ async function main(): Promise<void> {
   // constructor calls librespot.start() → killStale() and would kill the
   // running instance's librespot/bridge before this one even binds the port.
   if (await isPortTaken(config.port)) {
-    console.log(`[vaporzr] another instance already holds port ${config.port} — exiting quietly.`);
+    console.warn(
+      `[vaporzr] another instance already holds port ${config.port} — exiting quietly. ` +
+        'Two instances sharing one token fight over the single Discord gateway session ' +
+        '(missed events + duplicate replies); keep exactly ONE running.',
+    );
     process.exit(0);
   }
 

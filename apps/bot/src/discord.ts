@@ -29,6 +29,7 @@ import {
   type MessageComponentInteraction,
   type TextBasedChannel,
 } from 'discord.js';
+import { generateDependencyReport } from '@discordjs/voice';
 import { config } from './config.js';
 import { resolveTracks, SpotifyError, type ResolvedTrack } from './spotify.js';
 import { THEMES, themeById } from './themes.js';
@@ -310,6 +311,9 @@ const COMMANDS = [
         .setDescription('Rename the Spotify Connect device (restarts librespot)')
         .addStringOption((o) => o.setName('name').setDescription('New device name (max 32 chars)').setRequired(true)),
     ),
+  new SlashCommandBuilder()
+    .setName('diag')
+    .setDescription('Show bot diagnostics (gateway, voice/DAVE, librespot, sessions)'),
 ];
 
 function fmtMs(ms: number): string {
@@ -371,6 +375,9 @@ export class DiscordBot {
   /** Guilds currently re-anchoring their mini now-playing strip — a lock that
    *  prevents overlapping state-change calls from posting duplicate strips. */
   private miniNpBusy = new Set<string>();
+  /** guildId -> track uri whose auto mini-strip is suppressed because a command
+   *  reply is already showing that track (prevents a duplicate now-playing). */
+  private miniNpSuppress = new Map<string, string>();
   /** Message IDs already processed — guards against Discord retrying messageCreate. */
   private processedMessages = new Set<string>();
   private panelRefreshQueued = false;
@@ -603,6 +610,28 @@ export class DiscordBot {
       this.cancelSleepTimer(g.id);
       this.syncPrimaryGuild();
     });
+    // Duplicate-instance detection. Two clients sharing one token fight over the
+    // single gateway session, which surfaces as rapid disconnect/reconnect churn
+    // (missed events, duplicate replies, voice flapping) — warn loudly so it's
+    // obvious instead of looking like a mysterious bug.
+    const recentDisconnects: number[] = [];
+    this.client.on('shardDisconnect', (event, shardId) => {
+      const now = Date.now();
+      recentDisconnects.push(now);
+      while (recentDisconnects.length && now - recentDisconnects[0] > 60_000) recentDisconnects.shift();
+      const code = (event as { code?: number } | undefined)?.code;
+      console.warn(`[vaporzr] gateway shard ${shardId} disconnected (code ${code ?? '?'})`);
+      if (recentDisconnects.length >= 3) {
+        console.error(
+          '[vaporzr] WARNING: gateway dropped 3+ times in 60s. Another instance is probably ' +
+            'using this bot token (run only ONE), or the network/host is unstable.',
+        );
+        recentDisconnects.length = 0;
+      }
+    });
+    this.client.on('shardResume', (_shardId, replayedEvents) =>
+      console.log(`[vaporzr] gateway shard resumed (${replayedEvents} events replayed)`),
+    );
     await this.client.login(config.discordToken);
     this.startPresenceTicker();
   }
@@ -1465,6 +1494,10 @@ export class DiscordBot {
         break;
       }
 
+      case 'diag':
+        await interaction.reply({ embeds: [this.diagEmbed(interaction.guildId)] });
+        break;
+
       default:
         await interaction.reply('Unknown command.');
     }
@@ -1537,6 +1570,7 @@ export class DiscordBot {
       bass: 'bassboost', boost: 'bassboost', bassboost: 'bassboost',
       sleep: 'sleep', timer: 'sleep',
       help: 'help',
+      diag: 'diag',
     };
     const canonical = alias[cmd];
     if (canonical) {
@@ -2090,6 +2124,11 @@ export class DiscordBot {
           break;
         }
 
+        case 'diag': {
+          await message.reply({ embeds: [this.diagEmbed(message.guildId)] });
+          break;
+        }
+
         default:
           await message.reply(`Unknown command \`V@${cmd}\`. Try \`V@help\`.`);
       }
@@ -2106,6 +2145,9 @@ export class DiscordBot {
     const s = this.sessionFor(message.guildId);
     const first = tracks[0];
     const requestedBy = message.author.username;
+    const wasPlaying = s.queue.getState().playing;
+    const suppressStrip = !wasPlaying && !!first;
+    if (suppressStrip) this.suppressAutoMiniNp(message.guildId ?? undefined, first.uri);
     s.queue.enqueueMany(tracks, requestedBy);
     if (first) s.playback.prefetchStream(first);
     let playbackFailed: string | null = null;
@@ -2118,8 +2160,11 @@ export class DiscordBot {
       playbackFailed = err instanceof Error ? err.message : String(err);
       console.warn(`[discord] queued but couldn't start playback: ${playbackFailed}`);
     }
+    const st = s.queue.getState();
+    const startedFresh = !wasPlaying && st.playing && !!first && st.track?.uri === first.uri;
+    if (suppressStrip && !startedFresh) this.miniNpSuppress.delete(message.guildId ?? '');
     const embed = new EmbedBuilder()
-      .setTitle('Inserted to play next')
+      .setTitle('Added to queue')
       .setDescription(
         `${srcEmoji(first.source)} **${first.name}** — ${truncate(first.artists.join(', '), 80)}` +
           (playbackFailed ? `\n⚠️ Couldn't start playback yet: ${playbackFailed}` : ''),
@@ -2181,6 +2226,9 @@ export class DiscordBot {
     const s = this.sessionFor(message.guildId);
     const first = tracks[0];
     const requestedBy = message.author.username;
+    const wasPlaying = s.queue.getState().playing;
+    const suppressStrip = !wasPlaying && !!first;
+    if (suppressStrip) this.suppressAutoMiniNp(message.guildId ?? undefined, first.uri);
     s.queue.insertAfterCurrent(tracks, requestedBy);
     if (first) s.playback.prefetchStream(first);
     let playbackFailed: string | null = null;
@@ -2193,6 +2241,9 @@ export class DiscordBot {
       playbackFailed = err instanceof Error ? err.message : String(err);
       console.warn(`[discord] queued but couldn't start playback: ${playbackFailed}`);
     }
+    const st = s.queue.getState();
+    const startedFresh = !wasPlaying && st.playing && !!first && st.track?.uri === first.uri;
+    if (suppressStrip && !startedFresh) this.miniNpSuppress.delete(message.guildId ?? '');
     const embed = new EmbedBuilder()
       .setTitle('Inserted to play next')
       .setDescription(
@@ -2260,6 +2311,9 @@ export class DiscordBot {
     const s = this.sessionFor(interaction.guildId);
     const first = tracks[0];
     const requestedBy = interaction.member?.user.username ?? 'unknown';
+    const wasPlaying = s.queue.getState().playing;
+    const suppressStrip = !wasPlaying && !!first;
+    if (suppressStrip) this.suppressAutoMiniNp(interaction.guildId ?? undefined, first.uri);
     s.queue.insertAfterCurrent(tracks, requestedBy);
     if (first) s.playback.prefetchStream(first);
     let playbackFailed: string | null = null;
@@ -2272,6 +2326,9 @@ export class DiscordBot {
       playbackFailed = err instanceof Error ? err.message : String(err);
       console.warn(`[discord] queued but couldn't start playback: ${playbackFailed}`);
     }
+    const st = s.queue.getState();
+    const startedFresh = !wasPlaying && st.playing && !!first && st.track?.uri === first.uri;
+    if (suppressStrip && !startedFresh) this.miniNpSuppress.delete(interaction.guildId ?? '');
     const embed = new EmbedBuilder()
       .setTitle('Inserted to play next')
       .setDescription(
@@ -2288,6 +2345,9 @@ export class DiscordBot {
     const s = this.sessionFor(interaction.guildId);
     const first = tracks[0];
     const requestedBy = interaction.member?.user.username ?? 'unknown';
+    const wasPlaying = s.queue.getState().playing;
+    const suppressStrip = !wasPlaying && !!first;
+    if (suppressStrip) this.suppressAutoMiniNp(interaction.guildId ?? undefined, first.uri);
     s.queue.enqueueMany(tracks, requestedBy);
     // Warm the stream resolve while the voice-channel join is in flight so
     // playback starts as soon as the join completes instead of serially after.
@@ -2302,6 +2362,9 @@ export class DiscordBot {
       playbackFailed = err instanceof Error ? err.message : String(err);
       console.warn(`[discord] queued but couldn't start playback: ${playbackFailed}`);
     }
+    const st = s.queue.getState();
+    const startedFresh = !wasPlaying && st.playing && !!first && st.track?.uri === first.uri;
+    if (suppressStrip && !startedFresh) this.miniNpSuppress.delete(interaction.guildId ?? '');
     const embed = new EmbedBuilder()
       .setTitle('Added to queue')
       .setDescription(
@@ -2410,6 +2473,32 @@ export class DiscordBot {
   }
 
   /**
+   * A play/insert command posts its own reply embed for the track it just
+   * started. Suppress the always-on mini strip for that track and remove any
+   * existing strip so the reply is the only now-playing message (no duplicate).
+   * The suppression self-clears when the track changes.
+   */
+  private suppressAutoMiniNp(guildId: string | undefined, uri: string): void {
+    if (!guildId || !uri) return;
+    this.miniNpSuppress.set(guildId, uri);
+    const existing = this.miniNp.get(guildId);
+    if (!existing) return;
+    this.miniNp.delete(guildId);
+    this.miniTrackUri.delete(guildId);
+    this.scheduleSavePanels();
+    void (async () => {
+      try {
+        const ch = await this.client.channels.fetch(existing.channelId);
+        if (!ch?.isTextBased()) return;
+        const msg = await ch.messages.fetch(existing.messageId);
+        await msg.delete();
+      } catch {
+        /* already gone / no permission */
+      }
+    })();
+  }
+
+  /**
    * Posts the always-on mini now-playing message the first time a guild starts
    * playing — in whatever channel was last used for commands. After that it
    * updates in place on every queue/state change via refreshAllPanels, and
@@ -2420,6 +2509,14 @@ export class DiscordBot {
     if (!guildId || !st.track) return;
     const channelId = this.lastTextChannel.get(guildId);
     if (!channelId) return;
+    // A command reply for this exact track is already the visible now-playing —
+    // don't also auto-post a strip (that was the "two identical embeds"
+    // duplicate). Clears itself once the track moves on.
+    const suppressedUri = this.miniNpSuppress.get(guildId);
+    if (suppressedUri) {
+      if (suppressedUri === st.track.uri) return;
+      this.miniNpSuppress.delete(guildId);
+    }
     // Hold the per-guild lock for the whole post/delete dance so a burst of
     // state-change events for the same track can't create duplicate strips.
     if (this.miniNpBusy.has(guildId)) return;
@@ -3389,6 +3486,53 @@ export class DiscordBot {
     } catch {
       return false;
     }
+  }
+
+  /** One-shot health/diagnostic snapshot for `/diag` and `V@diag`. */
+  private diagEmbed(guildId: string | null): EmbedBuilder {
+    let dave = 'unknown';
+    try {
+      const line = generateDependencyReport()
+        .split('\n')
+        .find((l) => l.includes('@snazzah/davey'));
+      dave = line && !/not found/i.test(line) ? line.split(':').slice(1).join(':').trim() : 'missing';
+    } catch {
+      dave = 'unknown';
+    }
+
+    const sessions = this.sessions.all();
+    const s = guildId ? this.sessions.get(guildId) : this.sessions.primary;
+    const joined = !!s?.voice.isJoined();
+    const chanId = joined ? s?.voice.getChannelId() : null;
+    const voiceLine = joined
+      ? `connected${chanId ? ` · <#${chanId}>` : ''}`
+      : 'not connected';
+    const dev = this.bridge.librespot.getDeviceInfo();
+    const up = process.uptime();
+    const uptime = `${Math.floor(up / 3600)}h ${Math.floor((up % 3600) / 60)}m`;
+    const st = s?.queue.getState();
+
+    return new EmbedBuilder()
+      .setTitle('🩺 Diagnostics')
+      .setColor(this.themeColor())
+      .addFields(
+        { name: 'Gateway', value: `ping \`${Math.round(this.client.ws.ping)} ms\` · up \`${uptime}\``, inline: true },
+        { name: 'Token', value: `${this.client.guilds.cache.size} guild(s) · ${sessions.length} session(s)`, inline: true },
+        { name: 'Voice', value: `DAVE \`${dave}\`\n${voiceLine}`, inline: true },
+        {
+          name: 'librespot',
+          value: dev.enabled
+            ? `${dev.running ? '`running`' : '`stopped`'} · ${dev.name} · ${
+                dev.running ? `${Math.round(dev.uptimeMs / 60000)}m` : `${dev.bitrate}kbps`
+              }`
+            : '`disabled`',
+          inline: true,
+        },
+        { name: 'Audio', value: st?.track ? `${st.playing ? '▶️' : '⏸️'} ${st.track.name}`.slice(0, 100) : '`idle`', inline: false },
+      )
+      .setFooter({
+        text: 'Two instances sharing one token fight over the gateway session — run only one.',
+      });
   }
 
   /** Shared reference for both `/help` and `V@help`. */
