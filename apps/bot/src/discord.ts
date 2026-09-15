@@ -402,6 +402,23 @@ const COMMANDS = [
     .setDescription('Server listening stats — top DJs and most-played artists'),
   new SlashCommandBuilder().setName('dna').setDescription("Show the current track's Song DNA radar card"),
   new SlashCommandBuilder().setName('cover').setDescription('Render a mosaic of the queue album art'),
+  new SlashCommandBuilder()
+    .setName('hype')
+    .setDescription('Fire short hype SFX on strong beats (auto-hype)')
+    .addBooleanOption((o) => o.setName('enabled').setDescription('Turn auto-hype on or off').setRequired(false)),
+  new SlashCommandBuilder()
+    .setName('mix')
+    .setDescription('Crossfade two tracks into one DJ-style mix')
+    .addStringOption((o) => o.setName('a').setDescription('First track (link or name)').setRequired(true))
+    .addStringOption((o) => o.setName('b').setDescription('Second track (link or name)').setRequired(true))
+    .addIntegerOption((o) =>
+      o.setName('crossfade').setDescription('Crossfade seconds (2–20, default 6)').setRequired(false).setMinValue(2).setMaxValue(20),
+    ),
+  new SlashCommandBuilder().setName('quiz').setDescription('Start a guess-the-song lyric quiz'),
+  new SlashCommandBuilder()
+    .setName('guess')
+    .setDescription('Guess the current quiz song')
+    .addStringOption((o) => o.setName('text').setDescription('Your guess').setRequired(true)),
 ];
 
 function fmtMs(ms: number): string {
@@ -472,6 +489,11 @@ export class DiscordBot {
   private voiceStatusAt = new Map<string, number>();
   /** guildId -> play a generative ambient pad when the queue empties. */
   private ambientGuilds = new Set<string>();
+  /** guildId -> fire a short SFX on strong beats (auto-hype). */
+  private hypeGuilds = new Set<string>();
+  private lastHypeAt = new Map<string, number>();
+  /** guildId -> active lyric guess-the-song quiz. */
+  private quizzes = new Map<string, { name: string; artists: string[]; timer: NodeJS.Timeout }>();
   /** guildId -> tint now-playing colors from the track's audio features. */
   private moodOn = new Set<string>();
   private moodColor = new Map<string, number>();
@@ -762,6 +784,8 @@ export class DiscordBot {
     this.client.on('messageReactionAdd', (reaction, user) => {
       void this.handleReaction(reaction as MessageReaction, user as User);
     });
+    // Auto-hype: beat onsets from the analyzer fire a short SFX.
+    analyzer.setBeatHandler(() => this.onBeat());
     await this.client.login(config.discordToken);
     this.startPresenceTicker();
   }
@@ -1630,6 +1654,57 @@ export class DiscordBot {
         break;
       }
 
+      case 'hype': {
+        if (!this.requireLevel('hype', interaction)) return this.deny(interaction);
+        const gid = interaction.guildId;
+        if (!gid) return void (await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral }));
+        const enabled = interaction.options.getBoolean('enabled');
+        if (enabled === true) this.hypeGuilds.add(gid);
+        else if (enabled === false) this.hypeGuilds.delete(gid);
+        const on = this.hypeGuilds.has(gid);
+        await interaction.reply({
+          content: on ? '⚡ Auto-hype **on** — I\'ll drop a hit on strong beats.' : 'Auto-hype **off**.',
+          flags: MessageFlags.Ephemeral,
+        });
+        break;
+      }
+
+      case 'mix': {
+        if (!this.requireLevel('mix', interaction)) return this.deny(interaction);
+        await interaction.deferReply();
+        const a = interaction.options.getString('a', true);
+        const b = interaction.options.getString('b', true);
+        const sec = interaction.options.getInteger('crossfade') ?? 6;
+        await interaction.editReply(await this.mixTracks(s, a, b, sec));
+        break;
+      }
+
+      case 'quiz': {
+        if (!this.requireLevel('quiz', interaction)) return this.deny(interaction);
+        await interaction.deferReply();
+        await interaction.editReply(await this.startQuiz(s));
+        break;
+      }
+
+      case 'guess': {
+        if (!this.requireLevel('guess', interaction)) return this.deny(interaction);
+        const q = this.quizzes.get(interaction.guildId ?? '');
+        if (!q) {
+          await interaction.reply({ content: 'No quiz running — start one with `/quiz`.', flags: MessageFlags.Ephemeral });
+          break;
+        }
+        const norm = (x: string): string => x.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+        const g = norm(interaction.options.getString('text', true));
+        const t = norm(q.name);
+        if (g.length >= 3 && (t.includes(g) || g.includes(t))) {
+          this.endQuiz(interaction.guildId ?? '');
+          await interaction.reply(`✅ **${interaction.user.username}** got it — **${q.name}** — ${(q.artists ?? []).join(', ')}!`);
+        } else {
+          await interaction.reply({ content: '❌ Not it — keep guessing!', flags: MessageFlags.Ephemeral });
+        }
+        break;
+      }
+
       case 'sensitivity': {
         if (!this.requireLevel('sensitivity', interaction)) return this.deny(interaction);
         const multiplier = interaction.options.getNumber('multiplier', true);
@@ -2019,6 +2094,9 @@ export class DiscordBot {
       vibe: 'vibe',
       lb: 'leaderboard', leaderboard: 'leaderboard',
       dna: 'dna', cover: 'cover',
+      hype: 'hype',
+      mix: 'mix',
+      quiz: 'quiz', guess: 'guess',
     };
     const canonical = alias[cmd];
     if (canonical) {
@@ -2330,6 +2408,39 @@ export class DiscordBot {
           const res = await this.coverCard(s);
           if (typeof res === 'string') await message.reply(res);
           else await message.reply({ embeds: [res.embed], files: [res.file] });
+          break;
+        }
+
+        case 'quiz': {
+          if (!canUse('quiz')) return void (await deny());
+          await message.reply(await this.startQuiz(s));
+          break;
+        }
+
+        case 'guess': {
+          if (!canUse('guess')) return void (await deny());
+          const res = this.guessSong(message, args);
+          if (res) await message.reply(res);
+          break;
+        }
+
+        case 'mix': {
+          if (!canUse('mix')) return void (await deny());
+          const parts = args.split(/\s*\|\s*|\s*->\s*/).map((x) => x.trim()).filter(Boolean);
+          if (parts.length < 2) return void (await message.reply('Usage: `V@mix <a> | <b> [seconds]` (or `/mix`).'));
+          const sec = parts[2] ? parseInt(parts[2], 10) : 6;
+          await message.reply(await this.mixTracks(s, parts[0], parts[1], Number.isFinite(sec) ? sec : 6));
+          break;
+        }
+
+        case 'hype': {
+          if (!canUse('hype')) return void (await deny());
+          if (!message.guildId) return void (await message.reply('Must be used in a server.'));
+          const a = args.trim().toLowerCase();
+          if (/^(on|1|true)$/.test(a)) this.hypeGuilds.add(message.guildId);
+          else if (/^(off|0|false)$/.test(a)) this.hypeGuilds.delete(message.guildId);
+          const on = this.hypeGuilds.has(message.guildId);
+          await message.reply(on ? '⚡ Auto-hype **on** — I\'ll drop a hit on strong beats.' : 'Auto-hype **off**.');
           break;
         }
 
@@ -4491,6 +4602,87 @@ export class DiscordBot {
     }
   }
 
+  /** Start a lyric-guess quiz on a random queued track (title hidden). */
+  private async startQuiz(s: Session): Promise<string> {
+    const snap = s.queue.getSnapshot();
+    const pool = snap.tracks.filter((t) => !t.current);
+    const target = pool.length ? pool[Math.floor(Math.random() * pool.length)] : s.queue.getCurrentTrack();
+    if (!target) return 'Queue a few songs first, then start a quiz.';
+    const lyr = await fetchLyrics(target).catch(() => null);
+    const lines = (lyr?.syncedLines ?? []).map((l) => l.text).filter((t) => t.length > 12);
+    if (lines.length === 0) return 'No lyrics to quiz on yet — try again once more tracks are queued.';
+    const line = lines[Math.floor(Math.random() * lines.length)];
+    const gid = s.guildId ?? '';
+    this.endQuiz(gid);
+    const timer = setTimeout(() => void this.revealQuiz(gid), 60_000);
+    timer.unref?.();
+    this.quizzes.set(gid, { name: target.name, artists: target.artists, timer });
+    return `🎵 **Guess the song!** (60s)\n> ${truncate(line, 300)}\n\nType \`V@guess <answer>\`.`;
+  }
+
+  private endQuiz(guildId: string): void {
+    const q = this.quizzes.get(guildId);
+    if (q) {
+      clearTimeout(q.timer);
+      this.quizzes.delete(guildId);
+    }
+  }
+
+  private async revealQuiz(guildId: string): Promise<void> {
+    const q = this.quizzes.get(guildId);
+    if (!q) return;
+    this.quizzes.delete(guildId);
+    const chId = this.lastTextChannel.get(guildId);
+    if (!chId) return;
+    const ch = await this.client.channels.fetch(chId).catch(() => null);
+    if (ch && 'send' in ch) {
+      await ch.send(`⏰ Time's up! It was **${q.name}** — ${(q.artists ?? []).join(', ')}.`).catch(() => {});
+    }
+  }
+
+  /** Compare a guess to the quiz answer (forgiving fuzzy match). */
+  private guessSong(message: Message, guess: string): string | null {
+    const gid = message.guildId ?? '';
+    const q = this.quizzes.get(gid);
+    if (!q) return null;
+    const norm = (x: string): string => x.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    const g = norm(guess);
+    const t = norm(q.name);
+    if (g.length < 3) return 'Nope — too short.';
+    if (t.includes(g) || g.includes(t)) {
+      this.endQuiz(gid);
+      return `✅ **${message.author.username}** got it — **${q.name}** — ${(q.artists ?? []).join(', ')}!`;
+    }
+    return '❌ Not it — keep guessing!';
+  }
+
+  /** Crossfade two tracks into one mix by resolving each to a stream URL. */
+  private async mixTracks(s: Session, a: string, b: string, sec: number): Promise<string> {
+    const d = Math.max(2, Math.min(20, sec || 6));
+    const ra = (await resolvePlayInput(a).catch(() => []))[0];
+    const rb = (await resolvePlayInput(b).catch(() => []))[0];
+    if (!ra || !rb) return 'Need two resolvable tracks (links or names).';
+    const ua = ra.streamUrl ?? (await EW.resolveCandidate(ra).catch(() => null))?.streamUrl;
+    const ub = rb.streamUrl ?? (await EW.resolveCandidate(rb).catch(() => null))?.streamUrl;
+    if (!ua || !ub) return 'Could not resolve a playable stream for one of those.';
+    if (!s.voice.isJoined()) return 'Join a voice channel first (`V@j`), then mix.';
+    s.voice.playMix(ua, ub, { crossfadeSec: d, volume: s.queue.getState().volume });
+    return `🎚️ Mixing **${truncate(ra.name, 60)}** → **${truncate(rb.name, 60)}** with a ${d}s crossfade.`;
+  }
+
+  /** Auto-hype: on a strong beat, fire a short SFX for the primary guild (throttled). */
+  private onBeat(): void {
+    const guildId = this.bridge.getPrimaryGuildId();
+    if (!guildId || !this.hypeGuilds.has(guildId)) return;
+    const now = Date.now();
+    if (now - (this.lastHypeAt.get(guildId) ?? 0) < 1800) return;
+    const s = this.sessionFor(guildId);
+    if (!s.voice.isJoined() || !s.queue.getState().playing) return;
+    this.lastHypeAt.set(guildId, now);
+    const hype = ['drop', 'zap', 'boom'];
+    void s.playback.playSoundEffect(hype[Math.floor(Math.random() * hype.length)]);
+  }
+
   /** 🧬 Song DNA card: a radar GIF of the current track's audio features. */
   private async dnaCard(s: Session): Promise<{ embed: EmbedBuilder; file: AttachmentBuilder } | string> {
     const cur = s.queue.getCurrentTrack();
@@ -5119,6 +5311,8 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/sfx <id>` · `V@sfx` — play a sound effect',
       '`/dj` · `V@dj` — toggle the soundboard (mod)',
       '`/djrole @role` · `V@djrole` — set the DJ role (mod) — DJs skip without a vote',
+      '`/hype on|off` · `V@hype` — auto-hype: drop a hit on strong beats',
+      '`/mix <a> <b>` · `V@mix <a> | <b>` — crossfade two tracks into one mix',
     ],
   },
   {
@@ -5129,6 +5323,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
     lines: [
       '`/lyrics [query]` · `V@lyr` — lyrics for the current or searched song',
       '`/karaoke` · `V@k` — live karaoke highlight mode',
+      '`/quiz` · `V@quiz` — guess-the-song lyric game · `/guess <answer>` · `V@guess`',
     ],
   },
   {

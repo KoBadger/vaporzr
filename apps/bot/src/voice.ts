@@ -476,6 +476,49 @@ export class VoiceManager {
     console.log('[voice] ambient intermission started');
   }
 
+  /** Crossfade two source URLs into one continuous mix (ffmpeg acrossfade). */
+  playMix(urlA: string, urlB: string, opts: { crossfadeSec?: number; volume?: number } = {}): void {
+    if (!this.player) return;
+    this.clearIdleTimer();
+    this.stopStream();
+    const d = Math.max(2, Math.min(20, opts.crossfadeSec ?? 6));
+    const filter =
+      `[0:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[a0];` +
+      `[1:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[a1];` +
+      `[a0][a1]acrossfade=d=${d}:c1=tri:c2=tri[out]`;
+    const args = [
+      '-hide_banner', '-loglevel', 'error',
+      '-i', urlA, '-i', urlB,
+      '-filter_complex', filter,
+      '-map', '[out]', '-vn', '-ac', '2', '-ar', '48000', '-f', 's16le', 'pipe:1',
+    ];
+    const proc = spawn(config.ffmpegPath, args, { windowsHide: true });
+    this.ffmpeg = proc;
+    this.streamStartTime = Date.now();
+    this.pausedPositionMs = 0;
+    const stream = this.makeMixStream();
+    this.stream = stream;
+    proc.stdout.on('data', (d) => {
+      this.chunksSinceLog++;
+      this.bytesSinceLog += d.length;
+    });
+    proc.stderr.on('data', (d) => {
+      const l = d.toString().trim();
+      if (l) console.warn(`[voice] mix: ${l.slice(0, 200)}`);
+    });
+    proc.stdout.pipe(stream);
+    const resource = createAudioResource(stream, { inputType: StreamType.Raw, inlineVolume: true });
+    this.resource = resource;
+    if (opts.volume !== undefined) this.volumePercent = opts.volume;
+    this.applyVolumeToResource();
+    this.player.play(resource);
+    this.paused = false;
+    proc.on('exit', () => {
+      if (this.ffmpeg === proc) this.ffmpeg = null;
+    });
+    console.log(`[voice] crossfade mix started (${d}s)`);
+  }
+
   /** Set the callback fired when the active stream can accept more PCM again. */
   setStreamDrain(cb: (() => void) | null): void {
     this.onStreamDrain = cb;

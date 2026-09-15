@@ -212,8 +212,23 @@ function computeBars(): { bars: number[]; quiet: boolean } {
   return { bars, quiet };
 }
 
+let beatHandler: (() => void) | null = null;
+let lowEma = 0;
+let lastBeatAt = 0;
+
 function tick(): void {
   const { bars, quiet } = computeBars();
+  // Beat onset detection on the low band (kick) — drives auto-hype SFX.
+  const low = (bars[0] + bars[1] + bars[2]) / 3;
+  lowEma = lowEma > 0 ? lowEma * 0.92 + low * 0.08 : low;
+  if (!quiet && low > lowEma * 1.5 && low > 0.25 && Date.now() - lastBeatAt > 260) {
+    lastBeatAt = Date.now();
+    try {
+      beatHandler?.();
+    } catch {
+      /* handler errors must not kill the ticker */
+    }
+  }
   for (let i = 0; i < BARS; i++) smoothed[i] = smoothed[i] + 0.35 * (bars[i] - smoothed[i]);
   barHistory.push({ at: Date.now(), bars: [...smoothed] });
   if (barHistory.length > HISTORY_SNAPSHOTS) barHistory.shift();
@@ -256,6 +271,10 @@ function renderGif(ms = 2400, fps = 8): Buffer | null {
 }
 
 export const analyzer = {
+  /** Register a beat-onset handler (auto-hype). Pass null to clear. */
+  setBeatHandler(cb: (() => void) | null): void {
+    beatHandler = cb;
+  },
   feedPcm(buf: Buffer): void {
     lastPcmAt = Date.now();
     const n = Math.floor(buf.length / 4);
