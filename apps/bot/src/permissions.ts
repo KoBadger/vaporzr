@@ -7,6 +7,8 @@ import type { Guild } from 'discord.js';
 interface GuildConfig {
   roles: Record<PermissionLevel, string[]>;
   commandLevels: Record<string, PermissionLevel>;
+  /** Optional DJ role — members holding it may control playback without voting. */
+  djRole?: string | null;
 }
 
 const DEFAULT_COMMAND_LEVELS: Record<string, PermissionLevel> = {
@@ -38,6 +40,8 @@ const DEFAULT_COMMAND_LEVELS: Record<string, PermissionLevel> = {
   sfx: 'user',
   endwav: 'user',
   autoplay: 'user',
+  playlist: 'user',
+  djrole: 'mod',
   perms: 'admin',
   speed: 'user',
   bassboost: 'user',
@@ -149,6 +153,29 @@ export class PermissionsManager {
     return Boolean(owner) && userId === owner;
   }
 
+  /** The configured DJ role id for a guild, if any. */
+  getDjRole(guildId: string): string | null {
+    return this.load(guildId).djRole ?? null;
+  }
+
+  /** Set (or clear with null) the guild's DJ role. */
+  setDjRole(guildId: string, roleId: string | null): void {
+    const cfg = this.load(guildId);
+    cfg.djRole = roleId;
+    this.save(guildId);
+  }
+
+  /** True when a member may act as DJ: mod/admin/owner, or a holder of the DJ role. */
+  isDj(
+    guild: Guild,
+    member: { id: string; roles: { cache: ReadonlyMap<string, unknown> } },
+  ): boolean {
+    if (this.getLevel(guild, member) !== 'user') return true;
+    const dj = this.load(guild.id).djRole;
+    if (!dj) return false;
+    return [...member.roles.cache.keys()].includes(dj);
+  }
+
   snapshot(guildId: string) {
     const cfg = this.load(guildId);
     return {
@@ -156,6 +183,7 @@ export class PermissionsManager {
       modRoles: cfg.roles.mod,
       userRoles: cfg.roles.user,
       commandLevels: cfg.commandLevels,
+      djRole: cfg.djRole ?? null,
     };
   }
 }

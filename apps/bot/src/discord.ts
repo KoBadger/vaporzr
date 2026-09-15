@@ -19,6 +19,7 @@ import {
   Routes,
   SlashCommandBuilder,
   StringSelectMenuBuilder,
+  StringSelectMenuInteraction,
   StringSelectMenuOptionBuilder,
   type ChatInputCommandInteraction,
   type Guild,
@@ -31,7 +32,7 @@ import {
 } from 'discord.js';
 import { generateDependencyReport } from '@discordjs/voice';
 import { config } from './config.js';
-import { resolveTracks, SpotifyError, type ResolvedTrack } from './spotify.js';
+import { resolveTracks, searchCandidates, SpotifyError, type ResolvedTrack } from './spotify.js';
 import { THEMES, themeById } from './themes.js';
 import {
   isYoutubePlaylistUrl,
@@ -59,6 +60,7 @@ import { renderPanelIconPng, PANEL_ICON_FALLBACKS } from './panelIcons.js';
 import type { Bridge } from './bridge.js';
 import type { PermissionLevel, TrackInfo, PlaybackState } from '@vaporzr/shared';
 import * as EW from './endlesswave.js';
+import { PlaylistStore } from './playlists.js';
 
 /** First non-internal IPv4 address of this machine — reachable from the LAN. */
 function localIp(): string {
@@ -339,6 +341,35 @@ const COMMANDS = [
         .setMinValue(1)
         .setMaxValue(10),
     ),
+  new SlashCommandBuilder()
+    .setName('playlist')
+    .setDescription('Save the current queue as a playlist, or load a saved one')
+    .addSubcommand((sc) =>
+      sc
+        .setName('save')
+        .setDescription('Save the current queue as a playlist')
+        .addStringOption((o) => o.setName('name').setDescription('Playlist name').setRequired(true)),
+    )
+    .addSubcommand((sc) =>
+      sc
+        .setName('load')
+        .setDescription('Load a saved playlist into the queue')
+        .addStringOption((o) => o.setName('name').setDescription('Playlist name').setRequired(true)),
+    )
+    .addSubcommand((sc) => sc.setName('list').setDescription('List saved playlists'))
+    .addSubcommand((sc) =>
+      sc
+        .setName('delete')
+        .setDescription('Delete a saved playlist')
+        .addStringOption((o) => o.setName('name').setDescription('Playlist name').setRequired(true)),
+    ),
+  new SlashCommandBuilder()
+    .setName('djrole')
+    .setDescription('Set (or clear) the DJ role that can control playback without a vote')
+    .addRoleOption((o) =>
+      o.setName('role').setDescription('Role to grant DJ powers (omit to view current)').setRequired(false),
+    )
+    .addBooleanOption((o) => o.setName('off').setDescription('Clear the DJ role').setRequired(false)),
 ];
 
 function fmtMs(ms: number): string {
@@ -390,6 +421,21 @@ export class DiscordBot {
   private ewStartedUri = new Map<string, string>();
   /** guildId -> how many autoplay tracks to keep buffered (1–10). Unset = default per mode. */
   private ewAheadOverride = new Map<string, number>();
+  /** Per-guild saved playlists (favorites). */
+  private playlists = new PlaylistStore();
+  /** token -> pending interactive search results (for the `V@p <text>` picker). */
+  private pendingSearch = new Map<
+    string,
+    { guildId: string; userId: string; candidates: ResolvedTrack[]; createdAt: number }
+  >();
+  /** guildId -> in-flight vote-to-skip. */
+  private skipVotes = new Map<
+    string,
+    { voters: Set<string>; eligible: Set<string>; timer: NodeJS.Timeout }
+  >();
+  /** guildId -> last voice-status text posted (rate-limit aware). */
+  private voiceStatusText = new Map<string, string>();
+  private voiceStatusAt = new Map<string, number>();
   /** guildId -> panel message location. */
   private panels = new Map<string, { channelId: string; messageId: string }>();
   private npMessages = new Map<string, { channelId: string; messageId: string }>();
@@ -527,7 +573,10 @@ export class DiscordBot {
       s.queue.subscribe({
         onQueueChanged: () => this.scheduleWaveTopUp(s),
         onStateChanged: (st) => {
-          if (st.playing && st.track) this.markWaveStarted(s, st.track);
+          if (st.playing && st.track) {
+            this.markWaveStarted(s, st.track);
+            void this.syncVoiceStatus(s);
+          }
           this.scheduleWaveTopUp(s);
         },
       });
@@ -777,6 +826,8 @@ export class DiscordBot {
             await interaction.update({ embeds, components }).catch(() => {});
           }
         }
+      } else if (interaction.customId.startsWith('vzsearch:')) {
+        await this.handleSearchPick(interaction);
       }
       return;
     }
@@ -908,8 +959,12 @@ export class DiscordBot {
       case 'play': {
         const query = interaction.options.getString('query', true);
         await interaction.deferReply();
-        const tracks = await resolvePlayInput(query);
-        await this.addToQueue(interaction, tracks);
+        if (isUrlPlayInput(query)) {
+          const tracks = await resolvePlayInput(query);
+          await this.addToQueue(interaction, tracks);
+        } else {
+          await this.presentSearch(interaction, query);
+        }
         break;
       }
 
@@ -950,9 +1005,23 @@ export class DiscordBot {
 
       case 'skip': {
         if (!this.requireLevel('skip', interaction)) return this.deny(interaction);
-        s.playback.next();
-        const r1 = await interaction.reply('⏭️ Skipped');
-        this.autoExpire(r1);
+        if (this.isDjMember(interaction.guild, interaction.member)) {
+          this.clearSkipVote(interaction.guildId);
+          s.playback.next();
+          const r1 = await interaction.reply('⏭️ Skipped');
+          this.autoExpire(r1);
+          break;
+        }
+        const v = this.requestSkip(s, interaction.user.id);
+        if (v.result === 'skipped') {
+          s.playback.next();
+          const r1 = await interaction.reply('⏭️ Skipped (majority vote reached)');
+          this.autoExpire(r1);
+        } else if (v.result === 'started') {
+          await interaction.reply(`🗳️ Vote to skip started — **${v.votes}/${v.needed}**. Others: use \`/skip\` again to vote.`);
+        } else {
+          await interaction.reply(`🗳️ Vote recorded — **${v.votes}/${v.needed}**.`);
+        }
         break;
       }
 
@@ -1229,6 +1298,90 @@ export class DiscordBot {
           ),
           flags: MessageFlags.Ephemeral,
         });
+        break;
+      }
+
+      case 'playlist': {
+        if (!this.requireLevel('playlist', interaction)) return this.deny(interaction);
+        if (!interaction.guildId) return void (await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral }));
+        const sub = interaction.options.getSubcommand();
+        const ps = this.sessionFor(interaction.guildId);
+        if (sub === 'save') {
+          const name = interaction.options.getString('name', true);
+          const snap = ps.queue.getSnapshot();
+          const saved = this.playlists.save(
+            interaction.guildId,
+            name,
+            snap.tracks.map((t) => ({
+              uri: t.uri,
+              name: t.name,
+              artists: t.artists,
+              album: t.album,
+              durationMs: t.durationMs,
+              source: t.source ?? 'spotify',
+              image: t.image,
+            })),
+          );
+          await interaction.reply({
+            content: saved.ok
+              ? `💾 Saved **${name}** (${saved.tracks} track${saved.tracks === 1 ? '' : 's'}).`
+              : `⚠️ ${saved.error}`,
+            flags: MessageFlags.Ephemeral,
+          });
+        } else if (sub === 'load') {
+          const name = interaction.options.getString('name', true);
+          const pl = this.playlists.get(interaction.guildId, name);
+          if (!pl) {
+            await interaction.reply({ content: `No playlist called **${name}**.`, flags: MessageFlags.Ephemeral });
+            break;
+          }
+          const tracks = pl.tracks.map((t) => ({ ...t, source: t.source as ResolvedTrack['source'] }));
+          const failed = await this.playTracks(ps, tracks, interaction.user.username, () =>
+            this.ensureJoinedForPlayback(interaction, ps),
+          );
+          await interaction.reply({
+            content: `▶️ Loading **${pl.name}** — ${tracks.length} track${tracks.length === 1 ? '' : 's'}${
+              failed ? `\n⚠️ ${failed}` : ''
+            }`,
+            flags: MessageFlags.Ephemeral,
+          });
+        } else if (sub === 'delete') {
+          const name = interaction.options.getString('name', true);
+          const ok = this.playlists.delete(interaction.guildId, name);
+          await interaction.reply({
+            content: ok ? `🗑️ Deleted **${name}**.` : `No playlist called **${name}**.`,
+            flags: MessageFlags.Ephemeral,
+          });
+        } else {
+          const list = this.playlists.list(interaction.guildId);
+          await interaction.reply({
+            content: list.length
+              ? `💾 Saved playlists:\n${list.map((p) => `• **${p.name}** — ${p.tracks.length} track${p.tracks.length === 1 ? '' : 's'}`).join('\n')}`
+              : 'No saved playlists yet — use `/playlist save <name>`.',
+            flags: MessageFlags.Ephemeral,
+          });
+        }
+        break;
+      }
+
+      case 'djrole': {
+        if (!this.requireLevel('djrole', interaction)) return this.deny(interaction);
+        if (!interaction.guildId || !interaction.guild) return void (await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral }));
+        const off = interaction.options.getBoolean('off') ?? false;
+        const role = interaction.options.getRole('role');
+        if (off) {
+          this.perms.setDjRole(interaction.guildId, null);
+          await interaction.reply({ content: '🎧 DJ role cleared — skip now uses vote-to-skip.', flags: MessageFlags.Ephemeral });
+        } else if (role) {
+          this.perms.setDjRole(interaction.guildId, role.id);
+          await interaction.reply({ content: `🎧 DJ role set to <@&${role.id}>. Holders can skip/control without a vote.`, flags: MessageFlags.Ephemeral });
+        } else {
+          const cur = this.perms.getDjRole(interaction.guildId);
+          await interaction.reply({
+            content: cur ? `🎧 DJ role: <@&${cur}>` : '🎧 No DJ role set — use `/djrole role:@YourRole`.',
+            flags: MessageFlags.Ephemeral,
+          });
+        }
         break;
       }
 
@@ -1613,6 +1766,8 @@ export class DiscordBot {
       sleep: 'sleep', timer: 'sleep',
       help: 'help',
       diag: 'diag',
+      save: 'playlist', load: 'playlist', playlists: 'playlist', pl: 'playlist', del: 'playlist',
+      djrole: 'djrole',
     };
     const canonical = alias[cmd];
     if (canonical) {
@@ -1628,8 +1783,12 @@ export class DiscordBot {
         case 'p':
         case 'play': {
           if (!args) return void (await message.reply('Usage: `V@p <track name or link>`'));
-          const tracks = await resolvePlayInput(args);
-          await this.addToQueueMsg(message, tracks);
+          if (isUrlPlayInput(args)) {
+            const tracks = await resolvePlayInput(args);
+            await this.addToQueueMsg(message, tracks);
+          } else {
+            await this.presentSearch(message, args);
+          }
           break;
         }
 
@@ -1661,9 +1820,26 @@ export class DiscordBot {
         case 's':
         case 'skip': {
           if (!canUse('skip')) return void (await deny());
-          s.playback.next();
-          this.scheduleWaveTopUp(s);
-          { const m1 = await message.reply('⏭️ Skipped'); this.autoExpire(m1); }
+          if (this.isDjMember(message.guild, message.member)) {
+            this.clearSkipVote(message.guildId);
+            s.playback.next();
+            this.scheduleWaveTopUp(s);
+            { const m1 = await message.reply('⏭️ Skipped'); this.autoExpire(m1); }
+            break;
+          }
+          const v = this.requestSkip(s, message.author.id);
+          if (v.result === 'skipped') {
+            s.playback.next();
+            this.scheduleWaveTopUp(s);
+            const m1 = await message.reply('⏭️ Skipped (majority vote reached)');
+            this.autoExpire(m1);
+          } else {
+            await message.reply(
+              v.result === 'started'
+                ? `🗳️ Vote to skip started — **${v.votes}/${v.needed}**. Others: use \`V@s\` again to vote.`
+                : `🗳️ Vote recorded — **${v.votes}/${v.needed}**.`,
+            );
+          }
           break;
         }
 
@@ -1968,6 +2144,89 @@ export class DiscordBot {
             await message.reply('Usage: `V@autoplay off|basic|smart|now|count <1-10>` (or `V@autoplay` for status).');
           } else {
             await message.reply({ content: this.autoplayStatus(ewS) });
+          }
+          break;
+        }
+
+        case 'save': {
+          if (!canUse('playlist')) return void (await deny());
+          if (!message.guildId) return void (await message.reply('Must be used in a server.'));
+          if (!args) return void (await message.reply('Usage: `V@save <name>`.'));
+          const snap = s.queue.getSnapshot();
+          const saved = this.playlists.save(
+            message.guildId,
+            args,
+            snap.tracks.map((t) => ({
+              uri: t.uri,
+              name: t.name,
+              artists: t.artists,
+              album: t.album,
+              durationMs: t.durationMs,
+              source: t.source ?? 'spotify',
+              image: t.image,
+            })),
+          );
+          await message.reply(
+            saved.ok
+              ? `💾 Saved **${args}** (${saved.tracks} track${saved.tracks === 1 ? '' : 's'}).`
+              : `⚠️ ${saved.error}`,
+          );
+          break;
+        }
+
+        case 'load': {
+          if (!canUse('playlist')) return void (await deny());
+          if (!message.guildId) return void (await message.reply('Must be used in a server.'));
+          if (!args) return void (await message.reply('Usage: `V@load <name>`.'));
+          const pl = this.playlists.get(message.guildId, args);
+          if (!pl) return void (await message.reply(`No playlist called **${args}**.`));
+          const tracks = pl.tracks.map((t) => ({ ...t, source: t.source as ResolvedTrack['source'] }));
+          const failed = await this.playTracks(s, tracks, message.author.username, () =>
+            this.ensureJoinedForMessage(message, s),
+          );
+          await message.reply(
+            `▶️ Loading **${pl.name}** — ${tracks.length} track${tracks.length === 1 ? '' : 's'}${failed ? `\n⚠️ ${failed}` : ''}`,
+          );
+          break;
+        }
+
+        case 'playlists':
+        case 'pl': {
+          if (!canUse('playlist')) return void (await deny());
+          if (!message.guildId) return void (await message.reply('Must be used in a server.'));
+          const list = this.playlists.list(message.guildId);
+          await message.reply(
+            list.length
+              ? `💾 Saved playlists:\n${list.map((p) => `• **${p.name}** — ${p.tracks.length}`).join('\n')}`
+              : 'No saved playlists yet — use `V@save <name>`.',
+          );
+          break;
+        }
+
+        case 'del': {
+          if (!canUse('playlist')) return void (await deny());
+          if (!message.guildId) return void (await message.reply('Must be used in a server.'));
+          if (!args) return void (await message.reply('Usage: `V@del <name>`.'));
+          const ok = this.playlists.delete(message.guildId, args);
+          await message.reply(ok ? `🗑️ Deleted **${args}**.` : `No playlist called **${args}**.`);
+          break;
+        }
+
+        case 'djrole': {
+          if (!canUse('djrole')) return void (await deny());
+          if (!message.guildId) return void (await message.reply('Must be used in a server.'));
+          const roleId = message.mentions.roles.first()?.id;
+          if (/^(off|clear|none)$/i.test(args)) {
+            this.perms.setDjRole(message.guildId, null);
+            await message.reply('🎧 DJ role cleared — skip now uses vote-to-skip.');
+          } else if (roleId) {
+            this.perms.setDjRole(message.guildId, roleId);
+            await message.reply(`🎧 DJ role set to <@&${roleId}>. Holders can skip/control without a vote.`);
+          } else {
+            const cur = this.perms.getDjRole(message.guildId);
+            await message.reply(
+              cur ? `🎧 DJ role: <@&${cur}>` : 'No DJ role set — use `V@djrole @Role` (or `V@djrole off`).',
+            );
           }
           break;
         }
@@ -2431,7 +2690,10 @@ export class DiscordBot {
   }
 
   /** Auto-join the author's voice channel before playback, Luna/Jockie-style. */
-  private async ensureJoinedForPlayback(interaction: ChatInputCommandInteraction, s: Session): Promise<boolean> {
+  private async ensureJoinedForPlayback(
+    interaction: ChatInputCommandInteraction | StringSelectMenuInteraction,
+    s: Session,
+  ): Promise<boolean> {
     if (s.voice.isJoined()) return true;
     if (!interaction.inGuild()) return false;
     const member = interaction.member;
@@ -3611,6 +3873,197 @@ export class DiscordBot {
     return lines.join('\n');
   }
 
+  /** Enqueue tracks and kick playback, applying the mini-NP dedupe. Shared by
+   *  the search picker and playlist loader. Returns an error string if playback
+   *  couldn't start (tracks are still queued). */
+  private async playTracks(
+    s: Session,
+    tracks: ResolvedTrack[],
+    requestedBy: string,
+    ensureJoined: () => Promise<boolean>,
+    mode: 'queue' | 'insert' = 'queue',
+  ): Promise<string | null> {
+    const first = tracks[0];
+    const wasPlaying = s.queue.getState().playing;
+    const suppressStrip = !wasPlaying && !!first;
+    if (suppressStrip) this.suppressAutoMiniNp(s.guildId, first.uri);
+    if (mode === 'insert') s.queue.insertAfterCurrent(tracks, requestedBy);
+    else s.queue.enqueueMany(tracks, requestedBy);
+    if (first) s.playback.prefetchStream(first);
+    let playbackFailed: string | null = null;
+    try {
+      await ensureJoined();
+      if (!s.queue.getState().playing) await s.playback.play();
+    } catch (err) {
+      playbackFailed = err instanceof Error ? err.message : String(err);
+      console.warn(`[discord] queued but couldn't start playback: ${playbackFailed}`);
+    }
+    const st = s.queue.getState();
+    const startedFresh = !wasPlaying && st.playing && !!first && st.track?.uri === first.uri;
+    if (suppressStrip && !startedFresh) this.miniNpSuppress.delete(s.guildId);
+    return playbackFailed;
+  }
+
+  /** Interactive picker for a free-text search (top matches as a dropdown). */
+  private async presentSearch(target: Message | ChatInputCommandInteraction, query: string): Promise<void> {
+    const candidates = await searchCandidates(query, 5);
+    const isMsg = 'author' in target;
+    if (candidates.length === 0) {
+      const msg = `🔍 No results for \`${truncate(query, 60)}\`.`;
+      if (isMsg) await (target as Message).reply(msg);
+      else await (target as ChatInputCommandInteraction).editReply(msg);
+      return;
+    }
+    if (candidates.length === 1) {
+      if (isMsg) await this.addToQueueMsg(target as Message, candidates);
+      else await this.addToQueue(target as ChatInputCommandInteraction, candidates);
+      return;
+    }
+    const token = randomBytes(6).toString('hex');
+    const userId = isMsg ? (target as Message).author.id : (target as ChatInputCommandInteraction).user.id;
+    this.pendingSearch.set(token, { guildId: target.guildId ?? '', userId, candidates, createdAt: Date.now() });
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId(`vzsearch:${token}`)
+      .setPlaceholder('Pick a track to play…')
+      .addOptions(
+        candidates.map((c, i) =>
+          new StringSelectMenuOptionBuilder()
+            .setLabel(truncate(c.name || 'Unknown', 100))
+            .setDescription(truncate(`${(c.artists ?? []).join(', ') || c.album} · ${fmtMs(c.durationMs)}`, 100))
+            .setValue(String(i)),
+        ),
+      );
+    const embed = new EmbedBuilder()
+      .setTitle('🔍 Search results')
+      .setDescription(`Top matches for **${truncate(query, 70)}** — pick one below.`)
+      .setColor(this.themeColor());
+    const payload = {
+      embeds: [embed],
+      components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu)],
+    };
+    let sent: Message | undefined;
+    if (isMsg) {
+      sent = await (target as Message).reply(payload);
+    } else {
+      await (target as ChatInputCommandInteraction).editReply(payload);
+      sent = (await (target as ChatInputCommandInteraction).fetchReply()) as Message;
+    }
+    const t = setTimeout(() => void this.expireSearch(token, sent), 90_000);
+    t.unref?.();
+  }
+
+  private async expireSearch(token: string, sent?: Message): Promise<void> {
+    if (!this.pendingSearch.has(token)) return;
+    this.pendingSearch.delete(token);
+    try {
+      await sent?.edit({ content: '⌛ Search expired — run the command again.', embeds: [], components: [] });
+    } catch {
+      /* gone */
+    }
+  }
+
+  private async handleSearchPick(interaction: StringSelectMenuInteraction): Promise<void> {
+    const token = interaction.customId.slice('vzsearch:'.length);
+    const pending = this.pendingSearch.get(token);
+    if (!pending) {
+      await interaction.update({ content: '⌛ This search expired — run the command again.', embeds: [], components: [] }).catch(() => {});
+      return;
+    }
+    this.pendingSearch.delete(token);
+    const idx = parseInt(interaction.values[0] ?? '0', 10);
+    const track = pending.candidates[idx];
+    if (!track) {
+      await interaction.update({ content: '⚠️ Invalid selection.', embeds: [], components: [] }).catch(() => {});
+      return;
+    }
+    const s = this.sessionFor(interaction.guildId);
+    const playbackFailed = await this.playTracks(s, [track], interaction.user.username, () =>
+      this.ensureJoinedForPlayback(interaction, s),
+    );
+    const embed = new EmbedBuilder()
+      .setTitle('Added to queue')
+      .setDescription(
+        `${srcEmoji(track.source)} **${truncate(track.name, 80)}** — ${truncate((track.artists ?? []).join(', '), 80)}` +
+          (playbackFailed ? `\n⚠️ Couldn't start playback yet: ${playbackFailed}` : ''),
+      )
+      .setThumbnail(track.image ?? '')
+      .setFooter({ text: `${s.queue.getSnapshot().tracks.length} in queue` })
+      .setColor(this.themeColor());
+    await interaction.update({ embeds: [embed], components: [] }).catch(() => {});
+  }
+
+  /** Whether a member may control playback as DJ (owner/mod/admin or DJ role holder). */
+  private isDjMember(guild: Guild | null, member: unknown): boolean {
+    if (!guild || !member || !('roles' in (member as object))) return false;
+    return this.perms.isDj(guild, member as { id: string; roles: { cache: ReadonlyMap<string, unknown> } });
+  }
+
+  /** Start/advance a vote-to-skip. Returns the resulting state for the caller to message. */
+  private requestSkip(
+    s: Session,
+    requesterId: string,
+  ): { result: 'skipped' | 'started' | 'voted'; votes: number; needed: number } {
+    const guildId = s.guildId ?? '';
+    const channelId = s.voice.getChannelId();
+    let eligible = new Set<string>();
+    if (channelId) {
+      const ch = this.client.channels.cache.get(channelId);
+      if (ch && ch.isVoiceBased()) {
+        for (const m of ch.members.values()) if (!m.user.bot) eligible.add(m.id);
+      }
+    }
+    const existing = this.skipVotes.get(guildId);
+    if (!existing) {
+      if (eligible.size <= 1) return { result: 'skipped', votes: 1, needed: 1 };
+      const voters = new Set<string>([requesterId]);
+      const needed = Math.floor(eligible.size / 2) + 1;
+      if (voters.size >= needed) return { result: 'skipped', votes: voters.size, needed };
+      const timer = setTimeout(() => this.skipVotes.delete(guildId), 30_000);
+      timer.unref?.();
+      this.skipVotes.set(guildId, { voters, eligible, timer });
+      return { result: 'started', votes: voters.size, needed };
+    }
+    existing.voters.add(requesterId);
+    if (eligible.size > existing.eligible.size) existing.eligible = eligible;
+    const needed = Math.floor(existing.eligible.size / 2) + 1;
+    if (existing.voters.size >= needed) {
+      clearTimeout(existing.timer);
+      this.skipVotes.delete(guildId);
+      return { result: 'skipped', votes: existing.voters.size, needed };
+    }
+    return { result: 'voted', votes: existing.voters.size, needed };
+  }
+
+  private clearSkipVote(guildId: string | null | undefined): void {
+    if (!guildId) return;
+    const v = this.skipVotes.get(guildId);
+    if (v) {
+      clearTimeout(v.timer);
+      this.skipVotes.delete(guildId);
+    }
+  }
+
+  /** Mirror the now-playing track into the voice channel's status line. Discord
+   *  rate-limits this endpoint hard, so it's throttled and best-effort. */
+  private async syncVoiceStatus(s: Session): Promise<void> {
+    const guildId = s.guildId;
+    if (!guildId || !s.voice.isJoined()) return;
+    const channelId = s.voice.getChannelId();
+    if (!channelId) return;
+    const track = s.queue.getState().track;
+    const text = track ? `${track.name} — ${(track.artists ?? []).join(', ')}`.slice(0, 480) : '';
+    if (this.voiceStatusText.get(guildId) === text) return;
+    // ~2 requests / 10 min per channel: refresh at most every 3 min.
+    if (Date.now() - (this.voiceStatusAt.get(guildId) ?? 0) < 3 * 60_000) return;
+    this.voiceStatusAt.set(guildId, Date.now());
+    this.voiceStatusText.set(guildId, text);
+    try {
+      await this.rest.put(`/channels/${channelId}/voice-status`, { body: { status: text } });
+    } catch (err) {
+      console.warn(`[voice] status update failed: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
   /** Shared reference for both `/help` and `V@help`. */
   private helpEmbed(): EmbedBuilder {
     const link = vizTunnel.vizLink();
@@ -4066,6 +4519,21 @@ export async function resolveDirectMediaUrl(url: string): Promise<ResolvedTrack>
     source: 'direct',
     streamUrl: url,
   };
+}
+
+/** True when the play input is a direct link (resolve it) rather than a text
+ *  search (which should open the interactive picker instead). */
+function isUrlPlayInput(query: string): boolean {
+  return (
+    isDirectMediaUrl(query) ||
+    isYoutubePlaylistUrl(query) ||
+    isYoutubeUrl(query) ||
+    isSunoUrl(query) ||
+    isAppleMusicUrl(query) ||
+    isSoundcloudSetUrl(query) ||
+    isSoundcloudUrl(query) ||
+    /^(spotify:|https?:\/\/(open\.)?spotify\.com\/)/i.test(query)
+  );
 }
 
 async function resolvePlayInput(query: string): Promise<ResolvedTrack[]> {

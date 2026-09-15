@@ -634,6 +634,16 @@ export async function searchTracks(query: string, limit = 10): Promise<ResolvedT
   return out;
 }
 
+/** Top-N ranked results for a free-text query (drives the interactive picker). */
+export async function searchCandidates(input: string, limit = 5): Promise<ResolvedTrack[]> {
+  await loadCache();
+  const results = await searchTracks(input, 8);
+  if (results.length === 0) return [];
+  const q = input.toLowerCase().trim();
+  results.sort((a, b) => scorePlayResult(a, q) - scorePlayResult(b, q));
+  return results.slice(0, limit);
+}
+
 let lastWebTokenWarnAt = 0;
 /** Throttled warning when the web-player token is configured but unusable —
  *  usually a rotated/invalid sp_dc cookie or TOTP secret. */
