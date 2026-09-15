@@ -87,6 +87,7 @@ interface SunoClip {
   display_name?: string;
   audio_url?: string;
   media_urls?: Array<{ url?: string; content_type?: string; delivery?: string }>;
+  metadata?: { duration?: number; tags?: string; display_name?: string };
 }
 
 const SUNO_CLIP_API = 'https://studio-api.prod.suno.com/api/clip';
@@ -142,7 +143,7 @@ export async function resolveSuno(input: string): Promise<ResolvedVideo> {
   const name = clip?.title?.trim() || 'Suno track';
   const artist = clip?.handle || clip?.display_name || 'Suno';
   const image = clip?.image_large_url || clip?.image_url;
-  const durationMs = Math.round((Number(clip?.duration) || 0) * 1000);
+  const durationMs = Math.round((Number(clip?.metadata?.duration ?? clip?.duration) || 0) * 1000);
 
   return {
     videoId: uuid,
