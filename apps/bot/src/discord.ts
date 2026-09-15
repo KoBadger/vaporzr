@@ -15,6 +15,7 @@ import {
   EmbedBuilder,
   GatewayIntentBits,
   MessageFlags,
+  Partials,
   PermissionFlagsBits,
   REST,
   Routes,
@@ -29,7 +30,9 @@ import {
   type Interaction,
   type Message,
   type MessageComponentInteraction,
+  type MessageReaction,
   type TextBasedChannel,
+  type User,
 } from 'discord.js';
 import { generateDependencyReport } from '@discordjs/voice';
 import { config } from './config.js';
@@ -65,6 +68,7 @@ import type { Bridge } from './bridge.js';
 import type { PermissionLevel, TrackInfo, PlaybackState } from '@vaporzr/shared';
 import * as EW from './endlesswave.js';
 import { PlaylistStore } from './playlists.js';
+import { StatsStore } from './stats.js';
 
 /** First non-internal IPv4 address of this machine — reachable from the LAN. */
 function localIp(): string {
@@ -392,6 +396,9 @@ const COMMANDS = [
     .addStringOption((o) =>
       o.setName('mood').setDescription('Optional mood/style, e.g. "rainy lo-fi", "peak time techno"').setRequired(false),
     ),
+  new SlashCommandBuilder()
+    .setName('leaderboard')
+    .setDescription('Server listening stats — top DJs and most-played artists'),
 ];
 
 function fmtMs(ms: number): string {
@@ -445,6 +452,8 @@ export class DiscordBot {
   private ewAheadOverride = new Map<string, number>();
   /** Per-guild saved playlists (favorites). */
   private playlists = new PlaylistStore();
+  /** Per-guild listening statistics (leaderboards). */
+  private stats = new StatsStore();
   /** token -> pending interactive search results (for the `V@p <text>` picker). */
   private pendingSearch = new Map<
     string,
@@ -572,8 +581,10 @@ export class DiscordBot {
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildVoiceStates,
         GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.GuildMessageReactions,
         GatewayIntentBits.MessageContent,
       ],
+      partials: [Partials.Message, Partials.Channel, Partials.Reaction],
     });
     this.rest = new REST({ version: '10' });
     // Panel toggles Endless Wave through the same machinery as `V@ew on/off`.
@@ -607,6 +618,7 @@ export class DiscordBot {
             this.markWaveStarted(s, st.track);
             void this.syncVoiceStatus(s);
             if (this.moodOn.has(s.guildId)) void this.updateMood(s, st.track);
+            this.stats.notePlayed(s.guildId ?? '', st.track.addedBy ?? 'unknown', st.track.artists);
           }
           this.scheduleWaveTopUp(s);
         },
@@ -743,6 +755,10 @@ export class DiscordBot {
     this.client.on('shardResume', (_shardId, replayedEvents) =>
       console.log(`[vaporzr] gateway shard resumed (${replayedEvents} events replayed)`),
     );
+    // Reaction controls on the always-on now-playing strip.
+    this.client.on('messageReactionAdd', (reaction, user) => {
+      void this.handleReaction(reaction as MessageReaction, user as User);
+    });
     await this.client.login(config.discordToken);
     this.startPresenceTicker();
   }
@@ -1585,6 +1601,14 @@ export class DiscordBot {
         break;
       }
 
+      case 'leaderboard': {
+        if (!this.requireLevel('leaderboard', interaction)) return this.deny(interaction);
+        const gid = interaction.guildId;
+        if (!gid) return void (await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral }));
+        await interaction.reply({ embeds: [this.leaderboardEmbed(gid, interaction.user.username)] });
+        break;
+      }
+
       case 'sensitivity': {
         if (!this.requireLevel('sensitivity', interaction)) return this.deny(interaction);
         const multiplier = interaction.options.getNumber('multiplier', true);
@@ -1972,6 +1996,7 @@ export class DiscordBot {
       ambient: 'ambient',
       mood: 'mood',
       vibe: 'vibe',
+      lb: 'leaderboard', leaderboard: 'leaderboard',
     };
     const canonical = alias[cmd];
     if (canonical) {
@@ -2259,6 +2284,14 @@ export class DiscordBot {
         case 'vibe': {
           if (!canUse('vibe')) return void (await deny());
           await message.reply(await this.vibeDj(s, args || undefined, () => this.ensureJoinedForMessage(message, s)));
+          break;
+        }
+
+        case 'lb':
+        case 'leaderboard': {
+          if (!canUse('leaderboard')) return void (await deny());
+          if (!message.guildId) return void (await message.reply('Must be used in a server.'));
+          await message.reply({ embeds: [this.leaderboardEmbed(message.guildId, message.author.username)] });
           break;
         }
 
@@ -2718,6 +2751,7 @@ export class DiscordBot {
     const suppressStrip = !wasPlaying && !!first;
     if (suppressStrip) this.suppressAutoMiniNp(message.guildId ?? undefined, first.uri);
     s.queue.enqueueMany(tracks, requestedBy);
+    this.stats.noteQueued(s.guildId ?? '', requestedBy, tracks.flatMap((t) => t.artists));
     if (first) s.playback.prefetchStream(first);
     let playbackFailed: string | null = null;
     try {
@@ -2799,6 +2833,7 @@ export class DiscordBot {
     const suppressStrip = !wasPlaying && !!first;
     if (suppressStrip) this.suppressAutoMiniNp(message.guildId ?? undefined, first.uri);
     s.queue.insertAfterCurrent(tracks, requestedBy);
+    this.stats.noteQueued(s.guildId ?? '', requestedBy, tracks.flatMap((t) => t.artists));
     if (first) s.playback.prefetchStream(first);
     let playbackFailed: string | null = null;
     try {
@@ -2884,6 +2919,7 @@ export class DiscordBot {
     const suppressStrip = !wasPlaying && !!first;
     if (suppressStrip) this.suppressAutoMiniNp(interaction.guildId ?? undefined, first.uri);
     s.queue.insertAfterCurrent(tracks, requestedBy);
+    this.stats.noteQueued(s.guildId ?? '', requestedBy, tracks.flatMap((t) => t.artists));
     if (first) s.playback.prefetchStream(first);
     let playbackFailed: string | null = null;
     try {
@@ -2918,6 +2954,7 @@ export class DiscordBot {
     const suppressStrip = !wasPlaying && !!first;
     if (suppressStrip) this.suppressAutoMiniNp(interaction.guildId ?? undefined, first.uri);
     s.queue.enqueueMany(tracks, requestedBy);
+    this.stats.noteQueued(s.guildId ?? '', requestedBy, tracks.flatMap((t) => t.artists));
     // Warm the stream resolve while the voice-channel join is in flight so
     // playback starts as soon as the join completes instead of serially after.
     if (first) s.playback.prefetchStream(first);
@@ -3121,6 +3158,7 @@ export class DiscordBot {
       this.miniNp.set(guildId, { channelId, messageId: msg.id });
       this.miniTrackUri.set(guildId, uri);
       this.scheduleSavePanels();
+      void this.seedNpReactions(msg);
       // Sweep the channel for older Vaporzr strips so a track change never
       // leaves stale now-playing mini embeds piling up next to the fresh one.
       void this.sweepStaleMiniNp(channel, msg.id);
@@ -3500,7 +3538,7 @@ export class DiscordBot {
           `\`${bar}\` \`${fmtMs(pos)}\`/\`${fmtMs(dur)}\`` +
           (upNext ? `\n⏭ ${truncate(upNext.name, 42)}` : ''),
       )
-      .setFooter({ text: `${modeLabel} · ${queued} queued` });
+      .setFooter({ text: `${modeLabel} · ${queued} queued · react 🔥❤️⏭` });
     if (track.image) embed.setThumbnail(track.image);
     return embed;
   }
@@ -3866,6 +3904,56 @@ export class DiscordBot {
     await interaction.respond(filtered).catch(() => {});
   }
 
+  /** React on the now-playing strip: 🔥 boost · ❤️ save · ⏭️ skip · 🎛️ soundboard. */
+  private async handleReaction(reaction: MessageReaction, user: User): Promise<void> {
+    if (user.bot) return;
+    const guildId = reaction.message.guildId;
+    if (!guildId) return;
+    const mini = this.miniNp.get(guildId);
+    if (!mini || reaction.message.id !== mini.messageId) return;
+    const s = this.sessionFor(guildId);
+    const name = reaction.emoji.name ?? '';
+    try {
+      if (name === '🔥') {
+        s.playback.volume(100);
+      } else if (name === '❤️') {
+        const cur = s.queue.getCurrentTrack();
+        if (cur) {
+          this.playlists.appendTrack(guildId, '❤️ Favorites', {
+            uri: cur.uri,
+            name: cur.name,
+            artists: cur.artists,
+            album: cur.album,
+            durationMs: cur.durationMs,
+            source: cur.source ?? 'spotify',
+            image: cur.image,
+          });
+        }
+      } else if (name === '⏭️' || name === '⏭') {
+        const guild = reaction.message.guild;
+        const member = guild ? await guild.members.fetch(user.id).catch(() => null) : null;
+        if (this.isDjMember(guild, member)) s.playback.next();
+        else if (this.requestSkip(s, user.id).result === 'skipped') s.playback.next();
+      } else if (name === '🎛️' || name === '🎛') {
+        s.playback.setDjEnabled(guildId, !s.playback.isDjEnabled(guildId));
+        void this.maybeAutoMiniNp(guildId, s.queue.getState());
+      }
+    } catch (err) {
+      console.warn(`[discord] reaction ${name} failed: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  /** Add the reaction-control row to a freshly-posted now-playing strip. */
+  private async seedNpReactions(msg: Message): Promise<void> {
+    for (const e of ['🔥', '❤️', '⏭️', '🎛️']) {
+      try {
+        await msg.react(e);
+      } catch {
+        /* missing Add Reactions perm / rate limited */
+      }
+    }
+  }
+
   private async handleButton(interaction: MessageComponentInteraction): Promise<void> {
     if (!interaction.customId.startsWith('vz:')) return;
     const action = interaction.customId.slice(3);
@@ -4180,6 +4268,7 @@ export class DiscordBot {
     if (suppressStrip) this.suppressAutoMiniNp(s.guildId, first.uri);
     if (mode === 'insert') s.queue.insertAfterCurrent(tracks, requestedBy);
     else s.queue.enqueueMany(tracks, requestedBy);
+    this.stats.noteQueued(s.guildId ?? '', requestedBy, tracks.flatMap((t) => t.artists));
     if (first) s.playback.prefetchStream(first);
     let playbackFailed: string | null = null;
     try {
@@ -4362,6 +4451,29 @@ export class DiscordBot {
     } catch (err) {
       console.warn(`[voice] status update failed: ${err instanceof Error ? err.message : err}`);
     }
+  }
+
+  /** Server listening leaderboard (top DJs by queued, top artists by plays). */
+  private leaderboardEmbed(guildId: string, me: string): EmbedBuilder {
+    const users = this.stats.topUsers(guildId, 10);
+    const artists = this.stats.topArtists(guildId, 10);
+    const mine = this.stats.user(guildId, me);
+    return new EmbedBuilder()
+      .setTitle('🏆 Server listening stats')
+      .setColor(this.moodColor.get(guildId) ?? this.themeColor())
+      .addFields(
+        {
+          name: '🎧 Top DJs (queued)',
+          value: users.length
+            ? users.map(([u, s], i) => `${i + 1}. **${u}** — ${s.queued} queued · ${s.played} played`).join('\n')
+            : 'No data yet.',
+        },
+        {
+          name: '🎤 Top artists (played)',
+          value: artists.length ? artists.map(([a, c], i) => `${i + 1}. **${a}** — ${c}`).join('\n') : 'No data yet.',
+        },
+      )
+      .setFooter({ text: `You: ${mine.queued} queued · ${mine.played} played` });
   }
 
   /** Shared reference for both `/help` and `V@help`. */
@@ -4941,6 +5053,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
     blurb: 'stats, diagnostics and admin tools',
     lines: [
       '`/diag` · `V@diag` — diagnostics (gateway, voice, librespot)',
+      '`/leaderboard` · `V@lb` — server listening stats (top DJs & artists)',
       '`/stats` — bot statistics',
       '`/sleep <30m|1h>` · `V@sleep` — sleep timer',
       '`/help` · `V@help` — this menu',

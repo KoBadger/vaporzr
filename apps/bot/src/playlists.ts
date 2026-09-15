@@ -81,6 +81,18 @@ export class PlaylistStore {
     return { ok: true, tracks: trimmed.length };
   }
 
+  /** Append a track to a playlist (creating it if needed), skipping exact dupes. */
+  appendTrack(guildId: string, name: string, track: SavedTrack): void {
+    const key = normalizeName(name);
+    const data = this.load(guildId);
+    const pl = data[key] ?? (data[key] = { name: name.trim().slice(0, 60), tracks: [], updatedAt: Date.now() });
+    if (pl.tracks.some((t) => t.uri === track.uri)) return;
+    pl.tracks.push(track);
+    if (pl.tracks.length > MAX_TRACKS) pl.tracks.splice(0, pl.tracks.length - MAX_TRACKS);
+    pl.updatedAt = Date.now();
+    this.persist(guildId);
+  }
+
   delete(guildId: string, name: string): boolean {
     const key = normalizeName(name);
     const data = this.load(guildId);

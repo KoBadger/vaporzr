@@ -45,6 +45,7 @@ const DEFAULT_COMMAND_LEVELS: Record<string, PermissionLevel> = {
   ambient: 'user',
   mood: 'user',
   vibe: 'user',
+  leaderboard: 'user',
   djrole: 'mod',
   perms: 'admin',
   speed: 'user',
