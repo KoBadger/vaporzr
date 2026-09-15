@@ -69,6 +69,7 @@ import type { PermissionLevel, TrackInfo, PlaybackState } from '@vaporzr/shared'
 import * as EW from './endlesswave.js';
 import { PlaylistStore } from './playlists.js';
 import { StatsStore } from './stats.js';
+import { renderRadarGif, type RadarMetric } from './images.js';
 
 /** First non-internal IPv4 address of this machine — reachable from the LAN. */
 function localIp(): string {
@@ -399,6 +400,8 @@ const COMMANDS = [
   new SlashCommandBuilder()
     .setName('leaderboard')
     .setDescription('Server listening stats — top DJs and most-played artists'),
+  new SlashCommandBuilder().setName('dna').setDescription("Show the current track's Song DNA radar card"),
+  new SlashCommandBuilder().setName('cover').setDescription('Render a mosaic of the queue album art'),
 ];
 
 function fmtMs(ms: number): string {
@@ -1609,6 +1612,24 @@ export class DiscordBot {
         break;
       }
 
+      case 'dna': {
+        if (!this.requireLevel('dna', interaction)) return this.deny(interaction);
+        await interaction.deferReply();
+        const res = await this.dnaCard(s);
+        if (typeof res === 'string') await interaction.editReply(res);
+        else await interaction.editReply({ embeds: [res.embed], files: [res.file] });
+        break;
+      }
+
+      case 'cover': {
+        if (!this.requireLevel('cover', interaction)) return this.deny(interaction);
+        await interaction.deferReply();
+        const res = await this.coverCard(s);
+        if (typeof res === 'string') await interaction.editReply(res);
+        else await interaction.editReply({ embeds: [res.embed], files: [res.file] });
+        break;
+      }
+
       case 'sensitivity': {
         if (!this.requireLevel('sensitivity', interaction)) return this.deny(interaction);
         const multiplier = interaction.options.getNumber('multiplier', true);
@@ -1997,6 +2018,7 @@ export class DiscordBot {
       mood: 'mood',
       vibe: 'vibe',
       lb: 'leaderboard', leaderboard: 'leaderboard',
+      dna: 'dna', cover: 'cover',
     };
     const canonical = alias[cmd];
     if (canonical) {
@@ -2292,6 +2314,22 @@ export class DiscordBot {
           if (!canUse('leaderboard')) return void (await deny());
           if (!message.guildId) return void (await message.reply('Must be used in a server.'));
           await message.reply({ embeds: [this.leaderboardEmbed(message.guildId, message.author.username)] });
+          break;
+        }
+
+        case 'dna': {
+          if (!canUse('dna')) return void (await deny());
+          const res = await this.dnaCard(s);
+          if (typeof res === 'string') await message.reply(res);
+          else await message.reply({ embeds: [res.embed], files: [res.file] });
+          break;
+        }
+
+        case 'cover': {
+          if (!canUse('cover')) return void (await deny());
+          const res = await this.coverCard(s);
+          if (typeof res === 'string') await message.reply(res);
+          else await message.reply({ embeds: [res.embed], files: [res.file] });
           break;
         }
 
@@ -4453,6 +4491,68 @@ export class DiscordBot {
     }
   }
 
+  /** 🧬 Song DNA card: a radar GIF of the current track's audio features. */
+  private async dnaCard(s: Session): Promise<{ embed: EmbedBuilder; file: AttachmentBuilder } | string> {
+    const cur = s.queue.getCurrentTrack();
+    if (!cur) return 'Nothing is playing.';
+    const f = await EW.fetchFeatures(cur).catch(() => null);
+    if (!f) return `No audio-feature data for **${truncate(cur.name, 80)}** (Spotify tracks only).`;
+    const metrics: RadarMetric[] = [
+      { label: 'Energy', value: f.energy },
+      { label: 'Dance', value: f.danceability },
+      { label: 'Mood', value: f.valence },
+      { label: 'Bright', value: 1 - (f.acousticness ?? 0) },
+      { label: 'Instrumental', value: 1 - (f.instrumentalness ?? 0) },
+    ];
+    const accent = this.moodColor.get(s.guildId ?? '') ?? this.themeColor();
+    const file = new AttachmentBuilder(renderRadarGif(metrics, accent), { name: 'dna.gif' });
+    const embed = new EmbedBuilder()
+      .setTitle('🧬 Song DNA')
+      .setDescription(`**${truncate(cur.name, 80)}** — ${truncate((cur.artists ?? []).join(', '), 80)}`)
+      .setColor(accent)
+      .setImage('attachment://dna.gif')
+      .addFields(
+        metrics.map((m) => ({ name: m.label, value: `${Math.round(clamp01(m.value) * 100)}%`, inline: true })),
+      );
+    return { embed, file };
+  }
+
+  /** 🎨 Queue cover: a 2x2 mosaic of the queue's album art (ffmpeg xstack). */
+  private async coverCard(s: Session): Promise<{ embed: EmbedBuilder; file: AttachmentBuilder } | string> {
+    const tracks = s.queue.getSnapshot().tracks.filter((t) => t.image).slice(0, 4);
+    if (tracks.length === 0) return 'No album art in the queue yet.';
+    const dir = path.join(config.dataDir, 'tmp');
+    await fs.mkdir(dir, { recursive: true });
+    const stamp = Date.now();
+    const paths: string[] = [];
+    for (let i = 0; i < tracks.length; i++) {
+      try {
+        const res = await fetch(tracks[i].image!);
+        if (!res.ok) continue;
+        const p = path.join(dir, `cover-${stamp}-${i}.img`);
+        await fs.writeFile(p, Buffer.from(await res.arrayBuffer()));
+        paths.push(p);
+      } catch {
+        /* skip this image */
+      }
+    }
+    if (paths.length === 0) return 'Could not download any album art.';
+    const out = path.join(dir, `cover-${stamp}.png`);
+    const ok = await renderCollage(paths, out);
+    void Promise.all(paths.map((p) => fs.rm(p, { force: true }).catch(() => {})));
+    if (!ok) return 'Could not build the collage.';
+    const png = await fs.readFile(out).catch(() => null);
+    void fs.rm(out, { force: true }).catch(() => {});
+    if (!png) return 'Could not read the collage.';
+    const file = new AttachmentBuilder(png, { name: 'cover.png' });
+    const embed = new EmbedBuilder()
+      .setTitle('🎨 Queue cover')
+      .setColor(this.themeColor())
+      .setImage('attachment://cover.png')
+      .setFooter({ text: `${tracks.length} track${tracks.length === 1 ? '' : 's'}` });
+    return { embed, file };
+  }
+
   /** Server listening leaderboard (top DJs by queued, top artists by plays). */
   private leaderboardEmbed(guildId: string, me: string): EmbedBuilder {
     const users = this.stats.topUsers(guildId, 10);
@@ -5044,6 +5144,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/screensaver` · `V@sc` — idle screensaver',
       '`/sensitivity <0.5-1.5>` · `V@sens` — beat reactivity',
       '`/mood on|off` · `V@mood` — now-playing colors tinted by the track\'s mood',
+      '`/dna` · `V@dna` — Song DNA radar card · `/cover` · `V@cover` — queue album-art mosaic',
     ],
   },
   {
@@ -5065,6 +5166,25 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
     ],
   },
 ];
+
+/** Tile up to 4 album-art images into a 2x2 PNG mosaic via ffmpeg. */
+function renderCollage(inputs: string[], outPath: string): Promise<boolean> {
+  const imgs = inputs.slice(0, 4);
+  if (imgs.length === 0) return Promise.resolve(false);
+  while (imgs.length < 4) imgs.push(imgs[0]);
+  const args: string[] = ['-hide_banner', '-loglevel', 'error'];
+  for (const p of imgs) args.push('-i', p);
+  const parts = imgs.map(
+    (_, i) => `[${i}]scale=320:320:force_original_aspect_ratio=increase,crop=320:320[s${i}]`,
+  );
+  parts.push('[s0][s1][s2][s3]xstack=inputs=4:layout=0_0|w0_0|0_h0|w0_h0[out]');
+  args.push('-filter_complex', parts.join(';'), '-map', '[out]', '-frames:v', '1', '-y', outPath);
+  return new Promise((resolve) => {
+    const proc = spawn(config.ffmpegPath, args, { windowsHide: true });
+    proc.on('error', () => resolve(false));
+    proc.on('exit', (code) => resolve(code === 0));
+  });
+}
 
 function clamp01(v: number): number {
   return Math.max(0, Math.min(1, v));
