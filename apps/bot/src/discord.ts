@@ -745,6 +745,8 @@ export class DiscordBot {
       void this.syncBotAvatar();
       void this.loadKeyedGuilds();
     });
+    // Never let a stray client error take the process down.
+    this.client.on('error', (e) => console.warn('[vaporzr] client error:', e instanceof Error ? e.message : e));
     this.client.on('interactionCreate', (i) => {
       if (process.env.LOG_MESSAGES === '1') {
         const name = 'commandName' in i ? i.commandName : 'customId' in i ? i.customId : '';
@@ -799,7 +801,7 @@ export class DiscordBot {
     });
     // Auto-hype: beat onsets from the analyzer fire a short SFX.
     analyzer.setBeatHandler(() => this.onBeat());
-    await this.client.login(config.discordToken);
+    await this.loginWithRetry();
     this.startPresenceTicker();
   }
 
@@ -5014,6 +5016,27 @@ export class DiscordBot {
     if (!s) return;
     if (EW.modeOf(s.endlessWave) === mode) return;
     this.setAutoplayMode(s, mode);
+  }
+
+  /** Login with backoff so a transient gateway 5xx (Discord/Cloudflare blip or
+   *  IP throttle) never crash-loops the container. */
+  private async loginWithRetry(): Promise<void> {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await this.client.login(config.discordToken);
+        return;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const delay = Math.min(120_000, 5_000 * attempt);
+        console.warn(
+          `[vaporzr] gateway login failed (attempt ${attempt}): ${msg} — retrying in ${Math.round(delay / 1000)}s`,
+        );
+        await new Promise((r) => {
+          const t = setTimeout(r, delay);
+          t.unref?.();
+        });
+      }
+    }
   }
 
   /** Keep a lookahead buffer of 2 EW-picked tracks at the tail of the queue.
