@@ -745,8 +745,21 @@ export class DiscordBot {
       void this.syncBotAvatar();
       void this.loadKeyedGuilds();
     });
-    this.client.on('interactionCreate', (i) => void this.onInteraction(i));
-    this.client.on('messageCreate', (m) => void this.handleMessageCommand(m));
+    this.client.on('interactionCreate', (i) => {
+      if (process.env.LOG_MESSAGES === '1') {
+        const name = 'commandName' in i ? i.commandName : 'customId' in i ? i.customId : '';
+        console.log(`[dbg] interaction type=${i.type} name=${name} guild=${i.guildId ?? ''}`);
+      }
+      void this.onInteraction(i);
+    });
+    this.client.on('messageCreate', (m) => {
+      if (process.env.LOG_MESSAGES === '1') {
+        console.log(
+          `[dbg] message id=${m.id} guild=${m.guildId ?? ''} ch=${m.channelId} bot=${m.author?.bot} partial=${m.partial} content=${JSON.stringify(m.content ?? '').slice(0, 100)}`,
+        );
+      }
+      void this.handleMessageCommand(m);
+    });
     this.client.on('guildCreate', () =>
       void this.registerCommands().catch((err) =>
         console.error('[vaporzr] registerCommands on guildCreate failed:', err instanceof Error ? err.message : err),
