@@ -546,7 +546,10 @@ export class VoiceManager {
     // Suno's CDN blocks datacenter IPs too — when a Suno proxy is configured,
     // ffmpeg fetches the cdn1.suno.ai URL through it.
     const useSunoProxy = !!config.sunoProxy && /cdn1\.suno\.ai\//.test(url);
-    const fetchSelf = isHttp && !isHls && !useYtProxy && !useSunoProxy;
+    // Suno's real media is a public CloudFront m4a: let ffmpeg fetch it directly
+    // (piping MP4 through stdin can fail when the moov atom isn't at the front).
+    const isSunoMedia = /(^|[./])cloudfront\.net\//.test(url) && /\/clip\//.test(url);
+    const fetchSelf = isHttp && !isHls && !useYtProxy && !useSunoProxy && !isSunoMedia;
     const args = ['-hide_banner', '-loglevel', 'error'];
     if (fetchSelf) {
       // stdin is not seekable, so a resume seek runs on the output side
