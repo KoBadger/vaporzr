@@ -43,6 +43,8 @@ const DEFAULT_COMMAND_LEVELS: Record<string, PermissionLevel> = {
   playlist: 'user',
   jump: 'user',
   ambient: 'user',
+  mood: 'user',
+  vibe: 'user',
   djrole: 'mod',
   perms: 'admin',
   speed: 'user',

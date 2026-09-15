@@ -41,6 +41,9 @@ ytDlpPath: process.env.YT_DLP_PATH ?? path.join(__dirname, '..', '..', '..', 've
    sunoProxy: process.env.SUNO_PROXY ?? '',
    /** Optional Netscape-format cookies.txt for SoundCloud (authenticated / Go+ sets). */
    soundcloudCookiesPath: process.env.SOUNDCLOUD_COOKIES_PATH ?? '',
+   /** Optional lat/lon so `V@vibe` can pick a set by current weather (open-meteo). */
+   vibeLat: process.env.VIBE_LAT ?? '',
+   vibeLon: process.env.VIBE_LON ?? '',
    /** ffmpeg binary used for server-side streaming + PCM resampling. */
    ffmpegPath: process.env.FFMPEG_PATH ?? ffmpegStatic ?? 'ffmpeg',
    /** Path to the librespot binary (the server-side Spotify "device"). Empty = disabled. */

@@ -382,6 +382,16 @@ const COMMANDS = [
     .setName('ambient')
     .setDescription('Play a generative ambient pad when the queue ends (intermission)')
     .addBooleanOption((o) => o.setName('enabled').setDescription('Turn ambient intermission on or off').setRequired(false)),
+  new SlashCommandBuilder()
+    .setName('mood')
+    .setDescription("Tint now-playing colors + visuals from the current track's mood")
+    .addBooleanOption((o) => o.setName('enabled').setDescription('Turn mood-reactive visuals on or off').setRequired(false)),
+  new SlashCommandBuilder()
+    .setName('vibe')
+    .setDescription('Let the DJ pick a set for your mood, time of day or weather')
+    .addStringOption((o) =>
+      o.setName('mood').setDescription('Optional mood/style, e.g. "rainy lo-fi", "peak time techno"').setRequired(false),
+    ),
 ];
 
 function fmtMs(ms: number): string {
@@ -450,6 +460,9 @@ export class DiscordBot {
   private voiceStatusAt = new Map<string, number>();
   /** guildId -> play a generative ambient pad when the queue empties. */
   private ambientGuilds = new Set<string>();
+  /** guildId -> tint now-playing colors from the track's audio features. */
+  private moodOn = new Set<string>();
+  private moodColor = new Map<string, number>();
   /** guildId -> panel message location. */
   private panels = new Map<string, { channelId: string; messageId: string }>();
   private npMessages = new Map<string, { channelId: string; messageId: string }>();
@@ -593,6 +606,7 @@ export class DiscordBot {
           if (st.playing && st.track) {
             this.markWaveStarted(s, st.track);
             void this.syncVoiceStatus(s);
+            if (this.moodOn.has(s.guildId)) void this.updateMood(s, st.track);
           }
           this.scheduleWaveTopUp(s);
         },
@@ -967,6 +981,66 @@ export class DiscordBot {
         /* channel gone — nothing to notify */
       }
     }
+  }
+
+  /** Derive a color from a track's audio features (valence → hue, energy → sat/light). */
+  private moodColorFrom(f: EW.AudioFeatures): number {
+    const hue = Math.round((1 - clamp01(f.valence ?? 0.5)) * 280);
+    const sat = Math.round(45 + clamp01(f.energy ?? 0.5) * 45);
+    const light = Math.round(38 + clamp01(f.energy ?? 0.5) * 16);
+    return hslToInt(hue, sat, light);
+  }
+
+  /** Fetch the current track's features and broadcast a mood color to panels. */
+  private async updateMood(s: Session, track: TrackInfo): Promise<void> {
+    const f = await EW.fetchFeatures(track).catch(() => null);
+    if (!f) return;
+    const color = this.moodColorFrom(f);
+    this.moodColor.set(s.guildId, color);
+    this.bridge.broadcast({ type: 'visuals:mood', color, energy: f.energy, valence: f.valence });
+    this.schedulePanelRefresh();
+  }
+
+  /** Auto-DJ: pick a set for the mood / time of day / weather, then let Endless Wave carry it. */
+  private async vibeDj(s: Session, moodArg: string | undefined, ensureJoined: () => Promise<boolean>): Promise<string> {
+    const weather = moodArg ? null : await this.fetchWeatherMood().catch(() => null);
+    const seed = (moodArg?.trim() || weather || this.timeOfDayMood()).trim();
+    let picks = await searchCandidates(seed, 5).catch(() => [] as ResolvedTrack[]);
+    if (picks.length === 0) picks = await searchYoutube(seed, 5).catch(() => [] as ResolvedTrack[]);
+    if (picks.length === 0) return `🔎 Couldn't find anything for “${seed}”.`;
+    this.setAutoplayMode(s, 'smart');
+    const failed = await this.playTracks(s, picks.slice(0, 5), 'vibe-dj', ensureJoined);
+    const tag = weather ? ` (${weather})` : '';
+    return `🎧 **Vibe DJ** — queued ${picks.length} track${picks.length === 1 ? '' : 's'} for “**${seed}**”${tag}. Endless Wave is on to keep the mood going.${failed ? `\n⚠️ ${failed}` : ''}`;
+  }
+
+  /** A mood seed based on the local hour. */
+  private timeOfDayMood(): string {
+    const h = new Date().getHours();
+    if (h < 5) return 'deep night ambient';
+    if (h < 11) return 'morning acoustic chill';
+    if (h < 16) return 'daytime feel-good';
+    if (h < 20) return 'evening indie rock';
+    return 'late night electronic';
+  }
+
+  /** Map current weather (if VIBE_LAT/VIBE_LON are set) to a music mood. */
+  private async fetchWeatherMood(): Promise<string | null> {
+    if (!config.vibeLat || !config.vibeLon) return null;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${encodeURIComponent(config.vibeLat)}&longitude=${encodeURIComponent(config.vibeLon)}&current_weather=true`;
+    const res = await fetch(url, { headers: { 'user-agent': 'vaporzr-bot' } });
+    if (!res.ok) return null;
+    const j = (await res.json()) as { current_weather?: { weathercode?: number } };
+    const code = j.current_weather?.weathercode;
+    if (code == null) return null;
+    if (code === 0) return 'sunny feel-good';
+    if (code <= 3) return 'cloudy chill';
+    if (code === 45 || code === 48) return 'foggy ambient';
+    if (code >= 51 && code <= 67) return 'rainy lo-fi';
+    if (code >= 71 && code <= 77) return 'snowy ambient';
+    if (code >= 80 && code <= 82) return 'rainy lo-fi';
+    if (code >= 95) return 'stormy dark techno';
+    return null;
   }
 
   /** Jump to the first synced-lyrics line whose text contains the phrase. */
@@ -1480,6 +1554,37 @@ export class DiscordBot {
         break;
       }
 
+      case 'mood': {
+        if (!this.requireLevel('mood', interaction)) return this.deny(interaction);
+        const gid = interaction.guildId;
+        if (!gid) return void (await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral }));
+        const enabled = interaction.options.getBoolean('enabled');
+        if (enabled === true) this.moodOn.add(gid);
+        else if (enabled === false) {
+          this.moodOn.delete(gid);
+          this.moodColor.delete(gid);
+        }
+        const on = this.moodOn.has(gid);
+        if (on) {
+          const cur = s.queue.getCurrentTrack();
+          if (cur) void this.updateMood(s, cur);
+        }
+        await interaction.reply({
+          content: on ? '🌈 Mood-reactive visuals **on** — colors follow the music.' : 'Mood-reactive visuals **off**.',
+          flags: MessageFlags.Ephemeral,
+        });
+        break;
+      }
+
+      case 'vibe': {
+        if (!this.requireLevel('vibe', interaction)) return this.deny(interaction);
+        await interaction.deferReply();
+        await interaction.editReply(
+          await this.vibeDj(s, interaction.options.getString('mood') ?? undefined, () => this.ensureJoinedForPlayback(interaction, s)),
+        );
+        break;
+      }
+
       case 'sensitivity': {
         if (!this.requireLevel('sensitivity', interaction)) return this.deny(interaction);
         const multiplier = interaction.options.getNumber('multiplier', true);
@@ -1865,6 +1970,8 @@ export class DiscordBot {
       djrole: 'djrole',
       jump: 'jump',
       ambient: 'ambient',
+      mood: 'mood',
+      vibe: 'vibe',
     };
     const canonical = alias[cmd];
     if (canonical) {
@@ -2126,6 +2233,32 @@ export class DiscordBot {
               ? '🌌 Ambient intermission **on** — when the queue ends I\'ll play a generative pad.'
               : '🌌 Ambient intermission **off**. Use `V@ambient on` to enable.',
           );
+          break;
+        }
+
+        case 'mood': {
+          if (!canUse('mood')) return void (await deny());
+          if (!message.guildId) return void (await message.reply('Must be used in a server.'));
+          const a = args.trim().toLowerCase();
+          if (/^(on|1|true)$/.test(a)) this.moodOn.add(message.guildId);
+          else if (/^(off|0|false)$/.test(a)) {
+            this.moodOn.delete(message.guildId);
+            this.moodColor.delete(message.guildId);
+          }
+          const on = this.moodOn.has(message.guildId);
+          if (on) {
+            const cur = s.queue.getCurrentTrack();
+            if (cur) void this.updateMood(s, cur);
+          }
+          await message.reply(
+            on ? '🌈 Mood-reactive visuals **on** — colors follow the music.' : 'Mood-reactive visuals **off**.',
+          );
+          break;
+        }
+
+        case 'vibe': {
+          if (!canUse('vibe')) return void (await deny());
+          await message.reply(await this.vibeDj(s, args || undefined, () => this.ensureJoinedForMessage(message, s)));
           break;
         }
 
@@ -3342,9 +3475,10 @@ export class DiscordBot {
     const track = st.track;
     const mode = EW.modeOf(s.endlessWave);
     const modeLabel = mode === 'smart' ? '🌊 Autoplay: smart' : mode === 'basic' ? '🎵 Autoplay: basic' : 'Autoplay: off';
+    const color = this.moodOn.has(s.guildId) && this.moodColor.has(s.guildId) ? this.moodColor.get(s.guildId)! : this.themeColor();
     if (!track) {
       return new EmbedBuilder()
-        .setColor(this.themeColor())
+        .setColor(color)
         .setDescription('⏸️ **Idle** — queue something with `/play` or `V@p`')
         .setFooter({ text: modeLabel });
     }
@@ -3359,7 +3493,7 @@ export class DiscordBot {
     const upNext = snap.tracks.find((x, i) => i > snap.tracks.findIndex((y) => y.current));
     const queued = Math.max(0, snap.tracks.length - (snap.currentIndex + 1));
     const embed = new EmbedBuilder()
-      .setColor(this.themeColor())
+      .setColor(color)
       .setDescription(
         `${status} ${srcEmoji(track.source)} **${truncate(track.name, 60)}**\n` +
           `${truncate((track.artists ?? []).join(', ') || track.album, 80)}\n` +
@@ -4736,6 +4870,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/autoplay count:<1-10>` — how many tracks to buffer ahead',
       '`/endwav on|off|status` · `V@ew` — Endless Wave shortcut',
       '`/ambient on|off` · `V@ambient` — generative ambient pad when the queue empties',
+      '`/vibe [mood]` · `V@vibe` — auto-DJ set for your mood / time of day / weather',
     ],
   },
   {
@@ -4796,6 +4931,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/wave` — waveform snapshot · `/burst` — animated clip',
       '`/screensaver` · `V@sc` — idle screensaver',
       '`/sensitivity <0.5-1.5>` · `V@sens` — beat reactivity',
+      '`/mood on|off` · `V@mood` — now-playing colors tinted by the track\'s mood',
     ],
   },
   {
@@ -4816,6 +4952,30 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
     ],
   },
 ];
+
+function clamp01(v: number): number {
+  return Math.max(0, Math.min(1, v));
+}
+
+/** HSL (h 0-360, s/l 0-100) → 24-bit RGB int for Discord embed colors. */
+function hslToInt(h: number, s: number, l: number): number {
+  const sN = s / 100;
+  const lN = l / 100;
+  const c = (1 - Math.abs(2 * lN - 1)) * sN;
+  const hp = (((h % 360) + 360) % 360) / 60;
+  const x = c * (1 - Math.abs((hp % 2) - 1));
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  if (hp < 1) [r, g, b] = [c, x, 0];
+  else if (hp < 2) [r, g, b] = [x, c, 0];
+  else if (hp < 3) [r, g, b] = [0, c, x];
+  else if (hp < 4) [r, g, b] = [0, x, c];
+  else if (hp < 5) [r, g, b] = [x, 0, c];
+  else [r, g, b] = [c, 0, x];
+  const m = lN - c / 2;
+  return (Math.round((r + m) * 255) << 16) | (Math.round((g + m) * 255) << 8) | Math.round((b + m) * 255);
+}
 
 /** True when the play input is a direct link (resolve it) rather than a text
  *  search (which should open the interactive picker instead). */

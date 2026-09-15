@@ -178,6 +178,8 @@ export type OutboundMessage =
   /** Asks a visualizer window to capture a short clip and return burst:data. */
   | { type: 'burst:start'; durationMs?: number }
   | { type: 'endlesswave'; active: boolean; generated: number; mode?: 'off' | 'basic' | 'smart' }
+  /** Live "mood" derived from the current track's audio features (for reactive visuals). */
+  | { type: 'visuals:mood'; color: number; energy?: number; valence?: number }
   | { type: 'ready'; ok: boolean }
   | { type: 'error'; message: string }
   | CommandMessage;

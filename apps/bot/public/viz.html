@@ -293,6 +293,12 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
         case 'visuals:sensitivity':
           setSensitivity(msg.multiplier,false);
           break;
+        case 'visuals:mood':{
+          var mc='#'+('000000'+((msg.color>>>0).toString(16))).slice(-6);
+          document.documentElement.style.setProperty('--mood',mc);
+          if(document.body)document.body.style.boxShadow='inset 0 0 140px '+mc+'66';
+          break;
+        }
         case 'state:update':
           showState(msg.state);
           break;
