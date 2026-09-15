@@ -5,9 +5,17 @@ export const THEMES: VaporzrTheme[] = [
     id: 'vaporzr',
     name: 'Vaporzr',
     accent: '#6a5cff',
-    accent2: '#00f0ff',
+    accent2: '#22d3ee',
     glow: 'rgba(106, 92, 255, 0.45)',
     embedColor: 0x6a5cff,
+  },
+  {
+    id: 'sunset',
+    name: 'Sunset Drive',
+    accent: '#ff8a3d',
+    accent2: '#ff3cac',
+    glow: 'rgba(255, 138, 61, 0.45)',
+    embedColor: 0xff8a3d,
   },
   {
     id: 'neon',

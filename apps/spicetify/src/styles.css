@@ -1,15 +1,18 @@
 :root {
-  --vz-bg-0: #080b1d;
-  --vz-bg-1: #0a1128;
+  /* Vaporzr synthwave tokens — shared across every UI surface */
+  --vz-bg-0: #05060f;
+  --vz-bg-1: #0b1026;
   --vz-bg-2: #101a3a;
-  --vz-blue: #00f0ff;
-  --vz-cyan: #1ed6ff;
+  --vz-blue: #22d3ee;
+  --vz-cyan: #22d3ee;
   --vz-purple: #6a5cff;
-  --vz-pink: #ff71ce;
-  --vz-text: #cfe8ff;
-  --vz-text-dim: #6c87b3;
-  --vz-border: rgba(0, 240, 255, 0.25);
+  --vz-pink: #ff3cac;
+  --vz-orange: #ff8a3d;
+  --vz-text: #e6ecff;
+  --vz-text-dim: #8b96c9;
+  --vz-border: rgba(106, 140, 255, 0.25);
   --vz-glow: 0 0 18px rgba(106, 92, 255, 0.35);
+  --vz-sunset: linear-gradient(100deg, #ff8a3d, #ff3cac 42%, #6a5cff 72%, #22d3ee);
 }
 
 .vaporzr-top-btn {

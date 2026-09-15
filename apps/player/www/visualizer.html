@@ -167,8 +167,11 @@
   /* ---- Theme (set live from the bot via the bridge) ---- */
   :root {
     --vz-accent: #6a5cff;
-    --vz-accent2: #00f0ff;
+    --vz-accent2: #22d3ee;
+    --vz-accent3: #ff8a3d;
+    --vz-accent4: #ff3cac;
     --vz-glow: rgba(106, 92, 255, 0.45);
+    --vz-sunset: linear-gradient(100deg,#ff8a3d,#ff3cac 42%,#6a5cff 72%,#22d3ee);
   }
   #status { text-shadow: 0 0 6px var(--vz-glow); }
   .ctrl-btn.primary { background: color-mix(in srgb, var(--vz-accent) 35%, transparent); }
@@ -176,7 +179,7 @@
   input[type=range]::-webkit-slider-thumb { background: var(--vz-accent); box-shadow: 0 0 8px var(--vz-glow); }
   #controls-toggle.on { color: var(--vz-accent2); }
   #controls-toggle { border-color: color-mix(in srgb, var(--vz-accent) 35%, transparent); }
-  #pip-head { background: linear-gradient(90deg, color-mix(in srgb, var(--vz-accent2) 28%, transparent), color-mix(in srgb, var(--vz-accent) 28%, transparent)); }
+  #pip-head { background: var(--vz-sunset); }
   #pip { border-color: color-mix(in srgb, var(--vz-accent) 35%, transparent); box-shadow: 0 8px 40px rgba(0,0,0,.6), 0 0 24px var(--vz-glow); }
   #pip-badge { border-color: color-mix(in srgb, var(--vz-accent2) 30%, transparent); }
   #controls { border-color: color-mix(in srgb, var(--vz-accent) 35%, transparent); box-shadow: 0 8px 40px rgba(0,0,0,.6), 0 0 24px var(--vz-glow); }
