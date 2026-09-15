@@ -1947,7 +1947,7 @@ export class DiscordBot {
 
       case 'invite': {
         const appId = this.client.user!.id;
-        const perms = (1n << 11n) | (1n << 14n) | (1n << 15n) | (1n << 20n) | (1n << 31n) | (1n << 52n);
+        const perms = (1n << 6n) | (1n << 10n) | (1n << 11n) | (1n << 13n) | (1n << 14n) | (1n << 15n) | (1n << 16n) | (1n << 18n) | (1n << 20n) | (1n << 21n) | (1n << 31n) | (1n << 52n);
         const url = `https://discord.com/oauth2/authorize?client_id=${appId}&permissions=${perms}&scope=bot+applications.commands`;
         await interaction.reply({
           content: '➕ **Add Vaporzr to a server** — pick the server in the dropdown, hit Authorize, done.',
@@ -2889,7 +2889,7 @@ export class DiscordBot {
 
         case 'invite': {
           const appId = this.client.user!.id;
-          const perms = (1n << 11n) | (1n << 14n) | (1n << 15n) | (1n << 20n) | (1n << 31n) | (1n << 52n);
+          const perms = (1n << 6n) | (1n << 10n) | (1n << 11n) | (1n << 13n) | (1n << 14n) | (1n << 15n) | (1n << 16n) | (1n << 18n) | (1n << 20n) | (1n << 21n) | (1n << 31n) | (1n << 52n);
           const url = `https://discord.com/oauth2/authorize?client_id=${appId}&permissions=${perms}&scope=bot+applications.commands`;
           await message.reply({
             content: '➕ **Add Vaporzr to a server** — pick the server in the dropdown, hit Authorize, done.',
