@@ -84,6 +84,11 @@ cloudflaredPath:
    * non-primary instances refuse to boot while the primary is reachable.
    */
   botPrimary: process.env.BOT_PRIMARY === '1',
+  /**
+   * Explicit escape hatch to run a non-primary instance (e.g. local dev with the
+   * VPS stopped). Without it, only the PRIMARY instance will boot.
+   */
+  allowSecondary: process.env.ALLOW_SECONDARY === '1',
   /** Health URL of the primary instance. Defaults to <PUBLIC_BASE_URL>/health. */
   primaryHealthUrl:
     process.env.PRIMARY_HEALTH_URL ??

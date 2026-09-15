@@ -45,23 +45,27 @@ async function main(): Promise<void> {
   }
 
   console.log(`[vaporzr] instance role: ${config.botPrimary ? 'PRIMARY' : 'SECONDARY'}`);
-  // Cross-host single-instance guard: a SECONDARY instance refuses to start while
-  // the PRIMARY (VPS) bot is reachable. Two logins on one token fight over the
-  // single Discord gateway session (missed events + duplicate replies).
-  if (!config.botPrimary && config.primaryHealthUrl) {
-    try {
-      const res = await fetch(config.primaryHealthUrl, { signal: AbortSignal.timeout(4000) });
-      if (res.ok) {
-        console.warn(
-          `[vaporzr] PRIMARY instance is live at ${config.primaryHealthUrl} — exiting this SECONDARY instance.\n` +
-            '          Stop the primary first (ssh root@46.224.80.104 "docker stop vaporzr"), ' +
-            'or set BOT_PRIMARY=1 to force this one to run.',
-        );
-        process.exit(0);
+  // Single-instance guard: only the PRIMARY instance runs by default. A second
+  // login on the same token fights the primary for the gateway session (missed
+  // events + duplicate replies). Set ALLOW_SECONDARY=1 to run a non-primary
+  // instance intentionally (with the primary stopped).
+  if (!config.botPrimary && !config.allowSecondary) {
+    let detail = '';
+    if (config.primaryHealthUrl) {
+      try {
+        const res = await fetch(config.primaryHealthUrl, { signal: AbortSignal.timeout(4000) });
+        if (res.ok) detail = ` The primary is live at ${config.primaryHealthUrl}.`;
+      } catch {
+        /* can't reach the primary (or no network) — still refuse; this is the guard */
       }
-    } catch {
-      /* primary unreachable — this is the only instance, safe to run */
     }
+    console.warn(
+      `[vaporzr] Refusing to start a SECONDARY instance.${detail}\n` +
+        '          Only ONE instance may use a bot token. To run this one instead:\n' +
+        '            1. stop the primary:  ssh root@46.224.80.104 "docker stop vaporzr"\n' +
+        '            2. set ALLOW_SECONDARY=1 (or BOT_PRIMARY=1) in apps/bot/.env',
+    );
+    process.exit(0);
   }
 
   // Duplicate-launch guard: MUST run before startServer(), whose Bridge
