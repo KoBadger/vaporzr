@@ -34,10 +34,30 @@ function parseArtistFromTitle(title: string): string | null {
   return m ? m[1].trim() : null;
 }
 
+/** fetch() that routes through the Suno proxy when one is configured (Suno's
+ *  CDN rejects datacenter IPs). Falls back to a direct fetch on proxy error. */
+async function proxyFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  const proxy = config.sunoProxy;
+  if (!proxy) return fetch(url, init);
+  try {
+    const { ProxyAgent, fetch: uFetch } = await import('undici');
+    const dispatcher = new ProxyAgent(proxy);
+    const res = await uFetch(url, { ...(init as Record<string, unknown>), dispatcher } as never);
+    return res as unknown as Response;
+  } catch (err) {
+    console.warn(`[suno] proxy fetch failed, retrying direct: ${err instanceof Error ? err.message : err}`);
+    return fetch(url, init);
+  }
+}
+
 /** Probe a remote audio URL's duration via ffmpeg (reads headers only). */
-export function probeDuration(url: string): Promise<number | null> {
+export function probeDuration(url: string, proxy = ''): Promise<number | null> {
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([k]) => !k.toLowerCase().endsWith('_proxy')),
+  );
+  if (proxy) env.http_proxy = proxy;
   return new Promise((resolve) => {
-    const proc = spawn(config.ffmpegPath, ['-hide_banner', '-i', url], { windowsHide: true });
+    const proc = spawn(config.ffmpegPath, ['-hide_banner', '-i', url], { windowsHide: true, env });
     let stderr = '';
     proc.stderr.on('data', (d) => {
       stderr += d.toString();
@@ -74,7 +94,7 @@ export async function resolveSuno(input: string): Promise<ResolvedVideo> {
 
   let html = '';
   try {
-    const res = await fetch(url, {
+    const res = await proxyFetch(url, {
       redirect: 'follow',
       headers: { 'user-agent': UA, accept: 'text/html' },
     });
@@ -89,10 +109,15 @@ export async function resolveSuno(input: string): Promise<ResolvedVideo> {
 
   const streamUrl = `https://cdn1.suno.ai/${uuid}.mp3`;
   try {
-    const head = await fetch(streamUrl, { method: 'HEAD', headers: { 'user-agent': UA } });
+    const head = await proxyFetch(streamUrl, { method: 'HEAD', headers: { 'user-agent': UA } });
     if (!head.ok) throw new Error(`audio returned ${head.status}`);
   } catch (err) {
-    throw new SunoError(`Could not reach the Suno audio: ${err instanceof Error ? err.message : String(err)}`);
+    // Without a proxy a failed probe is fatal; with one, assume playback will
+    // work (ffmpeg fetches the CDN through the same proxy) and carry on.
+    if (!config.sunoProxy) {
+      throw new SunoError(`Could not reach the Suno audio: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    console.warn(`[suno] audio probe failed but a proxy is set — trying proxied playback`);
   }
 
   const title = html.match(/<meta property="og:title" content="([^"]+)"/);
@@ -100,7 +125,7 @@ export async function resolveSuno(input: string): Promise<ResolvedVideo> {
   const pageTitle = html.match(/<title>([^<]*)<\/title>/);
   const name = title ? title[1] : 'Suno track';
   const artist = parseArtistFromTitle(pageTitle?.[1] ?? '') ?? 'Suno';
-  const durationMs = (await probeDuration(streamUrl)) ?? 0;
+  const durationMs = (await probeDuration(streamUrl, config.sunoProxy)) ?? 0;
 
   return {
     videoId: uuid,

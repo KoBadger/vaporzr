@@ -90,6 +90,31 @@ function Transport({ bridge }: { bridge: BridgeClient }) {
   );
 }
 
+function Wave({ bridge }: { bridge: BridgeClient }) {
+  const [, force] = useState(0);
+  useEffect(() => {
+    const update = () => force((n) => n + 1);
+    bridge.onWave = update;
+    update();
+    return () => {
+      bridge.onWave = () => {};
+    };
+  }, [bridge]);
+  const mode = bridge.waveMode;
+  return (
+    <button
+      className={`vz-btn${mode !== 'off' ? ' vz-active' : ''}`}
+      title="Cycle autoplay: off → basic → smart"
+      onClick={() => {
+        const next = mode === 'off' ? 'basic' : mode === 'basic' ? 'smart' : 'off';
+        bridge.cmd({ type: 'cmd', command: 'endlesswave', mode: next });
+      }}
+    >
+      {mode === 'smart' ? '🌊' : mode === 'basic' ? '🎵' : '🚫'} Autoplay: {mode}
+    </button>
+  );
+}
+
 function Volume({ bridge }: { bridge: BridgeClient }) {
   const vol = bridge.playback?.volume ?? 100;
   return (
@@ -227,6 +252,7 @@ export default function App() {
           <section className="vz-card vz-now-card">
             <NowPlaying bridge={bridge} />
             <Transport bridge={bridge} />
+            <Wave bridge={bridge} />
             <Volume bridge={bridge} />
           </section>
 

@@ -37,6 +37,7 @@ const btnPlay = document.getElementById('btn-play') as HTMLButtonElement;
 const btnPrev = document.getElementById('btn-prev') as HTMLButtonElement;
 const btnNext = document.getElementById('btn-next') as HTMLButtonElement;
 const btnShuffle = document.getElementById('btn-shuffle') as HTMLButtonElement;
+const btnWave = document.getElementById('btn-wave') as HTMLButtonElement;
 const btnPreset = document.getElementById('btn-preset') as HTMLButtonElement;
 const btnSfx = {
   airhorn: document.getElementById('btn-sfx-airhorn') as HTMLButtonElement,
@@ -59,6 +60,7 @@ let analyser: AnalyserNode | null = null;
 let streamEnabled = false;
 let forwardEnabled = false;
 let forwardSource: 'loopback' | 'pip' = 'loopback';
+let waveMode: 'off' | 'basic' | 'smart' = 'off';
 let frameTimer: number | null = null;
 let stateTimer: number | null = null;
 let presets: Record<string, unknown> = {};
@@ -114,12 +116,13 @@ const client = new WsClient({
     } else if (msg.type === 'state:update') {
       handleState(msg.state);
     } else if (msg.type === 'endlesswave') {
-      handleEndlessWave(msg.active);
+      setWaveMode(msg.mode ?? (msg.active ? 'smart' : 'off'));
     } else if (msg.type === 'snapshot') {
       setDjEnabled(!!msg.djEnabled);
       // A snapshot only ever AUTO-ENABLES the scene (EW is on) — same rule as
       // the web visualizer: only a live 'endlesswave' broadcast may turn it off.
-      if (msg.endlesswave === true) handleEndlessWave(true);
+      if (msg.endlesswaveMode) setWaveMode(msg.endlesswaveMode);
+      else if (msg.endlesswave === true) handleEndlessWave(true);
     } else if (msg.type === 'dj:update') {
       setDjEnabled(msg.enabled);
     } else if (msg.type === 'audio:pcm') {
@@ -261,6 +264,17 @@ function handleEndlessWave(active: boolean): void {
   }
 }
 
+/** Update the autoplay cycler button + the Endless Wave scene. */
+function setWaveMode(mode: 'off' | 'basic' | 'smart'): void {
+  waveMode = mode;
+  if (btnWave) {
+    btnWave.textContent = mode === 'smart' ? '🌊' : mode === 'basic' ? '🎵' : '🚫';
+    btnWave.classList.toggle('active', mode !== 'off');
+    btnWave.title = `Autoplay: ${mode} — click to cycle`;
+  }
+  handleEndlessWave(mode !== 'off');
+}
+
 // ---- Controls overlay ----
 
 let latestState: PlaybackState = emptyState();
@@ -312,6 +326,10 @@ function wireControls(): void {
   btnPrev.addEventListener('click', () => sendCmd('previous'));
   btnNext.addEventListener('click', () => sendCmd('next'));
   btnShuffle.addEventListener('click', () => sendCmd('shuffle', { shuffle: !latestState.shuffle }));
+  btnWave.addEventListener('click', () => {
+    const next = waveMode === 'off' ? 'basic' : waveMode === 'basic' ? 'smart' : 'off';
+    sendCmd('endlesswave', { mode: next });
+  });
   btnPreset.addEventListener('click', () => cyclePreset());
   btnSynth.addEventListener('click', () => setSynthActive(!synthActive));
   btnDjToggle.addEventListener('click', () => sendCmd('dj', { djEnabled: !djEnabled }));

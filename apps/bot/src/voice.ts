@@ -543,7 +543,10 @@ export class VoiceManager {
     // proxy (node's fetch can't honor http_proxy). For those URLs ffmpeg
     // reads the URL directly — the env below carries the proxy.
     const useYtProxy = !!config.youtubeProxy && /googlevideo\.com\//.test(url);
-    const fetchSelf = isHttp && !isHls && !useYtProxy;
+    // Suno's CDN blocks datacenter IPs too — when a Suno proxy is configured,
+    // ffmpeg fetches the cdn1.suno.ai URL through it.
+    const useSunoProxy = !!config.sunoProxy && /cdn1\.suno\.ai\//.test(url);
+    const fetchSelf = isHttp && !isHls && !useYtProxy && !useSunoProxy;
     const args = ['-hide_banner', '-loglevel', 'error'];
     if (fetchSelf) {
       // stdin is not seekable, so a resume seek runs on the output side
@@ -572,6 +575,7 @@ export class VoiceManager {
       Object.entries(process.env).filter(([k]) => !k.toLowerCase().endsWith('_proxy')),
     );
     if (useYtProxy) ffEnv.http_proxy = config.youtubeProxy;
+    else if (useSunoProxy) ffEnv.http_proxy = config.sunoProxy;
     const proc = spawn(config.ffmpegPath, args, { windowsHide: true, env: ffEnv });
     this.ffmpeg = proc;
     this.streamStartTime = Date.now();

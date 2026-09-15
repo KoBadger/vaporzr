@@ -37,17 +37,28 @@ function toSoundcloudUri(url: string): string {
   return `soundcloud:${encodeURIComponent(url)}`;
 }
 
-function ytDlpOnce(args: string[]): Promise<string> {
+interface YtDlpOpts {
+  timeoutMs?: number;
+  maxBufferBytes?: number;
+}
+
+function ytDlpOnce(args: string[], opts: YtDlpOpts = {}): Promise<string> {
   return new Promise((resolve, reject) => {
     const noProxyEnv = Object.fromEntries(
       Object.entries(process.env).filter(([k]) => !k.toLowerCase().endsWith('_proxy')),
     );
     const flags = ['--no-check-certificates'];
-    if (config.youtubeCookiesPath) flags.push('--cookies', config.youtubeCookiesPath);
+    // SoundCloud-specific cookies (YouTube cookies don't authenticate SC).
+    if (config.soundcloudCookiesPath) flags.push('--cookies', config.soundcloudCookiesPath);
     execFile(
       config.ytDlpPath,
       [...flags, ...args],
-      { windowsHide: true, timeout: 60_000, maxBuffer: 4 * 1024 * 1024, env: noProxyEnv },
+      {
+        windowsHide: true,
+        timeout: opts.timeoutMs ?? 60_000,
+        maxBuffer: opts.maxBufferBytes ?? 4 * 1024 * 1024,
+        env: noProxyEnv,
+      },
       (err, stdout, stderr) => {
         if (err) {
           reject(new SoundcloudError(`yt-dlp failed: ${(stderr || err.message).toString().slice(0, 300)}`));
@@ -71,16 +82,27 @@ const TRANSIENT_YTDLP_ERRORS = [
   'ETIMEDOUT',
 ];
 
-async function runYtDlp(args: string[], retries = 2): Promise<string> {
+async function runYtDlp(args: string[], retries = 2, opts: YtDlpOpts = {}): Promise<string> {
   for (let attempt = 0; ; attempt++) {
     try {
-      return await ytDlpOnce(args);
+      return await ytDlpOnce(args, opts);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const transient = TRANSIENT_YTDLP_ERRORS.some((t) => msg.includes(t));
       if (!transient || attempt >= retries) throw err;
       await new Promise((r) => setTimeout(r, 900 * (attempt + 1)));
     }
+  }
+}
+
+/** Best-effort title from a SoundCloud URL slug (flat listings report "NA"). */
+function slugFromUrl(entryUrl: string): string {
+  try {
+    const path = new URL(entryUrl).pathname.split('/').filter(Boolean).pop() ?? '';
+    const t = decodeURIComponent(path).replace(/[-_]+/g, ' ').trim();
+    return t || 'SoundCloud track';
+  } catch {
+    return 'SoundCloud track';
   }
 }
 
@@ -154,30 +176,52 @@ async function resolveSoundcloudVideoInner(url: string): Promise<ResolvedSoundcl
   };
 }
 
-/** Resolve a SoundCloud set/playlist into lightweight tracks (stream resolved lazily on play). */
+/** Resolve a SoundCloud set/playlist into lightweight tracks (stream resolved lazily on play).
+ *  Handles large DJ sets: full extraction with generous limits, a fast flat-listing
+ *  fallback, and a whole-set YouTube fallback for DRM/unavailable sets. */
 export async function resolveSoundcloudSet(input: string): Promise<ResolvedSoundcloudTrack[]> {
   const url = input.trim().startsWith('http') ? input.trim() : `https://${input.trim()}`;
 
-  // Full extraction (not --flat-playlist): SoundCloud flat entries only report
-  // "NA" titles. Each entry's page URL is stored so the stream is resolved
-  // lazily on play (full extraction's `url` field is only a 30s preview).
-  const raw = await runYtDlp([
-    '--no-warnings',
-    '--print',
-    '%(webpage_url)s|%(title)s|%(uploader)s',
-    url,
-  ]);
+  // 1) Full extraction — real titles, but slow/heavy for large DJ sets. Generous
+  //    limits so a 100+ track set doesn't blow the 60s/4MB defaults.
+  let lines: string[] = [];
+  try {
+    const raw = await runYtDlp(
+      ['--no-warnings', '--print', '%(webpage_url)s|%(title)s|%(uploader)s', url],
+      1,
+      { timeoutMs: 180_000, maxBufferBytes: 16 * 1024 * 1024 },
+    );
+    lines = raw.trim().split(/\r?\n/).filter((l) => l.includes('|'));
+  } catch (err) {
+    console.warn(
+      `[soundcloud] full set extraction failed — trying flat listing: ${err instanceof Error ? err.message : err}`,
+    );
+  }
 
-  const lines = raw.trim().split(/\r?\n/).filter((l) => l.includes('|'));
+  // 2) Fast flat listing fallback — titles are often "NA"; derive them from the slug.
+  if (lines.length === 0) {
+    try {
+      const raw = await runYtDlp(
+        ['--no-warnings', '--flat-playlist', '--print', '%(webpage_url)s|%(title)s|%(uploader)s', url],
+        1,
+        { timeoutMs: 90_000, maxBufferBytes: 8 * 1024 * 1024 },
+      );
+      lines = raw.trim().split(/\r?\n/).filter((l) => l.includes('|'));
+    } catch (err) {
+      console.warn(`[soundcloud] flat set listing failed: ${err instanceof Error ? err.message : err}`);
+    }
+  }
 
   const tracks = lines
     .map((line): ResolvedSoundcloudTrack | null => {
       // Pipe-safe: exactly 2 separators — titles may contain '|'.
       const m = line.match(/^([^|]*)\|([^|]*)\|(.*)$/s);
       const entryUrl = m?.[1] ?? '';
-      const title = m?.[2] ?? '';
+      const rawTitle = m?.[2] ?? '';
       const uploader = m?.[3] ?? '';
-      if (!entryUrl || !title) return null;
+      if (!entryUrl) return null;
+      const title =
+        !rawTitle || /^(na|none|null)$/i.test(rawTitle.trim()) ? slugFromUrl(entryUrl) : rawTitle;
       return {
         videoId: entryUrl,
         uri: toSoundcloudUri(entryUrl),
@@ -191,8 +235,17 @@ export async function resolveSoundcloudSet(input: string): Promise<ResolvedSound
       };
     })
     .filter((t): t is ResolvedSoundcloudTrack => t !== null);
-  if (tracks.length === 0) {
-    throw new SoundcloudError('That SoundCloud set appears to be empty or unavailable.');
+  if (tracks.length > 0) return tracks;
+
+  // 3) Whole-set fallback: treat it as one long mix — search YouTube for the set
+  //    title (covers DRM-only/unavailable sets and single long uploads).
+  const slug = slugFromUrl(url);
+  if (slug && slug !== 'SoundCloud track') {
+    const yt = await searchAndResolveYoutube(slug);
+    if (yt) {
+      console.log(`[soundcloud] set unavailable — falling back to YouTube: "${yt.name}"`);
+      return [yt as ResolvedSoundcloudTrack];
+    }
   }
-  return tracks;
+  throw new SoundcloudError('That SoundCloud set appears to be empty or unavailable.');
 }

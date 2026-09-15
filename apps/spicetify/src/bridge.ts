@@ -40,6 +40,8 @@ export class BridgeClient {
   playback: BridgeState['playback'] = null;
   queue: TrackInfo[] = [];
   currentIndex = -1;
+  waveMode: 'off' | 'basic' | 'smart' = 'off';
+  onWave: (m: 'off' | 'basic' | 'smart') => void = () => {};
 
   constructor() {
     const stored = localStorage.getItem('vaporzr:port');
@@ -131,6 +133,8 @@ export class BridgeClient {
         this.queue = msg.queue.tracks;
         this.currentIndex = msg.queue.currentIndex;
         if (msg.theme) applyTheme(msg.theme);
+        this.waveMode = msg.endlesswaveMode ?? (msg.endlesswave ? 'smart' : 'off');
+        this.onWave(this.waveMode);
         this.onState(this.playback);
         this.onQueue(this.queue, this.currentIndex);
         break;
@@ -155,6 +159,10 @@ export class BridgeClient {
       }
       case 'theme':
         applyTheme(msg.theme);
+        break;
+      case 'endlesswave':
+        this.waveMode = msg.mode ?? (msg.active ? 'smart' : 'off');
+        this.onWave(this.waveMode);
         break;
       case 'visuals:frame':
         this.onVisuals(msg.data);

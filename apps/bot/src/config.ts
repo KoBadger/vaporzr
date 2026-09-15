@@ -32,6 +32,15 @@ ytDlpPath: process.env.YT_DLP_PATH ?? path.join(__dirname, '..', '..', '..', 've
     * http://[user:pass@]host:port — empty = direct.
     */
    youtubeProxy: process.env.YOUTUBE_PROXY ?? '',
+   /**
+    * HTTP proxy for Suno (the suno.com page fetch + the cdn1.suno.ai audio
+    * stream). Suno's CDN blocks datacenter IPs with 403, so routing just Suno
+    * through a residential proxy restores playback. Format:
+    * http://[user:pass@]host:port — empty = direct.
+    */
+   sunoProxy: process.env.SUNO_PROXY ?? '',
+   /** Optional Netscape-format cookies.txt for SoundCloud (authenticated / Go+ sets). */
+   soundcloudCookiesPath: process.env.SOUNDCLOUD_COOKIES_PATH ?? '',
    /** ffmpeg binary used for server-side streaming + PCM resampling. */
    ffmpegPath: process.env.FFMPEG_PATH ?? ffmpegStatic ?? 'ffmpeg',
    /** Path to the librespot binary (the server-side Spotify "device"). Empty = disabled. */
