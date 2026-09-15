@@ -78,6 +78,16 @@ cloudflaredPath:
    * Empty = no gate (LAN-only setups).
    */
   shareKey: process.env.SHARE_KEY ?? '',
+  /**
+   * Marks this instance as the primary (the VPS). A second instance sharing the
+   * same bot token fights the primary for the single Discord gateway session, so
+   * non-primary instances refuse to boot while the primary is reachable.
+   */
+  botPrimary: process.env.BOT_PRIMARY === '1',
+  /** Health URL of the primary instance. Defaults to <PUBLIC_BASE_URL>/health. */
+  primaryHealthUrl:
+    process.env.PRIMARY_HEALTH_URL ??
+    (process.env.PUBLIC_BASE_URL ? `${process.env.PUBLIC_BASE_URL.replace(/\/$/, '')}/health` : ''),
   /** Bitrate librespot requests from Spotify (320 needs Premium). */
   librespotBitrate: Number(process.env.LIBRESPOT_BITRATE ?? 320),
   /** When true, `V@p` plays via YouTube instead of the Spotify device to save API quota. */

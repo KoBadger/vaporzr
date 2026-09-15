@@ -44,6 +44,26 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  console.log(`[vaporzr] instance role: ${config.botPrimary ? 'PRIMARY' : 'SECONDARY'}`);
+  // Cross-host single-instance guard: a SECONDARY instance refuses to start while
+  // the PRIMARY (VPS) bot is reachable. Two logins on one token fight over the
+  // single Discord gateway session (missed events + duplicate replies).
+  if (!config.botPrimary && config.primaryHealthUrl) {
+    try {
+      const res = await fetch(config.primaryHealthUrl, { signal: AbortSignal.timeout(4000) });
+      if (res.ok) {
+        console.warn(
+          `[vaporzr] PRIMARY instance is live at ${config.primaryHealthUrl} — exiting this SECONDARY instance.\n` +
+            '          Stop the primary first (ssh root@46.224.80.104 "docker stop vaporzr"), ' +
+            'or set BOT_PRIMARY=1 to force this one to run.',
+        );
+        process.exit(0);
+      }
+    } catch {
+      /* primary unreachable — this is the only instance, safe to run */
+    }
+  }
+
   // Duplicate-launch guard: MUST run before startServer(), whose Bridge
   // constructor calls librespot.start() → killStale() and would kill the
   // running instance's librespot/bridge before this one even binds the port.
