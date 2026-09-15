@@ -655,7 +655,7 @@ function warnWebTokenUnavailable(): void {
 }
 
 function isSpotifyUrl(input: string): boolean {
-  return /^(spotify:|https?:\/\/(open\.)?spotify\.com\/)/.test(input);
+  return /^(spotify:|https?:\/\/(open|play|embed)\.spotify\.com\/)/i.test(input);
 }
 
 export async function resolveTracks(input: string): Promise<ResolvedTrack[]> {

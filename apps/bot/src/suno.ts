@@ -4,14 +4,19 @@ import type { ResolvedVideo } from './youtube.js';
 
 export class SunoError extends Error {}
 
-const SUNO_RE = /(^|[./])(suno\.com)\/(?:s\/[A-Za-z0-9_-]+|song\/|embed\/|clip\/)/;
-const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/;
+const SUNO_RE = /(^|[./])(suno\.com|suno\.ai)\/(?:s\/[A-Za-z0-9_-]+|song\/|embed\/|clip\/|playlist\/)/;
+const SUNO_CDN_RE = /(^|[./])cdn1\.suno\.ai\//;
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+const BARE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
 
+/** Only treat input as Suno when it's a Suno link, its CDN, or a bare UUID —
+ *  a UUID appearing anywhere in an unrelated URL must not hijack other sources. */
 export function isSunoUrl(input: string): boolean {
-  return SUNO_RE.test(input) || UUID_RE.test(input);
+  const t = input.trim();
+  return SUNO_RE.test(t) || SUNO_CDN_RE.test(t) || BARE_UUID_RE.test(t);
 }
 
 function extractUuid(input: string, html: string): string | null {

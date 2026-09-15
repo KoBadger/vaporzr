@@ -8,6 +8,7 @@ import {
   ActionRowBuilder,
   ActivityType,
   AttachmentBuilder,
+  AutocompleteInteraction,
   ButtonBuilder,
   ButtonStyle,
   Client,
@@ -35,11 +36,14 @@ import { config } from './config.js';
 import { resolveTracks, searchCandidates, SpotifyError, type ResolvedTrack } from './spotify.js';
 import { THEMES, themeById } from './themes.js';
 import {
+  isGenericMediaUrl,
   isYoutubePlaylistUrl,
   isYoutubeUrl,
+  resolveGenericMediaUrl,
   resolveYoutubePlaylist,
   resolveYoutubeVideo,
   searchAndResolveYoutube,
+  searchYoutube,
   YoutubeError,
 } from './youtube.js';
 import { isSunoUrl, resolveSuno } from './suno.js';
@@ -129,7 +133,7 @@ const COMMANDS = [
   new SlashCommandBuilder()
     .setName('remove')
     .setDescription('Remove a track from the queue')
-    .addIntegerOption((o) => o.setName('index').setDescription('1-based index into the queue').setRequired(true)),
+    .addIntegerOption((o) => o.setName('index').setDescription('1-based index into the queue').setRequired(true).setAutocomplete(true)),
   new SlashCommandBuilder()
     .setName('volume')
     .setDescription('Check the current volume, or set it with a level')
@@ -198,7 +202,7 @@ const COMMANDS = [
       s
         .setName('set')
         .setDescription('Set the minimum level for a command')
-        .addStringOption((o) => o.setName('command').setDescription('Command name').setRequired(true))
+        .addStringOption((o) => o.setName('command').setDescription('Command name').setRequired(true).setAutocomplete(true))
         .addStringOption((o) =>
           o
             .setName('level')
@@ -242,7 +246,7 @@ const COMMANDS = [
   new SlashCommandBuilder()
     .setName('sfx')
     .setDescription('Play a DJ sound effect over the music')
-    .addStringOption((o) => o.setName('sound').setDescription('The effect to play (omit to list)')),
+    .addStringOption((o) => o.setName('sound').setDescription('The effect to play (omit to list)').setAutocomplete(true)),
   new SlashCommandBuilder().setName('help').setDescription('Show how to use Vaporzr'),
   new SlashCommandBuilder().setName('invite').setDescription('Get a link to add Vaporzr to your server'),
   new SlashCommandBuilder().setName('stats').setDescription('Show bot statistics'),
@@ -348,20 +352,20 @@ const COMMANDS = [
       sc
         .setName('save')
         .setDescription('Save the current queue as a playlist')
-        .addStringOption((o) => o.setName('name').setDescription('Playlist name').setRequired(true)),
+        .addStringOption((o) => o.setName('name').setDescription('Playlist name').setRequired(true).setAutocomplete(true)),
     )
     .addSubcommand((sc) =>
       sc
         .setName('load')
         .setDescription('Load a saved playlist into the queue')
-        .addStringOption((o) => o.setName('name').setDescription('Playlist name').setRequired(true)),
+        .addStringOption((o) => o.setName('name').setDescription('Playlist name').setRequired(true).setAutocomplete(true)),
     )
     .addSubcommand((sc) => sc.setName('list').setDescription('List saved playlists'))
     .addSubcommand((sc) =>
       sc
         .setName('delete')
         .setDescription('Delete a saved playlist')
-        .addStringOption((o) => o.setName('name').setDescription('Playlist name').setRequired(true)),
+        .addStringOption((o) => o.setName('name').setDescription('Playlist name').setRequired(true).setAutocomplete(true)),
     ),
   new SlashCommandBuilder()
     .setName('djrole')
@@ -547,9 +551,9 @@ export class DiscordBot {
     });
     this.rest = new REST({ version: '10' });
     // Panel toggles Endless Wave through the same machinery as `V@ew on/off`.
-    bridge.setEndlessWaveToggle((guildId, active) => {
-      void this.panelSetEndlessWave(guildId, active).catch((err) => {
-        console.warn(`[endlesswave] panel toggle failed: ${err instanceof Error ? err.message : err}`);
+    bridge.setEndlessWaveToggle((guildId, mode) => {
+      void this.panelSetEndlessWave(guildId, mode).catch((err) => {
+        console.warn(`[autoplay] panel set failed: ${err instanceof Error ? err.message : err}`);
       });
     });
     // Every per-guild session refreshes that server's control panel on changes.
@@ -833,6 +837,10 @@ export class DiscordBot {
       } else if (interaction.customId.startsWith('vzsearch:')) {
         await this.handleSearchPick(interaction);
       }
+      return;
+    }
+    if (interaction.isAutocomplete()) {
+      await this.handleAutocomplete(interaction);
       return;
     }
     if (!interaction.isChatInputCommand()) return;
@@ -3588,6 +3596,35 @@ export class DiscordBot {
     return { embeds: [embed], components: rows };
   }
 
+  /** Autocomplete for dynamic options (playlist names, sfx ids, perms commands, queue index). */
+  private async handleAutocomplete(interaction: AutocompleteInteraction): Promise<void> {
+    const cmd = interaction.commandName;
+    const focused = interaction.options.getFocused(true);
+    const q = String(focused.value ?? '').toLowerCase();
+    const guildId = interaction.guildId ?? '';
+    let choices: Array<{ name: string; value: string | number }> = [];
+    try {
+      if (cmd === 'playlist' && focused.name === 'name') {
+        choices = this.playlists.list(guildId).map((p) => ({ name: `${p.name} · ${p.tracks.length}`, value: p.name }));
+      } else if (cmd === 'sfx' && focused.name === 'sound') {
+        choices = this.sessionFor(guildId).playback
+          .listSoundEffects()
+          .map((snd) => ({ name: `${snd.emoji ?? '🔊'} ${snd.id}`, value: snd.id }));
+      } else if (cmd === 'perms' && focused.name === 'command') {
+        choices = COMMANDS.map((c) => ({ name: c.name, value: c.name }));
+      } else if (cmd === 'remove' && focused.name === 'index') {
+        const snap = this.sessionFor(guildId).queue.getSnapshot();
+        choices = snap.tracks.slice(0, 25).map((t, i) => ({ name: `${i + 1}. ${truncate(t.name, 60)}`, value: i + 1 }));
+      }
+    } catch {
+      /* fall through to empty */
+    }
+    const filtered = choices
+      .filter((c) => !q || String(c.value).toLowerCase().includes(q) || c.name.toLowerCase().includes(q))
+      .slice(0, 25);
+    await interaction.respond(filtered).catch(() => {});
+  }
+
   private async handleButton(interaction: MessageComponentInteraction): Promise<void> {
     if (!interaction.customId.startsWith('vz:')) return;
     const action = interaction.customId.slice(3);
@@ -3919,10 +3956,19 @@ export class DiscordBot {
 
   /** Interactive picker for a free-text search (top matches as a dropdown). */
   private async presentSearch(target: Message | ChatInputCommandInteraction, query: string): Promise<void> {
-    const candidates = await searchCandidates(query, 5);
+    let candidates = await searchCandidates(query, 5);
     const isMsg = 'author' in target;
+    // Spotify found nothing (or is quota-limited) — fall back to YouTube search
+    // so every source stays reachable from a plain `V@p <text>`.
     if (candidates.length === 0) {
-      const msg = `🔍 No results for \`${truncate(query, 60)}\`.`;
+      try {
+        candidates = await searchYoutube(query, 5);
+      } catch {
+        /* ignore — reported below */
+      }
+    }
+    if (candidates.length === 0) {
+      const msg = `🔍 No results for \`${truncate(query, 60)}\` on Spotify or YouTube. Try a link (YouTube, SoundCloud, Bandcamp, Apple, Suno…) or \`/yt\`.`;
       if (isMsg) await (target as Message).reply(msg);
       else await (target as ChatInputCommandInteraction).editReply(msg);
       return;
@@ -4292,14 +4338,12 @@ export class DiscordBot {
     });
   }
 
-  /** Panel/visualizer-initiated autoplay toggle (via the browser): on = smart. */
-  private async panelSetEndlessWave(guildId: string, active: boolean): Promise<void> {
+  /** Panel/visualizer-initiated autoplay mode change (via the browser). */
+  private async panelSetEndlessWave(guildId: string, mode: EW.AutoplayMode): Promise<void> {
     const s = this.sessionFor(guildId);
     if (!s) return;
-    const current = EW.modeOf(s.endlessWave);
-    if (active && current !== 'off') return;
-    if (!active && current === 'off') return;
-    this.setAutoplayMode(s, active ? 'smart' : 'off');
+    if (EW.modeOf(s.endlessWave) === mode) return;
+    this.setAutoplayMode(s, mode);
   }
 
   /** Keep a lookahead buffer of 2 EW-picked tracks at the tail of the queue.
@@ -4491,7 +4535,7 @@ function srcEmoji(source: string | undefined): string {
 }
 
 /** Recognized direct media file extensions a playable URL may point at. */
-const DIRECT_MEDIA_EXT_RE = /\.(wav|mp3|flac|ogg|opus|oga|m4a|aac|mp4|m4v|mkv|webm|aiff|wma)$/i;
+const DIRECT_MEDIA_EXT_RE = /\.(wav|mp3|flac|ogg|opus|oga|m4a|aac|mp4|m4v|mkv|webm|aiff|wma|m3u8|m3u)$/i;
 
 /** True when the input is an http(s) URL to a bare audio/video file. */
 export function isDirectMediaUrl(input: string): boolean {
@@ -4675,7 +4719,8 @@ function isUrlPlayInput(query: string): boolean {
     isAppleMusicUrl(query) ||
     isSoundcloudSetUrl(query) ||
     isSoundcloudUrl(query) ||
-    /^(spotify:|https?:\/\/(open\.)?spotify\.com\/)/i.test(query)
+    isGenericMediaUrl(query) ||
+    /^(spotify:|https?:\/\/(open|play|embed)\.spotify\.com\/)/i.test(query)
   );
 }
 
@@ -4701,12 +4746,15 @@ async function resolvePlayInput(query: string): Promise<ResolvedTrack[]> {
   if (isSoundcloudUrl(query)) {
     return [await resolveSoundcloudVideo(query)];
   }
+  if (isGenericMediaUrl(query)) {
+    return [await resolveGenericMediaUrl(query)];
+  }
   try {
     return await resolveTracks(query);
   } catch (err) {
     // Spotify's Developer Mode quota can be locked for hours. Keep ordinary
     // free-text play usable through YouTube instead of surfacing a hard 429.
-    if (err instanceof SpotifyError && err.status === 429 && !/^(spotify:|https?:\/\/(open\.)?spotify\.com\/)/i.test(query)) {
+    if (err instanceof SpotifyError && err.status === 429 && !/^(spotify:|https?:\/\/(open|play|embed)\.spotify\.com\/)/i.test(query)) {
       const hit = await searchAndResolveYoutube(query);
       if (hit) return [hit];
     }

@@ -14,7 +14,7 @@ export interface ResolvedAppleTrack extends ResolvedTrack {
   thumbnail?: string;
 }
 
-const AM_URL_RE = /(^|[./])music\.apple\.com\//;
+const AM_URL_RE = /(^|[./])(music\.apple\.com|geo\.music\.apple\.com|itunes\.apple\.com)\//;
 
 export function isAppleMusicUrl(input: string): boolean {
   return AM_URL_RE.test(input);

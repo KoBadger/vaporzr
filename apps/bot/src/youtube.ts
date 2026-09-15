@@ -204,6 +204,50 @@ export async function resolveYoutubeVideo(input: string): Promise<ResolvedVideo>
   };
 }
 
+/** Non-YouTube audio hosts yt-dlp can resolve directly. */
+const GENERIC_MEDIA_HOST_RE =
+  /(^|[./])(bandcamp\.com|deezer\.com|tidal\.com|mixcloud\.com|audiomack\.com|jamendo\.com|qobuz\.com|napster\.com)\//i;
+
+export function isGenericMediaUrl(input: string): boolean {
+  const t = input.trim();
+  return /^https?:\/\//i.test(t) && GENERIC_MEDIA_HOST_RE.test(t);
+}
+
+/** Resolve any yt-dlp-supported URL (Bandcamp, Deezer, Tidal, Mixcloud, …)
+ *  into a single queuable track with a live stream URL. */
+export async function resolveGenericMediaUrl(input: string): Promise<ResolvedVideo> {
+  const url = input.trim();
+  const META_SEP = '\t';
+  const raw = await runYtDlp([
+    '--no-playlist',
+    '--no-warnings',
+    '-f',
+    AUDIO_FORMAT,
+    '--get-url',
+    '--print',
+    `%(id)s${META_SEP}%(title)s${META_SEP}%(duration)s${META_SEP}%(thumbnail)s${META_SEP}%(uploader)s`,
+    url,
+  ]);
+  const lines = raw.trim().split(/\r?\n/);
+  const metaLine = lines.find((l) => l.includes(META_SEP));
+  const streamUrl = lines.find((l) => /^https?:\/\//.test(l));
+  if (!metaLine || !streamUrl) throw new YoutubeError('Could not extract a playable stream from that link.');
+  const [id, title, duration, thumbnail, uploader] = metaLine.split(META_SEP);
+  return {
+    videoId: id,
+    uri: `direct:${url}`,
+    name: title || 'Unknown',
+    artists: [uploader || 'Web'],
+    album: '',
+    durationMs: (Number(duration) || 0) * 1000,
+    image: thumbnail || undefined,
+    source: 'direct',
+    streamUrl,
+    channel: uploader || 'Web',
+    thumbnail: thumbnail || undefined,
+  };
+}
+
 const SEARCH_URL = 'https://www.googleapis.com/youtube/v3/search';
 
 /**
