@@ -2038,13 +2038,25 @@ export class DiscordBot {
     if (this.processedMessages.has(message.id)) return;
     this.processedMessages.add(message.id);
     setTimeout(() => this.processedMessages.delete(message.id), 30_000);
-    if (!message.content.startsWith('v@') && !message.content.startsWith('V@')) return;
+
+    // Trigger forms: `v@…` / `V@…`, or a leading bot mention (`@Vaporzr diag`).
+    // The mention form keeps prefix commands working even when Discord withholds
+    // message content except for mentions/DMs (limited Message Content intent).
+    const raw = message.content ?? '';
+    const me = this.client.user?.id ?? '';
+    let rest: string | null = null;
+    if (raw.startsWith('v@') || raw.startsWith('V@')) {
+      rest = raw.slice(2).trimStart();
+    } else if (me && (raw.startsWith(`<@${me}>`) || raw.startsWith(`<@!${me}>`))) {
+      rest = raw.replace(/^<@!?\d+>/, '').trimStart();
+    }
+    if (rest === null) return;
+
     if (message.guildId && message.channelId) {
       this.lastTextChannel.set(message.guildId, message.channelId);
       this.scheduleSavePanels();
     }
 
-    const rest = message.content.slice(2).trimStart();
     if (!rest) {
       await message.reply('Vaporzr commands — try `V@p <link or search>`, `V@s`, `V@i <link or search>`, `V@q`, or `V@help`.');
       return;
