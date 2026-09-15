@@ -435,6 +435,47 @@ export class VoiceManager {
     this.paused = false;
   }
 
+  /** Generative ambient pad for an empty queue — synthesised live by ffmpeg
+   *  (detuned sines + tremolo + echo). Runs until a real stream replaces it. */
+  playAmbient(): void {
+    if (!this.player) return;
+    this.clearIdleTimer();
+    this.stopStream();
+    const freqs = [110, 164.81, 220, 329.63];
+    const args = ['-hide_banner', '-loglevel', 'error'];
+    for (const f of freqs) args.push('-f', 'lavfi', '-i', `sine=frequency=${f}:sample_rate=48000`);
+    const ins = freqs.map((_, i) => `[${i}:a]`).join('');
+    args.push(
+      '-filter_complex',
+      `${ins}amix=inputs=${freqs.length}:normalize=1,tremolo=f=0.12:d=0.6,lowpass=f=1400,aecho=0.8:0.9:600|900:0.35|0.25,volume=0.45,afade=t=in:st=0:d=4`,
+      '-ac', '2', '-ar', '48000', '-f', 's16le', 'pipe:1',
+    );
+    const proc = spawn(config.ffmpegPath, args, { windowsHide: true });
+    this.ffmpeg = proc;
+    this.streamStartTime = Date.now();
+    this.pausedPositionMs = 0;
+    const stream = this.makeMixStream();
+    this.stream = stream;
+    proc.stdout.on('data', (d) => {
+      this.chunksSinceLog++;
+      this.bytesSinceLog += d.length;
+    });
+    proc.stderr.on('data', (d) => {
+      const l = d.toString().trim();
+      if (l) console.warn(`[voice] ambient: ${l.slice(0, 200)}`);
+    });
+    proc.stdout.pipe(stream);
+    const resource = createAudioResource(stream, { inputType: StreamType.Raw, inlineVolume: true });
+    this.resource = resource;
+    this.applyVolumeToResource();
+    this.player.play(resource);
+    this.paused = false;
+    proc.on('exit', () => {
+      if (this.ffmpeg === proc) this.ffmpeg = null;
+    });
+    console.log('[voice] ambient intermission started');
+  }
+
   /** Set the callback fired when the active stream can accept more PCM again. */
   setStreamDrain(cb: (() => void) | null): void {
     this.onStreamDrain = cb;

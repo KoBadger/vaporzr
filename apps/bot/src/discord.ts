@@ -374,6 +374,14 @@ const COMMANDS = [
       o.setName('role').setDescription('Role to grant DJ powers (omit to view current)').setRequired(false),
     )
     .addBooleanOption((o) => o.setName('off').setDescription('Clear the DJ role').setRequired(false)),
+  new SlashCommandBuilder()
+    .setName('jump')
+    .setDescription('Jump to a lyric line in the current song (e.g. "jump to the chorus")')
+    .addStringOption((o) => o.setName('query').setDescription('Words from the lyric line to jump to').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('ambient')
+    .setDescription('Play a generative ambient pad when the queue ends (intermission)')
+    .addBooleanOption((o) => o.setName('enabled').setDescription('Turn ambient intermission on or off').setRequired(false)),
 ];
 
 function fmtMs(ms: number): string {
@@ -440,6 +448,8 @@ export class DiscordBot {
   /** guildId -> last voice-status text posted (rate-limit aware). */
   private voiceStatusText = new Map<string, string>();
   private voiceStatusAt = new Map<string, number>();
+  /** guildId -> play a generative ambient pad when the queue empties. */
+  private ambientGuilds = new Set<string>();
   /** guildId -> panel message location. */
   private panels = new Map<string, { channelId: string; messageId: string }>();
   private npMessages = new Map<string, { channelId: string; messageId: string }>();
@@ -468,7 +478,10 @@ export class DiscordBot {
   private lyricPagesTicker: NodeJS.Timeout | null = null;
   private karaokeTicker: NodeJS.Timeout | null = null;
   /** guildId -> active sleep timer (stops playback + leaves voice when it fires). */
-  private sleepTimers = new Map<string, { timeout: NodeJS.Timeout; at: number }>();
+  private sleepTimers = new Map<
+    string,
+    { timeout: NodeJS.Timeout; at: number; fade?: NodeJS.Timeout; step?: NodeJS.Timeout; prevVolume?: number }
+  >();
 
   // ---- persisted panel registrations (survive restarts) ----
   private panelSaveTimer: NodeJS.Timeout | null = null;
@@ -599,6 +612,10 @@ export class DiscordBot {
           void this.topUpWave(s).catch((err) => {
             console.warn(`[endlesswave] queue-end refill failed: ${err instanceof Error ? err.message : err}`);
           });
+          return;
+        }
+        if (this.ambientGuilds.has(s.guildId) && s.voice.isJoined()) {
+          s.voice.playAmbient();
           return;
         }
         void this.notifyQueueEnded(s.guildId);
@@ -886,21 +903,49 @@ export class DiscordBot {
     return 0;
   }
 
-  /** Set or replace a guild's sleep timer. Fires once, then clears itself. */
+  /** Set or replace a guild's sleep timer. Fades the volume out over the last
+   *  ~20s, then fires once and clears itself. */
   private setSleepTimer(s: Session, ms: number, onFire: () => void): void {
     this.cancelSleepTimer(s.guildId);
+    const FADE_MS = 20_000;
+    let fade: NodeJS.Timeout | undefined;
+    let step: NodeJS.Timeout | undefined;
+    let prevVolume: number | undefined;
+    if (ms > FADE_MS + 5_000) {
+      fade = setTimeout(() => {
+        prevVolume = s.queue.getState().volume;
+        const steps = 20;
+        let i = 0;
+        step = setInterval(() => {
+          i++;
+          s.playback.volume(Math.max(0, Math.round((prevVolume ?? 100) * (1 - i / steps))));
+          if (i >= steps && step) clearInterval(step);
+        }, FADE_MS / steps);
+        step.unref?.();
+        const e = this.sleepTimers.get(s.guildId);
+        if (e) {
+          e.step = step;
+          e.prevVolume = prevVolume;
+        }
+      }, ms - FADE_MS);
+      fade.unref?.();
+    }
     const timeout = setTimeout(() => {
       this.sleepTimers.delete(s.guildId);
       onFire();
     }, ms);
     timeout.unref?.();
-    this.sleepTimers.set(s.guildId, { timeout, at: Date.now() + ms });
+    this.sleepTimers.set(s.guildId, { timeout, at: Date.now() + ms, fade, prevVolume });
   }
 
   private cancelSleepTimer(guildId: string): void {
     const t = this.sleepTimers.get(guildId);
     if (t) {
       clearTimeout(t.timeout);
+      if (t.fade) clearTimeout(t.fade);
+      if (t.step) clearInterval(t.step);
+      // Restore the pre-fade volume if the timer is cancelled mid-fade.
+      if (t.prevVolume !== undefined) this.sessions.get(guildId).playback.volume(t.prevVolume);
       this.sleepTimers.delete(guildId);
     }
   }
@@ -922,6 +967,20 @@ export class DiscordBot {
         /* channel gone — nothing to notify */
       }
     }
+  }
+
+  /** Jump to the first synced-lyrics line whose text contains the phrase. */
+  private async jumpToLyric(s: Session, phrase: string): Promise<string> {
+    const cur = s.queue.getCurrentTrack();
+    if (!cur) return 'Nothing is playing.';
+    const lyr = await fetchLyrics(cur).catch(() => null);
+    const lines = lyr?.syncedLines ?? [];
+    if (lines.length === 0) return `No synced lyrics for **${cur.name}**, so I can't jump.`;
+    const q = phrase.toLowerCase().trim();
+    const hit = lines.find((l) => l.text.toLowerCase().includes(q));
+    if (!hit) return `Couldn't find “${phrase}” in the lyrics.`;
+    s.playback.seek(hit.timeMs);
+    return `⏩ Jumped to **${fmtMs(hit.timeMs)}** — “${truncate(hit.text, 80)}”`;
   }
 
   private canUse(command: string, interaction: MessageComponentInteraction): boolean {
@@ -1397,6 +1456,30 @@ export class DiscordBot {
         break;
       }
 
+      case 'ambient': {
+        if (!this.requireLevel('ambient', interaction)) return this.deny(interaction);
+        const gid = interaction.guildId;
+        if (!gid) return void (await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral }));
+        const enabled = interaction.options.getBoolean('enabled');
+        if (enabled === true) this.ambientGuilds.add(gid);
+        else if (enabled === false) this.ambientGuilds.delete(gid);
+        const on = this.ambientGuilds.has(gid);
+        await interaction.reply({
+          content: on
+            ? '🌌 Ambient intermission **on** — when the queue ends I\'ll play a generative pad instead of going quiet.'
+            : 'Ambient intermission **off** — the queue ends quietly.',
+          flags: MessageFlags.Ephemeral,
+        });
+        break;
+      }
+
+      case 'jump': {
+        if (!this.requireLevel('jump', interaction)) return this.deny(interaction);
+        await interaction.deferReply();
+        await interaction.editReply(await this.jumpToLyric(s, interaction.options.getString('query', true)));
+        break;
+      }
+
       case 'sensitivity': {
         if (!this.requireLevel('sensitivity', interaction)) return this.deny(interaction);
         const multiplier = interaction.options.getNumber('multiplier', true);
@@ -1780,6 +1863,8 @@ export class DiscordBot {
       diag: 'diag',
       save: 'playlist', load: 'playlist', playlists: 'playlist', pl: 'playlist', del: 'playlist',
       djrole: 'djrole',
+      jump: 'jump',
+      ambient: 'ambient',
     };
     const canonical = alias[cmd];
     if (canonical) {
@@ -1852,6 +1937,13 @@ export class DiscordBot {
                 : `🗳️ Vote recorded — **${v.votes}/${v.needed}**.`,
             );
           }
+          break;
+        }
+
+      case 'jump': {
+          if (!canUse('jump')) return void (await deny());
+          if (!args) return void (await message.reply('Usage: `V@jump <words from a lyric line>`.'));
+          await message.reply(await this.jumpToLyric(s, args));
           break;
         }
 
@@ -2018,6 +2110,21 @@ export class DiscordBot {
             ok
               ? `${s.playback.listSoundEffects().find((snd) => snd.id === id)?.emoji ?? ''} **${id}**! 🎧`
               : `Unknown sound \`${id}\`. Try ${s.playback.listSoundEffects().map((snd) => `\`${snd.id}\``).join(', ')}.`,
+          );
+          break;
+        }
+
+        case 'ambient': {
+          if (!canUse('ambient')) return void (await deny());
+          if (!message.guildId) return void (await message.reply('Must be used in a server.'));
+          const a = args.trim().toLowerCase();
+          if (/^(on|start|1|true)$/.test(a)) this.ambientGuilds.add(message.guildId);
+          else if (/^(off|stop|0|false)$/.test(a)) this.ambientGuilds.delete(message.guildId);
+          const on = this.ambientGuilds.has(message.guildId);
+          await message.reply(
+            on
+              ? '🌌 Ambient intermission **on** — when the queue ends I\'ll play a generative pad.'
+              : '🌌 Ambient intermission **off**. Use `V@ambient on` to enable.',
           );
           break;
         }
@@ -4601,6 +4708,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/nowplaying` · `V@np` — what\'s playing',
       '`/volume <0-100>` · `V@v` — set the volume',
       '`/clear` · `V@c` — stop and clear the queue',
+      '`/jump <lyric>` · `V@jump` — jump to a lyric line (e.g. "to the chorus")',
     ],
   },
   {
@@ -4627,6 +4735,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/autoplay now:true` — queue one more track right now',
       '`/autoplay count:<1-10>` — how many tracks to buffer ahead',
       '`/endwav on|off|status` · `V@ew` — Endless Wave shortcut',
+      '`/ambient on|off` · `V@ambient` — generative ambient pad when the queue empties',
     ],
   },
   {
