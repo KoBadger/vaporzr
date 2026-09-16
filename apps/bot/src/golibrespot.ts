@@ -24,6 +24,8 @@ export class GoLibrespotManager implements SpotifyBackend {
   private watchdog: ReturnType<typeof setInterval> | null = null;
   private lastHealthyAt = 0;
   private restarting = false;
+  /** Last time PCM actually flowed out of the sink (i.e. audio is audible). */
+  private lastPcmAt = 0;
   /** Total PCM bytes captured (44.1 kHz stereo s16 => 176400 B/s) for position tracking. */
   private pcmBytes = 0;
   private static readonly PCM_BYTES_PER_SEC = 44_100 * 2 * 2;
@@ -171,10 +173,17 @@ export class GoLibrespotManager implements SpotifyBackend {
       this.lastHealthyAt = Date.now();
       return;
     }
-    // API unresponsive — the dealer link is likely wedged. Wait out a short
-    // grace period (transient blips) before bouncing the process.
+    // Music is still flowing out of the sink — never bounce the process mid-song,
+    // that's exactly what cut tracks off. Defer recovery until playback stops;
+    // the device re-registers then and the next play works.
+    if (Date.now() - this.lastPcmAt < 15_000) {
+      this.lastHealthyAt = Date.now();
+      return;
+    }
+    // API unresponsive AND silent — the dealer link is likely wedged. Wait out a
+    // short grace period (transient blips) before bouncing the process.
     if (Date.now() - this.lastHealthyAt > 25_000) {
-      console.warn('[golibrespot] device API unresponsive (dealer link lost?) — restarting to re-register');
+      console.warn('[golibrespot] device API unresponsive and idle (dealer link lost?) — restarting to re-register');
       await this.restart();
     }
   }
@@ -253,6 +262,7 @@ export class GoLibrespotManager implements SpotifyBackend {
     this.parec = p;
     p.stdout?.on('data', (d: Buffer) => {
       this.pcmBytes += d.length;
+      this.lastPcmAt = Date.now();
       try {
         this.pcmHandler?.(d);
       } catch {
