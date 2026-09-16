@@ -106,7 +106,7 @@ export class GoLibrespotManager implements SpotifyBackend {
         ].join('\n'),
       );
     }
-    this.ensurePulse();
+    await this.ensurePulse();
     const log = fs.openSync(path.join(config.goLibrespotConfigDir, 'stderr.log'), 'a');
     this.proc = spawn(config.goLibrespotPath, ['--config_dir', config.goLibrespotConfigDir], {
       stdio: ['ignore', log, log],
@@ -116,14 +116,43 @@ export class GoLibrespotManager implements SpotifyBackend {
     console.log('[golibrespot] started — pair via spotify.com/pair (device-code); see stderr.log');
   }
 
-  private ensurePulse(): void {
-    // Best-effort: start the audio server and make sure the null sink exists.
-    spawn('pulseaudio', ['--start', '--exit-idle-time=-1'], { stdio: 'ignore' }).on('error', () => {});
-    const load = spawn('pactl', ['load-module', 'module-null-sink', `sink_name=${config.pulseSinkName}`], {
-      stdio: 'ignore',
+  /** Start PulseAudio and ensure the null-sink exists (retrying around startup races). */
+  private async ensurePulse(): Promise<void> {
+    await this.run('pulseaudio', ['--start', '--exit-idle-time=-1']);
+    for (let i = 0; i < 12; i++) {
+      if (await this.sinkExists()) {
+        await this.run('pactl', ['set-default-sink', config.pulseSinkName]);
+        return;
+      }
+      await this.run('pactl', [
+        'load-module',
+        'module-null-sink',
+        `sink_name=${config.pulseSinkName}`,
+        'sink_properties=device.description=Vaporzr',
+      ]);
+      await new Promise((r) => {
+        const t = setTimeout(r, 500);
+        t.unref?.();
+      });
+    }
+  }
+
+  private run(cmd: string, args: string[]): Promise<void> {
+    return new Promise((resolve) => {
+      const p = spawn(cmd, args, { stdio: 'ignore' });
+      p.on('error', () => resolve());
+      p.on('exit', () => resolve());
     });
-    load.on('error', () => {});
-    spawn('pactl', ['set-default-sink', config.pulseSinkName], { stdio: 'ignore' }).on('error', () => {});
+  }
+
+  private sinkExists(): Promise<boolean> {
+    return new Promise((resolve) => {
+      const p = spawn('pactl', ['list', 'short', 'sinks'], { stdio: ['ignore', 'pipe', 'ignore'] });
+      let out = '';
+      p.stdout?.on('data', (d: Buffer) => (out += d.toString()));
+      p.on('error', () => resolve(false));
+      p.on('exit', () => resolve(out.includes(config.pulseSinkName)));
+    });
   }
 
   private startCapture(): void {
