@@ -87,25 +87,26 @@ export class GoLibrespotManager implements SpotifyBackend {
     this.stopped = false;
     fs.mkdirSync(config.goLibrespotConfigDir, { recursive: true });
     const cfgPath = path.join(config.goLibrespotConfigDir, 'config.yml');
-    if (!fs.existsSync(cfgPath)) {
-      fs.writeFileSync(
-        cfgPath,
-        [
-          'log_level: info',
-          `device_name: "${config.librespotDeviceName}"`,
-          'device_type: speaker',
-          'audio_backend: pulseaudio',
-          `audio_device: "${config.pulseSinkName}"`,
-          'server:',
-          '  enabled: true',
-          '  address: 127.0.0.1',
-          `  port: ${config.goLibrespotApiPort}`,
-          'credentials:',
-          '  type: device_auth',
-          '',
-        ].join('\n'),
-      );
-    }
+    // Always (re)write the managed config so the audio backend can't drift
+    // (e.g. a carried-over config with the FIFO pipe backend). Credentials live
+    // in state.json, which is untouched.
+    fs.writeFileSync(
+      cfgPath,
+      [
+        'log_level: info',
+        `device_name: "${config.librespotDeviceName}"`,
+        'device_type: speaker',
+        'audio_backend: pulseaudio',
+        `audio_device: "${config.pulseSinkName}"`,
+        'server:',
+        '  enabled: true',
+        '  address: 127.0.0.1',
+        `  port: ${config.goLibrespotApiPort}`,
+        'credentials:',
+        '  type: device_auth',
+        '',
+      ].join('\n'),
+    );
     await this.ensurePulse();
     const log = fs.openSync(path.join(config.goLibrespotConfigDir, 'stderr.log'), 'a');
     this.proc = spawn(config.goLibrespotPath, ['--config_dir', config.goLibrespotConfigDir], {
