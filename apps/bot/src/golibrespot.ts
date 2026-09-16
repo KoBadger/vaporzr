@@ -110,8 +110,20 @@ export class GoLibrespotManager implements SpotifyBackend {
         'log_level: info',
         `device_name: "${config.librespotDeviceName}"`,
         'device_type: speaker',
+        // 160 kbps buffers faster than 320 and is plenty for Discord voice.
+        'bitrate: 160',
+        // go-librespot plays its OWN autoplay picks after a track otherwise,
+        // which the bot never queued (the "different song for 2s" glitch).
+        'disable_autoplay: true',
+        'crossfade_duration: 0',
         'audio_backend: pulseaudio',
         `audio_device: "${config.pulseSinkName}"`,
+        // On-disk audio cache: repeat/known tracks start from local disk instead
+        // of re-downloading from Spotify every time.
+        'cache:',
+        '  enabled: true',
+        `  dir: "${path.join(config.goLibrespotConfigDir, 'cache')}"`,
+        '  size_limit: "1GB"',
         'server:',
         '  enabled: true',
         '  address: 127.0.0.1',
