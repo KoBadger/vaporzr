@@ -107,7 +107,19 @@ export class SessionManager {
       };
       s.queue.restore(data);
       const restored = s.queue.getSnapshot().tracks.length;
-      console.log(`[vaporzr] restored ${restored} queued track(s) for guild ${guildId} (paused)`);
+      const wasPlaying = Boolean((data.state as { playing?: boolean } | undefined)?.playing);
+      // A queue persisted while PAUSED is almost always stale (e.g. a redeploy
+      // hours later). Restoring it silently made the next `V@p` look like it
+      // "auto-added" a pile of extra tracks. Only resume queues that were
+      // actually mid-playback; otherwise start the session clean.
+      if (!wasPlaying) {
+        s.queue.clear();
+        console.log(
+          `[vaporzr] ignoring stale paused queue for guild ${guildId} (${restored} track(s)) — starting fresh`,
+        );
+        return;
+      }
+      console.log(`[vaporzr] restored ${restored} queued track(s) for guild ${guildId} (was playing)`);
       // Warm the current + next stream URLs in the background so the first
       // play after a restart starts instantly instead of resolving cold.
       const cur = s.queue.getCurrentTrack();
