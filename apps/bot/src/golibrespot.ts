@@ -20,6 +20,10 @@ export class GoLibrespotManager implements SpotifyBackend {
   private pcmHandler: ((data: Buffer) => boolean) | null = null;
   private stopped = true;
   private startedAt = 0;
+  /** Watchdog that restarts go-librespot when its Spotify "dealer" link dies. */
+  private watchdog: ReturnType<typeof setInterval> | null = null;
+  private lastHealthyAt = 0;
+  private restarting = false;
   /** Total PCM bytes captured (44.1 kHz stereo s16 => 176400 B/s) for position tracking. */
   private pcmBytes = 0;
   private static readonly PCM_BYTES_PER_SEC = 44_100 * 2 * 2;
@@ -124,7 +128,68 @@ export class GoLibrespotManager implements SpotifyBackend {
     });
     this.startedAt = Date.now();
     this.startCapture();
+    this.startWatchdog();
     console.log('[golibrespot] started — pair via spotify.com/pair (device-code); see stderr.log');
+  }
+
+  /**
+   * go-librespot's connection to Spotify's "dealer" (the WebSocket that keeps the
+   * Connect device registered) can silently die — it logs "did not receive last
+   * pong from dealer" forever and never reconnects. The device then disappears
+   * and every play fails with "No Spotify device available". We can't fix
+   * go-librespot's reconnect, but we can bounce it: if its local API stops
+   * responding for a stretch, kill and respawn it so the device re-registers.
+   */
+  private startWatchdog(): void {
+    if (this.watchdog) return;
+    this.lastHealthyAt = Date.now();
+    const t = setInterval(() => void this.healthCheck(), 10_000);
+    t.unref?.();
+    this.watchdog = t;
+  }
+
+  private async healthCheck(): Promise<void> {
+    if (this.stopped || this.restarting) return;
+    if (!this.isRunning()) {
+      console.warn('[golibrespot] process is not running — restarting');
+      await this.restart();
+      return;
+    }
+    if (await this.pingApi()) {
+      this.lastHealthyAt = Date.now();
+      return;
+    }
+    // API unresponsive — the dealer link is likely wedged. Wait out a short
+    // grace period (transient blips) before bouncing the process.
+    if (Date.now() - this.lastHealthyAt > 25_000) {
+      console.warn('[golibrespot] device API unresponsive (dealer link lost?) — restarting to re-register');
+      await this.restart();
+    }
+  }
+
+  private async pingApi(): Promise<boolean> {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 5_000);
+      t.unref?.();
+      const r = await fetch(this.api('/status'), { signal: ctrl.signal });
+      clearTimeout(t);
+      return r.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  private async restart(): Promise<void> {
+    if (this.restarting) return;
+    this.restarting = true;
+    try {
+      this.stop();
+      this.stopped = false;
+      await this.start();
+    } finally {
+      this.restarting = false;
+    }
   }
 
   /** Start PulseAudio and ensure the null-sink exists (retrying around startup races). */
@@ -194,6 +259,10 @@ export class GoLibrespotManager implements SpotifyBackend {
 
   stop(): void {
     this.stopped = true;
+    if (this.watchdog) {
+      clearInterval(this.watchdog);
+      this.watchdog = null;
+    }
     try {
       this.parec?.kill();
     } catch {
