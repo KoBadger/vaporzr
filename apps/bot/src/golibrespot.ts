@@ -19,6 +19,34 @@ export class GoLibrespotManager {
   private pcmHandler: ((data: Buffer) => boolean) | null = null;
   private stopped = true;
   private startedAt = 0;
+  /** Total PCM bytes captured (44.1 kHz stereo s16 => 176400 B/s) for position tracking. */
+  private pcmBytes = 0;
+  private static readonly PCM_BYTES_PER_SEC = 44_100 * 2 * 2;
+
+  /** Mirrors LibrespotManager so the two are interchangeable. */
+  get enabled(): boolean {
+    return Boolean(config.goLibrespotPath);
+  }
+
+  getPcmBytes(): number {
+    return this.pcmBytes;
+  }
+
+  getPositionMs(): number {
+    return Math.round((this.pcmBytes / GoLibrespotManager.PCM_BYTES_PER_SEC) * 1000);
+  }
+
+  resetPosition(): void {
+    this.pcmBytes = 0;
+  }
+
+  setPositionMs(ms: number): void {
+    this.pcmBytes = Math.round((Math.max(0, ms) / 1000) * GoLibrespotManager.PCM_BYTES_PER_SEC);
+  }
+
+  /** No-op (parec has no socket); present for LibrespotManager parity. */
+  resumeSocket(): void {}
+  pauseSocket(): void {}
 
   setPcmHandler(fn: ((data: Buffer) => boolean) | null): void {
     this.pcmHandler = fn;
@@ -106,6 +134,7 @@ export class GoLibrespotManager {
     );
     this.parec = p;
     p.stdout?.on('data', (d: Buffer) => {
+      this.pcmBytes += d.length;
       try {
         this.pcmHandler?.(d);
       } catch {
@@ -159,5 +188,63 @@ export class GoLibrespotManager {
     } catch {
       return null;
     }
+  }
+
+  /** Start playback of a Spotify URI via the local API. */
+  async playUri(uri: string): Promise<boolean> {
+    return this.post('/player/play', { uri });
+  }
+
+  async pausePlayback(): Promise<void> {
+    await this.post('/player/pause', {});
+  }
+
+  async resumePlayback(): Promise<void> {
+    await this.post('/player/resume', {});
+  }
+
+  async seekMs(ms: number): Promise<void> {
+    await this.post('/player/seek', { position: Math.max(0, Math.round(ms)) });
+  }
+
+  private async post(pathname: string, body: unknown): Promise<boolean> {
+    try {
+      const r = await fetch(this.api(pathname), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      return r.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Rename the device: rewrites config.yml and restarts go-librespot. */
+  setDeviceName(name: string): void {
+    const clean = name.replace(/[\r\n"]/g, '').slice(0, 32).trim() || 'Vaporzr';
+    try {
+      const cfgPath = path.join(config.goLibrespotConfigDir, 'config.yml');
+      let cfg = fs.readFileSync(cfgPath, 'utf8');
+      cfg = /^device_name:/m.test(cfg)
+        ? cfg.replace(/^device_name:.*/m, `device_name: "${clean}"`)
+        : `device_name: "${clean}"\n${cfg}`;
+      fs.writeFileSync(cfgPath, cfg);
+    } catch {
+      /* ignore */
+    }
+    try {
+      this.proc?.kill();
+    } catch {
+      /* ignore */
+    }
+    this.proc = null;
+    try {
+      this.parec?.kill();
+    } catch {
+      /* ignore */
+    }
+    this.parec = null;
+    void this.start();
   }
 }
