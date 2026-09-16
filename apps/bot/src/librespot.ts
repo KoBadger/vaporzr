@@ -46,7 +46,39 @@ export function librespotDeviceId(name: string): string {
   return createHash('sha1').update(name).digest('hex');
 }
 
-export class LibrespotManager {
+/** Common surface both Spotify backends (librespot-org and go-librespot) implement,
+ *  so PlaybackController/Session can hold either one. */
+export interface SpotifyBackend {
+  readonly enabled: boolean;
+  isRunning(): boolean;
+  getDeviceInfo(): {
+    name: string;
+    deviceId: string;
+    running: boolean;
+    enabled: boolean;
+    uptimeMs: number;
+    bitrate: number;
+    stderrLog: string;
+  };
+  setDeviceName(name: string): void;
+  start(): Promise<void>;
+  stop(): void;
+  setPcmHandler(fn: ((data: Buffer) => boolean) | null): void;
+  resumeSocket(): void;
+  pauseSocket(): void;
+  getPcmBytes(): number;
+  getPositionMs(): number;
+  resetPosition(): void;
+  setPositionMs(ms: number): void;
+  /** go-librespot only: start a Spotify URI via its local API. */
+  playUri?(uri: string): Promise<boolean>;
+  pausePlayback?(): Promise<void>;
+  resumePlayback?(): Promise<void>;
+  seekMs?(ms: number): Promise<void>;
+  setVolume?(v: number): Promise<void>;
+}
+
+export class LibrespotManager implements SpotifyBackend {
   private proc: ChildProcess | null = null;
   private tcpServer: net.Server | null = null;
   private bridgeDir = '';

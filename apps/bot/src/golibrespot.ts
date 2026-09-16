@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
+import type { SpotifyBackend } from './librespot.js';
 
 /**
  * Manages go-librespot as the bot's server-side Spotify Connect device.
@@ -13,7 +14,7 @@ import { config } from './config.js';
  * Its login is the remote device-code flow (spotify.com/pair?code=…), so it can
  * pair from a datacenter with no local-network discovery.
  */
-export class GoLibrespotManager {
+export class GoLibrespotManager implements SpotifyBackend {
   private proc: ChildProcess | null = null;
   private parec: ChildProcess | null = null;
   private pcmHandler: ((data: Buffer) => boolean) | null = null;

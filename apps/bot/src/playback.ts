@@ -9,7 +9,7 @@ import { resolveSoundcloudVideo, soundcloudUriToUrl } from './soundcloud.js';
 import { resolveApplePlayback } from './apple.js';
 import { dj, sfxById, type SfxSound } from './soundboard.js';
 import type { VoiceManager } from './voice.js';
-import { librespotDeviceId, type LibrespotManager } from './librespot.js';
+import { librespotDeviceId, type SpotifyBackend } from './librespot.js';
 import { config } from './config.js';
 import { analyzer } from './analyzer.js';
 import {
@@ -109,7 +109,7 @@ export class PlaybackController {
     private queue: QueueManager,
     private sendVisualizer: SendFn,
     private voice: VoiceManager,
-    private librespot: LibrespotManager | null = null,
+    private librespot: SpotifyBackend | null = null,
   ) {
     this.loadStreamCache();
     // When the voice link drops mid-track and comes back, resume the current
@@ -484,9 +484,9 @@ export class PlaybackController {
         this.startSpotifyFeed();
       }
       try {
-        await spotifyPlay(device.id, [current.uri]);
+        await this.playOnDevice(device.id, current.uri);
         if (generation !== this.playGeneration || this.queue.getCurrentTrack()?.uri !== current.uri) {
-          void spotifyPause(device.id).catch(() => {});
+          this.pauseSpotifyAny();
           return;
         }
         this.spotifyRetryAttempts = 0;
@@ -559,7 +559,7 @@ export class PlaybackController {
     this.spotifyFallback = false;
     this.stopSpotifyFeed();
     this.stopSpotifyProgress();
-    if (this.spotifyDeviceId) void spotifyPause(this.spotifyDeviceId).catch(() => {});
+        this.pauseSpotifyAny();
     try {
       const cached = this.streamCache.get(current.uri);
       let video = cached;
@@ -668,7 +668,7 @@ export class PlaybackController {
     this.spotifyFallback = false;
     this.stopSpotifyFeed();
     this.stopSpotifyProgress();
-    if (this.spotifyDeviceId) void spotifyPause(this.spotifyDeviceId).catch(() => {});
+        this.pauseSpotifyAny();
     const durationMs = (await probeLocalDuration(filePath)) ?? current.durationMs;
     this.currentUri = current.uri;
     this.queue.setState({
@@ -696,7 +696,7 @@ export class PlaybackController {
     this.spotifyFallback = false;
     this.stopSpotifyFeed();
     this.stopSpotifyProgress();
-    if (this.spotifyDeviceId) void spotifyPause(this.spotifyDeviceId).catch(() => {});
+        this.pauseSpotifyAny();
     const durationMs = (await probeDuration(current.streamUrl)) ?? current.durationMs;
     this.currentUri = current.uri;
     this.queue.setState({
@@ -742,7 +742,7 @@ export class PlaybackController {
     this.spotifyFallback = false;
     this.stopSpotifyFeed();
     this.stopSpotifyProgress();
-    if (this.spotifyDeviceId) void spotifyPause(this.spotifyDeviceId).catch(() => {});
+        this.pauseSpotifyAny();
     const durationMs = video.durationMs || current.durationMs;
     this.currentUri = current.uri;
     this.currentVideo = video;
@@ -787,7 +787,7 @@ export class PlaybackController {
     this.spotifyFallback = false;
     this.stopSpotifyFeed();
     this.stopSpotifyProgress();
-    if (this.spotifyDeviceId) void spotifyPause(this.spotifyDeviceId).catch(() => {});
+        this.pauseSpotifyAny();
     const durationMs = video.durationMs || current.durationMs;
     this.currentUri = current.uri;
     this.currentVideo = video;
@@ -822,7 +822,7 @@ export class PlaybackController {
     this.spotifyFallback = false;
     this.stopSpotifyFeed();
     this.stopSpotifyProgress();
-    if (this.spotifyDeviceId) void spotifyPause(this.spotifyDeviceId).catch(() => {});
+        this.pauseSpotifyAny();
     const durationMs = video.durationMs || current.durationMs;
     this.currentUri = current.uri;
     this.currentVideo = video;
@@ -900,11 +900,36 @@ export class PlaybackController {
     // Spotify Connect command — otherwise the API call wastes ~300-500 ms
     // failing with a 404 before falling back to YouTube.
     if (!this.librespot.isRunning()) return Promise.resolve(null);
+    // go-librespot (soloist backend) plays through its own local HTTP API, so no
+    // Web API device command / OAuth token is needed.
+    if (this.librespot.playUri) {
+      return Promise.resolve({ id: 'go-librespot', name: config.librespotDeviceName, viaLibrespot: true });
+    }
     // librespot registers its Connect device with id = SHA1(device name), so we
     // don't need to hit the rate-limited /me/player/devices endpoint at all.
     const name = config.librespotDeviceName;
     const id = librespotDeviceId(name);
     return Promise.resolve({ id, name, viaLibrespot: true });
+  }
+
+  /** Start a track on the active backend: go-librespot's local API, or the
+   *  Spotify Web API device command for librespot-org. */
+  private async playOnDevice(deviceId: string, uri: string): Promise<void> {
+    if (this.librespot?.playUri) {
+      const ok = await this.librespot.playUri(uri);
+      if (!ok) throw new SpotifyError('go-librespot could not start playback.');
+      return;
+    }
+    await spotifyPlay(deviceId, [uri]);
+  }
+
+  /** Pause Spotify playback on whichever backend is active. */
+  private pauseSpotifyAny(): void {
+    if (this.librespot?.pausePlayback) {
+      void this.librespot.pausePlayback();
+      return;
+    }
+        this.pauseSpotifyAny();
   }
 
   /** Resample librespot's 44.1 kHz PCM to 48 kHz and feed the voice channel. */
@@ -1190,7 +1215,7 @@ export class PlaybackController {
       this.currentUri = null;
       this.spotifyFallback = false;
       this.sendVisualizer({ type: 'cmd', command: 'stop' });
-      if (this.spotifyDeviceId) void spotifyPause(this.spotifyDeviceId).catch(() => {});
+          this.pauseSpotifyAny();
       this.stopSpotifyFeed();
       this.stopSpotifyProgress();
       this.stopPositionTracker();
@@ -1244,7 +1269,7 @@ export class PlaybackController {
       this.stopPositionTracker();
       this.queue.setState({ playing: false });
     } else if (this.spotifyDeviceId) {
-      void spotifyPause(this.spotifyDeviceId).catch(() => {});
+      this.pauseSpotifyAny();
       this.voice.setExpectingPcm(false);
       this.queue.setState({ playing: false });
     }
@@ -1289,7 +1314,8 @@ export class PlaybackController {
       return;
     }
     if (this.spotifyDeviceId) {
-      void spotifyResume(this.spotifyDeviceId).catch(() => {});
+      if (this.librespot?.resumePlayback) void this.librespot.resumePlayback();
+    else void spotifyResume(this.spotifyDeviceId).catch(() => {});
       const state = this.queue.getState();
       this.queue.setState({ playing: true });
       if (state.track) this.scheduleEnd(state.durationMs, state.positionMs);
@@ -1311,7 +1337,8 @@ export class PlaybackController {
       this.seekServerStream(positionMs);
       this.queue.setState({ positionMs });
     } else if (this.spotifyDeviceId) {
-      void spotifySeek(this.spotifyDeviceId, positionMs).catch(() => {});
+      if (this.librespot?.seekMs) void this.librespot.seekMs(positionMs);
+    else void spotifySeek(this.spotifyDeviceId, positionMs).catch(() => {});
       this.librespot?.setPositionMs(positionMs);
       this.queue.setState({ positionMs });
     }
@@ -1323,6 +1350,9 @@ export class PlaybackController {
     const v = Math.max(0, Math.min(100, vol));
     if (this.usingServerStream()) {
       this.voice.setVolume(v);
+    } else if (this.librespot?.setVolume) {
+      // go-librespot applies volume through its own local API.
+      void this.librespot.setVolume(v);
     } else if (this.spotifyDeviceId) {
       void spotifySetVolume(this.spotifyDeviceId, v).catch(() => {});
     }
@@ -1358,7 +1388,7 @@ export class PlaybackController {
     this.spotifyFallback = false;
     this.lastSource = null;
     this.sendVisualizer({ type: 'cmd', command: 'stop' });
-    if (this.spotifyDeviceId) void spotifyPause(this.spotifyDeviceId).catch(() => {});
+        this.pauseSpotifyAny();
     this.stopSpotifyFeed();
     this.stopSpotifyProgress();
     this.stopPositionTracker();

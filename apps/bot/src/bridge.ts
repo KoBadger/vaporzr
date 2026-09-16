@@ -15,7 +15,8 @@ import { QueueManager } from './queue.js';
 import { PlaybackController } from './playback.js';
 import { PermissionsManager } from './permissions.js';
 import { VoiceManager } from './voice.js';
-import { LibrespotManager } from './librespot.js';
+import { LibrespotManager, type SpotifyBackend } from './librespot.js';
+import { GoLibrespotManager } from './golibrespot.js';
 import { Session, SessionManager } from './session.js';
 import { config } from './config.js';
 import { DEFAULT_THEME, themeById } from './themes.js';
@@ -42,7 +43,7 @@ export class Bridge {
   private theme: VaporzrTheme = DEFAULT_THEME;
   private sensitivity = 1.0;
   onBurstData: ((data: string) => void) | null = null;
-  librespot: LibrespotManager;
+  librespot: SpotifyBackend;
   /** Routed to the Discord layer when the panel changes autoplay mode. */
   private endlessWaveToggle: ((guildId: string, mode: 'off' | 'basic' | 'smart') => void) | null = null;
   /** Per-socket auth state: true = key holder (full control), false = guest (view-only). */
@@ -86,7 +87,11 @@ export class Bridge {
       if (s && typeof s.multiplier === 'number') this.sensitivity = s.multiplier;
     } catch { /* no saved sensitivity yet */ }
 
-    this.librespot = new LibrespotManager();
+    // Backend selection: go-librespot (soloist) or librespot-org (default).
+    this.librespot =
+      config.spotifyBackend === 'soloist' || config.spotifyBackend === 'go' || config.spotifyBackend === 'golibrespot'
+        ? new GoLibrespotManager()
+        : new LibrespotManager();
     this.sessions.attachLibrespot(this.librespot);
 
     this.sessions.onPrimaryChanged(() => this.syncPrimary());

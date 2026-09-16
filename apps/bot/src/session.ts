@@ -3,7 +3,7 @@ import path from 'node:path';
 import { QueueManager } from './queue.js';
 import { PlaybackController, type SendFn } from './playback.js';
 import { VoiceManager } from './voice.js';
-import type { LibrespotManager } from './librespot.js';
+import type { SpotifyBackend } from './librespot.js';
 import { config } from './config.js';
 import type { PlaybackState, TrackInfo } from '@vaporzr/shared';
 import * as EW from './endlesswave.js';
@@ -21,7 +21,7 @@ export class Session {
 
   constructor(
     readonly guildId: string,
-    private librespot: LibrespotManager | null,
+    private librespot: SpotifyBackend | null,
   ) {
     this.queue = new QueueManager();
     this.voice = new VoiceManager(() => {});
@@ -51,13 +51,13 @@ export class Session {
 export class SessionManager {
   private sessions = new Map<string, Session>();
   private primaryGuildId: string | null = null;
-  private librespot: LibrespotManager | null = null;
+  private librespot: SpotifyBackend | null = null;
   private createdHooks: Array<(s: Session) => void> = [];
   private primaryHooks: Array<(s: Session | null) => void> = [];
   private saveTimers = new Map<string, NodeJS.Timeout>();
 
   /** Called once the bot's librespot instance exists (sessions are created after). */
-  attachLibrespot(librespot: LibrespotManager | null): void {
+  attachLibrespot(librespot: SpotifyBackend | null): void {
     this.librespot = librespot;
   }
 
