@@ -1220,7 +1220,10 @@ export class PlaybackController {
       this.stopSpotifyProgress();
       this.stopPositionTracker();
       this.clearSpotifyRetry();
-      this.queue.setState({ playing: false, track: undefined, positionMs: 0, durationMs: 0, source: undefined });
+      // Keep the last track + the queue list visible when it runs out — only flip
+      // off "playing". Wiping `track` here made the queue look like it had been
+      // cleared, when really the user just reached the end and wants to replay.
+      this.queue.setState({ playing: false });
       this.voice.stopStream();
       if (this.onQueueEnd) this.onQueueEnd();
       return;
