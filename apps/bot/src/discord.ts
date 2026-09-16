@@ -4484,11 +4484,13 @@ export class DiscordBot {
       else await (target as ChatInputCommandInteraction).editReply(msg);
       return;
     }
-    if (candidates.length === 1) {
-      if (isMsg) await this.addToQueueMsg(target as Message, candidates);
-      else await this.addToQueue(target as ChatInputCommandInteraction, candidates);
-      return;
-    }
+    // Play the best match immediately so a plain `V@p <text>` just works; the
+    // dropdown below is an "alternatives" picker in case the guess was wrong.
+    const best = candidates[0];
+    if (isMsg) await this.addToQueueMsg(target as Message, [best]);
+    else await this.addToQueue(target as ChatInputCommandInteraction, [best]);
+    if (candidates.length === 1) return;
+
     const token = randomBytes(6).toString('hex');
     const userId = isMsg ? (target as Message).author.id : (target as ChatInputCommandInteraction).user.id;
     this.pendingSearch.set(token, { guildId: target.guildId ?? '', userId, candidates, createdAt: Date.now() });
@@ -4505,7 +4507,7 @@ export class DiscordBot {
       );
     const embed = new EmbedBuilder()
       .setTitle('🔍 Search results')
-      .setDescription(`Top matches for **${truncate(query, 70)}** — pick one below.`)
+      .setDescription(`Playing **${truncate(best.name, 60)}** — pick another below if that's wrong.`)
       .setColor(this.themeColor());
     const payload = {
       embeds: [embed],
@@ -4515,7 +4517,7 @@ export class DiscordBot {
     if (isMsg) {
       sent = await (target as Message).reply(payload);
     } else {
-      await (target as ChatInputCommandInteraction).editReply(payload);
+      await (target as ChatInputCommandInteraction).followUp(payload);
       sent = (await (target as ChatInputCommandInteraction).fetchReply()) as Message;
     }
     const t = setTimeout(() => void this.expireSearch(token, sent), 90_000);
@@ -4546,6 +4548,9 @@ export class DiscordBot {
       await interaction.update({ content: '⚠️ Invalid selection.', embeds: [], components: [] }).catch(() => {});
       return;
     }
+    // Acknowledge within Discord's 3s window — joining voice + resolving the
+    // stream can take longer (this was the "didn't respond in time" cause).
+    await interaction.deferUpdate().catch(() => {});
     const s = this.sessionFor(interaction.guildId);
     const playbackFailed = await this.playTracks(s, [track], interaction.user.username, () =>
       this.ensureJoinedForPlayback(interaction, s),
@@ -4559,7 +4564,7 @@ export class DiscordBot {
       .setThumbnail(track.image ?? '')
       .setFooter({ text: `${s.queue.getSnapshot().tracks.length} in queue` })
       .setColor(this.themeColor());
-    await interaction.update({ embeds: [embed], components: [] }).catch(() => {});
+    await interaction.editReply({ embeds: [embed], components: [] }).catch(() => {});
   }
 
   /** Whether a member may control playback as DJ (owner/mod/admin or DJ role holder). */
