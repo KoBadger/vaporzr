@@ -85,6 +85,16 @@ export class GoLibrespotManager implements SpotifyBackend {
   async start(): Promise<void> {
     if (this.isRunning()) return;
     this.stopped = false;
+    // Pin PulseAudio's runtime dir BEFORE starting pulseaudio, so pulseaudio,
+    // go-librespot and parec all agree on the socket path. Without this,
+    // pulseaudio picks a random /tmp/pulse-XXXX dir and go-librespot can't find
+    // the server ("dial unix pulse/native: no such file or directory").
+    if (!process.env.XDG_RUNTIME_DIR) process.env.XDG_RUNTIME_DIR = '/tmp/vz-runtime';
+    try {
+      fs.mkdirSync(process.env.XDG_RUNTIME_DIR, { recursive: true });
+    } catch {
+      /* ignore */
+    }
     fs.mkdirSync(config.goLibrespotConfigDir, { recursive: true });
     const cfgPath = path.join(config.goLibrespotConfigDir, 'config.yml');
     // Always (re)write the managed config so the audio backend can't drift
