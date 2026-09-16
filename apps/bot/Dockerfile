@@ -46,12 +46,16 @@ RUN npm ci --omit=dev
 FROM node:20-trixie-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates ffmpeg python3 python3-venv \
+      ca-certificates ffmpeg python3 python3-venv curl pulseaudio pulseaudio-utils \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g tsx \
     && python3 -m venv /opt/ytvenv \
     && /opt/ytvenv/bin/pip install --no-cache-dir --upgrade yt-dlp bgutil-ytdlp-pot-provider \
-    && ln -s /opt/ytvenv/bin/yt-dlp /usr/local/bin/yt-dlp
+    && ln -s /opt/ytvenv/bin/yt-dlp /usr/local/bin/yt-dlp \
+    && curl -fsSL -o /tmp/glr.tar.gz https://github.com/devgianlu/go-librespot/releases/download/v0.9.1/go-librespot_linux_x86_64.tar.gz \
+    && tar -xzf /tmp/glr.tar.gz -C /tmp \
+    && install -m 755 /tmp/go-librespot /usr/local/bin/go-librespot \
+    && rm -f /tmp/glr.tar.gz /tmp/go-librespot
 
 WORKDIR /app
 
@@ -59,6 +63,8 @@ COPY --from=build /app ./
 COPY librespot /usr/local/bin/librespot
 
 ENV NODE_ENV=production \
+    SPOTIFY_BACKEND=librespot \
+    GO_LIBRESPOT_PATH=/usr/local/bin/go-librespot \
     PORT=4876 \
     BIND_ADDRESS=0.0.0.0 \
     DATA_DIR=/app/data \

@@ -51,8 +51,24 @@ ytDlpPath: process.env.YT_DLP_PATH ?? path.join(__dirname, '..', '..', '..', 've
      process.env.LIBRESPOT_PATH ?? path.join(__dirname, '..', '..', '..', 'vendor', 'librespot', 'librespot'),
   /** Name librespot registers with Spotify — used to find it as a playback device. */
   librespotDeviceName: process.env.LIBRESPOT_DEVICE_NAME ?? 'Vaporzr',
-  /** Local TCP port librespot streams raw PCM to (must be space-free in the bridge command). */
-  librespotBridgePort: Number(process.env.LIBRESPOT_BRIDGE_PORT ?? 4789),
+   /** Local TCP port librespot streams raw PCM to (must be space-free in the bridge command). */
+   librespotBridgePort: Number(process.env.LIBRESPOT_BRIDGE_PORT ?? 4789),
+   /**
+    * Spotify playback backend:
+    *  - 'librespot' (default): librespot-org, PCM via the TCP bridge.
+    *  - 'soloist': go-librespot, remote OAuth login, PCM captured from a
+    *    PulseAudio null-sink via parec.
+    *  - 'auto': prefer soloist, fall back to librespot.
+    */
+   spotifyBackend: (process.env.SPOTIFY_BACKEND ?? 'librespot').toLowerCase(),
+   /** Path to the go-librespot binary (soloist backend). */
+   goLibrespotPath: process.env.GO_LIBRESPOT_PATH ?? 'go-librespot',
+   /** PulseAudio null-sink name the soloist backend plays into and captures. */
+   pulseSinkName: process.env.PULSE_SINK_NAME ?? 'vaporzr',
+   /** go-librespot config dir (persists its Spotify credentials). */
+   goLibrespotConfigDir: process.env.GO_LIBRESPOT_CONFIG_DIR ?? path.join(process.env.DATA_DIR ?? 'data', 'go-librespot'),
+   /** go-librespot local control API port. */
+   goLibrespotApiPort: Number(process.env.GO_LIBRESPOT_API_PORT ?? 3678),
   /**
    * Hostname advertised in /viz, /panel, and /help links. Empty = auto-detect
    * the LAN IP. Set to a custom domain when running behind port forwarding.
