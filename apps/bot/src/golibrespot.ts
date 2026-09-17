@@ -157,7 +157,7 @@ export class GoLibrespotManager implements SpotifyBackend {
   private startWatchdog(): void {
     if (this.watchdog) return;
     this.lastHealthyAt = Date.now();
-    const t = setInterval(() => void this.healthCheck(), 10_000);
+    const t = setInterval(() => void this.healthCheck(), 3_000);
     t.unref?.();
     this.watchdog = t;
   }
@@ -176,13 +176,13 @@ export class GoLibrespotManager implements SpotifyBackend {
     // Music is still flowing out of the sink — never bounce the process mid-song,
     // that's exactly what cut tracks off. Defer recovery until playback stops;
     // the device re-registers then and the next play works.
-    if (Date.now() - this.lastPcmAt < 15_000) {
+    if (Date.now() - this.lastPcmAt < 3_000) {
       this.lastHealthyAt = Date.now();
       return;
     }
     // API unresponsive AND silent — the dealer link is likely wedged. Wait out a
     // short grace period (transient blips) before bouncing the process.
-    if (Date.now() - this.lastHealthyAt > 25_000) {
+    if (Date.now() - this.lastHealthyAt > 5_000) {
       console.warn('[golibrespot] device API unresponsive and idle (dealer link lost?) — restarting to re-register');
       await this.restart();
     }
@@ -194,13 +194,13 @@ export class GoLibrespotManager implements SpotifyBackend {
     // healthCheck before it ever reaches the restart logic. Race a hard timeout
     // so this always settles.
     const hardTimeout = new Promise<boolean>((resolve) => {
-      const t = setTimeout(() => resolve(false), 6_000);
+      const t = setTimeout(() => resolve(false), 3_000);
       t.unref?.();
     });
     const probe = (async (): Promise<boolean> => {
       try {
         const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), 5_000);
+        const t = setTimeout(() => ctrl.abort(), 2_500);
         t.unref?.();
         const r = await fetch(this.api('/status'), { signal: ctrl.signal });
         clearTimeout(t);
