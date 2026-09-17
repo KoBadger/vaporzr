@@ -5056,6 +5056,20 @@ export class DiscordBot {
    *  any queue or state change re-tops the buffer. */
   private async topUpWave(s: Session): Promise<void> {
     if (!EW.isAutoActive(s.endlessWave)) return;
+    // Auto-upgrade basic → smart the moment an account is linked. Basic was only
+    // in effect because there was no OAuth token to drive Web-API curation, so
+    // once one appears (finished /login) we shouldn't stay on the lesser mode.
+    if (s.endlessWave.basic && !s.endlessWave.active) {
+      try {
+        const { tokenStore } = await import('./tokenStore.js');
+        if (tokenStore.load()?.refresh_token) {
+          console.log('[autoplay] OAuth token available — upgrading basic → smart');
+          this.setAutoplayMode(s, 'smart');
+        }
+      } catch {
+        /* ignore */
+      }
+    }
     if ((this.ewRetryAfter.get(s.guildId) ?? 0) > Date.now()) return;
     if (this.ewBusy.has(s.guildId)) return;
     this.ewBusy.add(s.guildId);
