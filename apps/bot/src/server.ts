@@ -215,7 +215,7 @@ async function handleRoute(req: http.IncomingMessage, url: URL, res: http.Server
         const appId = Buffer.from(config.discordToken.split('.')[0], 'base64').toString('ascii');
         const perms = (1n << 11n) | (1n << 14n) | (1n << 15n) | (1n << 20n) | (1n << 31n) | (1n << 52n);
         const inviteUrl = `https://discord.com/oauth2/authorize?client_id=${appId}&permissions=${perms}&scope=bot+applications.commands`;
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
         res.end(html(`
           <img src="/logo.png" alt="Vaporzr" style="width:96px;height:96px;border-radius:22px;box-shadow:0 8px 30px rgba(106,92,255,.45);margin-bottom:1rem">
           <h1>Vaporzr Bot</h1>
@@ -253,7 +253,7 @@ async function handleRoute(req: http.IncomingMessage, url: URL, res: http.Server
         }
         if (!code) throw new SpotifyError('Missing code.');
         await exchangeCode(code);
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
         res.end(html(`<h1 style="font-family:sans-serif">✓ Linked! You can close this tab.</h1>`));
         break;
       }
@@ -284,7 +284,7 @@ async function handleRoute(req: http.IncomingMessage, url: URL, res: http.Server
           const file = fs
             .readFileSync(path.join(__dirname, '..', 'public', 'panel.html'), 'utf8')
             .replace(/\{\{ORIGIN\}\}/g, origin);
-          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
           res.end(file);
         } catch {
           res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -299,7 +299,7 @@ async function handleRoute(req: http.IncomingMessage, url: URL, res: http.Server
           const file = fs
             .readFileSync(path.join(__dirname, '..', 'public', 'viz.html'), 'utf8')
             .replace(/\{\{ORIGIN\}\}/g, origin);
-          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
           res.end(file);
         } catch {
           res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -312,7 +312,7 @@ async function handleRoute(req: http.IncomingMessage, url: URL, res: http.Server
       case '/privacy.html': {
         try {
           const file = fs.readFileSync(path.join(__dirname, '..', 'public', 'privacy.html'), 'utf8');
-          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
           res.end(file);
         } catch {
           res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -327,7 +327,7 @@ async function handleRoute(req: http.IncomingMessage, url: URL, res: http.Server
       case '/tos.html': {
         try {
           const file = fs.readFileSync(path.join(__dirname, '..', 'public', 'tos.html'), 'utf8');
-          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
           res.end(file);
         } catch {
           res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
