@@ -218,6 +218,22 @@ export class GoLibrespotManager implements SpotifyBackend {
     }
   }
 
+  /**
+   * Public: guarantee the Spotify Connect device is registered before a caller
+   * re-issues playback. A dropped dealer link leaves the API answering but the
+   * device gone, which is exactly when a re-issue would otherwise fall back to
+   * YouTube. Restart to re-register, then give it a moment to authenticate.
+   */
+  async ensureDevice(): Promise<void> {
+    if (this.isRunning() && (await this.pingApi())) return;
+    console.warn('[golibrespot] device not registered — restarting to recover before re-issuing');
+    await this.restart();
+    await new Promise((r) => {
+      const t = setTimeout(r, 2_500);
+      t.unref?.();
+    });
+  }
+
   /** Start PulseAudio and ensure the null-sink exists (retrying around startup races). */
   private async ensurePulse(): Promise<void> {
     await this.run('pulseaudio', ['--start', '--exit-idle-time=-1']);

@@ -76,6 +76,8 @@ export interface SpotifyBackend {
   resumePlayback?(): Promise<void>;
   seekMs?(ms: number): Promise<void>;
   setVolume?(v: number): Promise<void>;
+  /** go-librespot only: make sure the Spotify device is registered, restarting if it vanished. */
+  ensureDevice?(): Promise<void>;
 }
 
 export class LibrespotManager implements SpotifyBackend {

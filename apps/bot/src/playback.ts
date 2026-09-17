@@ -1296,6 +1296,14 @@ export class PlaybackController {
         console.log(`[playback] stall detected — restarting "${track.name}" from ${Math.round(pos / 1000)}s`);
         this.sendVisualizer({ type: 'cmd', command: 'stop' });
         try {
+          // A stall is usually a dropped Spotify dealer link, which also
+          // unregisters the device. Re-register it before re-issuing so recovery
+          // plays on Spotify instead of falling back to YouTube.
+          await this.librespot?.ensureDevice?.();
+        } catch {
+          /* ignore */
+        }
+        try {
           await this.play();
           // seek to where we left off
           if (pos > 0) this.seek(pos);
