@@ -931,7 +931,15 @@ export class PlaybackController {
       void this.librespot.pausePlayback();
       return;
     }
-        this.pauseSpotifyAny();
+    // Web-API fallback. This used to call itself recursively, which blew the
+    // stack whenever no backend supported pause — leaving the old track playing
+    // (the "previous song keeps playing after stop/clear" bug).
+    const dev = this.spotifyDeviceId;
+    if (dev) {
+      void import('./spotify.js')
+        .then((m) => m.spotifyPause(dev))
+        .catch(() => {});
+    }
   }
 
   /** Resample librespot's 44.1 kHz PCM to 48 kHz and feed the voice channel. */
