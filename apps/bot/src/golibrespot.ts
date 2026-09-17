@@ -189,21 +189,31 @@ export class GoLibrespotManager implements SpotifyBackend {
   }
 
   private async pingApi(): Promise<boolean> {
-    try {
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 5_000);
+    // The AbortController alone is not enough: when go-librespot's API is
+    // wedged, `fetch` can hang WITHOUT honouring the abort, which deadlocks
+    // healthCheck before it ever reaches the restart logic. Race a hard timeout
+    // so this always settles.
+    const hardTimeout = new Promise<boolean>((resolve) => {
+      const t = setTimeout(() => resolve(false), 6_000);
       t.unref?.();
-      const r = await fetch(this.api('/status'), { signal: ctrl.signal });
-      clearTimeout(t);
-      if (!r.ok) return false;
-      // A wedged dealer leaves the API answering 200 with an empty body, so
-      // `r.ok` alone reads as healthy and the watchdog never re-registers the
-      // device. Require an actual device_id in the payload.
-      const j = (await r.json().catch(() => null)) as { device_id?: string } | null;
-      return Boolean(j && j.device_id);
-    } catch {
-      return false;
-    }
+    });
+    const probe = (async (): Promise<boolean> => {
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 5_000);
+        t.unref?.();
+        const r = await fetch(this.api('/status'), { signal: ctrl.signal });
+        clearTimeout(t);
+        if (!r.ok) return false;
+        // A wedged dealer leaves the API answering 200 with an empty body, so
+        // `r.ok` alone reads as healthy. Require an actual device_id.
+        const j = (await r.json().catch(() => null)) as { device_id?: string } | null;
+        return Boolean(j && j.device_id);
+      } catch {
+        return false;
+      }
+    })();
+    return Promise.race([probe, hardTimeout]);
   }
 
   private async restart(): Promise<void> {
