@@ -5108,9 +5108,13 @@ export class DiscordBot {
           if (!EW.isAutoActive(s.endlessWave)) return;
           const candidate = smart
             ? await EW.pickNextTrack(s.endlessWave, recent, failed, upcoming)
-            : await EW.pickBasicTrack(s.endlessWave, recent, failed, upcoming);
-          if (!candidate) break;
-          if (candidate.uri === lastPickUri) {
+            : null;
+          // Smart can dead-end (recommendations empty, or every candidate is a
+          // dupe / on cooldown). Fall through to the search-based basic picker so
+          // autoplay always queues something instead of stopping the music.
+          const chosen = candidate ?? (await EW.pickBasicTrack(s.endlessWave, recent, failed, upcoming));
+          if (!chosen) break;
+          if (chosen.uri === lastPickUri) {
             // Same pick twice in one pass — dedup inputs are blind (e.g. a
             // stale cursor), so stop instead of queueing it again forever.
             console.warn('[endlesswave] same pick twice in one refill — backing off');
@@ -5118,10 +5122,10 @@ export class DiscordBot {
             this.ewRetryAfter.set(s.guildId, Date.now() + deadEndBackoff);
             return;
           }
-          lastPickUri = candidate.uri;
-          failed.add(candidate.uri);
-          resolved = await EW.resolveCandidate(candidate);
-          if (!resolved) console.log(`[endlesswave] could not resolve "${candidate.name}" — trying another`);
+          lastPickUri = chosen.uri;
+          failed.add(chosen.uri);
+          resolved = await EW.resolveCandidate(chosen);
+          if (!resolved) console.log(`[endlesswave] could not resolve "${chosen.name}" — trying another`);
         }
         if (!resolved) {
           // Dead-end: the current context can't produce a fresh candidate (the
