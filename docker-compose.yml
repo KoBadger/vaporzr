@@ -1,0 +1,46 @@
+# vaporzr bot + visualizer -- fixed from broken C:\Users\joshv\docker-compose.yml
+# Secrets via apps/bot/.env (env_file) -- never enter image or compose file.
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  bot:
+    # DISABLED BY DEFAULT. The bot runs on the Hetzner VPS; running a local
+    # copy at the same time makes both logins fight over the single Discord
+    # gateway session (missed events, duplicate replies, voice flapping).
+    # Start this local copy ONLY deliberately (and only with the VPS bot
+    # stopped) via:
+    #   docker compose --profile local-bot up -d
+    # A bare `docker compose up` now starts just the visualizer.
+    profiles: ["local-bot"]
+    build:
+      context: .
+      dockerfile: apps/bot/Dockerfile
+    image: vaporzr-bot
+    container_name: vaporzr_bot_backend
+    restart: unless-stopped
+    env_file:
+      - apps/bot/.env
+    ports:
+      - "4876:4876"
+    volumes:
+      - ./apps/bot/data:/app/data
+    mem_limit: 768m
+    cpus: 1.0
+    logging: *default-logging
+
+  visualizer:
+    image: nginx:alpine
+    container_name: vaporzr_visualizer
+    restart: unless-stopped
+    ports:
+      - "8000:80"
+    volumes:
+      - ./apps/player/www:/usr/share/nginx/html:ro
+    mem_limit: 32m
+    cpus: 0.1
+    logging: *default-logging
