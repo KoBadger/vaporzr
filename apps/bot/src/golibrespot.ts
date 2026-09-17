@@ -195,7 +195,12 @@ export class GoLibrespotManager implements SpotifyBackend {
       t.unref?.();
       const r = await fetch(this.api('/status'), { signal: ctrl.signal });
       clearTimeout(t);
-      return r.ok;
+      if (!r.ok) return false;
+      // A wedged dealer leaves the API answering 200 with an empty body, so
+      // `r.ok` alone reads as healthy and the watchdog never re-registers the
+      // device. Require an actual device_id in the payload.
+      const j = (await r.json().catch(() => null)) as { device_id?: string } | null;
+      return Boolean(j && j.device_id);
     } catch {
       return false;
     }
