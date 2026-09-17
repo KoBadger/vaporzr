@@ -592,6 +592,19 @@ export async function pickNextTrack(
 ): Promise<ResolvedTrack | null> {
   if (!state.active) return null;
 
+  // Smart leans on the Spotify Web API (recommendations / similar-artists),
+  // which needs a LINKED account (OAuth refresh token). Without one those calls
+  // can't produce candidates, so smart silently queues nothing and the music
+  // stops. Degrade to the search-based basic picker so it always keeps playing.
+  try {
+    const { tokenStore } = await import('./tokenStore.js');
+    if (!tokenStore.load()?.refresh_token) {
+      return pickBasicTrack(state, recentTracks, excludeUris, upcoming);
+    }
+  } catch {
+    /* token store unreadable — carry on with smart */
+  }
+
   const targets = buildTargets(state);
   const seedIds = extractSeeds(recentTracks);
 
