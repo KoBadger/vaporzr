@@ -1424,8 +1424,9 @@ export class DiscordBot {
           });
           break;
         }
-        // give
-        if (!this.requireLevel('key', interaction)) return this.deny(interaction);
+        // give — owner-only: these links grant full panel control, so admins
+        // must not be able to mint/hand them out.
+        if (!this.perms.isOwner(interaction.user.id)) return this.deny(interaction);
         if (!config.shareKey) {
           await interaction.reply({ content: 'No share key is configured — the web panel is open access.', flags: MessageFlags.Ephemeral });
           break;
@@ -2529,7 +2530,8 @@ export class DiscordBot {
             await message.reply(`🔑 New key issued — all previous links and remembered devices are dead.\n${linkLine}`);
             break;
           }
-          if (!canUse('key')) return void (await deny());
+          // owner-only (matches the slash command): the links grant full panel control.
+          if (!this.perms.isOwner(message.author.id)) return void (await deny());
           if (!config.shareKey) {
             await message.reply('No share key is configured — the web panel is open access.');
             break;
