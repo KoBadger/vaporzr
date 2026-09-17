@@ -313,9 +313,11 @@ export class PlaybackController {
     if (remaining <= 0) return;
     // The ffmpeg stream's natural onEnd is the authoritative advance for
     // server streams; this timer is only a fallback for when that never fires.
-    // A generous +3s buffer means a metadata duration that under-reports the
-    // real audio by a second or two can't cut the tail off early.
-    const wait = Math.min(remaining + 3000, 6 * 60 * 60 * 1000);
+    // For the Spotify (go-librespot -> PulseAudio -> parec) path there IS no
+    // ffmpeg onEnd, and our position is estimated from captured PCM, which runs
+    // AHEAD of what the listener actually hears by the buffer depth — so
+    // advancing at durationMs clips the ending. +6s lets the buffered tail drain.
+    const wait = Math.min(remaining + 6000, 6 * 60 * 60 * 1000);
     this.endUri = this.queue.getCurrentTrack()?.uri ?? null;
     this.endTimer = setTimeout(() => {
       this.endTimer = null;
