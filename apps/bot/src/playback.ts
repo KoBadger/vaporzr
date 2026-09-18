@@ -72,6 +72,8 @@ export class PlaybackController {
   private pendingXfadeSeekMs = 0;
   /** Offset the CURRENT stream started at (crossfade handoff); 0 for normal starts. */
   private currentStartOffsetMs = 0;
+  /** Consecutive track-start failures, to avoid silently draining the queue. */
+  private playFailures = 0;
   /** True while advancing because a stream ended on its own (keeps the xfade seek). */
   private fromNaturalEnd = false;
   private spotifyProgress: NodeJS.Timeout | null = null;
@@ -224,6 +226,8 @@ export class PlaybackController {
   onTrackEnd: ((endedTrack: TrackInfo) => void) | null = null;
   /** Callback fired when the queue runs dry (last track ended, nothing to advance). */
   onQueueEnd: (() => void) | null = null;
+  /** Callback fired when playback stops because several tracks in a row failed to start. */
+  onPlaybackStalled: (() => void) | null = null;
 
   /** Route visualizer-targeted state messages (only the primary session broadcasts). */
   setSendVisualizer(fn: SendFn): void {
@@ -325,6 +329,8 @@ export class PlaybackController {
 
   private scheduleEnd(durationMs: number, positionMs: number): void {
     this.clearEndTimer();
+    // Reaching here means the track actually started — clear the failure streak.
+    this.playFailures = 0;
     // A stream that was crossfaded into already skipped `currentStartOffsetMs`,
     // so its true position is positionMs + that offset. Forgetting this made the
     // next crossfade timer fire a full window late (overlaying the FOLLOWING
@@ -618,11 +624,23 @@ export class PlaybackController {
   private safePlay(): void {
     void this.play().catch((err) => {
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`[playback] track failed to start: ${msg}`);
+      this.playFailures++;
+      console.warn(`[playback] track failed to start (${this.playFailures} in a row): ${msg}`);
       if (!this.voice.isJoined()) {
         // Not a track problem — leave the queue untouched for when we join.
         this.stopAll();
         this.queue.setState({ playing: false, track: undefined, positionMs: 0, durationMs: 0, source: undefined });
+        return;
+      }
+      // A flaky backend (e.g. no Spotify device AND no YouTube match) used to
+      // skip every track in turn, silently draining the queue. Stop instead and
+      // surface it so the user knows why the music died.
+      if (this.playFailures >= 3) {
+        this.playFailures = 0;
+        console.warn('[playback] 3 consecutive start failures — stopping instead of skipping the rest of the queue');
+        this.stopAll();
+        this.queue.setState({ playing: false });
+        if (this.onPlaybackStalled) this.onPlaybackStalled();
         return;
       }
       this.next();

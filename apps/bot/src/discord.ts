@@ -681,6 +681,10 @@ export class DiscordBot {
         }
         void this.notifyQueueEnded(s.guildId);
       };
+      // Playback stopped because several tracks in a row couldn't start.
+      s.playback.onPlaybackStalled = () => {
+        void this.notifyPlaybackStalled(s.guildId);
+      };
       // A wave restored as active from disk needs re-arming after a restart:
       // kick off an immediate top-up so it resumes generating on its own.
       if (EW.isAutoActive(s.endlessWave)) {
@@ -2318,8 +2322,20 @@ export class DiscordBot {
         case 'rem':
         case 'remove': {
           if (!canUse('remove')) return void (await deny());
-          const n = Number(args);
-          if (!args || Number.isNaN(n)) return void (await message.reply('Usage: `V@remove <queue number>`'));
+          const query = args.trim();
+          if (!query) return void (await message.reply('Usage: `V@remove <queue number>` or `V@remove <song>`'));
+          // Accept a plain number even with trailing text ("3, crawling, ..."),
+          // and fall back to matching the song/artist name.
+          let n = parseInt(query, 10);
+          if (Number.isNaN(n)) {
+            const q = query.toLowerCase();
+            const tracks = s.queue.getSnapshot().tracks;
+            const found = tracks.findIndex(
+              (t) => t.name.toLowerCase().includes(q) || (t.artists ?? []).some((a) => a.toLowerCase().includes(q)),
+            );
+            if (found < 0) return void (await message.reply(`No queued track matches **${query}**.`));
+            n = found + 1;
+          }
           const removed = s.removeFromQueue(n - 1);
           await message.reply(removed ? `Removed **${removed.name}**` : 'Index out of range.');
           break;
@@ -3451,6 +3467,27 @@ export class DiscordBot {
       });
     } catch {
       /* no access — skip; not worth retrying */
+    }
+  }
+
+  /** Playback halted because consecutive tracks couldn't start (backend issue). */
+  private async notifyPlaybackStalled(guildId: string): Promise<void> {
+    const channelId = this.lastTextChannel.get(guildId);
+    if (!channelId) return;
+    try {
+      const channel = await this.client.channels.fetch(channelId);
+      if (!channel || !('send' in channel)) return;
+      await channel.send({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(this.themeColor())
+            .setDescription(
+              '⚠️ **Playback stopped** — several tracks in a row couldn\'t start (Spotify device unavailable / no YouTube match). The queue is intact; try `V@p` again or re-link Spotify.',
+            ),
+        ],
+      });
+    } catch {
+      /* no access — skip */
     }
   }
 
