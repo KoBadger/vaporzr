@@ -46,7 +46,7 @@ RUN npm ci --omit=dev
 FROM node:20-trixie-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates ffmpeg python3 python3-venv curl pulseaudio pulseaudio-utils \
+      ca-certificates ffmpeg espeak-ng python3 python3-venv curl pulseaudio pulseaudio-utils \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g tsx \
     && python3 -m venv /opt/ytvenv \

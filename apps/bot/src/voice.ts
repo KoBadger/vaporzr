@@ -67,6 +67,8 @@ export class VoiceManager {
   private voiceLinkDown = false;
   /** Loudness applied to every new audio resource (0–100). */
   private volumePercent = 100;
+  /** One-shot seek (ms) applied to the next decoded stream — crossfade handoff. */
+  private streamOffsetMs = 0;
   /** Extra ffmpeg `-af` stage for session audio FX (e.g. nightcore/slowed/bass),
    *  appended after loudness normalization + fade-in. Empty when neutral. */
   private audioFx = '';
@@ -78,6 +80,8 @@ export class VoiceManager {
   private duckHoldMs = 700;
   private duckSpeakers = new Set<string>();
   private duckTimer: NodeJS.Timeout | null = null;
+  /** Music stays ducked until this timestamp (used over TTS announcements). */
+  private duckForceUntil = 0;
 
   /** True when the voice connection is alive but the audio stream has died
    *  (ffmpeg crashed, pipe broken, etc.) — resume should re-stream instead of unpause. */
@@ -106,6 +110,11 @@ export class VoiceManager {
   /** Set the tail fade-out (seconds) applied to streams started from now on. */
   setFadeOut(sec: number): void {
     this.fadeOutSec = Math.max(0, Math.min(15, sec));
+  }
+
+  /** Set a one-shot start offset (ms) for the next decoded stream (crossfade). */
+  setStreamOffset(ms: number): void {
+    this.streamOffsetMs = Math.max(0, ms);
   }
 
   /** Feed the bot-side spectrum analyzer (separate slot from setPcmTap). */
@@ -637,8 +646,12 @@ export class VoiceManager {
     this.stopStream();
     const token = this.streamToken;
     const startedAt = Date.now();
+    // Consume a one-shot start offset (a crossfade hands off partway into the
+    // incoming track). Explicit opts.seekMs (resume) always wins.
+    const requestedSeekMs = opts.seekMs ?? this.streamOffsetMs;
+    this.streamOffsetMs = 0;
     console.log(
-      `[voice] stream start ${opts.seekMs !== undefined ? `(resume ${opts.seekMs}ms) ` : ''}retries=${opts.retries ?? 0} refresh=${opts.refreshUrl ? 'yes' : 'no'} · ${String(url).slice(0, 96).replace(/\s+/g, ' ')}`,
+      `[voice] stream start ${requestedSeekMs > 0 ? `(seek ${requestedSeekMs}ms) ` : ''}retries=${opts.retries ?? 0} refresh=${opts.refreshUrl ? 'yes' : 'no'} · ${String(url).slice(0, 96).replace(/\s+/g, ' ')}`,
     );
     const isHttp = /^https?:\/\//i.test(url);
     // HLS playlists (SoundCloud serves .m3u8) must be demuxed by ffmpeg itself —
@@ -661,9 +674,9 @@ export class VoiceManager {
       // stdin is not seekable, so a resume seek runs on the output side
       // (decode + discard); opus/aac decoding is far faster than realtime.
       args.push('-i', 'pipe:0');
-      if (opts.seekMs) args.push('-ss', String(opts.seekMs / 1000));
+      if (requestedSeekMs) args.push('-ss', String(requestedSeekMs / 1000));
     } else {
-      if (opts.seekMs) args.push('-ss', String(opts.seekMs / 1000));
+      if (requestedSeekMs) args.push('-ss', String(requestedSeekMs / 1000));
       args.push('-i', url);
     }
     args.push('-vn', '-ac', '2', '-ar', '48000');
@@ -678,7 +691,7 @@ export class VoiceManager {
     // loudnorm; skipped for very short tracks, resumes near the end, or when off.
     const fade = this.fadeOutSec;
     if (fade > 0 && opts.durationMs && opts.durationMs > 0) {
-      const remainSec = (opts.durationMs - (opts.seekMs ?? 0)) / 1000;
+      const remainSec = (opts.durationMs - requestedSeekMs) / 1000;
       if (remainSec > fade + 0.5) {
         filters.push(`afade=t=out:st=${(remainSec - fade).toFixed(3)}:d=${fade}`);
       }
@@ -698,7 +711,7 @@ export class VoiceManager {
     const proc = spawn(config.ffmpegPath, args, { windowsHide: true, env: ffEnv });
     this.ffmpeg = proc;
     this.streamStartTime = Date.now();
-    this.pausedPositionMs = opts.seekMs ?? 0;
+    this.pausedPositionMs = requestedSeekMs;
     const stream = this.makeMixStream();
     this.stream = stream;
     proc.stdout.on('data', (d) => {
@@ -739,7 +752,7 @@ export class VoiceManager {
           // A signed YouTube URL can fail after minutes of otherwise healthy
           // playback. Refresh it and resume near the last known position rather
           // than treating a mid-track failure as a natural end and skipping.
-          const resumeMs = (opts.seekMs ?? 0) + Math.max(0, ranForMs - 250);
+          const resumeMs = requestedSeekMs + Math.max(0, ranForMs - 250);
           console.warn(
             `[voice] stream failed after ${ranForMs}ms — refreshing URL and resuming at ${Math.round(resumeMs)}ms (${attemptsLeft} retries left)`,
           );
@@ -837,6 +850,99 @@ export class VoiceManager {
     source.pipe(proc.stdin!);
   }
 
+  /**
+   * Decode the first `ms` of a stream/file to 48 kHz stereo PCM — used to
+   * pre-render the incoming track's head for a crossfade. Node-fetches http
+   * sources (avoids the googlevideo TLS-fingerprint 403 the normal path dodges);
+   * returns null for HLS playlists or on any failure so callers fall back.
+   */
+  async decodeHeadPcm(url: string, ms: number): Promise<Buffer | null> {
+    const seconds = Math.max(0.5, ms / 1000);
+    const maxBytes = Math.ceil(seconds * 48000) * 4;
+    const isHttp = /^https?:\/\//i.test(url);
+    const isHls = isHttp && /\.m3u8(\?|$)/i.test(url);
+    if (isHls) return null;
+    const args = ['-hide_banner', '-loglevel', 'error'];
+    if (isHttp) args.push('-i', 'pipe:0', '-t', String(seconds));
+    else args.push('-t', String(seconds), '-i', url);
+    args.push('-vn', '-ac', '2', '-ar', '48000', '-f', 's16le', 'pipe:1');
+    return await new Promise<Buffer | null>((resolve) => {
+      let settled = false;
+      const out: Buffer[] = [];
+      let size = 0;
+      let proc: ChildProcess;
+      try {
+        proc = spawn(config.ffmpegPath, args, { windowsHide: true });
+      } catch {
+        resolve(null);
+        return;
+      }
+      const finish = (buf: Buffer | null): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try {
+          proc.kill();
+        } catch {
+          /* ignore */
+        }
+        resolve(buf);
+      };
+      const timer = setTimeout(() => finish(null), Math.min(10_000, 3000 + seconds * 1000));
+      timer.unref?.();
+      proc.stdout?.on('data', (d: Buffer) => {
+        if (size >= maxBytes) return;
+        out.push(d);
+        size += d.length;
+        if (size >= maxBytes) finish(Buffer.concat(out).subarray(0, maxBytes));
+      });
+      proc.stderr?.on('data', () => {});
+      proc.on('error', () => finish(null));
+      proc.on('exit', () => finish(out.length ? Buffer.concat(out).subarray(0, maxBytes) : null));
+      if (isHttp) {
+        void this.fetchHeadIntoStdin(url, proc, Math.max(maxBytes * 6, 1_500_000));
+      } else {
+        try {
+          proc.stdin?.end();
+        } catch {
+          /* ignore */
+        }
+      }
+    });
+  }
+
+  private async fetchHeadIntoStdin(url: string, proc: ChildProcess, maxSourceBytes: number): Promise<void> {
+    const abort = new AbortController();
+    proc.on('exit', () => abort.abort());
+    proc.stdin?.on('error', () => {});
+    const CHUNK = 256 * 1024;
+    try {
+      let offset = 0;
+      while (offset < maxSourceBytes) {
+        const res = await fetch(url, {
+          headers: { 'User-Agent': STREAM_USER_AGENT, Range: `bytes=${offset}-${offset + CHUNK - 1}` },
+          signal: abort.signal,
+        });
+        if (res.status === 416) break;
+        if (res.status !== 206 && res.status !== 200) break;
+        const chunk = Buffer.from(await res.arrayBuffer());
+        if (!chunk.length) break;
+        offset += chunk.length;
+        const stdin = proc.stdin;
+        if (!stdin || stdin.destroyed) break;
+        if (!stdin.write(chunk)) await new Promise<void>((r) => stdin.once('drain', () => r()));
+        if (chunk.length < CHUNK) break;
+      }
+    } catch {
+      /* aborted or network error — ffmpeg flushes whatever it got */
+    }
+    try {
+      proc.stdin?.end();
+    } catch {
+      /* ignore */
+    }
+  }
+
   /** Set the loudness of the active server-side stream (0–100). */
   setVolume(volumePercent: number): void {
     const v = Math.max(0, Math.min(100, volumePercent));
@@ -849,7 +955,21 @@ export class VoiceManager {
   }
 
   private isDucking(): boolean {
-    return this.duckEnabled && this.duckSpeakers.size > 0;
+    return this.duckEnabled && (this.duckSpeakers.size > 0 || Date.now() < this.duckForceUntil);
+  }
+
+  /** Force-duck the music for a fixed window (e.g. over a TTS announcement). */
+  duckFor(ms: number): void {
+    if (ms <= 0) return;
+    this.duckForceUntil = Math.max(this.duckForceUntil, Date.now() + ms);
+    this.applyVolumeToResource();
+    const t = setTimeout(() => {
+      if (Date.now() >= this.duckForceUntil) {
+        this.duckForceUntil = 0;
+        this.applyVolumeToResource();
+      }
+    }, ms + 60);
+    t.unref?.();
   }
 
   private effectiveVolumePercent(): number {

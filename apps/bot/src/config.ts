@@ -120,6 +120,16 @@ cloudflaredPath:
   librespotBitrate: Number(process.env.LIBRESPOT_BITRATE ?? 320),
   /** Tail fade-out applied to decoded streams, in ms (0 disables it). */
   crossfadeMs: Number(process.env.CROSSFADE_MS ?? 2500),
+  /** Opt-in true crossfade (overlap) for decoded tracks; off by default. */
+  crossfadeOverlap: process.env.CROSSFADE_OVERLAP === '1' || process.env.CROSSFADE_OVERLAP === 'true',
+  /**
+   * TTS engine for optional DJ announcements: 'off' (default) or 'espeak'
+   * (local, offline espeak-ng). Never enabled automatically — each guild opts
+   * in with `/tts on`.
+   */
+  ttsProvider: (process.env.TTS_PROVIDER ?? 'off').toLowerCase(),
+  /** espeak-ng binary used when TTS_PROVIDER=espeak. */
+  espeakPath: process.env.ESPEAK_PATH ?? 'espeak-ng',
   /** When true, `V@p` plays via YouTube instead of the Spotify device to save API quota. */
   spotifyPreferYoutube: process.env.SPOTIFY_PREFER_YOUTUBE === '1' || process.env.SPOTIFY_PREFER_YOUTUBE === 'true',
   /** Resolve public Spotify data with the anonymous web-player token (no app quota). Fallback to OAuth. */

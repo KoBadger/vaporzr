@@ -69,6 +69,7 @@ import type { PermissionLevel, TrackInfo, PlaybackState } from '@vaporzr/shared'
 import * as EW from './endlesswave.js';
 import { playlistStore } from './playlists.js';
 import { statsStore } from './stats.js';
+import { ttsEngine } from './tts.js';
 import { renderRadarGif, type RadarMetric } from './images.js';
 
 /** First non-internal IPv4 address of this machine — reachable from the LAN. */
@@ -392,6 +393,10 @@ const COMMANDS = [
     .setDescription("Tint now-playing colors + visuals from the current track's mood")
     .addBooleanOption((o) => o.setName('enabled').setDescription('Turn mood-reactive visuals on or off').setRequired(false)),
   new SlashCommandBuilder()
+    .setName('tts')
+    .setDescription('Toggle spoken DJ announcements between tracks (opt-in, off by default)')
+    .addBooleanOption((o) => o.setName('enabled').setDescription('Turn TTS announcements on or off').setRequired(false)),
+  new SlashCommandBuilder()
     .setName('vibe')
     .setDescription('Let the DJ pick a set for your mood, time of day or weather')
     .addStringOption((o) =>
@@ -497,6 +502,9 @@ export class DiscordBot {
   /** guildId -> tint now-playing colors from the track's audio features. */
   private moodOn = new Set<string>();
   private moodColor = new Map<string, number>();
+  /** Guilds with the optional TTS DJ announcements enabled (opt-in, default off). */
+  private ttsOn = new Set<string>();
+  private ttsAnnounced = new Map<string, string>();
   /** guildId -> panel message location. */
   private panels = new Map<string, { channelId: string; messageId: string }>();
   private npMessages = new Map<string, { channelId: string; messageId: string }>();
@@ -644,6 +652,7 @@ export class DiscordBot {
             void this.syncVoiceStatus(s);
             if (this.moodOn.has(s.guildId)) void this.updateMood(s, st.track);
             this.stats.notePlayed(s.guildId ?? '', st.track.addedBy ?? 'unknown', st.track.artists);
+            this.maybeAnnounceTts(s, st.track);
           }
           this.scheduleWaveTopUp(s);
         },
@@ -1635,6 +1644,25 @@ export class DiscordBot {
         break;
       }
 
+      case 'tts': {
+        if (!this.requireLevel('tts', interaction)) return this.deny(interaction);
+        const gid = interaction.guildId;
+        if (!gid) return void (await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral }));
+        const enabled = interaction.options.getBoolean('enabled');
+        if (enabled === true) this.ttsOn.add(gid);
+        else if (enabled === false) this.ttsOn.delete(gid);
+        const on = this.ttsOn.has(gid);
+        await interaction.reply({
+          content: on
+            ? ttsEngine.enabled
+              ? '🗣 Spoken DJ announcements **on** — I\'ll announce each track.'
+              : '🗣 Announcements are **on**, but no TTS engine is configured on the bot (set `TTS_PROVIDER`).'
+            : '🗣 Spoken DJ announcements **off**.',
+          flags: MessageFlags.Ephemeral,
+        });
+        break;
+      }
+
       case 'vibe': {
         if (!this.requireLevel('vibe', interaction)) return this.deny(interaction);
         await interaction.deferReply();
@@ -2119,6 +2147,7 @@ export class DiscordBot {
       jump: 'jump',
       ambient: 'ambient',
       mood: 'mood',
+      tts: 'tts',
       vibe: 'vibe',
       lb: 'leaderboard', leaderboard: 'leaderboard',
       dna: 'dna', cover: 'cover',
@@ -2405,6 +2434,23 @@ export class DiscordBot {
           }
           await message.reply(
             on ? '🌈 Mood-reactive visuals **on** — colors follow the music.' : 'Mood-reactive visuals **off**.',
+          );
+          break;
+        }
+
+        case 'tts': {
+          if (!canUse('tts')) return void (await deny());
+          if (!message.guildId) return void (await message.reply('Must be used in a server.'));
+          const a = args.trim().toLowerCase();
+          if (/^(on|1|true)$/.test(a)) this.ttsOn.add(message.guildId);
+          else if (/^(off|0|false)$/.test(a)) this.ttsOn.delete(message.guildId);
+          const on = this.ttsOn.has(message.guildId);
+          await message.reply(
+            on
+              ? ttsEngine.enabled
+                ? '🗣 Spoken DJ announcements **on** — I\'ll announce each track.'
+                : '🗣 Announcements are **on**, but no TTS engine is configured on the bot (set `TTS_PROVIDER`).'
+              : '🗣 Spoken DJ announcements **off**.',
           );
           break;
         }
@@ -4976,6 +5022,33 @@ export class DiscordBot {
     if (this.ewStartedUri.get(s.guildId) === track.uri) return;
     this.ewStartedUri.set(s.guildId, track.uri);
     EW.markPlayed(s.endlessWave, track.uri, track.name, track.artists);
+  }
+
+  /**
+   * Optional TTS DJ: speak a short "now playing" line when a new track starts.
+   * Strictly opt-in per guild (`/tts on`), deduped per track, and only if a TTS
+   * engine is configured. The music ducks under the clip, then releases.
+   */
+  private maybeAnnounceTts(s: Session, track: TrackInfo): void {
+    if (!ttsEngine.enabled || !this.ttsOn.has(s.guildId)) return;
+    if (this.ttsAnnounced.get(s.guildId) === track.uri) return;
+    this.ttsAnnounced.set(s.guildId, track.uri);
+    const artists = (track.artists ?? []).filter(Boolean).slice(0, 2);
+    const text = artists.length
+      ? `Now playing, ${track.name}, by ${artists.join(' and ')}.`
+      : `Now playing, ${track.name}.`;
+    void ttsEngine
+      .synth(text)
+      .then((clip) => {
+        if (!clip || !s.voice.isJoined()) return;
+        // The track may have changed while synthesizing — don't speak over the wrong song.
+        if (s.queue.getCurrentTrack()?.uri !== track.uri) return;
+        s.voice.duckFor(clip.durationMs + 400);
+        s.voice.queueSfxPcm(clip.pcm);
+      })
+      .catch(() => {
+        /* announcements are best-effort */
+      });
   }
 
   /** Debounced trigger for topUpWave — fires 700ms after any queue/state change

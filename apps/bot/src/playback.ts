@@ -12,6 +12,7 @@ import type { VoiceManager } from './voice.js';
 import { librespotDeviceId, type SpotifyBackend } from './librespot.js';
 import { config } from './config.js';
 import { analyzer } from './analyzer.js';
+import { fadeInPcm } from './crossfade.js';
 import {
   spotifyPause,
   spotifyPlay,
@@ -65,6 +66,12 @@ export class PlaybackController {
   /** Track uri the current end timer was scheduled for (guards against double-advance). */
   private endUri: string | null = null;
   private preloadTimer: NodeJS.Timeout | null = null;
+  /** Fires shortly before a track ends to overlay the next track's head (crossfade). */
+  private crossfadeTimer: NodeJS.Timeout | null = null;
+  /** Seek offset for the track we crossfaded into; consumed by play(). */
+  private pendingXfadeSeekMs = 0;
+  /** True while advancing because a stream ended on its own (keeps the xfade seek). */
+  private fromNaturalEnd = false;
   private spotifyProgress: NodeJS.Timeout | null = null;
   /** PCM bytes seen on the previous progress tick (genuine-end detection). */
   private lastSpotifyBytes = 0;
@@ -280,6 +287,13 @@ export class PlaybackController {
     }
   }
 
+  private clearCrossfadeTimer(): void {
+    if (this.crossfadeTimer) {
+      clearTimeout(this.crossfadeTimer);
+      this.crossfadeTimer = null;
+    }
+  }
+
   /** Keep the panel progress in sync while a server-side stream is playing. */
   private startPositionTracker(): void {
     this.stopPositionTracker();
@@ -323,6 +337,48 @@ export class PlaybackController {
       this.endTimer = null;
       this.onTrackMaybeEnded();
     }, wait);
+    this.scheduleCrossfade(durationMs, positionMs);
+  }
+
+  /**
+   * Opt-in (CROSSFADE_OVERLAP) true crossfade: shortly before `durationMs`, decode
+   * the next decoded-source track's head and overlay it (ramped up) on the
+   * current track's tail (which step A already fades out). The natural end then
+   * hands off with a seek of `crossfadeMs` so the head is not replayed.
+   * Spotify and unresolved/HLS next tracks keep the step-A fade.
+   */
+  private scheduleCrossfade(durationMs: number, positionMs: number): void {
+    this.clearCrossfadeTimer();
+    if (!config.crossfadeOverlap) return;
+    const xfadeMs = config.crossfadeMs;
+    if (xfadeMs <= 0) return;
+    if (this.currentSource() === 'spotify' && !this.spotifyFallback) return;
+    const snapshot = this.queue.getSnapshot();
+    const next = snapshot.tracks[snapshot.currentIndex + 1];
+    if (!next || next.source === 'spotify') return;
+    const outgoingUri = this.queue.getCurrentTrack()?.uri ?? null;
+    const wait = durationMs - positionMs - xfadeMs;
+    if (wait < 1500) return;
+    this.crossfadeTimer = setTimeout(() => {
+      this.crossfadeTimer = null;
+      void this.startCrossfade(outgoingUri, next, xfadeMs);
+    }, Math.min(wait, 6 * 60 * 60 * 1000));
+    this.crossfadeTimer.unref?.();
+  }
+
+  private async startCrossfade(outgoingUri: string | null, next: TrackInfo, xfadeMs: number): Promise<void> {
+    // Need the already-resolved stream URL; preload normally warmed it. If it is
+    // not cached yet, skip (step A still fades the tail) rather than resolve
+    // synchronously here.
+    const video = this.streamCache.get(next.uri);
+    const url = video?.streamUrl ?? (next.source === 'local' ? next.filePath : undefined);
+    if (!url) return;
+    const head = await this.voice.decodeHeadPcm(url, xfadeMs + 120);
+    if (!head) return;
+    // The track may have changed while decoding — don't mix over the wrong song.
+    if (!outgoingUri || this.queue.getCurrentTrack()?.uri !== outgoingUri) return;
+    this.voice.queueSfxPcm(fadeInPcm(head, xfadeMs));
+    this.pendingXfadeSeekMs = xfadeMs;
   }
 
   /** Pre-resolve the next track's stream URL so it can start with no yt-dlp delay. */
@@ -423,7 +479,7 @@ export class PlaybackController {
         this.replayCurrent();
         return;
       }
-      this.next();
+      this.next(true);
       if (this.onTrackEnd && endedTrack) this.onTrackEnd(endedTrack);
     };
   }
@@ -434,6 +490,12 @@ export class PlaybackController {
     this.applyAudioFx();
     const current = this.queue.getCurrentTrack();
     if (!current) return;
+    // Consume a pending crossfade handoff (set only on a natural end): the next
+    // decoded track starts partway in, because its head already played as an
+    // overlay on the outgoing track.
+    const xfadeSeek = this.pendingXfadeSeekMs;
+    this.pendingXfadeSeekMs = 0;
+    if (xfadeSeek > 0 && current.source !== 'spotify') this.voice.setStreamOffset(xfadeSeek);
     if (!this.voice.isJoined()) {
       throw new Error('I\'m not in a voice channel. Join one and try again.');
     }
@@ -1213,6 +1275,8 @@ export class PlaybackController {
   }
 
   playAt(index: number): boolean {
+    this.clearCrossfadeTimer();
+    this.pendingXfadeSeekMs = 0;
     const tracks = this.queue.getSnapshot().tracks;
     if (index < 0 || index >= tracks.length) return false;
     while (this.queue.getCurrentTrack()?.uri !== tracks[index].uri) {
@@ -1222,9 +1286,12 @@ export class PlaybackController {
     return true;
   }
 
-  next(): void {
+  next(keepXfade = false): void {
     this.playGeneration++;
     this.clearPreloadTimer();
+    this.clearCrossfadeTimer();
+    // A manual skip invalidates a pending crossfade seek; a natural end keeps it.
+    if (!keepXfade) this.pendingXfadeSeekMs = 0;
     this.lastSource = this.currentSource();
     if (!this.queue.next()) {
       const snap = this.queue.getSnapshot();
@@ -1275,6 +1342,8 @@ export class PlaybackController {
   previous(): void {
     this.playGeneration++;
     this.clearPreloadTimer();
+    this.clearCrossfadeTimer();
+    this.pendingXfadeSeekMs = 0;
     this.lastSource = this.currentSource();
     this.queue.previous();
     this.clearEndTimer();
@@ -1285,6 +1354,8 @@ export class PlaybackController {
   pause(): void {
     this.clearEndTimer();
     this.clearPreloadTimer();
+    this.clearCrossfadeTimer();
+    this.pendingXfadeSeekMs = 0;
     this.clearSpotifyRetry();
     if (this.usingServerStream()) {
       this.stopPositionTracker();
@@ -1413,6 +1484,8 @@ export class PlaybackController {
     this.playGeneration++;
     this.clearEndTimer();
     this.clearPreloadTimer();
+    this.clearCrossfadeTimer();
+    this.pendingXfadeSeekMs = 0;
     this.streamCache.clear();
     this.spotifyFallback = false;
     this.lastSource = null;

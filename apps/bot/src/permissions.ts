@@ -44,6 +44,7 @@ const DEFAULT_COMMAND_LEVELS: Record<string, PermissionLevel> = {
   jump: 'user',
   ambient: 'user',
   mood: 'user',
+  tts: 'user',
   vibe: 'user',
   leaderboard: 'user',
   dna: 'user',
