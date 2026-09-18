@@ -572,32 +572,63 @@ export class PlaybackController {
         }
         this.spotifyRetryAttempts = 0;
       } catch (err) {
-        this.stopSpotifyFeed();
-        this.voice.stopStream();
-        if (err instanceof SpotifyError && err.status === 404) {
-          console.warn(`[playback] device not active — falling back to YouTube for "${current.name}"`);
+        if (err instanceof SpotifyError && err.status === 404 && this.librespot?.ensureDevice) {
+          // Device not registered (usually librespot mid-reconnect). Re-register
+          // and retry the SAME track once before falling back to YouTube, so a
+          // transient hiccup doesn't cascade into the fallback path.
+          console.warn(`[playback] device not active — re-registering and retrying "${current.name}"`);
+          try {
+            this.stopSpotifyFeed();
+            this.voice.stopStream();
+            await this.librespot.ensureDevice();
+            if (generation !== this.playGeneration || this.queue.getCurrentTrack()?.uri !== current.uri) return;
+            this.startSpotifyFeed();
+            await this.playOnDevice(device.id, current.uri);
+            if (generation !== this.playGeneration || this.queue.getCurrentTrack()?.uri !== current.uri) {
+              this.pauseSpotifyAny();
+              return;
+            }
+            this.spotifyRetryAttempts = 0;
+          } catch (retryErr) {
+            this.stopSpotifyFeed();
+            this.voice.stopStream();
+            console.warn(
+              `[playback] re-register/retry failed (${retryErr instanceof Error ? retryErr.message : retryErr}) — YouTube fallback for "${current.name}"`,
+            );
+            this.spotifyDeviceId = undefined;
+            this.spotifyPlaybackBlockedUntil = Date.now() + 90 * 1000;
+            await this.playYoutubeFallback(current, generation);
+            return;
+          }
+        } else if (err instanceof SpotifyError && err.status === 404) {
+          // Classic librespot (no ensureDevice): short block, then YouTube.
+          this.stopSpotifyFeed();
+          this.voice.stopStream();
           this.spotifyDeviceId = undefined;
-          // Short block only: a 404 usually means librespot is mid-reconnect and
-          // re-registers within seconds. Blocking for an hour here sent every
-          // later Spotify track to the (often unmatched) YouTube fallback.
           this.spotifyPlaybackBlockedUntil = Date.now() + 90 * 1000;
+          console.warn(`[playback] device not active — YouTube fallback for "${current.name}"`);
           await this.playYoutubeFallback(current, generation);
           return;
-        }
-        if (err instanceof SpotifyError && err.status === 429) {
+        } else if (err instanceof SpotifyError && err.status === 429) {
+          this.stopSpotifyFeed();
+          this.voice.stopStream();
           this.spotifyDeviceId = undefined;
           console.warn(`[playback] Spotify app quota is rate-limited — using YouTube fallback for "${current.name}"`);
           await this.playYoutubeFallback(current, generation);
           return;
-        }
-        if (err instanceof SpotifyError && !err.status) {
+        } else if (err instanceof SpotifyError && !err.status) {
+          this.stopSpotifyFeed();
+          this.voice.stopStream();
           console.warn(`[playback] no Spotify OAuth token — using YouTube fallback for "${current.name}"`);
           this.spotifyDeviceId = undefined;
           this.spotifyPlaybackBlockedUntil = Date.now() + 10 * 60 * 1000;
           await this.playYoutubeFallback(current, generation);
           return;
+        } else {
+          this.stopSpotifyFeed();
+          this.voice.stopStream();
+          throw err;
         }
-        throw err;
       }
       this.queue.setState({
         playing: true,
