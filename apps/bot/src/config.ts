@@ -128,6 +128,8 @@ cloudflaredPath:
    * on every event reads as random volume jumps.
    */
   ducking: process.env.DUCKING === '1' || process.env.DUCKING === 'true',
+  /** Keep paused queues across restarts instead of dropping them as stale. */
+  keepPausedQueue: process.env.KEEP_PAUSED_QUEUE === '1' || process.env.KEEP_PAUSED_QUEUE === 'true',
   /**
    * TTS engine for optional DJ announcements: 'off' (default) or 'espeak'
    * (local, offline espeak-ng). Never enabled automatically — each guild opts

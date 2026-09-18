@@ -577,7 +577,10 @@ export class PlaybackController {
         if (err instanceof SpotifyError && err.status === 404) {
           console.warn(`[playback] device not active — falling back to YouTube for "${current.name}"`);
           this.spotifyDeviceId = undefined;
-          this.spotifyPlaybackBlockedUntil = Date.now() + 60 * 60 * 1000;
+          // Short block only: a 404 usually means librespot is mid-reconnect and
+          // re-registers within seconds. Blocking for an hour here sent every
+          // later Spotify track to the (often unmatched) YouTube fallback.
+          this.spotifyPlaybackBlockedUntil = Date.now() + 90 * 1000;
           await this.playYoutubeFallback(current, generation);
           return;
         }
@@ -590,7 +593,7 @@ export class PlaybackController {
         if (err instanceof SpotifyError && !err.status) {
           console.warn(`[playback] no Spotify OAuth token — using YouTube fallback for "${current.name}"`);
           this.spotifyDeviceId = undefined;
-          this.spotifyPlaybackBlockedUntil = Date.now() + 60 * 60 * 1000;
+          this.spotifyPlaybackBlockedUntil = Date.now() + 10 * 60 * 1000;
           await this.playYoutubeFallback(current, generation);
           return;
         }
