@@ -85,13 +85,31 @@ jobs:
             set -e
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             docker pull ${{ env.IMAGE }}:${{ github.sha }}
+
+            # YouTube PO-token provider (host loopback :4416). Persists across
+            # deploys; start it here if the VPS was rebuilt from scratch.
+            if ! docker container inspect bgutil-provider >/dev/null 2>&1; then
+              docker run -d --name bgutil-provider --init --restart unless-stopped \
+                --network host brainicism/bgutil-ytdlp-pot-provider
+            fi
+
+            docker volume inspect vaporzr-data >/dev/null 2>&1 || docker volume create vaporzr-data
+
+            # Mount YouTube cookies read-only when the host provides them.
+            COOKIE_MOUNT=""
+            if [ -f /opt/vaporzr/cookies.txt ]; then
+              COOKIE_MOUNT="-v /opt/vaporzr/cookies.txt:/app/data/cookies.txt:ro"
+            fi
+
             docker stop vaporzr || true
             docker rm vaporzr || true
             docker run -d --name vaporzr \
               --restart unless-stopped \
               --network host \
               --env-file /opt/vaporzr/.env \
+              -e BIND_ADDRESS=127.0.0.1 \
               -v vaporzr-data:/app/data \
+              $COOKIE_MOUNT \
               ${{ env.IMAGE }}:${{ github.sha }}
             docker image prune -f
             sleep 5
