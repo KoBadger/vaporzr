@@ -9,6 +9,9 @@ on:
 env:
   IMAGE: ghcr.io/kobadger/vaporzr/vaporzr-bot
   LIBRESPOT_VERSION: v0.8.0
+  # Opt into the Node 24 action runtime now (GitHub is forcing it anyway) so the
+  # deprecated-Node-20 warnings stop.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
   build-and-push:
@@ -18,6 +21,15 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+
+      - name: Cache cargo (librespot)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            .cargo-target
+          key: librespot-${{ env.LIBRESPOT_VERSION }}-${{ runner.os }}
 
       - name: Build librespot for linux
         # The Dockerfile does `COPY librespot /usr/local/bin/librespot`. The
@@ -31,6 +43,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends build-essential pkg-config
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
           export PATH="$HOME/.cargo/bin:$PATH"
+          # Keep the (cached) build output outside the throwaway clone.
+          export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/.cargo-target"
           git clone https://github.com/librespot-org/librespot.git
           cd librespot
           git fetch --depth 1 origin "refs/tags/$LIBRESPOT_VERSION:refs/tags/$LIBRESPOT_VERSION"
@@ -38,10 +52,9 @@ jobs:
           cargo build --release --bin librespot \
             --no-default-features \
             --features "rustls-tls-webpki-roots,with-libmdns"
-          cp target/release/librespot /tmp/librespot
           cd ..
           rm -rf librespot
-          mv /tmp/librespot ./librespot
+          cp "$CARGO_TARGET_DIR/release/librespot" ./librespot
           test -x librespot && ./librespot --version | head -1
           timeout 3 ./librespot --backend ? 2>&1 | grep -E 'pipe|subprocess' || true
         env:
@@ -101,6 +114,11 @@ jobs:
               COOKIE_MOUNT="-v /opt/vaporzr/cookies.txt:/app/data/cookies.txt:ro"
             fi
 
+            # Smoke-test the freshly built image BEFORE touching the running
+            # container, so a broken build aborts here and prod keeps serving.
+            docker run --rm ${{ env.IMAGE }}:${{ github.sha }} \
+              sh -c "cd /app/apps/bot && tsx smoke-persist.ts"
+
             docker stop vaporzr || true
             docker rm vaporzr || true
             docker run -d --name vaporzr \
@@ -112,5 +130,10 @@ jobs:
               $COOKIE_MOUNT \
               ${{ env.IMAGE }}:${{ github.sha }}
             docker image prune -f
+            # Keep the 6 newest bot images (current + a few rollback targets);
+            # the VPS disk fills fast at ~1.4 GB per tag otherwise.
+            docker images --format '{{.ID}} {{.CreatedAt}}' ${{ env.IMAGE }} \
+              | sort -k2 -r | tail -n +7 | awk '{print $1}' | sort -u \
+              | xargs -r docker rmi -f >/dev/null 2>&1 || true
             sleep 5
             docker exec vaporzr node -e "const h=require('http');h.get('http://127.0.0.1:'+(process.env.PORT||4876)+'/health',s=>{process.exit(s.statusCode===200?0:1)}).on('error',()=>process.exit(1))" || echo "WARN: /health not reachable after deploy"

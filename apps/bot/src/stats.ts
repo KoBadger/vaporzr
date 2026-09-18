@@ -92,4 +92,11 @@ export class StatsStore {
   user(guildId: string, name: string): UserStat {
     return this.load(guildId).users[name] ?? { queued: 0, played: 0 };
   }
+
+  totalQueued(guildId: string): number {
+    return this.load(guildId).totalQueued;
+  }
 }
+
+/** Process-wide stats store shared by the Discord commands and the panel API. */
+export const statsStore = new StatsStore();

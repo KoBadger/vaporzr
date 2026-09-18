@@ -67,8 +67,8 @@ import { renderPanelIconPng, PANEL_ICON_FALLBACKS } from './panelIcons.js';
 import type { Bridge } from './bridge.js';
 import type { PermissionLevel, TrackInfo, PlaybackState } from '@vaporzr/shared';
 import * as EW from './endlesswave.js';
-import { PlaylistStore } from './playlists.js';
-import { StatsStore } from './stats.js';
+import { playlistStore } from './playlists.js';
+import { statsStore } from './stats.js';
 import { renderRadarGif, type RadarMetric } from './images.js';
 
 /** First non-internal IPv4 address of this machine — reachable from the LAN. */
@@ -471,9 +471,9 @@ export class DiscordBot {
   /** guildId -> how many autoplay tracks to keep buffered (1–10). Unset = default per mode. */
   private ewAheadOverride = new Map<string, number>();
   /** Per-guild saved playlists (favorites). */
-  private playlists = new PlaylistStore();
+  private playlists = playlistStore;
   /** Per-guild listening statistics (leaderboards). */
-  private stats = new StatsStore();
+  private stats = statsStore;
   /** token -> pending interactive search results (for the `V@p <text>` picker). */
   private pendingSearch = new Map<
     string,

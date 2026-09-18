@@ -70,6 +70,12 @@ export class VoiceManager {
   /** Extra ffmpeg `-af` stage for session audio FX (e.g. nightcore/slowed/bass),
    *  appended after loudness normalization + fade-in. Empty when neutral. */
   private audioFx = '';
+  /** Ducking: lower the music while channel members are speaking. */
+  private duckEnabled = true;
+  private duckFactor = 0.25;
+  private duckHoldMs = 700;
+  private duckSpeakers = new Set<string>();
+  private duckTimer: NodeJS.Timeout | null = null;
 
   /** True when the voice connection is alive but the audio stream has died
    *  (ffmpeg crashed, pipe broken, etc.) — resume should re-stream instead of unpause. */
@@ -245,6 +251,13 @@ export class VoiceManager {
    * the library's own reconnect attempts fizzle.
    */
   private attachHandlers(connection: VoiceConnection): void {
+    // Voice-activity ducking: the receiver's speaking map fires per user with
+    // no audio decoding, so we can cheaply dip the music whenever anyone talks.
+    if (this.duckEnabled && !(connection as unknown as { __vzDuck?: boolean }).__vzDuck) {
+      (connection as unknown as { __vzDuck?: boolean }).__vzDuck = true;
+      connection.receiver.speaking.on('start', (userId) => this.noteSpeaker(userId, true));
+      connection.receiver.speaking.on('end', (userId) => this.noteSpeaker(userId, false));
+    }
     connection.on('stateChange', (oldS, newS) => {
       if (newS.status === oldS.status) return;
       const reason = newS.status === VoiceConnectionStatus.Disconnected
@@ -809,11 +822,54 @@ export class VoiceManager {
   setVolume(volumePercent: number): void {
     const v = Math.max(0, Math.min(100, volumePercent));
     this.volumePercent = v;
-    this.resource?.volume?.setVolume(v / 100);
+    this.applyVolumeToResource();
   }
 
   private applyVolumeToResource(): void {
-    this.resource?.volume?.setVolume(this.volumePercent / 100);
+    this.resource?.volume?.setVolume(this.effectiveVolumePercent() / 100);
+  }
+
+  private isDucking(): boolean {
+    return this.duckEnabled && this.duckSpeakers.size > 0;
+  }
+
+  private effectiveVolumePercent(): number {
+    return this.isDucking() ? this.volumePercent * this.duckFactor : this.volumePercent;
+  }
+
+  /** Track a speaker; duck while anyone talks, release after a short hold. */
+  private noteSpeaker(userId: string, talking: boolean): void {
+    if (!this.duckEnabled) return;
+    if (talking) this.duckSpeakers.add(userId);
+    else this.duckSpeakers.delete(userId);
+    if (this.duckTimer) {
+      clearTimeout(this.duckTimer);
+      this.duckTimer = null;
+    }
+    if (this.duckSpeakers.size > 0) {
+      this.applyVolumeToResource();
+    } else {
+      // Release shortly after the last speaker stops so short gaps don't pump.
+      this.duckTimer = setTimeout(() => {
+        this.duckTimer = null;
+        this.duckSpeakers.clear();
+        this.applyVolumeToResource();
+      }, this.duckHoldMs);
+      this.duckTimer.unref?.();
+    }
+  }
+
+  /** Enable/disable voice-activity ducking for this session. */
+  setDucking(enabled: boolean): void {
+    this.duckEnabled = enabled;
+    if (!enabled) {
+      this.duckSpeakers.clear();
+      if (this.duckTimer) {
+        clearTimeout(this.duckTimer);
+        this.duckTimer = null;
+      }
+    }
+    this.applyVolumeToResource();
   }
 
   /** Playback position (ms) of the ffmpeg-backed stream, or 0 for raw feeds. */

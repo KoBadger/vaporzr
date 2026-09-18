@@ -5,6 +5,14 @@ on:
     branches: ['**']
   pull_request:
 
+permissions:
+  contents: read
+
+env:
+  # Opt into the Node 24 action runtime early (GitHub forces it regardless) so
+  # the deprecated-Node-20 warnings go away.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   typecheck-and-test:
     runs-on: ubuntu-latest

@@ -10,6 +10,7 @@ import {
   type QueueSnapshot,
   type PermissionSnapshot,
   type VaporzrTheme,
+  type MediaSource,
 } from '@vaporzr/shared';
 import { QueueManager } from './queue.js';
 import { PlaybackController } from './playback.js';
@@ -22,6 +23,8 @@ import { config } from './config.js';
 import { DEFAULT_THEME, themeById } from './themes.js';
 import { analyzer } from './analyzer.js';
 import { searchAndResolveYoutube } from './youtube.js';
+import { secretEquals } from './secretCompare.js';
+import { playlistStore } from './playlists.js';
 
 interface Client {
   socket: WebSocket;
@@ -105,7 +108,15 @@ export class Bridge {
       if (config.shareKey) {
         const cookie = req.headers.cookie ?? '';
         const m = /(?:^|;\s*)vz_key=([^;]+)/.exec(cookie);
-        this.socketAuthed.set(socket, !!m && m[1] === config.shareKey);
+        let value = m?.[1];
+        if (value !== undefined) {
+          try {
+            value = decodeURIComponent(value);
+          } catch {
+            /* malformed encoding — compare raw */
+          }
+        }
+        this.socketAuthed.set(socket, secretEquals(value, config.shareKey));
       } else {
         this.socketAuthed.set(socket, true);
       }
@@ -189,6 +200,7 @@ export class Bridge {
 
   private handleClose(socket: WebSocket): void {
     this.socketAuthed.delete(socket);
+    this.cmdBudget.delete(socket);
     for (const panel of this.panels) {
       if (panel.socket === socket) {
         this.panels.delete(panel);
@@ -257,6 +269,32 @@ export class Bridge {
     return this.socketAuthed.get(socket) ?? true;
   }
 
+  /** Per-socket command token bucket: ~30 burst, refilled at 3/s. Keeps a keyed
+   *  panel (or a hijacked socket) from flooding the bot with commands. */
+  private cmdBudget = new Map<WebSocket, { tokens: number; last: number; warnedAt: number }>();
+
+  private allowCommand(socket: WebSocket): boolean {
+    const now = Date.now();
+    const CAP = 30;
+    const REFILL_PER_MS = 3 / 1000;
+    const b = this.cmdBudget.get(socket) ?? { tokens: CAP, last: now, warnedAt: 0 };
+    b.tokens = Math.min(CAP, b.tokens + (now - b.last) * REFILL_PER_MS);
+    b.last = now;
+    if (b.tokens < 1) {
+      if (now - b.warnedAt > 2000) {
+        b.warnedAt = now;
+        this.cmdBudget.set(socket, b);
+        this.sendToSocket(socket, { type: 'panel:notice', level: 'error', text: 'Slow down a moment.' });
+      } else {
+        this.cmdBudget.set(socket, b);
+      }
+      return false;
+    }
+    b.tokens -= 1;
+    this.cmdBudget.set(socket, b);
+    return true;
+  }
+
   private clientOf(socket: WebSocket): Client | null {
     for (const p of this.panels) if (p.socket === socket) return p;
     for (const v of this.visualizers) if (v.socket === socket) return v;
@@ -279,6 +317,7 @@ export class Bridge {
         break;
       case 'cmd':
         if (!this.isAuthed(socket)) return;
+        if (!this.allowCommand(socket)) return;
         this.handlePanelCommand(msg);
         break;
       default:
@@ -319,6 +358,7 @@ export class Bridge {
       }
       case 'cmd':
         if (!this.isAuthed(socket)) return;
+        if (!this.allowCommand(socket)) return;
         this.handlePanelCommand(msg);
         break;
       case 'state:request':
@@ -470,8 +510,84 @@ export class Bridge {
         })();
         break;
       }
+      case 'saveVibe': {
+        const name = (msg.name ?? '').trim();
+        if (!name) {
+          this.notice('error', 'Name the vibe first.');
+          break;
+        }
+        const s = this.sessions.primary ?? this.fallback;
+        const tracks = s.queue.getSnapshot().tracks.map((t) => ({
+          uri: t.uri,
+          name: t.name,
+          artists: t.artists,
+          album: t.album,
+          durationMs: t.durationMs,
+          source: (t.source ?? 'youtube') as string,
+          image: t.image,
+        }));
+        const res = playlistStore.save(s.guildId, name, tracks);
+        this.notice(
+          res.ok ? 'success' : 'error',
+          res.ok ? `Saved vibe "${name}" (${res.tracks} tracks)` : res.error ?? 'Save failed.',
+        );
+        break;
+      }
+      case 'loadVibe': {
+        const name = (msg.name ?? '').trim();
+        if (!name) {
+          this.notice('error', 'Pick a saved vibe first.');
+          break;
+        }
+        const s = this.sessions.primary ?? this.fallback;
+        const pl = playlistStore.get(s.guildId, name);
+        if (!pl) {
+          this.notice('error', `No saved vibe "${name}".`);
+          break;
+        }
+        s.queue.enqueueMany(
+          pl.tracks.map((t) => ({
+            uri: t.uri,
+            name: t.name,
+            artists: t.artists,
+            album: t.album,
+            durationMs: t.durationMs,
+            source: t.source as MediaSource,
+            image: t.image,
+          })),
+          'vibe',
+        );
+        this.notice('success', `Loaded "${pl.name}" (${pl.tracks.length} tracks)`);
+        break;
+      }
       default:
         break;
+    }
+  }
+
+  /** Used by the public /request page: resolve a query and queue it (no playback). */
+  async requestTrack(query: string): Promise<{ ok: boolean; name?: string; error?: string }> {
+    const q = query.trim();
+    if (!q) return { ok: false, error: 'Type a song to request.' };
+    try {
+      const video = await searchAndResolveYoutube(q);
+      if (!video) return { ok: false, error: `No match for "${q}".` };
+      const s = this.sessions.primary ?? this.fallback;
+      s.queue.enqueue(
+        {
+          uri: video.uri,
+          name: video.name,
+          artists: video.artists,
+          album: video.album,
+          durationMs: video.durationMs,
+          image: video.image,
+          source: 'youtube',
+        },
+        'request',
+      );
+      return { ok: true, name: video.name };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
   }
 

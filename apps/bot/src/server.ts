@@ -10,8 +10,31 @@ import { Bridge } from './bridge.js';
 import { SessionManager } from './session.js';
 import { PermissionsManager } from './permissions.js';
 import { vizTunnel } from './tunnel.js';
+import { secretEquals } from './secretCompare.js';
+import { statsStore } from './stats.js';
+import { playlistStore } from './playlists.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Cached health of the bgutil YouTube PO-token provider (host loopback :4416).
+ * Without it YouTube extraction silently degrades, so surface it in /health.
+ * "unknown" until the first probe lands.
+ */
+let poTokenStatus: 'up' | 'down' | 'unknown' = 'unknown';
+function probePoTokenProvider(): void {
+  const req = http.get({ host: '127.0.0.1', port: 4416, path: '/ping', timeout: 1500 }, (res) => {
+    res.resume();
+    poTokenStatus = res.statusCode === 200 ? 'up' : 'down';
+  });
+  req.on('timeout', () => {
+    poTokenStatus = 'down';
+    req.destroy();
+  });
+  req.on('error', () => {
+    poTokenStatus = 'down';
+  });
+}
 
 export function startServer(sessions: SessionManager, perms: PermissionsManager): Bridge {
   // Declared here so the request handler (which runs later) can read live
@@ -49,6 +72,7 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
         sessions: all.length,
         librespot: librespotStatus,
         spotifyApi: spotifyApiStatus,
+        poToken: poTokenStatus,
         memory: {
           heapUsedMb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
           heapTotalMb: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
@@ -63,7 +87,7 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
       return;
     }
 
-    void handleRoute(req, url, res);
+    void handleRoute(req, url, res, () => bridge);
   });
 
   bridge = new Bridge(sessions, perms, server);
@@ -84,16 +108,85 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
     bridge?.startLibrespot();
   });
 
+  // Watch the PO-token provider so /health reflects it (see poTokenStatus).
+  probePoTokenProvider();
+  const poTimer = setInterval(probePoTokenProvider, 30_000);
+  poTimer.unref?.();
+
   return bridge;
 }
 
 /** True when the request carries the shared key (cookie or ?key= param). */
 export function hasShareAccess(req: http.IncomingMessage, url: URL): boolean {
-  if (!config.shareKey) return true;
+  const key = config.shareKey;
+  if (!key) return true;
   const cookie = req.headers.cookie ?? '';
   const m = /(?:^|;\s*)vz_key=([^;]+)/.exec(cookie);
-  if (m && m[1] === config.shareKey) return true;
-  return url.searchParams.get('key') === config.shareKey;
+  if (m) {
+    let value = m[1];
+    try {
+      value = decodeURIComponent(value);
+    } catch {
+      /* malformed encoding — compare raw */
+    }
+    if (secretEquals(value, key)) return true;
+  }
+  return secretEquals(url.searchParams.get('key'), key);
+}
+
+/** Gate for the public /request page: its own lower-privilege key. */
+function hasRequestAccess(req: http.IncomingMessage, url: URL): boolean {
+  if (config.requestKey) {
+    const cookie = req.headers.cookie ?? '';
+    const m = /(?:^|;\s*)vz_req=([^;]+)/.exec(cookie);
+    if (m) {
+      let value = m[1];
+      try {
+        value = decodeURIComponent(value);
+      } catch {
+        /* compare raw */
+      }
+      if (secretEquals(value, config.requestKey)) return true;
+    }
+    return secretEquals(url.searchParams.get('key'), config.requestKey);
+  }
+  // No dedicated request key: only allow on an otherwise-open (LAN-only) setup.
+  return !config.shareKey;
+}
+
+/** Global throttle for the public request endpoint (8 requests / minute). */
+let requestWindowStart = 0;
+let requestCount = 0;
+function requestGate(): boolean {
+  const now = Date.now();
+  if (now - requestWindowStart > 60_000) {
+    requestWindowStart = now;
+    requestCount = 0;
+  }
+  if (requestCount >= 8) return false;
+  requestCount++;
+  return true;
+}
+
+async function readJsonBody(req: http.IncomingMessage, limit = 64 * 1024): Promise<unknown> {
+  return new Promise((resolve) => {
+    let data = '';
+    req.on('data', (chunk) => {
+      data += chunk;
+      if (data.length > limit) {
+        req.destroy();
+        resolve(null);
+      }
+    });
+    req.on('end', () => {
+      try {
+        resolve(data ? JSON.parse(data) : {});
+      } catch {
+        resolve(null);
+      }
+    });
+    req.on('error', () => resolve(null));
+  });
 }
 
 function keyPrompt(res: http.ServerResponse): void {
@@ -109,7 +202,12 @@ button{padding:.6rem 1.4rem;border-radius:9px;border:none;background:linear-grad
 <input name="key" placeholder="share key" autofocus><button>Enter</button></form></body></html>`);
 }
 
-async function handleRoute(req: http.IncomingMessage, url: URL, res: http.ServerResponse): Promise<void> {
+async function handleRoute(
+  req: http.IncomingMessage,
+  url: URL,
+  res: http.ServerResponse,
+  bridgeRef: () => Bridge | null,
+): Promise<void> {
   const host = req.headers.host ?? `localhost:${config.port}`;
   const origin = `https://${host}`;
   try {
@@ -120,8 +218,16 @@ async function handleRoute(req: http.IncomingMessage, url: URL, res: http.Server
       keyPrompt(res);
       return;
     }
-    if (gated && config.shareKey && url.searchParams.get('key') === config.shareKey) {
-      res.setHeader('Set-Cookie', `vz_key=${config.shareKey}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax`);
+    if (gated && config.shareKey && secretEquals(url.searchParams.get('key'), config.shareKey)) {
+      // Persist the key so later loads don't need ?key=. Add Secure when the
+      // request arrived through an HTTPS tunnel so the cookie never travels in
+      // clear over the last hop.
+      const proto = String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim();
+      const secure = proto === 'https' ? '; Secure' : '';
+      res.setHeader(
+        'Set-Cookie',
+        `vz_key=${encodeURIComponent(config.shareKey)}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax${secure}`,
+      );
     }
     // Brand assets.
     if (url.pathname === '/favicon.png' || url.pathname === '/logo.png') {
@@ -332,6 +438,117 @@ async function handleRoute(req: http.IncomingMessage, url: URL, res: http.Server
         } catch {
           res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
           res.end('Terms of service not found.');
+        }
+        break;
+      }
+
+      case '/api/stats': {
+        // Same key gate as /api/token when a shared key is configured.
+        if (config.shareKey && !hasShareAccess(req, url)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'unauthorized' }));
+          return;
+        }
+        const gid = url.searchParams.get('guildId') || (bridgeRef()?.getPrimaryGuildId() ?? '');
+        const body = JSON.stringify({
+          guildId: gid,
+          totalQueued: gid ? statsStore.totalQueued(gid) : 0,
+          users: gid ? statsStore.topUsers(gid, 10) : [],
+          artists: gid ? statsStore.topArtists(gid, 10) : [],
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(body);
+        break;
+      }
+
+      case '/api/vibes': {
+        if (config.shareKey && !hasShareAccess(req, url)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'unauthorized' }));
+          return;
+        }
+        const gid = url.searchParams.get('guildId') || (bridgeRef()?.getPrimaryGuildId() ?? '');
+        const vibes = gid
+          ? playlistStore.list(gid).map((p) => ({ name: p.name, tracks: p.tracks.length, updatedAt: p.updatedAt }))
+          : [];
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ vibes }));
+        break;
+      }
+
+      case '/api/request': {
+        if (req.method !== 'POST') {
+          res.writeHead(405);
+          res.end();
+          return;
+        }
+        if (!hasRequestAccess(req, url)) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'forbidden' }));
+          return;
+        }
+        const bot = bridgeRef();
+        if (!bot) {
+          res.writeHead(503, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'bot offline' }));
+          return;
+        }
+        if (!requestGate()) {
+          res.writeHead(429, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Too many requests — try again shortly.' }));
+          return;
+        }
+        const body = (await readJsonBody(req)) as { query?: string } | null;
+        const result = await bot.requestTrack(String(body?.query ?? ''));
+        res.writeHead(result.ok ? 200 : 400, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify(result));
+        break;
+      }
+
+      case '/request':
+      case '/request.html': {
+        if (!hasRequestAccess(req, url)) {
+          res.writeHead(403, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end('<h1 style="font-family:system-ui">Requests are disabled or keyed. Ask the operator for a link.</h1>');
+          return;
+        }
+        if (config.requestKey && secretEquals(url.searchParams.get('key'), config.requestKey)) {
+          res.setHeader(
+            'Set-Cookie',
+            `vz_req=${encodeURIComponent(config.requestKey)}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax`,
+          );
+        }
+        try {
+          const file = fs.readFileSync(path.join(__dirname, '..', 'public', 'request.html'), 'utf8');
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+          res.end(file);
+        } catch {
+          res.writeHead(404);
+          res.end('Request page not found.');
+        }
+        break;
+      }
+
+      case '/manifest.webmanifest': {
+        try {
+          const file = fs.readFileSync(path.join(__dirname, '..', 'public', 'manifest.webmanifest'));
+          res.writeHead(200, { 'Content-Type': 'application/manifest+json', 'Cache-Control': 'public, max-age=3600' });
+          res.end(file);
+        } catch {
+          res.writeHead(404);
+          res.end();
+        }
+        break;
+      }
+
+      case '/sw.js': {
+        try {
+          const file = fs.readFileSync(path.join(__dirname, '..', 'public', 'sw.js'));
+          res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-cache' });
+          res.end(file);
+        } catch {
+          res.writeHead(404);
+          res.end();
         }
         break;
       }

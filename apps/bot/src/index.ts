@@ -90,6 +90,13 @@ async function main(): Promise<void> {
   // stays registered as the Connect device — later play commands route to it
   // instead of the fresh session (wrong track / silent stall).
   const shutdown = (): void => {
+    // Flush debounced queue persistence first — process.exit() below discards
+    // the pending timers, so a redeploy would otherwise lose the newest changes.
+    try {
+      sessions.flushAll();
+    } catch {
+      /* ignore */
+    }
     try {
       bridge.librespot.stop();
     } catch {

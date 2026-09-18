@@ -95,6 +95,13 @@ cloudflaredPath:
    */
   shareKey: process.env.SHARE_KEY ?? '',
   /**
+   * Separate, lower-privilege key for the public /request page (search + queue
+   * only, no playback control). Requiring it keeps the full-control SHARE_KEY
+   * out of members' hands. When empty, /request is only reachable on LAN-only
+   * setups (no SHARE_KEY); on a keyed deployment it stays disabled until set.
+   */
+  requestKey: process.env.REQUEST_KEY ?? '',
+  /**
    * Marks this instance as the primary (the VPS). A second instance sharing the
    * same bot token fights the primary for the single Discord gateway session, so
    * non-primary instances refuse to boot while the primary is reachable.

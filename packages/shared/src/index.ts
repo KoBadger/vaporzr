@@ -104,7 +104,9 @@ export type CommandName =
   | 'sensitivity'
   | 'theme'
   | 'move'
-  | 'playSearch';
+  | 'playSearch'
+  | 'saveVibe'
+  | 'loadVibe';
 
 export interface CommandMessage {
   type: 'cmd';
@@ -138,6 +140,8 @@ export interface CommandMessage {
   to?: number;
   /** Search text for command: 'playSearch'. */
   query?: string;
+  /** Vibe (saved playlist) name for commands: 'saveVibe' / 'loadVibe'. */
+  name?: string;
   /** For 'playSearch': false = add to queue only, true = start playing now. */
   now?: boolean;
 }

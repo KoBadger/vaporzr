@@ -1,65 +1,51 @@
 #!/usr/bin/env bash
-# Vaporzr VPS redeploy — build the image ON the VPS from a source tarball and
-# recreate the container. Used when the local Docker Desktop is unavailable
-# (or just to keep build load off the dev machine).
+# Vaporzr VPS redeploy — pull the CI-built image and recreate the container.
 #
-# Usage:
-#   1. From the repo root (Windows/PowerShell or bash), stage + ship a tarball:
-#        tar -cf vaporzr-deploy.tar package.json package-lock.json \
-#            packages/shared apps/bot apps/player apps/spicetify \
-#            --exclude=node_modules --exclude=apps/bot/data
-#        scp vaporzr-deploy.tar root@<vps>:/opt/vaporzr-deploy.tar
-#      (robocopy to a staging dir first on Windows if tar excludes misbehave)
-#   2. ssh in, then:  bash vps-redeploy.sh [/opt/vaporzr-deploy.tar]
+# This is the BREAK-GLASS / manual path. The normal path is GitHub Actions
+# (.github/workflows/deploy.yml), which builds the image (including compiling
+# the Linux librespot binary the Dockerfile COPYs) and rolls the container on
+# every push to master. This script only pulls an already-published image — it
+# never builds, so it can't hit the missing-binary trap a tarball build does.
 #
-# Safe to re-run. Requires /opt/vaporzr/.env (see vps-setup.sh). Mounts
-# /opt/vaporzr/cookies.txt read-only when present and points
-# YOUTUBE_COOKIES_PATH at it (add that line to .env once; vps-setup.sh does
-# this automatically).
+# Usage (on the VPS):
+#   bash vps-redeploy.sh              # deploy :latest
+#   bash vps-redeploy.sh <git-sha>    # deploy a specific commit image
+#   IMAGE=ghcr.io/you/fork-bot bash vps-redeploy.sh <tag>
+#
+# If the GHCR package is private, log in first (or export GHCR_TOKEN):
+#   echo "$GHCR_TOKEN" | docker login ghcr.io -u <user> --password-stdin
+#
+# Requires /opt/vaporzr/.env (see vps-setup.sh). Mounts /opt/vaporzr/cookies.txt
+# read-only when present.
 
 set -euo pipefail
 
 APP_DIR=/opt/vaporzr
 CONTAINER=vaporzr
-IMAGE=kobadger/vaporzr-bot:latest
+IMAGE="${IMAGE:-ghcr.io/kobadger/vaporzr/vaporzr-bot}"
+TAG="${1:-latest}"
 PORT=4876
-TARBALL="${1:-/opt/vaporzr-deploy.tar}"
-BUILD_DIR=/opt/vaporzr-build
 
-if [ ! -f "$TARBALL" ]; then
-  echo "!! No tarball at $TARBALL — ship the repo tarball first (see header)."
-  exit 1
-fi
+REF="$IMAGE:$TAG"
+
 if [ ! -f "$APP_DIR/.env" ]; then
   echo "!! No $APP_DIR/.env found (see vps-setup.sh)."
   exit 1
 fi
 
-echo "==> Extracting source"
-rm -rf "$BUILD_DIR"
-mkdir -p "$BUILD_DIR"
-tar -xf "$TARBALL" -C "$BUILD_DIR" 2>/dev/null
-
-echo "==> Building $IMAGE (amd64, on this host)"
-docker build -f "$BUILD_DIR/apps/bot/Dockerfile" -t "$IMAGE" "$BUILD_DIR"
-
-COOKIE_MOUNT=()
-if [ -f "$APP_DIR/cookies.txt" ]; then
-  echo "==> cookies.txt found — will mount read-only"
-  COOKIE_MOUNT=(-v "$APP_DIR/cookies.txt:/app/data/cookies.txt:ro")
-else
-  echo "==> no cookies.txt — YouTube may throttle/403 from this IP"
+if [ -n "${GHCR_TOKEN:-}" ]; then
+  echo "==> Logging in to ghcr.io"
+  echo "$GHCR_TOKEN" | docker login ghcr.io -u "${GHCR_USER:-github}" --password-stdin
 fi
 
-# PO-token provider (bgutil): YouTube refuses format extraction from
-# datacenter IPs without a PO token. The provider generates them; the
-# bgutil yt-dlp plugin baked into the bot image auto-detects it at
-# http://127.0.0.1:4416. Host networking on both containers makes that
-# loopback reachable.
-if docker container inspect bgutil-provider >/dev/null 2>&1; then
-  echo "==> bgutil PO-token provider present"
-else
-  echo "==> starting bgutil PO-token provider (port 4416)"
+echo "==> Pulling $REF"
+docker pull "$REF"
+
+echo "==> Smoke-testing the image before touching the running container"
+docker run --rm "$REF" sh -c "cd /app/apps/bot && tsx smoke-persist.ts"
+
+echo "==> Ensuring PO-token provider (host loopback :4416)"
+if ! docker container inspect bgutil-provider >/dev/null 2>&1; then
   docker pull brainicism/bgutil-ytdlp-pot-provider
   docker run -d --name bgutil-provider --init --restart unless-stopped \
     --network host \
@@ -68,11 +54,17 @@ fi
 
 docker volume inspect vaporzr-data >/dev/null 2>&1 || docker volume create vaporzr-data
 
+COOKIE_MOUNT=()
+if [ -f "$APP_DIR/cookies.txt" ]; then
+  echo "==> cookies.txt found — will mount read-only"
+  COOKIE_MOUNT=(-v "$APP_DIR/cookies.txt:/app/data/cookies.txt:ro")
+fi
+
 echo "==> Stopping old container"
 docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
 echo "==> Starting container"
-# Host networking keeps the loopbound control server (BIND_ADDRESS=127.0.0.1)
-# reachable as 127.0.0.1 from the host; see vps-setup.sh.
+# BIND_ADDRESS=127.0.0.1 keeps the control server on the loopback; with host
+# networking it stays reachable as 127.0.0.1 from a tunnel but not the internet.
 docker run -d --name "$CONTAINER" \
   --restart unless-stopped \
   --network host \
@@ -80,7 +72,13 @@ docker run -d --name "$CONTAINER" \
   -e BIND_ADDRESS=127.0.0.1 \
   -v vaporzr-data:/app/data \
   "${COOKIE_MOUNT[@]}" \
-  "$IMAGE"
+  "$REF"
+
+docker image prune -f >/dev/null 2>&1 || true
+# Keep the 6 newest bot images (current + rollback targets).
+docker images --format '{{.ID}} {{.CreatedAt}}' "$IMAGE" \
+  | sort -k2 -r | tail -n +7 | awk '{print $1}' | sort -u \
+  | xargs -r docker rmi -f >/dev/null 2>&1 || true
 
 echo "==> Waiting for health check"
 for i in $(seq 1 30); do

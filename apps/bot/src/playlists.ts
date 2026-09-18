@@ -102,3 +102,6 @@ export class PlaylistStore {
     return true;
   }
 }
+
+/** Process-wide saved-playlist store shared by Discord commands and the panel. */
+export const playlistStore = new PlaylistStore();

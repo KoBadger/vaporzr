@@ -127,6 +127,21 @@ export class SessionManager {
     this.saveTimers.set(guildId, t);
   }
 
+  /**
+   * Persist every guild immediately. Called on shutdown so a redeploy/restart
+   * can't drop the last few seconds of queue changes still sitting on the 3s
+   * debounce (process.exit() discards the unref'd timers).
+   */
+  flushAll(): void {
+    const guildIds = new Set<string>([...this.saveTimers.keys(), ...this.sessions.keys()]);
+    for (const guildId of guildIds) {
+      const timer = this.saveTimers.get(guildId);
+      if (timer) clearTimeout(timer);
+      this.persist(guildId);
+    }
+    this.saveTimers.clear();
+  }
+
   private restore(guildId: string, s: Session): void {
     const file = this.queueFileFor(guildId);
     if (!fs.existsSync(file)) return;
