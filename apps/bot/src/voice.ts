@@ -13,6 +13,7 @@ import {
   type DiscordGatewayAdapterCreator,
 } from '@discordjs/voice';
 import { spawn, type ChildProcess } from 'node:child_process';
+import fs from 'node:fs';
 import { Readable, Transform } from 'node:stream';
 import { config } from './config.js';
 
@@ -506,7 +507,11 @@ export class VoiceManager {
   }
 
   /** Crossfade two source URLs into one continuous mix (ffmpeg acrossfade). */
-  playMix(urlA: string, urlB: string, opts: { crossfadeSec?: number; volume?: number } = {}): void {
+  playMix(
+    urlA: string,
+    urlB: string,
+    opts: { crossfadeSec?: number; volume?: number; cleanup?: string[] } = {},
+  ): void {
     if (!this.player) return;
     this.clearIdleTimer();
     this.stopStream();
@@ -544,6 +549,13 @@ export class VoiceManager {
     this.paused = false;
     proc.on('exit', () => {
       if (this.ffmpeg === proc) this.ffmpeg = null;
+      for (const f of opts.cleanup ?? []) {
+        try {
+          fs.rmSync(f, { force: true });
+        } catch {
+          /* ignore */
+        }
+      }
     });
     console.log(`[voice] crossfade mix started (${d}s)`);
   }

@@ -70,6 +70,7 @@ import * as EW from './endlesswave.js';
 import { playlistStore } from './playlists.js';
 import { statsStore } from './stats.js';
 import { ttsEngine } from './tts.js';
+import { downloadToTempFile } from './mediaDownload.js';
 import { renderRadarGif, type RadarMetric } from './images.js';
 
 /** First non-internal IPv4 address of this machine — reachable from the LAN. */
@@ -4751,7 +4752,24 @@ export class DiscordBot {
     const ub = rb.streamUrl ?? (await EW.resolveCandidate(rb).catch(() => null))?.streamUrl;
     if (!ua || !ub) return 'Could not resolve a playable stream for one of those.';
     if (!s.voice.isJoined()) return 'Join a voice channel first (`V@j`), then mix.';
-    s.voice.playMix(ua, ub, { crossfadeSec: d, volume: s.queue.getState().volume });
+    // `/mix` hands ffmpeg two inputs directly, but ffmpeg's own HTTPS client 403s
+    // on googlevideo (TLS fingerprint). Pull http(s) sources with Node first;
+    // local files and HLS playlists pass straight through.
+    const cleanup: string[] = [];
+    const toInput = async (url: string): Promise<string | null> => {
+      if (!/^https?:\/\//i.test(url)) return url;
+      if (/\.m3u8(\?|$)/i.test(url)) return url; // ffmpeg demuxes HLS natively
+      const file = await downloadToTempFile(url);
+      if (file) cleanup.push(file);
+      return file;
+    };
+    const ia = await toInput(ua);
+    const ib = await toInput(ub);
+    if (!ia || !ib) {
+      for (const f of cleanup) await fs.rm(f, { force: true }).catch(() => {});
+      return 'Could not download one of those tracks to mix.';
+    }
+    s.voice.playMix(ia, ib, { crossfadeSec: d, volume: s.queue.getState().volume, cleanup });
     return `🎚️ Mixing **${truncate(ra.name, 60)}** → **${truncate(rb.name, 60)}** with a ${d}s crossfade.`;
   }
 
