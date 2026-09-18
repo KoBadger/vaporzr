@@ -6,6 +6,10 @@
 <title>Vaporzr Panel</title>
 <link rel="icon" type="image/png" href="/favicon.png">
 <meta name="theme-color" content="#6a5cff">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Vaporzr">
 <meta property="og:title" content="Vaporzr — Control Panel">
 <meta property="og:description" content="Full playback control for the Vaporzr music bot — queue, search, soundboard, visuals.">
 <meta property="og:image" content="{{ORIGIN}}/logo.png">
@@ -186,6 +190,20 @@ kbd{display:inline-block;padding:2px 7px;border-radius:6px;border:1px solid var(
 
 body.guest button,body.guest input[type=range]{opacity:.45;cursor:not-allowed}
 body.guest #guilds{display:none}
+
+/* Queue: drag-to-reorder + multi-select */
+#queue li[draggable=true]{cursor:grab}
+#queue li.dragging{opacity:.45}
+#queue li.drop-before{box-shadow:inset 0 2px 0 var(--accent)}
+#queue li.drop-after{box-shadow:inset 0 -2px 0 var(--accent)}
+#queue li.selected{background:color-mix(in srgb,var(--accent) 12%,transparent)}
+#queue li .qcheck{margin-right:7px;accent-color:var(--accent);width:14px;height:14px;flex:0 0 auto;cursor:pointer}
+#q-selbar{display:none;align-items:center;gap:8px;margin:6px 0 2px;font-size:12px;color:var(--muted)}
+#q-selbar.on{display:flex}
+#q-selbar button{font-size:12px;padding:3px 9px;height:auto;min-width:0}
+.qhint{font-size:10.5px;color:var(--muted);opacity:.75;margin-top:4px}
+.stat-row{display:flex;justify-content:space-between;gap:10px;padding:2px 0;font-size:12px}
+.stat-row b{color:var(--text)}
 </style>
 </head>
 <body>
@@ -256,7 +274,37 @@ body.guest #guilds{display:none}
         <span style="font-size:11px;color:var(--muted)"><span id="queue-count">0 tracks</span> <span id="queue-total"></span></span>
         <button id="btn-jump" class="icon" data-tip="Scroll to the playing track" style="height:26px;min-width:26px;font-size:12px">⌖</button>
       </div>
+      <div id="q-selbar">
+        <span id="q-selcount">0 selected</span>
+        <button id="q-sel-remove" class="danger">✕ Remove</button>
+        <button id="q-sel-clear" class="icon">Clear</button>
+      </div>
       <ul id="queue"><li id="empty" style="color:var(--muted);font-size:12px">Nothing queued.</li></ul>
+      <div class="qhint">Drag a row to reorder · tick rows to remove several at once</div>
+    </div>
+
+    <!-- Leaderboard -->
+    <div class="card">
+      <div id="queue-info">
+        <span class="section-label">📊 LEADERBOARD</span>
+        <button id="btn-stats-refresh" class="icon" data-tip="Refresh stats" style="height:26px;min-width:26px;font-size:12px">↻</button>
+      </div>
+      <div id="stats-body" style="font-size:12px;color:var(--muted)">Loading…</div>
+    </div>
+
+    <!-- Vibes (saved queues) -->
+    <div class="card">
+      <div id="queue-info">
+        <span class="section-label">🌙 VIBES</span>
+        <button id="btn-vibes-refresh" class="icon" data-tip="Refresh saved vibes" style="height:26px;min-width:26px;font-size:12px">↻</button>
+      </div>
+      <div id="search-row">
+        <input id="vibe-name" placeholder="Name this queue…" autocomplete="off" />
+        <button id="btn-vibe-save" data-tip="Save the current queue as a vibe">💾 Save</button>
+        <button id="btn-vibe-load" class="primary" data-tip="Load the selected vibe into the queue">⬇ Load</button>
+      </div>
+      <select id="vibe-list" style="margin-top:8px;width:100%;padding:9px 10px;border-radius:9px;border:1px solid rgba(140,160,255,.3);background:rgba(10,14,32,.7);color:#e2e8f0;font-size:12.5px"></select>
+      <div class="qhint">Saved per server (max 25) · load adds the vibe to the queue.</div>
     </div>
   </div>
 
@@ -318,12 +366,16 @@ body.guest #guilds{display:none}
    'wave-badge','wave-toggle',
    'btn-play','btn-shuffle','btn-repeat','btn-prev','btn-next','btn-clear','progress','t-now','t-dur','vol',
    'queue','queue-count','queue-total','btn-jump','empty','search','btn-q-add','btn-q-play',
+   'q-selbar','q-selcount','q-sel-remove','q-sel-clear',
+   'stats-body','btn-stats-refresh',
+   'vibe-name','btn-vibe-save','btn-vibe-load','vibe-list','btn-vibes-refresh',
    'swatches','sens','sens-val','link-viz','guilds','toasts',
    'conn-dot','conn-text'].forEach(function (id) { el[id] = $(id); });
 
   var ws = null, state = null, queue = [], djEnabled = false, connected = false;
   var sensitivity = 1.0, themeId = 'vaporzr';
   var waveMode = 'off';
+  var selected = new Set(), dragIndex = -1;
 
   var THEMES = [
     {id:'vaporzr',name:'Vaporzr',accent:'#6a5cff',accent2:'#00f0ff'},
@@ -442,6 +494,19 @@ body.guest #guilds{display:none}
     renderQueue();renderDj();
   }
 
+  function syncSelBar(){
+    var n=selected.size;
+    el['q-selcount'].textContent=n+' selected';
+    el['q-selbar'].classList.toggle('on',n>0);
+  }
+  function removeSelected(){
+    if(!selected.size)return;
+    Array.from(selected).sort(function(a,b){return b-a}).forEach(function(i){cmd('remove',{index:i})});
+    selected.clear();syncSelBar();
+  }
+  el['q-sel-remove'].onclick=removeSelected;
+  el['q-sel-clear'].onclick=function(){selected.clear();renderQueue();};
+
   function renderQueue(){
     var known=queue.filter(function(q){return q.durationMs});
     var tot=known.reduce(function(a,q){return a+(q.durationMs||0)},0);
@@ -462,6 +527,12 @@ body.guest #guilds{display:none}
         for(var k=0;k<3;k++)eq.appendChild(document.createElement('i'));
         li.appendChild(eq);
       }
+      var cb=document.createElement('input');
+      cb.type='checkbox';cb.className='qcheck';cb.setAttribute('data-tip','Select for bulk remove');
+      cb.checked=selected.has(i);
+      if(cb.checked)li.classList.add('selected');
+      cb.onclick=function(ev){ev.stopPropagation();if(cb.checked)selected.add(i);else selected.delete(i);li.classList.toggle('selected',cb.checked);syncSelBar();};
+      li.insertBefore(cb,li.firstChild);
       var art;
       if(t.image){art=document.createElement('img');art.className='qart';art.loading='lazy';art.src=t.image;art.alt='';art.onerror=function(){art.replaceWith(mkArtFallback(t))}}
       else{art=mkArtFallback(t)}
@@ -485,6 +556,12 @@ body.guest #guilds{display:none}
       acts.appendChild(mk('▼','Move down one',function(){if(i<queue.length-1)cmd('move',{index:i,to:i+1})}));
       acts.appendChild(mk('✕','Remove from queue',function(){cmd('remove',{index:i})},'danger'));
       li.appendChild(acts);
+      li.draggable=true;
+      li.ondragstart=function(ev){dragIndex=i;li.classList.add('dragging');if(ev.dataTransfer){ev.dataTransfer.effectAllowed='move';try{ev.dataTransfer.setData('text/plain',String(i))}catch(_e){}}};
+      li.ondragend=function(){li.classList.remove('dragging');dragIndex=-1;};
+      li.ondragover=function(ev){if(dragIndex<0)return;ev.preventDefault();if(ev.dataTransfer)ev.dataTransfer.dropEffect='move';var r=li.getBoundingClientRect();var after=(ev.clientY-r.top)>r.height/2;li.classList.toggle('drop-after',after);li.classList.toggle('drop-before',!after);};
+      li.ondragleave=function(){li.classList.remove('drop-before','drop-after');};
+      li.ondrop=function(ev){ev.preventDefault();li.classList.remove('drop-before','drop-after');if(dragIndex<0||dragIndex===i)return;var r=li.getBoundingClientRect();var after=(ev.clientY-r.top)>r.height/2;var p=after?i+1:i;var to=p-(p>dragIndex?1:0);if(to!==dragIndex&&to>=0&&to<queue.length)cmd('move',{index:dragIndex,to:to});dragIndex=-1;};
       el.queue.appendChild(li);
     });
     function mkArtFallback(t){
@@ -649,6 +726,63 @@ body.guest #guilds{display:none}
     el.search.value='';
   }
 
+  /* ---------- leaderboard stats ---------- */
+  function renderStats(d){
+    var wrap=el['stats-body'];wrap.innerHTML='';
+    if(!d||!d.totalQueued){wrap.textContent='No stats yet — queue something!';return}
+    var h=document.createElement('div');h.style.cssText='font-size:11px;margin-bottom:6px';h.textContent=d.totalQueued+' tracks queued all-time';wrap.appendChild(h);
+    function section(title,rows,key){
+      if(!rows||!rows.length)return;
+      var t=document.createElement('div');t.className='section-label';t.style.cssText='font-size:10px;margin-top:8px';t.textContent=title;wrap.appendChild(t);
+      rows.forEach(function(r){
+        var row=document.createElement('div');row.className='stat-row';
+        var name=document.createElement('span');name.textContent=r[0];
+        var val=document.createElement('b');val.textContent=String(key(r[1]));
+        row.appendChild(name);row.appendChild(val);wrap.appendChild(row);
+      });
+    }
+    section('TOP REQUESTERS',d.users,function(v){return v.queued});
+    section('TOP ARTISTS',d.artists,function(v){return v});
+  }
+  function loadStats(){
+    fetch('/api/stats').then(function(r){return r.ok?r.json():null}).then(function(d){
+      if(!d){el['stats-body'].textContent='Stats unavailable.';return}
+      renderStats(d);
+    }).catch(function(){el['stats-body'].textContent='Stats unavailable.';});
+  }
+  el['btn-stats-refresh'].onclick=loadStats;
+  loadStats();
+  setInterval(loadStats,60000);
+
+  /* ---------- vibes (saved queues) ---------- */
+  function loadVibes(){
+    fetch('/api/vibes').then(function(r){return r.ok?r.json():null}).then(function(d){
+      var sel=el['vibe-list'];sel.innerHTML='';
+      if(!d||!d.vibes||!d.vibes.length){
+        var o=document.createElement('option');o.value='';o.textContent='— no saved vibes —';sel.appendChild(o);return;
+      }
+      var ph=document.createElement('option');ph.value='';ph.textContent='Select a vibe…';sel.appendChild(ph);
+      d.vibes.forEach(function(v){
+        var opt=document.createElement('option');opt.value=v.name;opt.textContent=v.name+' ('+v.tracks+')';sel.appendChild(opt);
+      });
+    }).catch(function(){});
+  }
+  el['btn-vibes-refresh'].onclick=loadVibes;
+  el['btn-vibe-save'].onclick=function(){
+    var name=(el['vibe-name'].value||'').trim();
+    if(!name){toast('error','Name the vibe first');return}
+    cmd('saveVibe',{name:name});
+    toast('info','Saving vibe "'+name+'"…');
+    el['vibe-name'].value='';
+    setTimeout(loadVibes,1500);
+  };
+  el['btn-vibe-load'].onclick=function(){
+    var name=el['vibe-list'].value;
+    if(!name){toast('error','Pick a saved vibe');return}
+    cmd('loadVibe',{name:name});
+  };
+  loadVibes();
+
   /* ---------- keyboard shortcuts ---------- */
   document.addEventListener('keydown',function(e){
     var tag=(e.target&&e.target.tagName)||'';
@@ -672,6 +806,13 @@ body.guest #guilds{display:none}
   requestAnimationFrame(drawSpec);
   setInterval(render,1000);
   connect();
+
+  // PWA: register the (cache-free) service worker so the panel is installable.
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('/sw.js').catch(function () {});
+    });
+  }
 })();
 </script>
 </body>
