@@ -507,6 +507,9 @@ export class PlaybackController {
     if (!this.voice.isJoined()) {
       throw new Error('I\'m not in a voice channel. Join one and try again.');
     }
+    console.log(
+      `[playback] start "${current.name}" (source=${current.source ?? '?'}${this.currentStartOffsetMs > 0 ? `, offset=${this.currentStartOffsetMs}ms` : ''})`,
+    );
     this.tracksPlayed++;
 
     if (current.source === 'youtube') {

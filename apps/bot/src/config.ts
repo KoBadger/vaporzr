@@ -123,6 +123,12 @@ cloudflaredPath:
   /** Opt-in true crossfade (overlap) for decoded tracks; off by default. */
   crossfadeOverlap: process.env.CROSSFADE_OVERLAP === '1' || process.env.CROSSFADE_OVERLAP === 'true',
   /**
+   * Duck the music while channel members are talking. Opt-in (off by default):
+   * the receiver's speaking events can be chatty, and dropping/restoring volume
+   * on every event reads as random volume jumps.
+   */
+  ducking: process.env.DUCKING === '1' || process.env.DUCKING === 'true',
+  /**
    * TTS engine for optional DJ announcements: 'off' (default) or 'espeak'
    * (local, offline espeak-ng). Never enabled automatically — each guild opts
    * in with `/tts on`.
