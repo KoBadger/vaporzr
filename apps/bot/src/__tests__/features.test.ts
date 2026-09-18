@@ -5,6 +5,7 @@ import path from 'node:path';
 import { QueueManager } from '../queue.js';
 import { VoiceManager } from '../voice.js';
 import { PlaybackController, STREAM_CACHE_SAVE_DEBOUNCE_MS } from '../playback.js';
+import { Session } from '../session.js';
 import { parseSleepSpec } from '../discord.js';
 import { config } from '../config.js';
 import type { ResolvedVideo } from '../youtube.js';
@@ -112,5 +113,63 @@ describe('stream cache persistence', () => {
 
     const fresh = new PlaybackController(new QueueManager(), () => {}, new VoiceManager(), null);
     expect(fresh.cachedStream('spotify:track:omega')).toBeDefined();
+  });
+});
+
+describe('Session.removeFromQueue', () => {
+  function makeSession(): { s: Session; events: string[] } {
+    const s = new Session('guild-test', null);
+    const events: string[] = [];
+    s.playback.play = () => {
+      events.push('play');
+      return Promise.resolve();
+    };
+    s.playback.stopAll = () => {
+      events.push('stop');
+    };
+    return { s, events };
+  }
+
+  it('hands playback off to the next track when the playing track is removed', () => {
+    const { s, events } = makeSession();
+    s.queue.setState({ playing: true });
+    s.queue.enqueue(video('spotify:track:a'), 'user');
+    s.queue.enqueue(video('spotify:track:b'), 'user');
+    s.queue.enqueue(video('spotify:track:c'), 'user');
+    expect(s.queue.getSnapshot().currentIndex).toBe(0);
+
+    s.removeFromQueue(0);
+
+    expect(s.queue.getSnapshot().currentIndex).toBe(0);
+    expect(s.queue.getCurrentTrack()?.uri).toBe('spotify:track:b');
+    expect(events).toEqual(['play']);
+  });
+
+  it('stops playback when the playing tail track is removed', () => {
+    const { s, events } = makeSession();
+    s.queue.setState({ playing: true });
+    s.queue.enqueue(video('spotify:track:a'), 'user');
+    s.queue.enqueue(video('spotify:track:b'), 'user');
+    while (s.queue.getCurrentTrack()?.uri !== 'spotify:track:b') {
+      if (!s.queue.next()) break;
+    }
+
+    s.removeFromQueue(1);
+
+    expect(events).toEqual(['stop']);
+    expect(s.queue.getState().playing).toBe(false);
+    expect(s.queue.getSnapshot().tracks.map((t) => t.uri)).toEqual(['spotify:track:a']);
+  });
+
+  it('leaves playback alone when a non-current track is removed', () => {
+    const { s, events } = makeSession();
+    s.queue.setState({ playing: true });
+    s.queue.enqueue(video('spotify:track:a'), 'user');
+    s.queue.enqueue(video('spotify:track:b'), 'user');
+
+    s.removeFromQueue(1);
+
+    expect(events).toEqual([]);
+    expect(s.queue.getSnapshot().currentIndex).toBe(0);
   });
 });

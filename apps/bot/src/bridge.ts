@@ -377,7 +377,7 @@ export class Bridge {
         this.queue.clear();
         break;
       case 'remove':
-        if (msg.index != null) this.queue.remove(msg.index);
+        if (msg.index != null) (this.sessions.primary ?? this.fallback).removeFromQueue(msg.index);
         break;
       case 'playAt':
         if (msg.index != null) this.playback.playAt(msg.index);

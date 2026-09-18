@@ -1250,7 +1250,7 @@ export class DiscordBot {
       case 'remove': {
         const index = interaction.options.getInteger('index', true);
         if (!this.requireLevel('remove', interaction)) return this.deny(interaction);
-        const removed = s.queue.remove(index - 1);
+        const removed = s.removeFromQueue(index - 1);
         await interaction.reply(removed ? `Removed **${removed.name}**` : 'Index out of range.');
         break;
       }
@@ -2290,7 +2290,7 @@ export class DiscordBot {
           if (!canUse('remove')) return void (await deny());
           const n = Number(args);
           if (!args || Number.isNaN(n)) return void (await message.reply('Usage: `V@remove <queue number>`'));
-          const removed = s.queue.remove(n - 1);
+          const removed = s.removeFromQueue(n - 1);
           await message.reply(removed ? `Removed **${removed.name}**` : 'Index out of range.');
           break;
         }

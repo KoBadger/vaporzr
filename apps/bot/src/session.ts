@@ -42,6 +42,38 @@ export class Session {
   setPcmSink(fn: ((data: Buffer) => void) | null): void {
     this.voice.setPcmTap(fn);
   }
+
+  /**
+   * Remove a queue track and, when it was the one playing, hand playback off to
+   * the new current track (or stop when there is nothing left to advance to) so
+   * audio never keeps playing a track the user just deleted.
+   */
+  removeFromQueue(index: number): TrackInfo | undefined {
+    const before = this.queue.getSnapshot();
+    const wasCurrent = index === before.currentIndex;
+    const wasPlaying = this.queue.getState().playing;
+    const hadNext = index < before.tracks.length - 1;
+    const removed = this.queue.remove(index);
+    if (!removed || !wasCurrent || !wasPlaying) return removed;
+
+    if (hadNext) {
+      // A later track is now current — start it.
+      void this.playback.play().catch((err) => {
+        console.warn(
+          '[vaporzr] playback after removing the current track failed:',
+          err instanceof Error ? err.message : err,
+        );
+      });
+    } else {
+      // The tail (or the whole queue) was removed: stop instead of replaying
+      // the previous track, and drop out of the playing state.
+      this.playback.stopAll();
+      if (this.queue.getSnapshot().tracks.length > 0) {
+        this.queue.setState({ playing: false });
+      }
+    }
+    return removed;
+  }
 }
 
 /**

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { emptyState } from '@vaporzr/shared';
 import { QueueManager } from '../queue.js';
 
 function track(uri: string, name = uri): { uri: string; name: string; artists: string[]; album: string; durationMs: number } {
@@ -81,5 +82,90 @@ describe('QueueManager.enqueue cursor behavior', () => {
     // after it where the top-up ahead-counter can see them.
     const upcoming = snap.tracks.slice(snap.currentIndex + 1);
     expect(upcoming.filter((t) => t.addedBy === 'endless-wave')).toHaveLength(2);
+  });
+});
+
+describe('QueueManager regressions', () => {
+  it('enqueueMany counts each track exactly once, even under shuffle', () => {
+    const q = new QueueManager();
+    q.enqueue(track('spotify:track:a', 'A'), 'user');
+    q.setState({ shuffle: true });
+    q.enqueueMany([track('spotify:track:b', 'B'), track('spotify:track:c', 'C')], 'user');
+    // Before the fix each shuffled add went through enqueue() (which counts)
+    // and was then counted again in bulk, inflating the stats total.
+    expect(q.totalEnqueued).toBe(3);
+    expect(q.getSnapshot().tracks).toHaveLength(3);
+  });
+
+  it('enqueueMany returns the insert index instead of -1 after adding tracks', () => {
+    const q = new QueueManager();
+    expect(q.enqueueMany([track('spotify:track:a', 'A')], 'user')).toBe(0);
+    expect(q.enqueueMany([track('spotify:track:b', 'B')], 'user')).toBe(1);
+    expect(q.enqueueMany([], 'user')).toBe(-1);
+  });
+
+  it('next() and previous() notify listeners so the cursor cannot go stale', () => {
+    const q = new QueueManager();
+    q.enqueue(track('spotify:track:a', 'A'), 'user');
+    q.enqueue(track('spotify:track:b', 'B'), 'user'); // idle → cursor pinned to the tail (1)
+    let changes = 0;
+    q.subscribe({ onQueueChanged: () => { changes++; }, onStateChanged: () => {} });
+    expect(q.next()).toBe(false); // already at the end — no movement, no emit
+    expect(changes).toBe(0);
+    expect(q.previous()).toBe(true); // 1 → 0
+    expect(changes).toBe(1);
+    expect(q.next()).toBe(true); // 0 → 1
+    expect(changes).toBe(2);
+  });
+
+  it('remove() of the now-playing track re-syncs state to the new current track', () => {
+    const q = new QueueManager();
+    q.setState({ playing: true });
+    q.enqueue(track('spotify:track:a', 'A'), 'user');
+    q.enqueue(track('spotify:track:b', 'B'), 'user');
+    q.enqueue(track('spotify:track:c', 'C'), 'user'); // playing → cursor stays on A
+    q.setState({ track: q.getCurrentTrack() });
+    q.remove(0);
+    const st = q.getState();
+    expect(q.getSnapshot().currentIndex).toBe(0);
+    expect(st.track?.uri).toBe('spotify:track:b');
+    expect(st.playing).toBe(true);
+  });
+
+  it('remove() of the last track clears now-playing and stops playback', () => {
+    const q = new QueueManager();
+    q.setState({ playing: true });
+    q.enqueue(track('spotify:track:a', 'A'), 'user');
+    q.setState({ track: q.getCurrentTrack() });
+    q.remove(0);
+    const st = q.getState();
+    expect(q.getSnapshot().tracks).toHaveLength(0);
+    expect(q.getSnapshot().currentIndex).toBe(-1);
+    expect(st.playing).toBe(false);
+    expect(st.track).toBeUndefined();
+  });
+
+  it('restore() defaults a missing cursor to the first track', () => {
+    const q = new QueueManager();
+    q.restore({
+      tracks: [{ ...track('spotify:track:a', 'A'), addedBy: 'u', addedAt: 0 }],
+      currentIndex: undefined as unknown as number,
+      state: emptyState(),
+    });
+    expect(q.getSnapshot().currentIndex).toBe(0);
+    expect(q.getState().track?.uri).toBe('spotify:track:a');
+  });
+
+  it('restore() keeps an explicit finished cursor (-1) and zeroes the duration', () => {
+    const q = new QueueManager();
+    q.restore({
+      tracks: [{ ...track('spotify:track:a', 'A'), addedBy: 'u', addedAt: 0 }],
+      currentIndex: -1,
+      state: { ...emptyState(), positionMs: 1234, durationMs: 200_000 },
+    });
+    const st = q.getState();
+    expect(q.getSnapshot().currentIndex).toBe(-1);
+    expect(st.track).toBeUndefined();
+    expect(st.durationMs).toBe(0);
   });
 });

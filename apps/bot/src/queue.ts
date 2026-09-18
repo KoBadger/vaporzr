@@ -47,7 +47,11 @@ export class QueueManager {
   restore(data: { tracks: TrackInfo[]; currentIndex: number; state: PlaybackState }): void {
     if (!Array.isArray(data.tracks) || data.tracks.length === 0) return;
     this.tracks = data.tracks.map((t) => ({ ...t }));
-    this.currentIndex = Math.min(Math.max(data.currentIndex ?? -1, -1), this.tracks.length - 1);
+    // A missing cursor defaults to the first track (a restored queue should have
+    // a current track); an explicit -1 is kept so a finished queue stays finished.
+    this.currentIndex = data.currentIndex == null
+      ? 0
+      : Math.min(Math.max(data.currentIndex, -1), this.tracks.length - 1);
     const current = this.getCurrentTrack();
     this.state = {
       ...this.state,
@@ -55,7 +59,7 @@ export class QueueManager {
       track: current,
       playing: false,
       positionMs: data.state?.positionMs ?? 0,
-      durationMs: current?.durationMs ?? data.state?.durationMs ?? 0,
+      durationMs: current?.durationMs ?? 0,
     };
     this.emitQueue();
     this.emitState();
@@ -112,19 +116,21 @@ export class QueueManager {
   }
 
   enqueueMany(tracks: Omit<TrackInfo, 'addedBy' | 'addedAt'>[], requestedBy: string): number {
-    const wasEmpty = this.tracks.length === 0;
+    if (tracks.length === 0) return -1;
     this.resetCursorIfFinished();
+    const addedIndex = this.tracks.length;
     if (this.state.shuffle && this.tracks.length > 0) {
+      // enqueue() counts each track and notifies listeners itself, so the bulk
+      // bookkeeping below must not run here or totalEnqueued double-counts.
       for (const t of tracks) this.enqueue(t, requestedBy);
     } else {
-      const addedIndex = this.tracks.length;
       for (const t of tracks) this.tracks.push({ ...t, addedBy: requestedBy, addedAt: Date.now() });
       if (this.currentIndex === -1) this.currentIndex = 0;
       this.advanceToAdded(addedIndex, this.tracks.length);
+      this.totalEnqueued += tracks.length;
+      this.emitQueue();
     }
-    this.totalEnqueued += tracks.length;
-    this.emitQueue();
-    return wasEmpty ? this.tracks.length - tracks.length : -1;
+    return addedIndex;
   }
 
   /** Insert tracks right after the currently-playing track (or at the front if nothing is playing). */
@@ -156,12 +162,27 @@ export class QueueManager {
   remove(index: number): TrackInfo | undefined {
     if (index < 0 || index >= this.tracks.length) return undefined;
     const [removed] = this.tracks.splice(index, 1);
+    const removedCurrent = index === this.currentIndex;
     if (index < this.currentIndex) this.currentIndex -= 1;
-    else if (index === this.currentIndex) {
+    else if (removedCurrent && this.currentIndex >= this.tracks.length) {
       // the currently-playing track was removed; keep index pointing at the next track
-      if (this.currentIndex >= this.tracks.length) this.currentIndex = this.tracks.length - 1;
+      this.currentIndex = this.tracks.length - 1;
     }
     this.emitQueue();
+    if (removedCurrent) {
+      // The cursor moved (or the queue emptied): re-sync the now-playing state
+      // so it never points at a track that is no longer in the queue.
+      const current = this.getCurrentTrack();
+      this.state = {
+        ...this.state,
+        track: current,
+        positionMs: 0,
+        durationMs: current?.durationMs ?? 0,
+        playing: current ? this.state.playing : false,
+        updatedAt: Date.now(),
+      };
+      this.emitState();
+    }
     return removed;
   }
 
@@ -184,7 +205,14 @@ export class QueueManager {
   clear(): void {
     this.tracks = [];
     this.currentIndex = -1;
-    this.state = { ...this.state, track: undefined, playing: false, positionMs: 0, durationMs: 0 };
+    this.state = {
+      ...this.state,
+      track: undefined,
+      playing: false,
+      positionMs: 0,
+      durationMs: 0,
+      updatedAt: Date.now(),
+    };
     this.emitQueue();
     this.emitState();
   }
@@ -193,6 +221,7 @@ export class QueueManager {
     if (this.tracks.length === 0) return false;
     if (this.currentIndex < this.tracks.length - 1) {
       this.currentIndex += 1;
+      this.emitQueue();
       return true;
     }
     return false;
@@ -201,6 +230,7 @@ export class QueueManager {
   previous(): boolean {
     if (this.currentIndex > 0) {
       this.currentIndex -= 1;
+      this.emitQueue();
       return true;
     }
     return false;
