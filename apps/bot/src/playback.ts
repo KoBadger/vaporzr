@@ -594,6 +594,7 @@ export class PlaybackController {
         source: 'youtube',
       });
       this.voice.playFfmpegUrl(video.streamUrl!, {
+        durationMs: video.durationMs,
         volume: this.queue.getState().volume,
         onEnd: this.serverStreamOnEnd(),
         retries: 2,
@@ -681,6 +682,7 @@ export class PlaybackController {
       source: 'local',
     });
     this.voice.playFfmpegUrl(filePath, {
+      durationMs,
       volume: this.queue.getState().volume,
       onEnd: this.serverStreamOnEnd(),
       retries: 2,
@@ -709,6 +711,7 @@ export class PlaybackController {
       source: 'direct',
     });
     this.voice.playFfmpegUrl(current.streamUrl, {
+      durationMs,
       volume: this.queue.getState().volume,
       onEnd: this.serverStreamOnEnd(),
       retries: 2,
@@ -756,6 +759,7 @@ export class PlaybackController {
       source: 'suno',
     });
     this.voice.playFfmpegUrl(video.streamUrl!, {
+      durationMs,
       volume: this.queue.getState().volume,
       onEnd: this.serverStreamOnEnd(),
     });
@@ -801,6 +805,7 @@ export class PlaybackController {
       source: 'soundcloud',
     });
     this.voice.playFfmpegUrl(video.streamUrl!, {
+      durationMs,
       volume: this.queue.getState().volume,
       onEnd: this.serverStreamOnEnd(),
     });
@@ -836,6 +841,7 @@ export class PlaybackController {
       source: 'apple',
     });
     this.voice.playFfmpegUrl(video.streamUrl!, {
+      durationMs,
       volume: this.queue.getState().volume,
       onEnd: this.serverStreamOnEnd(),
     });
@@ -875,6 +881,7 @@ export class PlaybackController {
       const track = this.queue.getCurrentTrack();
       if (!track?.filePath) return;
       this.voice.playFfmpegUrl(track.filePath, {
+        durationMs: track.durationMs,
         seekMs: positionMs,
         volume: this.queue.getState().volume,
         onEnd: this.serverStreamOnEnd(),
@@ -884,6 +891,7 @@ export class PlaybackController {
     const video = this.currentVideo;
     if (!video) return;
     this.voice.playFfmpegUrl(video.streamUrl!, {
+      durationMs: video.durationMs,
       seekMs: positionMs,
       volume: this.queue.getState().volume,
       onEnd: this.serverStreamOnEnd(),

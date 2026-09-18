@@ -70,6 +70,8 @@ export class VoiceManager {
   /** Extra ffmpeg `-af` stage for session audio FX (e.g. nightcore/slowed/bass),
    *  appended after loudness normalization + fade-in. Empty when neutral. */
   private audioFx = '';
+  /** Tail fade-out (seconds) applied to every decoded stream; 0 = hard cut. */
+  private fadeOutSec = 2.5;
   /** Ducking: lower the music while channel members are speaking. */
   private duckEnabled = true;
   private duckFactor = 0.25;
@@ -99,6 +101,11 @@ export class VoiceManager {
   /** Session audio FX (nightcore/slowed/bass) applied to the next stream. */
   setAudioFx(fx: string): void {
     this.audioFx = fx;
+  }
+
+  /** Set the tail fade-out (seconds) applied to streams started from now on. */
+  setFadeOut(sec: number): void {
+    this.fadeOutSec = Math.max(0, Math.min(15, sec));
   }
 
   /** Feed the bot-side spectrum analyzer (separate slot from setPcmTap). */
@@ -618,6 +625,8 @@ export class VoiceManager {
       onEnd?: () => void;
       retries?: number;
       refreshUrl?: () => Promise<string>;
+      /** Track length, used to schedule the tail fade-out. */
+      durationMs?: number;
     } = {},
   ): void {
     if (!this.player) {
@@ -664,8 +673,18 @@ export class VoiceManager {
     // mode keeps latency low while still riding gain to the target — but it is
     // reactive, so the first ~1-3s pass through un-attenuated; the short fade-in
     // stops hot intros from punching through before the gain rider catches up.
-    const baseFilter = 'loudnorm=I=-14:TP=-1.5:LRA=11,afade=t=in:st=0:d=0.4';
-    args.push('-af', this.audioFx ? `${baseFilter},${this.audioFx}` : baseFilter);
+    const filters = ['loudnorm=I=-14:TP=-1.5:LRA=11', 'afade=t=in:st=0:d=0.4'];
+    // Tail fade so a track eases out instead of cutting off. Sits downstream of
+    // loudnorm; skipped for very short tracks, resumes near the end, or when off.
+    const fade = this.fadeOutSec;
+    if (fade > 0 && opts.durationMs && opts.durationMs > 0) {
+      const remainSec = (opts.durationMs - (opts.seekMs ?? 0)) / 1000;
+      if (remainSec > fade + 0.5) {
+        filters.push(`afade=t=out:st=${(remainSec - fade).toFixed(3)}:d=${fade}`);
+      }
+    }
+    if (this.audioFx) filters.push(this.audioFx);
+    args.push('-af', filters.join(','));
     args.push('-f', 's16le', 'pipe:1');
 
     // Strip ambient proxy vars (Windows system proxies break yt-dlp/ffmpeg),

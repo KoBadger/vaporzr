@@ -118,6 +118,8 @@ cloudflaredPath:
     (process.env.PUBLIC_BASE_URL ? `${process.env.PUBLIC_BASE_URL.replace(/\/$/, '')}/health` : ''),
   /** Bitrate librespot requests from Spotify (320 needs Premium). */
   librespotBitrate: Number(process.env.LIBRESPOT_BITRATE ?? 320),
+  /** Tail fade-out applied to decoded streams, in ms (0 disables it). */
+  crossfadeMs: Number(process.env.CROSSFADE_MS ?? 2500),
   /** When true, `V@p` plays via YouTube instead of the Spotify device to save API quota. */
   spotifyPreferYoutube: process.env.SPOTIFY_PREFER_YOUTUBE === '1' || process.env.SPOTIFY_PREFER_YOUTUBE === 'true',
   /** Resolve public Spotify data with the anonymous web-player token (no app quota). Fallback to OAuth. */
