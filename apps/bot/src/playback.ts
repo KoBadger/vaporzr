@@ -560,6 +560,17 @@ export class PlaybackController {
       if (device) {
       this.spotifyDeviceId = device.id;
       this.currentUri = current.uri;
+      // Proactively confirm the device is registered before issuing play. A
+      // cheap local ping for go-librespot (restart only if it's actually gone),
+      // so we usually avoid the 404-and-retry path entirely.
+      if (this.librespot?.ensureDevice) {
+        try {
+          await this.librespot.ensureDevice();
+        } catch {
+          /* fall through — the play attempt below has its own retry */
+        }
+        if (generation !== this.playGeneration || this.queue.getCurrentTrack()?.uri !== current.uri) return;
+      }
       if (device.viaLibrespot) {
         // Prime the PCM feed before issuing play so no initial audio is dropped.
         this.startSpotifyFeed();
