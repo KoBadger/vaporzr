@@ -1058,6 +1058,9 @@ export class VoiceManager {
       this.stream = null;
     }
     this.resource = null;
+    // Drop any pending SFX overlay (TTS/crossfade head) with the old stream so it
+    // can't bleed into the next track as a doubled/loud burst.
+    this.sfxBuffer = null;
     if (this.player && this.player.state.status !== AudioPlayerStatus.Idle) {
       this.player.stop();
     }

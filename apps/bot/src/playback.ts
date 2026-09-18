@@ -12,7 +12,7 @@ import type { VoiceManager } from './voice.js';
 import { librespotDeviceId, type SpotifyBackend } from './librespot.js';
 import { config } from './config.js';
 import { analyzer } from './analyzer.js';
-import { fadeInPcm } from './crossfade.js';
+import { fadeInPcm, planCrossfade } from './crossfade.js';
 import {
   spotifyPause,
   spotifyPlay,
@@ -70,6 +70,8 @@ export class PlaybackController {
   private crossfadeTimer: NodeJS.Timeout | null = null;
   /** Seek offset for the track we crossfaded into; consumed by play(). */
   private pendingXfadeSeekMs = 0;
+  /** Offset the CURRENT stream started at (crossfade handoff); 0 for normal starts. */
+  private currentStartOffsetMs = 0;
   /** True while advancing because a stream ended on its own (keeps the xfade seek). */
   private fromNaturalEnd = false;
   private spotifyProgress: NodeJS.Timeout | null = null;
@@ -323,7 +325,12 @@ export class PlaybackController {
 
   private scheduleEnd(durationMs: number, positionMs: number): void {
     this.clearEndTimer();
-    const remaining = Math.max(0, durationMs - positionMs);
+    // A stream that was crossfaded into already skipped `currentStartOffsetMs`,
+    // so its true position is positionMs + that offset. Forgetting this made the
+    // next crossfade timer fire a full window late (overlaying the FOLLOWING
+    // track) and could briefly double the audio.
+    const effectivePosition = positionMs + this.currentStartOffsetMs;
+    const remaining = Math.max(0, durationMs - effectivePosition);
     if (remaining <= 0) return;
     // The ffmpeg stream's natural onEnd is the authoritative advance for
     // server streams; this timer is only a fallback for when that never fires.
@@ -357,12 +364,12 @@ export class PlaybackController {
     const next = snapshot.tracks[snapshot.currentIndex + 1];
     if (!next || next.source === 'spotify') return;
     const outgoingUri = this.queue.getCurrentTrack()?.uri ?? null;
-    const wait = durationMs - positionMs - xfadeMs;
-    if (wait < 1500) return;
+    const plan = planCrossfade(durationMs, positionMs, this.currentStartOffsetMs, xfadeMs);
+    if (!plan) return;
     this.crossfadeTimer = setTimeout(() => {
       this.crossfadeTimer = null;
       void this.startCrossfade(outgoingUri, next, xfadeMs);
-    }, Math.min(wait, 6 * 60 * 60 * 1000));
+    }, Math.min(plan.waitMs, 6 * 60 * 60 * 1000));
     this.crossfadeTimer.unref?.();
   }
 
@@ -495,7 +502,8 @@ export class PlaybackController {
     // overlay on the outgoing track.
     const xfadeSeek = this.pendingXfadeSeekMs;
     this.pendingXfadeSeekMs = 0;
-    if (xfadeSeek > 0 && current.source !== 'spotify') this.voice.setStreamOffset(xfadeSeek);
+    this.currentStartOffsetMs = xfadeSeek > 0 && current.source !== 'spotify' ? xfadeSeek : 0;
+    if (this.currentStartOffsetMs > 0) this.voice.setStreamOffset(this.currentStartOffsetMs);
     if (!this.voice.isJoined()) {
       throw new Error('I\'m not in a voice channel. Join one and try again.');
     }
@@ -1486,6 +1494,7 @@ export class PlaybackController {
     this.clearPreloadTimer();
     this.clearCrossfadeTimer();
     this.pendingXfadeSeekMs = 0;
+    this.currentStartOffsetMs = 0;
     this.streamCache.clear();
     this.spotifyFallback = false;
     this.lastSource = null;

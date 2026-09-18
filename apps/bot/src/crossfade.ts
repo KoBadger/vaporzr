@@ -19,6 +19,25 @@ export function equalPowerOut(t: number): number {
   return Math.cos((c * Math.PI) / 2);
 }
 
+/**
+ * When to start the crossfade overlay, in ms after the current stream started.
+ * `startOffsetMs` is how far into the track that stream began (non-zero when the
+ * outgoing track was itself crossfaded into) — ignoring it makes the overlay
+ * fire a full window late and spill onto the FOLLOWING track. Returns null when
+ * there is not enough track left to blend.
+ */
+export function planCrossfade(
+  durationMs: number,
+  positionMs: number,
+  startOffsetMs: number,
+  xfadeMs: number,
+  minLeadMs = 1500,
+): { waitMs: number } | null {
+  const waitMs = durationMs - (positionMs + startOffsetMs) - xfadeMs;
+  if (waitMs < minLeadMs) return null;
+  return { waitMs };
+}
+
 /** Linear ramp in [0,1]. */
 export function linearIn(t: number): number {
   return Math.max(0, Math.min(1, t));

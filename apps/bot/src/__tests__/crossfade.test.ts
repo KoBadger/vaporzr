@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { crossfadePcm, equalPowerIn, equalPowerOut, fadeInPcm, linearIn } from '../crossfade.js';
+import { crossfadePcm, equalPowerIn, equalPowerOut, fadeInPcm, linearIn, planCrossfade } from '../crossfade.js';
 
 /** Build `frames` of 48 kHz stereo Int16 PCM with a constant sample value. */
 function pcm(frames: number, value = 1000): Buffer {
@@ -73,5 +73,22 @@ describe('crossfadePcm', () => {
       expect(out.readInt16LE(i * 4)).toBeLessThanOrEqual(32767);
       expect(out.readInt16LE(i * 4)).toBeGreaterThanOrEqual(-32768);
     }
+  });
+});
+
+describe('planCrossfade', () => {
+  it('starts one xfade window before the end of a normal track', () => {
+    expect(planCrossfade(240_000, 0, 0, 2500)).toEqual({ waitMs: 237_500 });
+  });
+
+  it('accounts for a crossfade handoff offset (regression)', () => {
+    // Track began 2.5s in (its head already played) — the overlay must fire 2.5s
+    // earlier than naive math, or it lands on the following track and doubles it.
+    expect(planCrossfade(240_000, 0, 2500, 2500)).toEqual({ waitMs: 235_000 });
+  });
+
+  it('returns null when there is not enough track left to blend', () => {
+    expect(planCrossfade(3000, 0, 0, 2500)).toBeNull();
+    expect(planCrossfade(240_000, 239_000, 0, 2500)).toBeNull();
   });
 });
