@@ -27,7 +27,7 @@
 #   OAuth link, copy apps/bot/data (tokens.json) into the vaporzr-data volume.
 # - The bot runs TypeScript directly (tsx), so no compile step is needed.
 
-FROM node:20-trixie-slim AS build
+FROM node:26-trixie-slim AS build
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential python3 python3-pip ca-certificates ffmpeg \
@@ -43,7 +43,7 @@ COPY apps/spicetify ./apps/spicetify
 
 RUN npm ci --omit=dev
 
-FROM node:20-trixie-slim AS runtime
+FROM node:26-trixie-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates ffmpeg espeak-ng python3 python3-venv curl pulseaudio pulseaudio-utils \
