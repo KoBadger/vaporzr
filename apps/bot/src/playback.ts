@@ -733,7 +733,7 @@ export class PlaybackController {
         durationMs: video.durationMs,
         volume: this.queue.getState().volume,
         onEnd: this.serverStreamOnEnd(),
-        retries: 2,
+        retries: 4,
         refreshUrl: () => resolveYoutubeVideo(video.videoId).then((v) => v.streamUrl),
       });
       this.scheduleEnd(video.durationMs, 0);
@@ -791,7 +791,7 @@ export class PlaybackController {
     this.voice.playFfmpegUrl(video.streamUrl!, {
       volume: this.queue.getState().volume,
       onEnd: this.serverStreamOnEnd(),
-      retries: 2,
+      retries: 4,
       refreshUrl: () => resolveYoutubeVideo(video.videoId).then((v) => v.streamUrl),
     });
     this.scheduleEnd(video.durationMs, 0);
@@ -821,7 +821,7 @@ export class PlaybackController {
       durationMs,
       volume: this.queue.getState().volume,
       onEnd: this.serverStreamOnEnd(),
-      retries: 2,
+      retries: 4,
       refreshUrl: () => Promise.resolve(filePath),
     });
     this.scheduleEnd(durationMs, 0);
@@ -850,7 +850,7 @@ export class PlaybackController {
       durationMs,
       volume: this.queue.getState().volume,
       onEnd: this.serverStreamOnEnd(),
-      retries: 2,
+      retries: 4,
       refreshUrl: () => Promise.resolve(current.streamUrl!),
     });
     this.scheduleEnd(durationMs, 0);
@@ -1031,7 +1031,7 @@ export class PlaybackController {
       seekMs: positionMs,
       volume: this.queue.getState().volume,
       onEnd: this.serverStreamOnEnd(),
-      retries: 2,
+      retries: 4,
       refreshUrl: () => resolveYoutubeVideo(video.videoId).then((v) => v.streamUrl),
     });
   }

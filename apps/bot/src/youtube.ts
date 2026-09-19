@@ -94,7 +94,7 @@ function stageCookieCopy(): string | null {
   }
 }
 
-function ytDlpOnce(args: string[]): Promise<string> {
+function ytDlpOnce(args: string[], useProxy = true): Promise<string> {
   return new Promise((resolve, reject) => {
     const noProxyEnv = Object.fromEntries(
       Object.entries(process.env).filter(([k]) => !k.toLowerCase().endsWith('_proxy')),
@@ -107,7 +107,7 @@ function ytDlpOnce(args: string[]): Promise<string> {
     // Residential proxy for YouTube: datacenter IPs are SABR-flagged (no
     // direct stream URLs). The proxy's exit IP resolves the URL AND downloads
     // it (ffmpeg uses the same proxy — googlevideo URLs are IP-bound).
-    if (config.youtubeProxy) flags.push('--proxy', config.youtubeProxy);
+    if (config.youtubeProxy && useProxy) flags.push('--proxy', config.youtubeProxy);
     const cookieCopy = stageCookieCopy();
     if (cookieCopy) flags.push('--cookies', cookieCopy);
     execFile(
@@ -152,16 +152,29 @@ const TRANSIENT_YTDLP_ERRORS = [
 ];
 
 async function runYtDlp(args: string[], retries = 2): Promise<string> {
-  for (let attempt = 0; ; attempt++) {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      return await ytDlpOnce(args);
+      return await ytDlpOnce(args, true);
     } catch (err) {
+      lastErr = err;
       const msg = err instanceof Error ? err.message : String(err);
       const transient = TRANSIENT_YTDLP_ERRORS.some((t) => msg.includes(t));
-      if (!transient || attempt >= retries) throw err;
+      if (!transient || attempt >= retries) break;
       await new Promise((r) => setTimeout(r, 900 * (attempt + 1)));
     }
   }
+  // The residential proxy can go down/blocked mid-session (seen as empty
+  // responses / "Failed to parse JSON"). Fall back to a direct attempt so a dead
+  // proxy doesn't take YouTube down entirely.
+  if (config.youtubeProxy) {
+    try {
+      return await ytDlpOnce(args, false);
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr;
 }
 
 /** Resolve a YouTube video (id or URL) into a queuable track with a live stream URL. */
