@@ -3506,9 +3506,20 @@ export class DiscordBot {
       if (!channel || !('send' in channel)) return;
       const existing = this.miniNp.get(guildId);
       if (existing) {
-        // Re-anchor: delete the old strip so the fresh one sits at the bottom.
+        // Smart re-anchor: if the strip is already the newest message (quiet
+        // channel) update it in place — no duplicate flash. Only when newer
+        // messages have pushed it up do we repost at the bottom (brief blip),
+        // which is when staying visible actually matters.
+        const lastId = (channel as { lastMessageId?: string | null }).lastMessageId;
+        const isLatest = lastId === existing.messageId;
         try {
           const old = await channel.messages.fetch(existing.messageId);
+          if (isLatest) {
+            await old.edit({ embeds: [this.miniNpPayload(this.sessionFor(guildId))] });
+            this.miniTrackUri.set(guildId, uri);
+            this.scheduleSavePanels();
+            return;
+          }
           try {
             await old.delete();
           } catch {
