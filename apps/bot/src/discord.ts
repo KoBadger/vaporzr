@@ -2254,12 +2254,14 @@ export class DiscordBot {
         case 'p':
         case 'play': {
           if (!args) return void (await message.reply('Usage: `V@p <track name or link>`'));
-          if (isUrlPlayInput(args)) {
-            const tracks = await resolvePlayInput(args);
-            await this.addToQueueMsg(message, tracks);
-          } else {
-            await this.presentSearch(message, args);
-          }
+          await this.withAck(message, '🔎 Working on it…', async () => {
+            if (isUrlPlayInput(args)) {
+              const tracks = await resolvePlayInput(args);
+              await this.addToQueueMsg(message, tracks);
+            } else {
+              await this.presentSearch(message, args);
+            }
+          });
           break;
         }
 
@@ -2283,8 +2285,10 @@ export class DiscordBot {
         case 'i':
         case 'insert': {
           if (!args) return void (await message.reply('Usage: `V@i <track name or link>`'));
-          const tracks = await resolvePlayInput(args);
-          await this.insertToQueueMsg(message, tracks);
+          await this.withAck(message, '🔎 Working on it…', async () => {
+            const tracks = await resolvePlayInput(args);
+            await this.insertToQueueMsg(message, tracks);
+          });
           break;
         }
 
@@ -4686,6 +4690,24 @@ export class DiscordBot {
   }
 
   /** Interactive picker for a free-text search (top matches as a dropdown). */
+  /**
+   * Post a quick acknowledgement to a prefix command, run `work`, then remove
+   * the ack (or turn it into an error). Keeps slow resolves — search, yt-dlp,
+   * voice join — from looking like the bot ignored the command.
+   */
+  private async withAck(message: Message, label: string, work: () => Promise<void>): Promise<void> {
+    const ack = await message.reply(label).catch(() => null);
+    try {
+      await work();
+    } catch (err) {
+      const text = `❌ ${err instanceof Error ? err.message : String(err)}`;
+      if (ack) await ack.edit(text).catch(() => {});
+      else await message.reply(text).catch(() => {});
+      return;
+    }
+    if (ack) await ack.delete().catch(() => {});
+  }
+
   private async presentSearch(target: Message | ChatInputCommandInteraction, query: string): Promise<void> {
     let candidates: ResolvedTrack[] = [];
     const isMsg = 'author' in target;
