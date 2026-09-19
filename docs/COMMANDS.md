@@ -15,10 +15,9 @@ Legend: `[/cmd]` = slash, `[V@x]` = prefix.
 
 | Slash | Prefix | What it does |
 |---|---|---|
-| `/play <name\|link>` | `V@p` | Play a song. A **text search opens an interactive picker**; a link plays directly. |
+| `/play <name\|link>` | `V@p` | Play a song. A **text search opens an interactive picker**; a link plays directly; **attach a file** to play it locally. |
 | `/insert <name\|link>` | `V@i` | Queue a track to play **next**. |
 | `/yt <link\|search>` | — | Play from YouTube (link or search). |
-| `/wav` | `V@wav`, `V@file` | Play an uploaded file (attach it). |
 | `/pause` | `V@pau` | Pause. |
 | `/resume` | `V@r` | Resume. |
 | `/toggle` | `V@t` | Pause/resume. |
@@ -135,7 +134,7 @@ searches Spotify first, then falls back to YouTube.
 | **Suno** | `suno.com/song|s|embed|clip|playlist`, `cdn1.suno.ai`, or a bare song UUID | direct CDN mp3 |
 | **Bandcamp, Deezer, Tidal, Mixcloud, Audiomack, Jamendo, Qobuz** | any track URL | resolved with yt-dlp |
 | **Direct media** | `.mp3 .flac .ogg .opus .m4a .aac .webm .mp4 .mkv .m3u8 …` | streamed directly (HLS supported) |
-| **Local files** | attach a file to `V@wav` / `/wav` | stored under `data/uploads` |
+| **Local files** | attach a file to `V@p` / `/play` | stored under `data/uploads`, played via ffmpeg (any audio/video format) |
 
 > If a source fails, check `/diag` and the bot logs — yt-dlp cookies/proxy
 > settings (`apps/bot/.env`) affect YouTube and the yt-dlp-backed sources.

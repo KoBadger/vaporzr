@@ -122,8 +122,9 @@ function vizHost(): string {
 const COMMANDS = [
   new SlashCommandBuilder()
     .setName('play')
-    .setDescription('Search for a track or paste a Spotify/YouTube link to queue it')
-    .addStringOption((o) => o.setName('query').setDescription('Track name or Spotify/YouTube URL').setRequired(true)),
+    .setDescription('Queue a track (search/link) or play an attached audio/video file')
+    .addStringOption((o) => o.setName('query').setDescription('Track name or Spotify/YouTube URL'))
+    .addAttachmentOption((o) => o.setName('file').setDescription('Audio/video file to play instead')),
   new SlashCommandBuilder()
     .setName('insert')
     .setDescription('Search for a track and add it to play right after the current one')
@@ -197,10 +198,6 @@ const COMMANDS = [
     .setDescription('Show lyrics for the current or searched song')
     .addStringOption((o) => o.setName('query').setDescription('Song to look up (optional — defaults to current track)').setRequired(false))
     .addBooleanOption((o) => o.setName('karaoke').setDescription('Jump straight into live karaoke highlight').setRequired(false)),
-  new SlashCommandBuilder()
-    .setName('wav')
-    .setDescription('Play an uploaded audio/video file (wav, mp3, mp4, flac, …)')
-    .addAttachmentOption((o) => o.setName('file').setDescription('The file to play').setRequired(true)),
   new SlashCommandBuilder()
     .setName('perms')
     .setDescription('Manage permissions (admin only)')
@@ -1203,9 +1200,20 @@ export class DiscordBot {
 
     switch (name) {
       case 'play': {
-        const query = interaction.options.getString('query', true);
+        const query = interaction.options.getString('query');
+        const file = interaction.options.getAttachment('file');
         await interaction.deferReply();
-        if (isUrlPlayInput(query)) {
+        if (file) {
+          await this.playUploadedFile(
+            s,
+            { name: file.name, url: file.url },
+            interaction.user.username,
+            () => this.ensureJoinedForPlayback(interaction, s),
+            async (embed) => interaction.editReply({ embeds: [embed] }),
+          );
+        } else if (!query) {
+          await interaction.editReply('Give a track name/link, or attach an audio/video file.');
+        } else if (isUrlPlayInput(query)) {
           const tracks = await resolvePlayInput(query);
           await this.addToQueue(interaction, tracks);
         } else {
@@ -1975,24 +1983,6 @@ export class DiscordBot {
         break;
       }
 
-      case 'wav': {
-        if (!this.requireLevel('wav', interaction)) return this.deny(interaction);
-        const file = interaction.options.getAttachment('file');
-        if (!file) {
-          await interaction.reply({ content: 'No file attached.', flags: MessageFlags.Ephemeral });
-          break;
-        }
-        await interaction.deferReply();
-        await this.playUploadedFile(
-          s,
-          { name: file.name, url: file.url },
-          interaction.member?.user.username ?? 'unknown',
-          () => this.ensureJoinedForPlayback(interaction, s),
-          async (embed) => interaction.editReply({ embeds: [embed] }),
-        );
-        break;
-      }
-
       case 'perms':
         await this.handlePerms(interaction);
         break;
@@ -2205,7 +2195,6 @@ export class DiscordBot {
       sh: 'shuffle', shuffle: 'shuffle',
       j: 'join', join: 'join',
       l: 'leave', leave: 'leave',
-      wav: 'wav', file: 'wav',
       pan: 'panel', panel: 'panel', key: 'key',
       sc: 'screensaver', screensaver: 'screensaver',
       th: 'theme', theme: 'theme',
@@ -2253,7 +2242,20 @@ export class DiscordBot {
       switch (cmd) {
         case 'p':
         case 'play': {
-          if (!args) return void (await message.reply('Usage: `V@p <track name or link>`'));
+          const attachment = message.attachments.first();
+          if (attachment) {
+            await this.withAck(message, '📂 Adding your file…', async () => {
+              await this.playUploadedFile(
+                s,
+                { name: attachment.name ?? 'file', url: attachment.url },
+                message.author.username,
+                () => this.ensureJoinedForMessage(message, s),
+                async (embed) => message.reply({ embeds: [embed] }),
+              );
+            });
+            break;
+          }
+          if (!args) return void (await message.reply('Usage: `V@p <track name or link>` — or attach a file'));
           await this.withAck(message, '🔎 Working on it…', async () => {
             if (isUrlPlayInput(args)) {
               const tracks = await resolvePlayInput(args);
@@ -2262,23 +2264,6 @@ export class DiscordBot {
               await this.presentSearch(message, args);
             }
           });
-          break;
-        }
-
-        case 'wav':
-        case 'file': {
-          if (!canUse('wav')) return void (await deny());
-          const attachment = message.attachments.first();
-          if (!attachment) {
-            return void (await message.reply('Attach a file to your message — e.g. `V@wav` with a .wav/.mp4 attached.'));
-          }
-          await this.playUploadedFile(
-            s,
-            { name: attachment.name ?? 'file', url: attachment.url },
-            message.author.username,
-            () => this.ensureJoinedForMessage(message, s),
-            async (embed) => message.reply({ embeds: [embed] }),
-          );
           break;
         }
 
@@ -5617,7 +5602,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/play <name|link>` · `V@p` — play a song (a text search opens a picker)',
       '`/insert <name|link>` · `V@i` — play next',
       '`/yt <link|search>` — play from YouTube',
-      '`/wav` · `V@wav` — play an uploaded audio/video file',
+      '`/play` · `V@p` — queue a track (name/link) or play an attached file',
       '`/pause` · `V@pau` — pause',
       '`/resume` · `V@r` — resume',
       '`/toggle` · `V@t` — pause/resume',
