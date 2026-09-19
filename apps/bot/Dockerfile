@@ -59,6 +59,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+# yt-dlp's EJS needs a JavaScript runtime to solve YouTube's signature/n-sig
+# challenges; Deno is its default. Node is NOT accepted as the EJS runtime.
+COPY --from=denoland/deno:bin /deno /usr/local/bin/deno
+
 COPY --from=build /app ./
 COPY librespot /usr/local/bin/librespot
 

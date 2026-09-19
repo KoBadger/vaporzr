@@ -100,10 +100,8 @@ function ytDlpOnce(args: string[], useProxy = true): Promise<string> {
       Object.entries(process.env).filter(([k]) => !k.toLowerCase().endsWith('_proxy')),
     );
     const flags = ['--no-check-certificates', '--socket-timeout', '10', '--retries', '1'];
-    // yt-dlp's signature/n-challenge solver needs a JS runtime (extraction is
-    // deprecated without one). Node ships with the bot everywhere we run
-    // (dev machine + container), so point yt-dlp at it explicitly.
-    flags.push('--js-runtimes', 'node');
+    // yt-dlp's signature/n-sig solver needs a JS runtime; Deno is its default and
+    // is baked into the bot image (node is not accepted as the EJS runtime).
     // Residential proxy for YouTube: datacenter IPs are SABR-flagged (no
     // direct stream URLs). The proxy's exit IP resolves the URL AND downloads
     // it (ffmpeg uses the same proxy — googlevideo URLs are IP-bound).
