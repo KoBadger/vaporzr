@@ -180,7 +180,41 @@ docker logs vaporzr          # look for "control server on http://127.0.0.1:4876
 curl -s http://127.0.0.1:4876/health   # on the VPS itself
 ```
 
-`/health` returns JSON with `ok: true`, uptime, guild/session counts.
+`/health` returns JSON with `ok: true`, uptime, guild/session counts, plus
+`librespot`, `spotifyApi`, `poToken`, `youtube` (`ok` | `auth` | `down`), and
+`cookiesAgeDays`.
+
+## Runbook — common fixes
+
+All settings live in `/opt/vaporzr/.env`. **Docker bakes env vars and file mounts
+at container-create time, so `docker restart` does NOT apply changes** — always
+recreate with the redeploy script (pull → smoke-test → recreate → health-check):
+
+```bash
+# edit /opt/vaporzr/.env, then:
+ssh root@<vps> "bash /opt/vps-redeploy.sh"
+```
+
+| Symptom | Fix |
+|---|---|
+| `/health` → `youtube: "auth"`, or tracks fail with "needs fresh cookies" | Refresh cookies (below). The bot also DMs the owner when this flips. |
+| `cookiesAgeDays` climbing past ~21 | Refresh cookies before they expire (a startup warning fires too). |
+| `/health` → `youtube: "down"` | Network/proxy problem. If a proxy is set it must be **sticky** (same exit IP). |
+| Spotify device churn / "no Spotify device" | Keep `SPOTIFY_PREFER_YOUTUBE=1` (default here) — plays Spotify tracks via YouTube. |
+| Bad deploy | Run the previous image (last 6 are kept): `docker run -d --name vaporzr --restart unless-stopped --network host --env-file /opt/vaporzr/.env -e BIND_ADDRESS=127.0.0.1 -v vaporzr-data:/app/data ghcr.io/kobadger/vaporzr/vaporzr-bot:<prev-sha>` |
+
+### Refresh YouTube cookies (they expire every few weeks)
+1. Browser extension **"Get cookies.txt LOCALLY"**, logged into YouTube → export `www.youtube.com_cookies.txt`.
+2. Overwrite `/opt/vaporzr/cookies.txt` with it.
+3. `bash /opt/vps-redeploy.sh` (recreates the container so the new file mounts).
+
+> Deno (the JS runtime yt-dlp needs to solve YouTube's `n`-signature) and the
+> bgutil PO-token provider are baked into the image — no action needed.
+
+### Proxy
+If `YOUTUBE_PROXY` is set it's used for both yt-dlp resolve and the ffmpeg stream,
+so it must present a **sticky** exit IP (googlevideo URLs are IP-bound). Leave it
+unset to go direct, which works with cookies + the bundled PO-token provider.
 
 ## Data
 

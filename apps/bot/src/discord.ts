@@ -47,6 +47,7 @@ import {
   resolveYoutubeVideo,
   searchAndResolveYoutube,
   searchYoutube,
+  setYoutubeHealthListener,
   YoutubeError,
 } from './youtube.js';
 import { isSunoUrl, resolveSuno } from './suno.js';
@@ -731,6 +732,8 @@ export class DiscordBot {
     this.client.on('clientReady', async () => {
       console.log(`[vaporzr] logged in as ${this.client.user?.tag}`);
       void this.loadPanelRegistrations();
+      // Alert the owner if the YouTube canary flips to a broken state.
+      setYoutubeHealthListener((status) => void this.alertYoutubeHealth(status));
       if (!config.ownerId) {
           // Auto-detect owner from the application record. This fetch can fail
           // on a flaky network at boot, so retry with backoff, then keep
@@ -3595,6 +3598,36 @@ export class DiscordBot {
       });
     } catch {
       /* no access — skip; not worth retrying */
+    }
+  }
+
+  /** DM the owner when the YouTube canary flips to a broken state. */
+  private async alertYoutubeHealth(status: 'ok' | 'auth' | 'down' | 'unknown'): Promise<void> {
+    const text =
+      status === 'auth'
+        ? '⚠️ **Vaporzr: YouTube needs fresh cookies** — the bot is hitting YouTube\'s sign-in/bot check. Refresh `/opt/vaporzr/cookies.txt` and redeploy.'
+        : status === 'down'
+          ? '⚠️ **Vaporzr: YouTube resolution is failing** — check `/health` (`youtube`) and the proxy/network.'
+          : '';
+    if (!text) return;
+    const owner = config.ownerId;
+    if (owner) {
+      try {
+        const user = await this.client.users.fetch(owner);
+        await user.send(text);
+        return;
+      } catch {
+        /* fall back to a channel */
+      }
+    }
+    const gid = this.bridge.getPrimaryGuildId();
+    const chId = gid ? this.lastTextChannel.get(gid) : undefined;
+    if (!chId) return;
+    try {
+      const ch = await this.client.channels.fetch(chId);
+      if (ch && 'send' in ch) await ch.send(text);
+    } catch {
+      /* ignore */
     }
   }
 

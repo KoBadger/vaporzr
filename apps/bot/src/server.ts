@@ -13,6 +13,7 @@ import { vizTunnel } from './tunnel.js';
 import { secretEquals } from './secretCompare.js';
 import { statsStore } from './stats.js';
 import { playlistStore } from './playlists.js';
+import { probeYoutube, youtubeHealth } from './youtube.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -73,6 +74,8 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
         librespot: librespotStatus,
         spotifyApi: spotifyApiStatus,
         poToken: poTokenStatus,
+        youtube: youtubeHealth().status,
+        cookiesAgeDays: cookiesAgeDays(),
         memory: {
           heapUsedMb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
           heapTotalMb: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
@@ -112,6 +115,17 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
   probePoTokenProvider();
   const poTimer = setInterval(probePoTokenProvider, 30_000);
   poTimer.unref?.();
+
+  // YouTube canary: catch expired cookies / dead solver / dead proxy up front.
+  const cookieAge = cookiesAgeDays();
+  if (cookieAge === null) {
+    console.warn('[vaporzr] no YouTube cookies file found — YouTube may hit the bot check. Set YOUTUBE_COOKIES_PATH.');
+  } else if (cookieAge > 21) {
+    console.warn(`[vaporzr] YouTube cookies are ~${cookieAge} days old — they expire soon; refresh /opt/vaporzr/cookies.txt.`);
+  }
+  void probeYoutube();
+  const ytTimer = setInterval(() => void probeYoutube(), 15 * 60 * 1000);
+  ytTimer.unref?.();
 
   return bridge;
 }
@@ -187,6 +201,18 @@ async function readJsonBody(req: http.IncomingMessage, limit = 64 * 1024): Promi
     });
     req.on('error', () => resolve(null));
   });
+}
+
+/** Age of the YouTube cookies file in days (null if unset/missing). */
+function cookiesAgeDays(): number | null {
+  try {
+    const p = config.youtubeCookiesPath;
+    if (!p) return null;
+    const st = fs.statSync(p);
+    return Math.max(0, Math.round((Date.now() - st.mtimeMs) / 86_400_000));
+  } catch {
+    return null;
+  }
 }
 
 function keyPrompt(res: http.ServerResponse): void {

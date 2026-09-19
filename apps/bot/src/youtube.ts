@@ -190,6 +190,49 @@ async function runYtDlp(args: string[], retries = 2): Promise<string> {
   throw lastErr;
 }
 
+/**
+ * YouTube health canary. Resolves a known video through the real path (cookies,
+ * JS runtime, PO-token provider) so failures — expired cookies, a dead solver, a
+ * broken proxy — are caught by a probe instead of the next song.
+ */
+export type YoutubeHealth = 'ok' | 'auth' | 'down' | 'unknown';
+const CANARY_URL = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ';
+let ytHealth: YoutubeHealth = 'unknown';
+let ytHealthAt = 0;
+let ytHealthListener: ((status: YoutubeHealth) => void) | null = null;
+
+export function youtubeHealth(): { status: YoutubeHealth; checkedAt: number } {
+  return { status: ytHealth, checkedAt: ytHealthAt };
+}
+
+/** Register a callback fired only when the status actually changes. */
+export function setYoutubeHealthListener(cb: ((status: YoutubeHealth) => void) | null): void {
+  ytHealthListener = cb;
+}
+
+export async function probeYoutube(): Promise<YoutubeHealth> {
+  let status: YoutubeHealth;
+  try {
+    // -g prints the stream URL: full extraction (n-sig solve) without downloading.
+    await runYtDlp(['--no-playlist', '--get-url', '-f', AUDIO_FORMAT, CANARY_URL], 0);
+    status = 'ok';
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    status = /cookie|sign in|not a bot/i.test(msg) ? 'auth' : 'down';
+  }
+  const prev = ytHealth;
+  ytHealth = status;
+  ytHealthAt = Date.now();
+  if (status !== prev && ytHealthListener) {
+    try {
+      ytHealthListener(status);
+    } catch {
+      /* listener errors must not break the probe */
+    }
+  }
+  return status;
+}
+
 /** Resolve a YouTube video (id or URL) into a queuable track with a live stream URL. */
 export async function resolveYoutubeVideo(input: string): Promise<ResolvedVideo> {
   const id = extractYoutubeId(input) ?? (input.trim().match(/^[A-Za-z0-9_-]{6,}$/) ? input.trim() : null);
