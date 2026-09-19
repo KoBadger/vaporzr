@@ -1206,9 +1206,9 @@ export class DiscordBot {
         const file = interaction.options.getAttachment('file');
         await interaction.deferReply();
         if (file) {
-          await this.playUploadedFile(
+          await this.playUploadedFiles(
             s,
-            { name: file.name, url: file.url },
+            [{ name: file.name, url: file.url }],
             interaction.user.username,
             () => this.ensureJoinedForPlayback(interaction, s),
             async (embed) => interaction.editReply({ embeds: [embed] }),
@@ -2243,12 +2243,12 @@ export class DiscordBot {
       switch (cmd) {
         case 'p':
         case 'play': {
-          const attachment = message.attachments.first();
-          if (attachment) {
-            await this.withAck(message, '📂 Adding your file…', async () => {
-              await this.playUploadedFile(
+          const attachments = [...message.attachments.values()];
+          if (attachments.length > 0) {
+            await this.withAck(message, '📂 Adding your file(s)…', async () => {
+              await this.playUploadedFiles(
                 s,
-                { name: attachment.name ?? 'file', url: attachment.url },
+                attachments.map((a) => ({ name: a.name ?? 'file', url: a.url })),
                 message.author.username,
                 () => this.ensureJoinedForMessage(message, s),
                 async (embed) => message.reply({ embeds: [embed] }),
@@ -3138,31 +3138,41 @@ export class DiscordBot {
   }
 
   /** Download a Discord attachment and queue it as a locally-streamed track. */
-  private async playUploadedFile(
+  private async playUploadedFiles(
     s: Session,
-    file: { name: string; url: string },
+    files: { name: string; url: string }[],
     requester: string,
     ensureJoined: () => Promise<boolean>,
     reply: (embed: EmbedBuilder) => Promise<unknown>,
   ): Promise<void> {
+    if (files.length === 0) return;
     const dir = path.join(config.dataDir, 'uploads');
     await fs.mkdir(dir, { recursive: true });
-    const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, '_');
-    const filePath = path.join(dir, `${Date.now()}-${safe}`);
-    const res = await fetch(file.url);
-    if (!res.ok) throw new Error(`Could not download the attachment (HTTP ${res.status}).`);
-    const buf = Buffer.from(await res.arrayBuffer());
-    await fs.writeFile(filePath, buf);
-    const track: Omit<TrackInfo, 'addedBy' | 'addedAt'> = {
-      uri: `local:${Date.now()}:${safe}`,
-      name: file.name.replace(/\.[^.]+$/, ''),
-      artists: ['Local file'],
-      album: 'Uploads',
-      durationMs: 0,
-      source: 'local',
-      filePath,
-    };
-    s.queue.enqueue(track, requester);
+    const added: string[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, '_');
+      const stamp = Date.now() + i;
+      const filePath = path.join(dir, `${stamp}-${safe}`);
+      const res = await fetch(file.url);
+      if (!res.ok) throw new Error(`Could not download "${file.name}" (HTTP ${res.status}).`);
+      const buf = Buffer.from(await res.arrayBuffer());
+      await fs.writeFile(filePath, buf);
+      const name = file.name.replace(/\.[^.]+$/, '');
+      s.queue.enqueue(
+        {
+          uri: `local:${stamp}:${safe}`,
+          name,
+          artists: ['Local file'],
+          album: 'Uploads',
+          durationMs: 0,
+          source: 'local',
+          filePath,
+        },
+        requester,
+      );
+      added.push(name);
+    }
     let playbackFailed: string | null = null;
     try {
       await ensureJoined();
@@ -3173,10 +3183,11 @@ export class DiscordBot {
       playbackFailed = err instanceof Error ? err.message : String(err);
       console.warn(`[discord] queued but couldn't start playback: ${playbackFailed}`);
     }
+    const list = added.map((n) => `📂 **${n}**`).join('\n');
     const embed = new EmbedBuilder()
       .setTitle('Added to queue')
       .setDescription(
-        `📂 **${track.name}** — local file` +
+        (added.length === 1 ? `${list} — local file` : `${list}\n— ${added.length} local files`) +
           (playbackFailed ? `\n⚠️ Couldn't start playback yet: ${playbackFailed}` : ''),
       )
       .setFooter({ text: `${s.queue.getSnapshot().tracks.length} in queue` })

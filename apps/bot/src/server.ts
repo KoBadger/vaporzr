@@ -127,6 +127,16 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
   const ytTimer = setInterval(() => void probeYoutube(), 15 * 60 * 1000);
   ytTimer.unref?.();
 
+  // Optional external dead-man's-switch: ping it so a stopped process is noticed.
+  if (config.healthcheckPingUrl) {
+    const ping = (): void => {
+      void fetch(config.healthcheckPingUrl, { signal: AbortSignal.timeout(10_000) }).catch(() => {});
+    };
+    ping();
+    const hcTimer = setInterval(ping, 5 * 60 * 1000);
+    hcTimer.unref?.();
+  }
+
   return bridge;
 }
 

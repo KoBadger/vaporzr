@@ -131,6 +131,11 @@ cloudflaredPath:
   /** Keep paused queues across restarts instead of dropping them as stale. */
   keepPausedQueue: process.env.KEEP_PAUSED_QUEUE === '1' || process.env.KEEP_PAUSED_QUEUE === 'true',
   /**
+   * Optional dead-man's-switch URL (e.g. a healthchecks.io ping URL). The bot
+   * GETs it every 5 min so an external service alerts if the whole process dies.
+   */
+  healthcheckPingUrl: process.env.HEALTHCHECK_PING_URL ?? '',
+  /**
    * TTS engine for optional DJ announcements: 'off' (default) or 'espeak'
    * (local, offline espeak-ng). Never enabled automatically — each guild opts
    * in with `/tts on`.

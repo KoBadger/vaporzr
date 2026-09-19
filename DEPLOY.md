@@ -209,7 +209,8 @@ ssh root@<vps> "bash /opt/vps-redeploy.sh"
 3. `bash /opt/vps-redeploy.sh` (recreates the container so the new file mounts).
 
 > Deno (the JS runtime yt-dlp needs to solve YouTube's `n`-signature) and the
-> bgutil PO-token provider are baked into the image — no action needed.
+> bgutil PO-token provider are baked into the image — no action needed. For local
+> dev, install Deno (https://deno.land) so yt-dlp behaves like it does on the VPS.
 
 ### Proxy
 If `YOUTUBE_PROXY` is set it's used for both yt-dlp resolve and the ffmpeg stream,
