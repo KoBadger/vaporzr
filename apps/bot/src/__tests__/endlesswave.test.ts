@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   getRecommendations: vi.fn(),
@@ -29,6 +29,19 @@ vi.mock('../youtube.js', async (importOriginal) => {
     searchAndResolveYoutube: (...args: unknown[]) => mocks.searchAndResolveYoutube(...args),
   };
 });
+
+// A linked Spotify account is required for the smart picker; without it
+// pickNextTrack degrades to the basic search picker. The tests exercise the
+// smart path, so stub the token store instead of depending on a local
+// data/tokens.json (which CI doesn't have — that made these tests pass only on
+// the dev machine).
+vi.mock('../tokenStore.js', () => ({
+  tokenStore: {
+    load: () => ({ access_token: 'test', refresh_token: 'test', expires_at: Date.now() + 3_600_000 }),
+    save: () => {},
+    clear: () => {},
+  },
+}));
 
 import {
   DEFAULT_CONFIG,
@@ -618,10 +631,18 @@ function recCandidate(overrides: Partial<ResolvedTrack> = {}): ResolvedTrack {
 describe('pickNextTrack (smoke)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // The picker adds a small Math.random jitter to scores (and nudges the target
+    // direction). Pin it so the "best" candidate is deterministic — otherwise
+    // these assertions depend on the coin flips.
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
     mocks.searchTracks.mockResolvedValue([]);
     mocks.searchAndResolveYoutube.mockResolvedValue(null);
     mocks.getAudioFeatures.mockResolvedValue(new Map());
     mocks.deezerRelatedTracks.mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it('strategy 5: falls back to Deezer related tracks when Spotify dead-ends', async () => {
