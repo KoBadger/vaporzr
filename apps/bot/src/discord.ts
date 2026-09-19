@@ -523,7 +523,6 @@ export class DiscordBot {
   private moodOn = new Set<string>();
   private moodColor = new Map<string, number>();
   /** Guilds with the optional TTS DJ announcements enabled (opt-in, default off). */
-  private ttsOn = new Set<string>();
   private ttsAnnounced = new Map<string, string>();
   /** guildId -> panel message location. */
   private panels = new Map<string, { channelId: string; messageId: string }>();
@@ -1694,9 +1693,8 @@ export class DiscordBot {
         const gid = interaction.guildId;
         if (!gid) return void (await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral }));
         const enabled = interaction.options.getBoolean('enabled');
-        if (enabled === true) this.ttsOn.add(gid);
-        else if (enabled === false) this.ttsOn.delete(gid);
-        const on = this.ttsOn.has(gid);
+        if (enabled !== null) this.perms.setTts(gid, enabled);
+        const on = this.perms.getTts(gid);
         await interaction.reply({
           content: on
             ? ttsEngine.enabled
@@ -2531,9 +2529,9 @@ export class DiscordBot {
           if (!canUse('tts')) return void (await deny());
           if (!message.guildId) return void (await message.reply('Must be used in a server.'));
           const a = args.trim().toLowerCase();
-          if (/^(on|1|true)$/.test(a)) this.ttsOn.add(message.guildId);
-          else if (/^(off|0|false)$/.test(a)) this.ttsOn.delete(message.guildId);
-          const on = this.ttsOn.has(message.guildId);
+          if (/^(on|1|true)$/.test(a)) this.perms.setTts(message.guildId, true);
+          else if (/^(off|0|false)$/.test(a)) this.perms.setTts(message.guildId, false);
+          const on = this.perms.getTts(message.guildId);
           await message.reply(
             on
               ? ttsEngine.enabled
@@ -5276,7 +5274,7 @@ export class DiscordBot {
    * engine is configured. The music ducks under the clip, then releases.
    */
   private maybeAnnounceTts(s: Session, track: TrackInfo): void {
-    if (!ttsEngine.enabled || !this.ttsOn.has(s.guildId)) return;
+    if (!ttsEngine.enabled || !this.perms.getTts(s.guildId)) return;
     if (this.ttsAnnounced.get(s.guildId) === track.uri) return;
     this.ttsAnnounced.set(s.guildId, track.uri);
     const artists = (track.artists ?? []).filter(Boolean).slice(0, 2);

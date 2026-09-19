@@ -13,6 +13,8 @@ interface GuildConfig {
   voteSkip?: boolean;
   /** Auto ducking of the music while people talk: off (default) | auto | hosts. */
   duckMode?: 'off' | 'auto' | 'hosts';
+  /** Spoken DJ announcements enabled for this guild (default false). */
+  tts?: boolean;
 }
 
 const DEFAULT_COMMAND_LEVELS: Record<string, PermissionLevel> = {
@@ -206,6 +208,17 @@ export class PermissionsManager {
     this.save(guildId);
   }
 
+  /** Whether spoken DJ announcements are enabled (default false). */
+  getTts(guildId: string): boolean {
+    return this.load(guildId).tts === true;
+  }
+
+  setTts(guildId: string, on: boolean): void {
+    const cfg = this.load(guildId);
+    cfg.tts = on;
+    this.save(guildId);
+  }
+
   /** True when a member may act as DJ: mod/admin/owner, or a holder of the DJ role. */
   isDj(
     guild: Guild,
@@ -227,6 +240,7 @@ export class PermissionsManager {
       djRole: cfg.djRole ?? null,
       voteSkip: cfg.voteSkip !== false,
       duckMode: cfg.duckMode ?? 'off',
+      tts: cfg.tts === true,
     };
   }
 }
