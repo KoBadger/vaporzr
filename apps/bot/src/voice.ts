@@ -76,7 +76,7 @@ export class VoiceManager {
   /** Tail fade-out (seconds) applied to every decoded stream; 0 = hard cut. */
   private fadeOutSec = 2.5;
   /** Ducking: lower the music while channel members are speaking. */
-  private duckEnabled = true;
+  private duckAuto: ((userId: string) => boolean) | null = null;
   private duckFactor = 0.25;
   private duckHoldMs = 700;
   private duckSpeakers = new Set<string>();
@@ -270,9 +270,11 @@ export class VoiceManager {
   private attachHandlers(connection: VoiceConnection): void {
     // Voice-activity ducking: the receiver's speaking map fires per user with
     // no audio decoding, so we can cheaply dip the music whenever anyone talks.
-    if (this.duckEnabled && !(connection as unknown as { __vzDuck?: boolean }).__vzDuck) {
+    if (!(connection as unknown as { __vzDuck?: boolean }).__vzDuck) {
       (connection as unknown as { __vzDuck?: boolean }).__vzDuck = true;
-      connection.receiver.speaking.on('start', (userId) => this.noteSpeaker(userId, true));
+      connection.receiver.speaking.on('start', (userId) => {
+        if (this.duckAuto?.(userId)) this.noteSpeaker(userId, true);
+      });
       connection.receiver.speaking.on('end', (userId) => this.noteSpeaker(userId, false));
     }
     connection.on('stateChange', (oldS, newS) => {
@@ -967,7 +969,16 @@ export class VoiceManager {
   }
 
   private isDucking(): boolean {
-    return this.duckEnabled && (this.duckSpeakers.size > 0 || Date.now() < this.duckForceUntil);
+    // Manual duck (duckFor) is always honored; automatic voice-activity ducking
+    // applies when a speaker passed the configured predicate.
+    if (Date.now() < this.duckForceUntil) return true;
+    return this.duckSpeakers.size > 0;
+  }
+
+  /** Cancel a manual duck immediately. */
+  cancelDuck(): void {
+    this.duckForceUntil = 0;
+    this.applyVolumeToResource();
   }
 
   /** Force-duck the music for a fixed window (e.g. over a TTS announcement). */
@@ -990,7 +1001,6 @@ export class VoiceManager {
 
   /** Track a speaker; duck while anyone talks, release after a short hold. */
   private noteSpeaker(userId: string, talking: boolean): void {
-    if (!this.duckEnabled) return;
     if (talking) this.duckSpeakers.add(userId);
     else this.duckSpeakers.delete(userId);
     if (this.duckTimer) {
@@ -1010,17 +1020,21 @@ export class VoiceManager {
     }
   }
 
-  /** Enable/disable voice-activity ducking for this session. */
-  setDucking(enabled: boolean): void {
-    this.duckEnabled = enabled;
-    if (!enabled) {
+  /**
+   * Configure automatic voice-activity ducking. `fn` decides whether a given
+   * speaker should duck the music ('auto' = always, 'hosts' = DJ/owner only);
+   * null disables it. Manual duckFor() is independent and always works.
+   */
+  setDuckAuto(fn: ((userId: string) => boolean) | null): void {
+    this.duckAuto = fn;
+    if (!fn) {
       this.duckSpeakers.clear();
       if (this.duckTimer) {
         clearTimeout(this.duckTimer);
         this.duckTimer = null;
       }
+      this.applyVolumeToResource();
     }
-    this.applyVolumeToResource();
   }
 
   /** Playback position (ms) of the ffmpeg-backed stream, or 0 for raw feeds. */

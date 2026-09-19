@@ -382,6 +382,27 @@ const COMMANDS = [
     )
     .addBooleanOption((o) => o.setName('off').setDescription('Clear the DJ role').setRequired(false)),
   new SlashCommandBuilder()
+    .setName('voteskip')
+    .setDescription('Require a majority vote to skip (off = anyone can skip). Default: on')
+    .addBooleanOption((o) => o.setName('enabled').setDescription('Turn vote-to-skip on or off').setRequired(false)),
+  new SlashCommandBuilder()
+    .setName('duck')
+    .setDescription('Lower the music for a moment so people can talk (manual, not automatic)')
+    .addIntegerOption((o) =>
+      o.setName('seconds').setDescription('How long to duck (5-300, default 30)').setRequired(false).setMinValue(5).setMaxValue(300),
+    )
+    .addBooleanOption((o) => o.setName('cancel').setDescription('Cancel an in-progress duck').setRequired(false)),
+  new SlashCommandBuilder()
+    .setName('duckmode')
+    .setDescription('Auto-lower the music while people talk: off | auto | hosts (DJ/owner only)')
+    .addStringOption((o) =>
+      o
+        .setName('mode')
+        .setDescription('off | auto | hosts')
+        .setRequired(true)
+        .addChoices({ name: 'off', value: 'off' }, { name: 'auto', value: 'auto' }, { name: 'hosts', value: 'hosts' }),
+    ),
+  new SlashCommandBuilder()
     .setName('jump')
     .setDescription('Jump to a lyric line in the current song (e.g. "jump to the chorus")')
     .addStringOption((o) => o.setName('query').setDescription('Words from the lyric line to jump to').setRequired(true)),
@@ -685,6 +706,14 @@ export class DiscordBot {
       s.playback.onPlaybackStalled = () => {
         void this.notifyPlaybackStalled(s.guildId);
       };
+      // Auto ducking: 'auto' ducks for any speaker, 'hosts' only for DJ/owner,
+      // 'off' (default) disables it. Manual /duck still works either way.
+      s.voice.setDuckAuto((userId) => {
+        const mode = this.perms.getDuckMode(s.guildId);
+        if (mode === 'auto') return true;
+        if (mode === 'hosts') return this.isDuckHost(s.guildId, userId);
+        return false;
+      });
       // A wave restored as active from disk needs re-arming after a restart:
       // kick off an immediate top-up so it resumes generating on its own.
       if (EW.isAutoActive(s.endlessWave)) {
@@ -1232,7 +1261,7 @@ export class DiscordBot {
         const v = this.requestSkip(s, interaction.user.id);
         if (v.result === 'skipped') {
           s.playback.next();
-          const r1 = await interaction.reply('⏭️ Skipped (majority vote reached)');
+          const r1 = await interaction.reply(this.perms.getVoteSkip(interaction.guildId ?? '') ? '⏭️ Skipped (majority vote reached)' : '⏭️ Skipped');
           this.autoExpire(r1);
         } else if (v.result === 'started') {
           await interaction.reply(`🗳️ Vote to skip started — **${v.votes}/${v.needed}**. Others: use \`/skip\` again to vote.`);
@@ -1663,6 +1692,54 @@ export class DiscordBot {
               ? '🗣 Spoken DJ announcements **on** — I\'ll announce each track.'
               : '🗣 Announcements are **on**, but no TTS engine is configured on the bot (set `TTS_PROVIDER`).'
             : '🗣 Spoken DJ announcements **off**.',
+          flags: MessageFlags.Ephemeral,
+        });
+        break;
+      }
+
+      case 'voteskip': {
+        if (!this.requireLevel('voteskip', interaction)) return this.deny(interaction);
+        const gid = interaction.guildId;
+        if (!gid) return void (await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral }));
+        const enabled = interaction.options.getBoolean('enabled');
+        if (enabled !== null) this.perms.setVoteSkip(gid, enabled);
+        const on = this.perms.getVoteSkip(gid);
+        await interaction.reply({
+          content: on
+            ? '🗳️ Vote-to-skip is **on** — non-DJs need a majority of the voice channel.'
+            : '⏭️ Vote-to-skip is **off** — anyone can skip instantly.',
+          flags: MessageFlags.Ephemeral,
+        });
+        break;
+      }
+
+      case 'duck': {
+        if (!this.requireLevel('duck', interaction)) return this.deny(interaction);
+        if (!s.voice.isJoined()) return void (await interaction.reply({ content: 'Not in a voice channel.', flags: MessageFlags.Ephemeral }));
+        if (interaction.options.getBoolean('cancel')) {
+          s.voice.cancelDuck();
+          await interaction.reply({ content: '🔊 Duck cancelled.', flags: MessageFlags.Ephemeral });
+          break;
+        }
+        const seconds = interaction.options.getInteger('seconds') ?? 30;
+        s.voice.duckFor(seconds * 1000);
+        await interaction.reply({ content: `🔉 Ducking the music for **${seconds}s** — talk away.`, flags: MessageFlags.Ephemeral });
+        break;
+      }
+
+      case 'duckmode': {
+        if (!this.requireLevel('duckmode', interaction)) return this.deny(interaction);
+        const gid = interaction.guildId;
+        if (!gid) return void (await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral }));
+        const mode = interaction.options.getString('mode', true) as 'off' | 'auto' | 'hosts';
+        this.perms.setDuckMode(gid, mode);
+        await interaction.reply({
+          content:
+            mode === 'off'
+              ? '🔇 Auto-ducking **off** (manual `/duck` still works).'
+              : mode === 'auto'
+                ? '🔉 Auto-ducking **on** — the music dips whenever anyone talks.'
+                : '🎧 Auto-ducking **hosts only** — only DJs/owner dip the music.',
           flags: MessageFlags.Ephemeral,
         });
         break;
@@ -2153,6 +2230,9 @@ export class DiscordBot {
       ambient: 'ambient',
       mood: 'mood',
       tts: 'tts',
+      voteskip: 'voteskip', vs: 'voteskip',
+      duck: 'duck',
+      duckmode: 'duckmode', dmode: 'duckmode',
       vibe: 'vibe',
       lb: 'leaderboard', leaderboard: 'leaderboard',
       dna: 'dna', cover: 'cover',
@@ -2222,7 +2302,7 @@ export class DiscordBot {
           if (v.result === 'skipped') {
             s.playback.next();
             this.scheduleWaveTopUp(s);
-            const m1 = await message.reply('⏭️ Skipped (majority vote reached)');
+            const m1 = await message.reply(this.perms.getVoteSkip(message.guildId ?? '') ? '⏭️ Skipped (majority vote reached)' : '⏭️ Skipped');
             this.autoExpire(m1);
           } else {
             await message.reply(
@@ -2467,7 +2547,55 @@ export class DiscordBot {
               ? ttsEngine.enabled
                 ? '🗣 Spoken DJ announcements **on** — I\'ll announce each track.'
                 : '🗣 Announcements are **on**, but no TTS engine is configured on the bot (set `TTS_PROVIDER`).'
-              : '🗣 Spoken DJ announcements **off**.',
+                : '🗣 Spoken DJ announcements **off**.',
+          );
+          break;
+        }
+
+        case 'voteskip':
+        case 'vs': {
+          if (!canUse('voteskip')) return void (await deny());
+          if (!message.guildId) return void (await message.reply('Must be used in a server.'));
+          const a = args.trim().toLowerCase();
+          if (/^(on|1|true)$/.test(a)) this.perms.setVoteSkip(message.guildId, true);
+          else if (/^(off|0|false)$/.test(a)) this.perms.setVoteSkip(message.guildId, false);
+          await message.reply(
+            this.perms.getVoteSkip(message.guildId)
+              ? '🗳️ Vote-to-skip is **on** — non-DJs need a majority of the voice channel.'
+              : '⏭️ Vote-to-skip is **off** — anyone can skip instantly.',
+          );
+          break;
+        }
+
+        case 'duck': {
+          if (!canUse('duck')) return void (await deny());
+          if (!s.voice.isJoined()) return void (await message.reply('Not in a voice channel.'));
+          const a = args.trim().toLowerCase();
+          if (/^(off|cancel|0|stop)$/.test(a)) {
+            s.voice.cancelDuck();
+            await message.reply('🔊 Duck cancelled.');
+            break;
+          }
+          const secs = a ? parseInt(a, 10) : 30;
+          const seconds = Number.isFinite(secs) ? Math.max(5, Math.min(300, secs)) : 30;
+          s.voice.duckFor(seconds * 1000);
+          await message.reply(`🔉 Ducking the music for **${seconds}s** — talk away.`);
+          break;
+        }
+
+        case 'duckmode':
+        case 'dmode': {
+          if (!canUse('duckmode')) return void (await deny());
+          if (!message.guildId) return void (await message.reply('Must be used in a server.'));
+          const a = args.trim().toLowerCase();
+          if (a === 'off' || a === 'auto' || a === 'hosts') this.perms.setDuckMode(message.guildId, a);
+          const mode = this.perms.getDuckMode(message.guildId);
+          await message.reply(
+            mode === 'off'
+              ? '🔇 Auto-ducking **off** (manual `V@duck` still works).'
+              : mode === 'auto'
+                ? '🔉 Auto-ducking **on** — dips whenever anyone talks.'
+                : '🎧 Auto-ducking **hosts only** — only DJs/owner dip the music.',
           );
           break;
         }
@@ -4322,8 +4450,8 @@ export class DiscordBot {
           const sfx = s.playback.listSoundEffects().find((snd) => snd.id === id);
           void interaction.followUp({ content: `🔊 ${sfx ? `${sfx.emoji} ${sfx.name}` : id}`, flags: MessageFlags.Ephemeral }).catch(() => {});
         }
-        break;
-    }
+          break;
+        }
 
     if (interaction.guildId) {
       const panel = this.panels.get(interaction.guildId);
@@ -4659,12 +4787,24 @@ export class DiscordBot {
     return this.perms.isDj(guild, member as { id: string; roles: { cache: ReadonlyMap<string, unknown> } });
   }
 
+  /** True when a speaker counts as a "host" for Duck mode 'hosts' (DJ/mod/owner). */
+  private isDuckHost(guildId: string, userId: string): boolean {
+    const guild = this.client.guilds.cache.get(guildId);
+    if (!guild) return false;
+    if (userId === guild.ownerId || this.perms.isOwner(userId)) return true;
+    const member = guild.members.cache.get(userId);
+    if (!member) return false;
+    return this.isDjMember(guild, member);
+  }
+
   /** Start/advance a vote-to-skip. Returns the resulting state for the caller to message. */
   private requestSkip(
     s: Session,
     requesterId: string,
   ): { result: 'skipped' | 'started' | 'voted'; votes: number; needed: number } {
     const guildId = s.guildId ?? '';
+    // Vote-skip turned off — any member may skip directly.
+    if (!this.perms.getVoteSkip(guildId)) return { result: 'skipped', votes: 1, needed: 1 };
     const channelId = s.voice.getChannelId();
     let eligible = new Set<string>();
     if (channelId) {
@@ -5517,6 +5657,9 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/sfx <id>` · `V@sfx` — play a sound effect',
       '`/dj` · `V@dj` — toggle the soundboard (mod)',
       '`/djrole @role` · `V@djrole` — set the DJ role (mod) — DJs skip without a vote',
+      '`/voteskip on|off` · `V@vs` — require a majority vote to skip (off = anyone can skip)',
+      '`/duck [seconds]` · `V@duck` — manually lower the music so people can talk',
+      '`/duckmode off|auto|hosts` · `V@dmode` — auto-lower music while people talk (mod)',
       '`/hype on|off` · `V@hype` — auto-hype: drop a hit on strong beats',
       '`/mix <a> <b>` · `V@mix <a> | <b>` — crossfade two tracks into one mix',
     ],

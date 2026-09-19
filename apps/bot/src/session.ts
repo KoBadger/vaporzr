@@ -26,7 +26,6 @@ export class Session {
     this.queue = new QueueManager();
     this.voice = new VoiceManager(() => {});
     this.voice.setFadeOut(config.crossfadeMs / 1000);
-    this.voice.setDucking(config.ducking);
     this.playback = new PlaybackController(this.queue, () => {}, this.voice, this.librespot);
   }
 

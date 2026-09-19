@@ -9,6 +9,10 @@ interface GuildConfig {
   commandLevels: Record<string, PermissionLevel>;
   /** Optional DJ role — members holding it may control playback without voting. */
   djRole?: string | null;
+  /** When false, any member may skip without a vote (default true = vote required). */
+  voteSkip?: boolean;
+  /** Auto ducking of the music while people talk: off (default) | auto | hosts. */
+  duckMode?: 'off' | 'auto' | 'hosts';
 }
 
 const DEFAULT_COMMAND_LEVELS: Record<string, PermissionLevel> = {
@@ -54,6 +58,9 @@ const DEFAULT_COMMAND_LEVELS: Record<string, PermissionLevel> = {
   quiz: 'user',
   guess: 'user',
   djrole: 'mod',
+  voteskip: 'mod',
+  duck: 'user',
+  duckmode: 'mod',
   perms: 'admin',
   speed: 'user',
   bassboost: 'user',
@@ -177,6 +184,29 @@ export class PermissionsManager {
     this.save(guildId);
   }
 
+  /** Whether skip requires a majority vote (default true). */
+  getVoteSkip(guildId: string): boolean {
+    return this.load(guildId).voteSkip !== false;
+  }
+
+  /** Turn the skip vote on/off; off = any member can skip directly. */
+  setVoteSkip(guildId: string, on: boolean): void {
+    const cfg = this.load(guildId);
+    cfg.voteSkip = on;
+    this.save(guildId);
+  }
+
+  /** Auto-duck mode: 'off' (default), 'auto' (any speaker), 'hosts' (DJ/owner). */
+  getDuckMode(guildId: string): 'off' | 'auto' | 'hosts' {
+    return this.load(guildId).duckMode ?? 'off';
+  }
+
+  setDuckMode(guildId: string, mode: 'off' | 'auto' | 'hosts'): void {
+    const cfg = this.load(guildId);
+    cfg.duckMode = mode;
+    this.save(guildId);
+  }
+
   /** True when a member may act as DJ: mod/admin/owner, or a holder of the DJ role. */
   isDj(
     guild: Guild,
@@ -196,6 +226,8 @@ export class PermissionsManager {
       userRoles: cfg.roles.user,
       commandLevels: cfg.commandLevels,
       djRole: cfg.djRole ?? null,
+      voteSkip: cfg.voteSkip !== false,
+      duckMode: cfg.duckMode ?? 'off',
     };
   }
 }
