@@ -113,7 +113,7 @@ function ytDlpOnce(args: string[], useProxy = true): Promise<string> {
     execFile(
       config.ytDlpPath,
       [...flags, ...args],
-      { windowsHide: true, timeout: 45_000, maxBuffer: 4 * 1024 * 1024, env: noProxyEnv },
+      { windowsHide: true, timeout: 20_000, maxBuffer: 4 * 1024 * 1024, env: noProxyEnv },
       (err, stdout, stderr) => {
         if (cookieCopy) {
           try {
@@ -123,7 +123,18 @@ function ytDlpOnce(args: string[], useProxy = true): Promise<string> {
           }
         }
         if (err) {
-          reject(new YoutubeError(`yt-dlp failed: ${(stderr || err.message).toString().slice(0, 300)}`));
+          const detail = (stderr || err.message).toString();
+          // Expired cookies: YouTube's anti-bot wall. Retrying can't fix it, and
+          // the raw yt-dlp text is cryptic, so surface an actionable message.
+          if (/Sign in to confirm|not a bot/i.test(detail)) {
+            reject(
+              new YoutubeError(
+                'YouTube is asking the bot to sign in — its cookies have expired. An admin needs to refresh the YouTube cookies file.',
+              ),
+            );
+            return;
+          }
+          reject(new YoutubeError(`yt-dlp failed: ${detail.slice(0, 300)}`));
           return;
         }
         resolve(stdout);
@@ -144,8 +155,10 @@ const TRANSIENT_YTDLP_ERRORS = [
   'HTTP Error 5',
   'Unable to download',
   'Failed to extract',
-  'Sign in to confirm',
   'ETIMEDOUT',
+  // NOTE: 'Sign in to confirm you're not a bot' is deliberately NOT here — it is
+  // an expired-cookie wall that retrying never fixes, and retrying made every
+  // start hang for ~45s before failing.
   // YouTube occasionally serves a degraded player response ("The page needs
   // to be reloaded") — the same request typically succeeds on a retry.
   'page needs to be reloaded',
