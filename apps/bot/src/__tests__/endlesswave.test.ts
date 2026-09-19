@@ -43,6 +43,7 @@ import {
   isDuplicate,
   isRemixOrCover,
   isArtistOnCooldown,
+  isLongFormMix,
   markPlayed,
   scoreCandidate,
   extractSeeds,
@@ -941,5 +942,28 @@ describe('fetchFeatures (smoke)', () => {
     mocks.getAudioFeatures.mockRejectedValue(new Error('boom'));
     const out = await fetchFeatures(fakeTrack({ uri: 'spotify:track:aaaaaaaaaaaaaaaaaaaaaa' }));
     expect(out).toBeNull();
+  });
+});
+
+describe('isLongFormMix', () => {
+  const t = (name: string, durationMs = 200_000): Parameters<typeof isLongFormMix>[0] =>
+    ({ name, durationMs } as Parameters<typeof isLongFormMix>[0]);
+
+  it('flags mixes, sets and full albums', () => {
+    expect(isLongFormMix(t('Essential Mix 2024'))).toBe(true);
+    expect(isLongFormMix(t('Artist - Full Album'))).toBe(true);
+    expect(isLongFormMix(t('Song', 12 * 60 * 1000))).toBe(true);
+  });
+
+  it('flags talk-y uploads the search returns instead of songs (regression)', () => {
+    expect(isLongFormMix(t('Makthaverskan - II ALBUM REVIEW'))).toBe(true);
+    expect(isLongFormMix(t('Artist reacts to Fan Song'))).toBe(true);
+    expect(isLongFormMix(t('Interview with the Band'))).toBe(true);
+    expect(isLongFormMix(t('Top 10 Songs of 2024'))).toBe(true);
+  });
+
+  it('leaves normal songs alone', () => {
+    expect(isLongFormMix(t('Modest Mouse - Float On (Official Music Video)'))).toBe(false);
+    expect(isLongFormMix(t('Broken Social Scene - Anthems For A Seventeen Year Old Girl'))).toBe(false);
   });
 });

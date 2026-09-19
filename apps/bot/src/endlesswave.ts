@@ -440,12 +440,15 @@ export function titleMentionsCooldownArtist(state: EndlessWaveState, name: strin
   return cooldown.some((a) => a.length >= 3 && norm.includes(a));
 }
 
-/** EW should queue individual songs, not radio sets, DJ mixes, or full albums. */
-function isLongFormMix(track: ResolvedTrack): boolean {
+/** EW should queue songs — not radio sets/mixes/full albums, and not the
+ *  talk-y uploads YouTube surfaces when it can't find the track (album reviews,
+ *  reactions, interviews, top-N lists). */
+export function isLongFormMix(track: ResolvedTrack): boolean {
   const title = String(track.name ?? '').toLowerCase();
   if ((track.durationMs ?? 0) > 10 * 60 * 1000) return true;
-  return /\b(essential mix|dj set|continuous mix|full album|compilation|boiler room|radio show|radio mix|meg amix|mixtape|live set|session)\b/i.test(title)
-    || /\b\d+\s*(hour|hr|min)\b/i.test(title);
+  if (/\b(essential mix|dj set|continuous mix|full album|compilation|boiler room|radio show|radio mix|meg amix|mixtape|live set|session)\b/i.test(title)) return true;
+  if (/\b\d+\s*(hour|hr|min)\b/i.test(title)) return true;
+  return /\b(album review|review|reaction|reacts|interview|podcast|explained|analysis|commentary|documentary|making of|behind the scenes|tier list|ranked|countdown|top \d+|episode \d+)\b/i.test(title);
 }
 
 /** Mark a track as played. Trims old entries when the set gets huge. */
