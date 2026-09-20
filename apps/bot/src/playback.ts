@@ -1213,7 +1213,9 @@ export class PlaybackController {
   private audioFxFilter(): string {
     const stages: string[] = [];
     if (this.bassBoostDb > 0) {
-      stages.push(`bass=g=${this.bassBoostDb.toFixed(1)}:f=100`);
+      // Corner at 150 Hz (not 100) so the shelf is actually audible on normal
+      // speakers instead of only sub-bass. q=0.8 is a moderate, non-boomy slope.
+      stages.push(`bass=g=${this.bassBoostDb.toFixed(1)}:f=150:width_type=q:width=0.8`);
     }
     if (this.speedFactor !== 1) {
       // asetrate shifts the sample-rate *field* only (pitch + tempo move

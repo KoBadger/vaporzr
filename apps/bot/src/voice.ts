@@ -477,13 +477,16 @@ export class VoiceManager {
     if (!this.player) return;
     this.clearIdleTimer();
     this.stopStream();
-    const freqs = [110, 164.81, 220, 329.63];
+    // A soft, higher major triad (A3/C#4/E4/A4) — the old low A2 drone read as a
+    // muddy rumble on small speakers. Gentle tremolo + lowpass, no echo (the
+    // echo made it ring). Kept well below the music level.
+    const freqs = [220, 277.18, 329.63, 440];
     const args = ['-hide_banner', '-loglevel', 'error'];
     for (const f of freqs) args.push('-f', 'lavfi', '-i', `sine=frequency=${f}:sample_rate=48000`);
     const ins = freqs.map((_, i) => `[${i}:a]`).join('');
     args.push(
       '-filter_complex',
-      `${ins}amix=inputs=${freqs.length}:normalize=1,tremolo=f=0.12:d=0.6,lowpass=f=1400,aecho=0.8:0.9:600|900:0.35|0.25,volume=0.45,afade=t=in:st=0:d=4`,
+      `${ins}amix=inputs=${freqs.length}:normalize=1,tremolo=f=0.08:d=0.3,lowpass=f=2200,volume=0.5,afade=t=in:st=0:d=3`,
       '-ac', '2', '-ar', '48000', '-f', 's16le', 'pipe:1',
     );
     const proc = spawn(config.ffmpegPath, args, { windowsHide: true });
