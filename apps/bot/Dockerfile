@@ -52,7 +52,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && python3 -m venv /opt/ytvenv \
     && /opt/ytvenv/bin/pip install --no-cache-dir --upgrade yt-dlp bgutil-ytdlp-pot-provider \
     && ln -s /opt/ytvenv/bin/yt-dlp /usr/local/bin/yt-dlp \
-    && curl -fsSL -o /tmp/glr.tar.gz https://github.com/devgianlu/go-librespot/releases/download/v0.9.1/go-librespot_linux_x86_64.tar.gz \
+    && curl -fsSL -o /tmp/glr.tar.gz https://github.com/devgianlu/go-librespot/releases/download/v0.10.0/go-librespot_linux_x86_64.tar.gz \
     && tar -xzf /tmp/glr.tar.gz -C /tmp \
     && install -m 755 /tmp/go-librespot /usr/local/bin/go-librespot \
     && rm -f /tmp/glr.tar.gz /tmp/go-librespot
