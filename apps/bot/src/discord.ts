@@ -3181,7 +3181,7 @@ export class DiscordBot {
       .setThumbnail(first.image ?? '')
       .setFooter({ text: `${tracks.length} track${tracks.length > 1 ? 's' : ''} · ${s.queue.getSnapshot().tracks.length} in queue` })
       .setColor(this.themeColor());
-    await message.reply({ embeds: [embed] });
+    this.replyTemp(message, embed);
   }
 
   /** Download a Discord attachment and queue it as a locally-streamed track. */
@@ -3274,7 +3274,19 @@ export class DiscordBot {
       .setThumbnail(first.image ?? '')
       .setFooter({ text: `${tracks.length} track${tracks.length > 1 ? 's' : ''} · ${s.queue.getSnapshot().tracks.length} in queue` })
       .setColor(this.themeColor());
-    await message.reply({ embeds: [embed] });
+    this.replyTemp(message, embed);
+  }
+
+  /** Reply with a confirmation embed and auto-delete it shortly after, so busy
+   *  channels don't accumulate bot replies. */
+  private replyTemp(message: Message, embed: EmbedBuilder, ms = 12_000): void {
+    void message
+      .reply({ embeds: [embed] })
+      .then((msg) => {
+        const t = setTimeout(() => void msg.delete().catch(() => {}), ms);
+        t.unref?.();
+      })
+      .catch(() => {});
   }
 
   /** Auto-join the author's voice channel before playback (message-command variant). */
