@@ -39,7 +39,17 @@ if [ -n "${GHCR_TOKEN:-}" ]; then
 fi
 
 echo "==> Pulling $REF"
-docker pull "$REF"
+if ! docker pull "$REF"; then
+  # A stale/expired ghcr.io credential (or a registry rate-limit) makes the pull
+  # fail even though CI can push. Don't hard-abort with the old container still
+  # running stale config — fall back to the local image when there is one.
+  if docker image inspect "$REF" >/dev/null 2>&1; then
+    echo "!! Pull failed — falling back to the local $REF image and continuing."
+  else
+    echo "!! Pull failed and no local $REF image exists — aborting before touching the container."
+    exit 1
+  fi
+fi
 
 echo "==> Smoke-testing the image before touching the running container"
 docker run --rm "$REF" sh -c "cd /app/apps/bot && tsx smoke-persist.ts"
