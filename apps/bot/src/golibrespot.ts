@@ -19,8 +19,8 @@ import type { SpotifyBackend } from './librespot.js';
  */
 export class GoLibrespotManager implements SpotifyBackend {
   private proc: ChildProcess | null = null;
-  /** Reader for the go-librespot PCM FIFO (replaces the old parec capture). */
-  private capture: fs.ReadStream | null = null;
+  /** Read fd for the go-librespot PCM FIFO (replaces the old parec capture). */
+  private captureFd: number | null = null;
   /** Named pipe go-librespot writes decoded PCM to (audio_backend: pipe). */
   private readonly fifoPath = path.join(config.goLibrespotConfigDir, 'audio.fifo');
   private pcmHandler: ((data: Buffer) => boolean) | null = null;
@@ -271,40 +271,79 @@ export class GoLibrespotManager implements SpotifyBackend {
     }
   }
 
-  /** Read decoded PCM from go-librespot's FIFO. Opening the read end unblocks
-   *  go-librespot's (wait_for_reader) writer; we keep it open across tracks so a
-   *  stream switch never sees a closed pipe. */
+  /**
+   * Read decoded PCM from go-librespot's FIFO. Opening the read end unblocks
+   * go-librespot's (wait_for_reader) writer; we keep it open across tracks so a
+   * stream switch never sees a closed pipe.
+   *
+   * We read with `fs.read` rather than `fs.createReadStream`: a FIFO reports
+   * size 0, and the stream helper treats a 0-size file as already empty (opens
+   * then immediately ends), so it would never drain the pipe — go-librespot
+   * would fill the buffer, block on write and pause the track.
+   */
   private startCapture(): void {
-    if (this.capture) return;
+    if (this.captureFd !== null) return;
     this.ensureFifo();
-    let s: fs.ReadStream;
-    try {
-      s = fs.createReadStream(this.fifoPath, { highWaterMark: 1 << 16 });
-    } catch {
-      return;
-    }
-    this.capture = s;
-    s.on('data', (d) => {
-      const buf = typeof d === 'string' ? Buffer.from(d) : (d as Buffer);
-      this.pcmBytes += buf.length;
-      this.lastPcmAt = Date.now();
+    const bufSize = 1 << 16;
+    const retry = (): void => {
+      if (this.stopped) return;
+      const t = setTimeout(() => this.startCapture(), 2000);
+      t.unref?.();
+    };
+    fs.open(this.fifoPath, 'r', (err, fd) => {
+      if (err) {
+        retry();
+        return;
+      }
+      if (this.stopped) {
+        try {
+          fs.close(fd, () => {});
+        } catch {
+          /* ignore */
+        }
+        return;
+      }
+      this.captureFd = fd;
+      const readLoop = (): void => {
+        if (this.captureFd !== fd) return;
+        const buf = Buffer.allocUnsafe(bufSize);
+        fs.read(fd, buf, 0, bufSize, null, (rerr, bytesRead) => {
+          if (this.captureFd !== fd) return;
+          if (rerr || bytesRead === 0) {
+            // Error or writer closed (go-librespot exited) — reopen shortly.
+            try {
+              fs.close(fd, () => {});
+            } catch {
+              /* ignore */
+            }
+            if (this.captureFd === fd) this.captureFd = null;
+            retry();
+            return;
+          }
+          this.pcmBytes += bytesRead;
+          this.lastPcmAt = Date.now();
+          try {
+            this.pcmHandler?.(buf.subarray(0, bytesRead));
+          } catch {
+            /* ignore */
+          }
+          readLoop();
+        });
+      };
+      readLoop();
+    });
+  }
+
+  private closeCapture(): void {
+    const fd = this.captureFd;
+    this.captureFd = null;
+    if (fd !== null) {
       try {
-        this.pcmHandler?.(buf);
+        fs.close(fd, () => {});
       } catch {
         /* ignore */
       }
-    });
-    s.on('error', () => {
-      /* transient (e.g. writer not open yet) — 'close' reopens below */
-    });
-    s.on('close', () => {
-      if (this.capture !== s) return;
-      this.capture = null;
-      if (!this.stopped) {
-        const t = setTimeout(() => this.startCapture(), 2000);
-        t.unref?.();
-      }
-    });
+    }
   }
 
   stop(): void {
@@ -313,12 +352,7 @@ export class GoLibrespotManager implements SpotifyBackend {
       clearInterval(this.watchdog);
       this.watchdog = null;
     }
-    try {
-      this.capture?.destroy();
-    } catch {
-      /* ignore */
-    }
-    this.capture = null;
+    this.closeCapture();
     try {
       this.proc?.kill();
     } catch {
@@ -399,12 +433,7 @@ export class GoLibrespotManager implements SpotifyBackend {
       /* ignore */
     }
     this.proc = null;
-    try {
-      this.capture?.destroy();
-    } catch {
-      /* ignore */
-    }
-    this.capture = null;
+    this.closeCapture();
     void this.start();
   }
 }
