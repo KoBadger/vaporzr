@@ -737,9 +737,9 @@ export class DiscordBot {
   async start(): Promise<void> {
     this.client.on('clientReady', async () => {
       console.log(`[vaporzr] logged in as ${this.client.user?.tag}`);
-      void this.loadPanelRegistrations();
+      await this.loadPanelRegistrations();
       // Remove now-playing strips in channels that never opted in (see /npchannel).
-      void this.cleanupMiniNp();
+      await this.cleanupMiniNp();
       // Alert the owner if the YouTube canary flips to a broken state.
       setYoutubeHealthListener((status) => void this.alertYoutubeHealth(status));
       if (!config.ownerId) {
