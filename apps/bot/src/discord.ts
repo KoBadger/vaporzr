@@ -71,6 +71,7 @@ import * as EW from './endlesswave.js';
 import { playlistStore } from './playlists.js';
 import { statsStore } from './stats.js';
 import { ttsEngine } from './tts.js';
+import { pushBroadcast } from './push.js';
 import { downloadToTempFile } from './mediaDownload.js';
 import { renderRadarGif, type RadarMetric } from './images.js';
 
@@ -3619,6 +3620,7 @@ export class DiscordBot {
           ? '⚠️ **Vaporzr: YouTube resolution is failing** — check `/health` (`youtube`) and the proxy/network.'
           : '';
     if (!text) return;
+    void pushBroadcast({ title: 'Vaporzr', body: text.replace(/\*\*/g, ''), url: '/panel' }).catch(() => {});
     const owner = config.ownerId;
     if (owner) {
       try {

@@ -227,6 +227,7 @@ body.guest #guilds{display:none}
       </div>
       <button id="dj-toggle" data-tip="Toggle the DJ soundboard on/off">🎛</button>
       <button id="wave-toggle" data-tip="Cycle autoplay mode: off → basic → smart">🌊</button>
+      <button id="btn-push" data-tip="Enable browser notifications (YouTube / cookie alerts)">🔔</button>
     </div>
     <div id="guilds"></div>
   </div>
@@ -367,6 +368,7 @@ body.guest #guilds{display:none}
   var el = {};
   ['voice','dj-badge','dj-toggle','sfx-status','track-name','track-meta','src-badge','art',
    'wave-badge','wave-toggle',
+   'btn-push',
    'btn-play','btn-shuffle','btn-repeat','btn-prev','btn-next','btn-clear','progress','t-now','t-dur','vol',
    'queue','queue-count','queue-total','btn-jump','empty','search','btn-q-add','btn-q-play',
    'q-selbar','q-selcount','q-sel-remove','q-sel-clear',
@@ -820,10 +822,46 @@ body.guest #guilds{display:none}
   setInterval(render,1000);
   connect();
 
+  /* ---------- browser notifications (Web Push) ---------- */
+  function urlB64ToUint8(base64){
+    var pad='='.repeat((4-base64.length%4)%4);
+    var s=(base64+pad).replace(/-/g,'+').replace(/_/g,'/');
+    var raw=atob(s),out=new Uint8Array(raw.length);
+    for(var i=0;i<raw.length;i++)out[i]=raw.charCodeAt(i);
+    return out;
+  }
+  async function updatePushBtn(){
+    try{
+      var reg=await navigator.serviceWorker.ready;
+      var sub=await reg.pushManager.getSubscription();
+      el['btn-push'].classList.toggle('active',!!sub);
+      el['btn-push'].setAttribute('data-tip',sub?'Notifications on — click to disable':'Enable browser notifications (YouTube / cookie alerts)');
+    }catch(e){}
+  }
+  el['btn-push'].onclick=async function(){
+    if(!('serviceWorker' in navigator)||!('PushManager' in window)){toast('error','Notifications not supported on this device');return}
+    try{
+      var reg=await navigator.serviceWorker.ready;
+      var existing=await reg.pushManager.getSubscription();
+      if(existing){
+        await fetch('/api/push/unsubscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({endpoint:existing.endpoint})}).catch(function(){});
+        await existing.unsubscribe().catch(function(){});
+        toast('info','Notifications off');await updatePushBtn();return;
+      }
+      var perm=await Notification.requestPermission();
+      if(perm!=='granted'){toast('error','Notifications were blocked');return}
+      var keyRes=await fetch('/api/push/key').then(function(r){return r.ok?r.json():null});
+      if(!keyRes||!keyRes.key){toast('error','Push not available');return}
+      var sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlB64ToUint8(keyRes.key)});
+      await fetch('/api/push/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sub.toJSON())});
+      toast('success','Notifications on');await updatePushBtn();
+    }catch(e){toast('error','Could not enable notifications');}
+  };
+
   // PWA: register the (cache-free) service worker so the panel is installable.
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', function () {
-      navigator.serviceWorker.register('/sw.js').catch(function () {});
+      navigator.serviceWorker.register('/sw.js').then(updatePushBtn).catch(function () {});
     });
   }
 })();

@@ -14,6 +14,7 @@ import { secretEquals } from './secretCompare.js';
 import { statsStore } from './stats.js';
 import { playlistStore } from './playlists.js';
 import { probeYoutube, youtubeHealth } from './youtube.js';
+import { addPushSubscription, pushPublicKey, pushSubscriptionCount, removePushSubscription } from './push.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -76,6 +77,7 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
         poToken: poTokenStatus,
         youtube: youtubeHealth().status,
         cookiesAgeDays: cookiesAgeDays(),
+        push: pushSubscriptionCount(),
         memory: {
           heapUsedMb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
           heapTotalMb: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
@@ -510,6 +512,60 @@ async function handleRoute(
           : [];
         res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
         res.end(JSON.stringify({ vibes }));
+        break;
+      }
+
+      case '/api/push/key': {
+        if (config.shareKey && !hasShareAccess(req, url)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'unauthorized' }));
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ key: pushPublicKey() }));
+        break;
+      }
+
+      case '/api/push/subscribe': {
+        if (req.method !== 'POST') {
+          res.writeHead(405);
+          res.end();
+          return;
+        }
+        if (config.shareKey && !hasShareAccess(req, url)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'unauthorized' }));
+          return;
+        }
+        const body = (await readJsonBody(req)) as
+          | { endpoint?: string; keys?: { p256dh?: string; auth?: string } }
+          | null;
+        if (body?.endpoint && body.keys?.p256dh && body.keys.auth) {
+          addPushSubscription({ endpoint: body.endpoint, keys: { p256dh: body.keys.p256dh, auth: body.keys.auth } });
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          res.end(JSON.stringify({ ok: true }));
+        } else {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'bad subscription' }));
+        }
+        break;
+      }
+
+      case '/api/push/unsubscribe': {
+        if (req.method !== 'POST') {
+          res.writeHead(405);
+          res.end();
+          return;
+        }
+        if (config.shareKey && !hasShareAccess(req, url)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'unauthorized' }));
+          return;
+        }
+        const body = (await readJsonBody(req)) as { endpoint?: string } | null;
+        if (body?.endpoint) removePushSubscription(body.endpoint);
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ ok: true }));
         break;
       }
 

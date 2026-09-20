@@ -142,6 +142,11 @@ cloudflaredPath:
    * GETs it every 5 min so an external service alerts if the whole process dies.
    */
   healthcheckPingUrl: process.env.HEALTHCHECK_PING_URL ?? '',
+  /** VAPID subject for Web Push (a mailto: or https: URL). */
+  pushContact: process.env.PUSH_CONTACT ?? 'mailto:admin@vaporzr.local',
+  /** Optional fixed VAPID keys; otherwise generated once and persisted in dataDir. */
+  vapidPublicKey: process.env.VAPID_PUBLIC_KEY ?? '',
+  vapidPrivateKey: process.env.VAPID_PRIVATE_KEY ?? '',
   /**
    * TTS engine for optional DJ announcements: 'off' (default) or 'espeak'
    * (local, offline espeak-ng). Never enabled automatically — each guild opts
