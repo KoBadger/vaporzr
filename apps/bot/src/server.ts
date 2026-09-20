@@ -129,6 +129,11 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
   const ytTimer = setInterval(() => void probeYoutube(), 15 * 60 * 1000);
   ytTimer.unref?.();
 
+  // Prune stale uploads at boot and daily.
+  pruneUploads();
+  const upTimer = setInterval(() => pruneUploads(), 24 * 60 * 60 * 1000);
+  upTimer.unref?.();
+
   // Optional external dead-man's-switch: ping it so a stopped process is noticed.
   if (config.healthcheckPingUrl) {
     const ping = (): void => {
@@ -224,6 +229,24 @@ function cookiesAgeDays(): number | null {
     return Math.max(0, Math.round((Date.now() - st.mtimeMs) / 86_400_000));
   } catch {
     return null;
+  }
+}
+
+/** Delete uploaded files older than `maxAgeDays` so data/uploads can't grow forever. */
+function pruneUploads(maxAgeDays = 30): void {
+  try {
+    const dir = path.join(config.dataDir, 'uploads');
+    const cutoff = Date.now() - maxAgeDays * 86_400_000;
+    for (const name of fs.readdirSync(dir)) {
+      const file = path.join(dir, name);
+      try {
+        if (fs.statSync(file).mtimeMs < cutoff) fs.rmSync(file, { force: true });
+      } catch {
+        /* skip */
+      }
+    }
+  } catch {
+    /* no uploads dir */
   }
 }
 
