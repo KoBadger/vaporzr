@@ -304,10 +304,32 @@ export class GoLibrespotManager implements SpotifyBackend {
         return;
       }
       this.captureFd = fd;
+      // go-librespot's pipe output is UNPACED: it decodes and writes as fast as
+      // it can (observed ~30x realtime). Reading that fast would race the bot's
+      // realtime position model (bytes / 176400/s) to the end of the track
+      // instantly. So read at most 1x realtime; the FIFO buffer then fills and
+      // go-librespot blocks on write, pacing itself to our read rate.
+      const rt = GoLibrespotManager.PCM_BYTES_PER_SEC;
+      const maxBurst = Math.round(rt * 0.5); // allow a 500 ms catch-up burst
+      let budget = 0;
+      let last = Date.now();
+      const refill = (): void => {
+        const now = Date.now();
+        budget += ((now - last) / 1000) * rt;
+        last = now;
+        if (budget > maxBurst) budget = maxBurst;
+      };
       const readLoop = (): void => {
         if (this.captureFd !== fd) return;
-        const buf = Buffer.allocUnsafe(bufSize);
-        fs.read(fd, buf, 0, bufSize, null, (rerr, bytesRead) => {
+        refill();
+        const want = Math.min(bufSize, Math.floor(budget));
+        if (want < 4096) {
+          const t = setTimeout(readLoop, 20);
+          t.unref?.();
+          return;
+        }
+        const buf = Buffer.allocUnsafe(want);
+        fs.read(fd, buf, 0, want, null, (rerr, bytesRead) => {
           if (this.captureFd !== fd) return;
           if (rerr || bytesRead === 0) {
             // Error or writer closed (go-librespot exited) — reopen shortly.
@@ -320,6 +342,7 @@ export class GoLibrespotManager implements SpotifyBackend {
             retry();
             return;
           }
+          budget -= bytesRead;
           this.pcmBytes += bytesRead;
           this.lastPcmAt = Date.now();
           try {
