@@ -82,6 +82,7 @@ Names autocomplete. Up to 25 playlists/server, 200 tracks each.
 | `/voteskip on\|off` | `V@vs on\|off` | Require a majority vote to skip (mod). `off` = anyone can skip instantly. |
 | `/duck [seconds]` | `V@duck [seconds]` | Manually lower the music so people can talk (default 30s; `cancel` stops it). |
 | `/duckmode off\|auto\|hosts` | `V@dmode` | Auto-duck while people talk (mod): `off` (default), `auto` (any speaker), `hosts` (DJ/owner only). |
+| `/npchannel` | `V@npc` | Post the live now-playing strip in this channel (mod). `off` disables it. **The bot never posts it anywhere else.** |
 
 Members with the **DJ role** (or mod/admin/owner) skip and control playback
 instantly; everyone else triggers a majority **vote-to-skip** among the humans

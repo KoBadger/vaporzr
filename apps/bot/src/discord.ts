@@ -404,6 +404,10 @@ const COMMANDS = [
         .addChoices({ name: 'off', value: 'off' }, { name: 'auto', value: 'auto' }, { name: 'hosts', value: 'hosts' }),
     ),
   new SlashCommandBuilder()
+    .setName('npchannel')
+    .setDescription('Post the live now-playing strip in this channel (mod); "off" disables it')
+    .addBooleanOption((o) => o.setName('off').setDescription('Disable the now-playing strip').setRequired(false)),
+  new SlashCommandBuilder()
     .setName('jump')
     .setDescription('Jump to a lyric line in the current song (e.g. "jump to the chorus")')
     .addStringOption((o) => o.setName('query').setDescription('Words from the lyric line to jump to').setRequired(true)),
@@ -734,6 +738,8 @@ export class DiscordBot {
     this.client.on('clientReady', async () => {
       console.log(`[vaporzr] logged in as ${this.client.user?.tag}`);
       void this.loadPanelRegistrations();
+      // Remove now-playing strips in channels that never opted in (see /npchannel).
+      void this.cleanupMiniNp();
       // Alert the owner if the YouTube canary flips to a broken state.
       setYoutubeHealthListener((status) => void this.alertYoutubeHealth(status));
       if (!config.ownerId) {
@@ -1073,7 +1079,9 @@ export class DiscordBot {
     s.queue.clear();
     s.voice.leave();
     const guildId = s.guildId;
-    const channelId = this.lastTextChannel.get(guildId);
+    // Only the opted-in now-playing channel (see /npchannel) — never an
+    // arbitrary channel the bot merely saw a command in.
+    const channelId = this.perms.getNpChannel(guildId);
     if (channelId) {
       try {
         const channel = await this.client.channels.fetch(channelId);
@@ -1757,6 +1765,25 @@ export class DiscordBot {
         break;
       }
 
+      case 'npchannel': {
+        if (!this.requireLevel('npchannel', interaction)) return this.deny(interaction);
+        const gid = interaction.guildId;
+        if (!gid) return void (await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral }));
+        if (interaction.options.getBoolean('off')) {
+          this.perms.setNpChannel(gid, null);
+          await this.clearMiniNp(gid);
+          await interaction.reply({ content: '🌙 Now-playing strip **disabled**.', flags: MessageFlags.Ephemeral });
+        } else {
+          this.perms.setNpChannel(gid, interaction.channelId);
+          this.miniTrackUri.delete(gid);
+          await interaction.reply({
+            content: `📻 The live now-playing strip will post in <#${interaction.channelId}>.`,
+            flags: MessageFlags.Ephemeral,
+          });
+        }
+        break;
+      }
+
       case 'vibe': {
         if (!this.requireLevel('vibe', interaction)) return this.deny(interaction);
         await interaction.deferReply();
@@ -2226,6 +2253,7 @@ export class DiscordBot {
       voteskip: 'voteskip', vs: 'voteskip',
       duck: 'duck',
       duckmode: 'duckmode', dmode: 'duckmode',
+      npchannel: 'npchannel', npc: 'npchannel',
       vibe: 'vibe',
       lb: 'leaderboard', leaderboard: 'leaderboard',
       dna: 'dna', cover: 'cover',
@@ -2590,6 +2618,22 @@ export class DiscordBot {
                 ? '🔉 Auto-ducking **on** — dips whenever anyone talks.'
                 : '🎧 Auto-ducking **hosts only** — only DJs/owner dip the music.',
           );
+          break;
+        }
+
+        case 'npchannel':
+        case 'npc': {
+          if (!canUse('npchannel')) return void (await deny());
+          if (!message.guildId) return void (await message.reply('Must be used in a server.'));
+          if (/^(off|0|false|disable)$/i.test(args.trim())) {
+            this.perms.setNpChannel(message.guildId, null);
+            await this.clearMiniNp(message.guildId);
+            await message.reply('🌙 Now-playing strip **disabled**.');
+          } else {
+            this.perms.setNpChannel(message.guildId, message.channelId);
+            this.miniTrackUri.delete(message.guildId);
+            await message.reply('📻 The live now-playing strip will post here.');
+          }
           break;
         }
 
@@ -3487,9 +3531,37 @@ export class DiscordBot {
    * re-anchors to the bottom of the channel whenever the track changes so it
    * never gets buried by chat.
    */
+  /** Delete the guild's now-playing strip (if any) and forget the registration. */
+  private async clearMiniNp(guildId: string): Promise<void> {
+    const mini = this.miniNp.get(guildId);
+    this.miniNp.delete(guildId);
+    this.miniTrackUri.delete(guildId);
+    this.scheduleSavePanels();
+    if (!mini) return;
+    try {
+      const ch = await this.client.channels.fetch(mini.channelId);
+      if (ch && 'messages' in ch) {
+        const msg = await ch.messages.fetch(mini.messageId).catch(() => null);
+        if (msg) await msg.delete().catch(() => {});
+      }
+    } catch {
+      /* already gone */
+    }
+  }
+
+  /** On boot, remove stray strips for guilds that never opted in (see /npchannel). */
+  private async cleanupMiniNp(): Promise<void> {
+    for (const guildId of [...this.miniNp.keys()]) {
+      if (!this.perms.getNpChannel(guildId)) await this.clearMiniNp(guildId);
+    }
+  }
+
   private async maybeAutoMiniNp(guildId: string | undefined, st: PlaybackState): Promise<void> {
     if (!guildId || !st.track) return;
-    const channelId = this.lastTextChannel.get(guildId);
+    // Opt-in only. The strip used to target "the last channel a command ran in",
+    // which made the bot post now-playing updates in unrelated main channels.
+    // Now it only posts where an admin explicitly set one (/npchannel).
+    const channelId = this.perms.getNpChannel(guildId);
     if (!channelId) return;
     // A command reply for this exact track is already the visible now-playing —
     // don't also auto-post a strip (that was the "two identical embeds"
@@ -3596,7 +3668,9 @@ export class DiscordBot {
 
   /** Post a friendly "queue's done" notice to the last-used text channel. */
   private async notifyQueueEnded(guildId: string): Promise<void> {
-    const channelId = this.lastTextChannel.get(guildId);
+    // Only the opted-in now-playing channel (see /npchannel) — never an
+    // arbitrary channel the bot merely saw a command in.
+    const channelId = this.perms.getNpChannel(guildId);
     if (!channelId) return;
     try {
       const channel = await this.client.channels.fetch(channelId);
@@ -3634,7 +3708,7 @@ export class DiscordBot {
       }
     }
     const gid = this.bridge.getPrimaryGuildId();
-    const chId = gid ? this.lastTextChannel.get(gid) : undefined;
+    const chId = gid ? this.perms.getNpChannel(gid) : undefined;
     if (!chId) return;
     try {
       const ch = await this.client.channels.fetch(chId);
@@ -3646,7 +3720,9 @@ export class DiscordBot {
 
   /** Playback halted because consecutive tracks couldn't start (backend issue). */
   private async notifyPlaybackStalled(guildId: string): Promise<void> {
-    const channelId = this.lastTextChannel.get(guildId);
+    // Only the opted-in now-playing channel (see /npchannel) — never an
+    // arbitrary channel the bot merely saw a command in.
+    const channelId = this.perms.getNpChannel(guildId);
     if (!channelId) return;
     try {
       const channel = await this.client.channels.fetch(channelId);
@@ -5737,6 +5813,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/voteskip on|off` · `V@vs` — require a majority vote to skip (off = anyone can skip)',
       '`/duck [seconds]` · `V@duck` — manually lower the music so people can talk',
       '`/duckmode off|auto|hosts` · `V@dmode` — auto-lower music while people talk (mod)',
+      '`/npchannel` · `V@npc` — post the live now-playing strip in this channel (mod; `off` disables)',
       '`/hype on|off` · `V@hype` — auto-hype: drop a hit on strong beats',
       '`/mix <a> <b>` · `V@mix <a> | <b>` — crossfade two tracks into one mix',
     ],

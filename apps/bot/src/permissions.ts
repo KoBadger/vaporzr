@@ -15,6 +15,12 @@ interface GuildConfig {
   duckMode?: 'off' | 'auto' | 'hosts';
   /** Spoken DJ announcements enabled for this guild (default false). */
   tts?: boolean;
+  /**
+   * Channel where the bot may post the automatic "now playing" strip. null/unset
+   * = never auto-post (default) — the bot must only post unsolicited messages
+   * where it was explicitly told to.
+   */
+  npChannel?: string | null;
 }
 
 const DEFAULT_COMMAND_LEVELS: Record<string, PermissionLevel> = {
@@ -62,6 +68,7 @@ const DEFAULT_COMMAND_LEVELS: Record<string, PermissionLevel> = {
   voteskip: 'mod',
   duck: 'user',
   duckmode: 'mod',
+  npchannel: 'mod',
   perms: 'admin',
   speed: 'user',
   bassboost: 'user',
@@ -219,6 +226,17 @@ export class PermissionsManager {
     this.save(guildId);
   }
 
+  /** Channel allowed to receive the auto now-playing strip (null = disabled). */
+  getNpChannel(guildId: string): string | null {
+    return this.load(guildId).npChannel ?? null;
+  }
+
+  setNpChannel(guildId: string, channelId: string | null): void {
+    const cfg = this.load(guildId);
+    cfg.npChannel = channelId;
+    this.save(guildId);
+  }
+
   /** True when a member may act as DJ: mod/admin/owner, or a holder of the DJ role. */
   isDj(
     guild: Guild,
@@ -241,6 +259,7 @@ export class PermissionsManager {
       voteSkip: cfg.voteSkip !== false,
       duckMode: cfg.duckMode ?? 'off',
       tts: cfg.tts === true,
+      npChannel: cfg.npChannel ?? null,
     };
   }
 }
