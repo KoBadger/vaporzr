@@ -45,6 +45,8 @@ RUN npm ci --omit=dev
 
 FROM node:20-trixie-slim AS runtime
 
+ARG GIT_SHA=dev
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates ffmpeg espeak-ng python3 python3-venv curl pulseaudio pulseaudio-utils \
     && rm -rf /var/lib/apt/lists/* \
@@ -67,6 +69,7 @@ COPY --from=build /app ./
 COPY librespot /usr/local/bin/librespot
 
 ENV NODE_ENV=production \
+    VAPORZR_BUILD=$GIT_SHA \
     SPOTIFY_BACKEND=librespot \
     GO_LIBRESPOT_PATH=/usr/local/bin/go-librespot \
     PORT=4876 \
