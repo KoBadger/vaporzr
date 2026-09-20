@@ -900,6 +900,23 @@ describe('pickNextTrack (smoke)', () => {
     const pick = await pickNextTrack(s, recent);
     expect(pick).toBeNull();
   });
+
+  it('relaxes the artist cooldown instead of going silent when nothing else is available', async () => {
+    const s = createState();
+    activate(s);
+    markPlayed(s, 'spotify:track:aaa000000000000000001', 'A Song', ['Old Artist']);
+    markPlayed(s, 'spotify:track:bbb000000000000000001', 'B Song', ['Mid Artist']);
+    markPlayed(s, 'spotify:track:ccc000000000000000001', 'C Song', ['New Artist']);
+    // The only candidate is by the oldest artist, which is inside the strict
+    // 3-artist cooldown but outside the relaxed 2-artist window.
+    mocks.getRecommendations.mockResolvedValue([
+      recCandidate({ uri: 'spotify:track:ddd000000000000000001', name: 'Old Song', artists: ['Old Artist'] }),
+    ]);
+    mocks.searchTracks.mockResolvedValue([]);
+    const recent = [fakeTrack({ uri: 'spotify:track:aaaa000000000000000001', name: 'Seed', artists: ['Seed Artist'] })];
+    const pick = await pickNextTrack(s, recent);
+    expect(pick?.uri).toBe('spotify:track:ddd000000000000000001');
+  });
 });
 
 /* ---------- smoke: resolve + features ---------- */

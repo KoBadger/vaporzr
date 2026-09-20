@@ -628,9 +628,9 @@ export async function pickNextTrack(
       if (norm.length >= 3) upcomingArtists.add(norm);
     }
   }
-  const cooldownArtists = new Set<string>(
-    state.recentArtists.slice(-DEFAULT_CONFIG.artistCooldown).map((a) => a.toLowerCase().trim()),
-  );
+  const buildCooldown = (window: number): Set<string> =>
+    new Set(state.recentArtists.slice(-window).map((a) => a.toLowerCase().trim()));
+  let cooldownArtists = buildCooldown(DEFAULT_CONFIG.artistCooldown);
   for (const a of upcomingArtists) cooldownArtists.add(a);
   const artistIsOnCooldown = (artist: string): boolean =>
     cooldownArtists.has(artist.toLowerCase().trim());
@@ -658,6 +658,8 @@ export async function pickNextTrack(
 
   let candidates: ResolvedTrack[] = [];
   let survivors: ResolvedTrack[] = [];
+  // Every candidate fetched this pass, for the relaxed-cooldown retry below.
+  const allCandidates: ResolvedTrack[] = [];
   let stage = 0;
   const logReject = (name: string, reason: string) => {
     if (process.env.NODE_ENV === 'test') return;
@@ -686,6 +688,7 @@ export async function pickNextTrack(
     } catch {
       // Recommendations can fail on rate limits or missing seeds — fall through.
     }
+    allCandidates.push(...candidates);
     survivors = viable(candidates);
   }
 
@@ -703,6 +706,7 @@ export async function pickNextTrack(
     } catch {
       // ignore
     }
+    allCandidates.push(...candidates);
     survivors = viable(candidates);
   }
 
@@ -730,6 +734,7 @@ export async function pickNextTrack(
             source: 'youtube',
             streamUrl: video.streamUrl,
           }];
+          allCandidates.push(...candidates);
           // Reject the same song outright (including its remix/cover variants).
           const v = candidates[0];
           if (!isRemixOrCover(state, v.name, v.artists)) {
@@ -775,6 +780,7 @@ export async function pickNextTrack(
         // fall through — nothing usable from Spotify
       }
     }
+    allCandidates.push(...pool);
     survivors = pool.filter(relax);
   }
 
@@ -789,7 +795,9 @@ export async function pickNextTrack(
     const artist = (similarArtistSeed(state) || last.artists[0] || '').trim();
     if (artist) {
       try {
-        survivors = viable(await deezerRelatedTracks(artist));
+        const dz = await deezerRelatedTracks(artist);
+        allCandidates.push(...dz);
+        survivors = viable(dz);
       } catch {
         // fall through — Deezer is best-effort only
       }
@@ -825,6 +833,20 @@ export async function pickNextTrack(
       );
     survivors.sort((a, b) => score(a) - score(b));
     return survivors[0];
+  }
+
+  // Smart strategies dead-ended. Rather than going silent, relax the artist
+  // cooldown (last 2 artists only) and re-filter the candidates we already
+  // fetched — a rare repeat beats a dead-air gap. Repeats still can't be exact
+  // duplicates (those are filtered regardless of cooldown).
+  if (survivors.length === 0 && allCandidates.length > 0 && state.recentArtists.length > 2) {
+    cooldownArtists = buildCooldown(2);
+    for (const a of upcomingArtists) cooldownArtists.add(a);
+    survivors = viable(allCandidates);
+    if (survivors.length > 0) {
+      console.log('[endlesswave] relaxed artist cooldown to avoid a gap');
+      return survivors[0];
+    }
   }
 
   return null;
@@ -868,6 +890,10 @@ export async function pickBasicTrack(
     if (isRemixOrCover(state, c.name, c.artists)) return false;
     const main = (c.artists[0] ?? '').toLowerCase().trim();
     if (main && cooldown.has(main)) return false;
+    // Compilation/setlist uploads with an empty artist still name the artist in
+    // the title — reject them too (matches the smart picker's filter).
+    const norm = normalizeTrackName(c.name);
+    if ([...cooldown].some((a) => a.length >= 3 && norm.includes(a))) return false;
     if (!c.name || c.name.trim().length < 2) return false;
     return true;
   };
