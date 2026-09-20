@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs/promises';
+import { statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -48,6 +49,7 @@ import {
   searchAndResolveYoutube,
   searchYoutube,
   setYoutubeHealthListener,
+  youtubeHealth,
   YoutubeError,
 } from './youtube.js';
 import { isSunoUrl, resolveSuno } from './suno.js';
@@ -71,7 +73,7 @@ import * as EW from './endlesswave.js';
 import { playlistStore } from './playlists.js';
 import { statsStore } from './stats.js';
 import { ttsEngine } from './tts.js';
-import { pushBroadcast } from './push.js';
+import { pushBroadcast, pushSubscriptionCount } from './push.js';
 import { downloadToTempFile } from './mediaDownload.js';
 import { renderRadarGif, type RadarMetric } from './images.js';
 
@@ -4640,6 +4642,13 @@ export class DiscordBot {
     const up = process.uptime();
     const uptime = `${Math.floor(up / 3600)}h ${Math.floor((up % 3600) / 60)}m`;
     const st = s?.queue.getState();
+    let cookieAge: number | null = null;
+    try {
+      cookieAge = Math.round((Date.now() - statSync(config.youtubeCookiesPath).mtimeMs) / 86_400_000);
+    } catch {
+      cookieAge = null;
+    }
+    const yt = youtubeHealth().status;
 
     return new EmbedBuilder()
       .setTitle('🩺 Diagnostics')
@@ -4657,6 +4666,12 @@ export class DiscordBot {
             : '`disabled`',
           inline: true,
         },
+        {
+          name: 'YouTube',
+          value: `canary \`${yt}\` · cookies ${cookieAge === null ? '`missing`' : `\`${cookieAge}d\``}`,
+          inline: true,
+        },
+        { name: 'Web Push', value: `${pushSubscriptionCount()} subscriber(s)`, inline: true },
         { name: 'Audio', value: st?.track ? `${st.playing ? '▶️' : '⏸️'} ${st.track.name}`.slice(0, 100) : '`idle`', inline: false },
       )
       .setFooter({

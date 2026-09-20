@@ -79,10 +79,13 @@ Names autocomplete. Up to 25 playlists/server, 200 tracks each.
 | `/sfx <id>` | `V@sfx` | Play a sound effect (autocompletes). |
 | `/dj` | `V@dj` | Toggle the soundboard (mod). |
 | `/djrole @role` | `V@djrole @role` | Set the DJ role (mod). `off` clears it. |
+| `/voteskip on\|off` | `V@vs on\|off` | Require a majority vote to skip (mod). `off` = anyone can skip instantly. |
+| `/duck [seconds]` | `V@duck [seconds]` | Manually lower the music so people can talk (default 30s; `cancel` stops it). |
+| `/duckmode off\|auto\|hosts` | `V@dmode` | Auto-duck while people talk (mod): `off` (default), `auto` (any speaker), `hosts` (DJ/owner only). |
 
 Members with the **DJ role** (or mod/admin/owner) skip and control playback
 instantly; everyone else triggers a majority **vote-to-skip** among the humans
-in the bot's voice channel.
+in the bot's voice channel (unless vote-skip was turned off).
 
 ## 🎤 Lyrics
 

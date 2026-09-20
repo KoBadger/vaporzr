@@ -217,6 +217,24 @@ If `YOUTUBE_PROXY` is set it's used for both yt-dlp resolve and the ffmpeg strea
 so it must present a **sticky** exit IP (googlevideo URLs are IP-bound). Leave it
 unset to go direct, which works with cookies + the bundled PO-token provider.
 
+### Optional env knobs
+
+| Env | Effect |
+|---|---|
+| `SPOTIFY_PREFER_YOUTUBE=1` | Play Spotify requests via YouTube (no Spotify device needed). |
+| `AUDIO_NORM_FILTER` | ffmpeg normalize stage (default `alimiter=limit=0.95`; e.g. `loudnorm=I=-14:TP=-1.5:LRA=14`). |
+| `CROSSFADE_OVERLAP=1`, `CROSSFADE_MS` | Enable real crossfade; blend length (default 2000 ms). |
+| `KEEP_PAUSED_QUEUE=1` | Keep paused queues across restarts. |
+| `DUCKING=1` | Enable auto voice-activity ducking (or use per-guild `/duckmode`). |
+| `REQUEST_KEY` | Enables the public `/request?key=…` song-request page. |
+| `HEALTHCHECK_PING_URL` | Dead-man's-switch ping every 5 min (healthchecks.io, Uptime Kuma…). |
+| `PUSH_CONTACT` | VAPID subject for Web Push (default `mailto:admin@vaporzr.local`). |
+| `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | Optional fixed Web Push keys (else generated + persisted in the data volume). |
+
+**Web Push:** open the panel and click the 🔔 button to subscribe. `/health` shows
+a `push` subscriber count; the YouTube canary pushes an alert (expired cookies /
+outage) to subscribed browsers in addition to the Discord DM.
+
 ## Data
 
 `/app/data` (linked token store, DJ settings, theme, uploads) is a named volume
