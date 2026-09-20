@@ -399,13 +399,17 @@ export class VoiceManager {
         }
       } else if (this.ffmpeg) {
         // Server-side stream: silence is normal between tracks; don't warn.
-      } else if (this.expectingPcm && Date.now() - this.lastChunkAt > 8000) {
+      } else if (this.expectingPcm && Date.now() - this.lastChunkAt > 15_000) {
+        // The Spotify FIFO feed has no ffmpeg onEnd and briefly runs dry at
+        // track boundaries; a short gap is normal. Require a sustained ~30s
+        // outage (2 warnings) before re-issuing, so the end-of-track advance
+        // wins instead of being pre-empted by a re-seek.
         console.warn(
-          '[voice] WARNING: expected audio but no chunks received in 8s — stream may be stalled',
+          '[voice] WARNING: expected audio but no chunks received in 15s — stream may be stalled',
         );
         this.lastChunkAt = Date.now();
         this.stallWarnings++;
-        if (this.stallWarnings >= 3) {
+        if (this.stallWarnings >= 2) {
           this.stallWarnings = 0;
           this.onStallRecovery?.();
         }

@@ -1175,6 +1175,12 @@ export class PlaybackController {
       // falls back to YouTube. Debounced so a burst of stall warnings doesn't
       // hammer the play path.
       const state = this.queue.getState();
+      // Near the end of the track the FIFO feed legitimately runs dry while the
+      // buffered tail drains — let the end timer advance instead of re-seeking
+      // (which used to fire a stale re-play even after the queue had ended).
+      const pos = state.positionMs ?? 0;
+      const dur = state.durationMs ?? 0;
+      if (dur > 0 && pos >= dur - 8_000) return;
       if (state.track && state.playing && this.currentSource() === 'spotify' && !this.spotifyFallback) {
         const now = Date.now();
         if (!this.lastStallRecoveryAt || now - this.lastStallRecoveryAt > 20_000) {
