@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Vaporzr Panel</title>
 <link rel="icon" type="image/png" href="/favicon.png">
 <meta name="theme-color" content="#6a5cff">
@@ -206,6 +206,32 @@ body.guest #guilds{display:none}
 .stat-row b{color:var(--text)}
 .stat-chart{display:flex;align-items:flex-end;gap:2px;height:44px;margin:6px 0 2px}
 .stat-chart i{flex:1;min-height:2px;border-radius:2px;background:linear-gradient(180deg,var(--accent),var(--accent2));opacity:.85}
+/* header tools + autoplay select */
+.menu-wrap{position:relative;display:inline-block}
+.menu{position:absolute;right:0;top:calc(100% + 6px);min-width:200px;background:rgba(12,16,34,.98);border:1px solid var(--line);
+  border-radius:12px;padding:6px;display:none;z-index:50;box-shadow:0 18px 50px rgba(0,0,0,.6)}
+.menu.open{display:block}
+.menu .mlabel{font-size:9.5px;letter-spacing:1.4px;color:var(--muted);padding:8px 10px 4px;font-weight:700}
+.menu button,.menu a{display:block;width:100%;text-align:left;height:auto;min-width:0;padding:8px 10px;border:0;background:none;
+  border-radius:8px;font-size:13px;color:var(--text);cursor:pointer;text-decoration:none}
+.menu button:hover,.menu a:hover{background:rgba(148,163,184,.18);transform:none}
+.menu .mrow{display:flex;gap:4px;padding:2px 6px}
+.menu .mrow button{flex:1;text-align:center;border:1px solid var(--line);background:rgba(148,163,184,.08)}
+.menu .mrow button.active{color:var(--accent2);border-color:color-mix(in srgb,var(--accent2) 45%,transparent);background:color-mix(in srgb,var(--accent2) 14%,transparent)}
+#wave-select{height:36px;border-radius:10px;border:1px solid var(--line);background:rgba(10,14,32,.7);color:var(--text);
+  font-family:inherit;font-size:12.5px;padding:0 8px;cursor:pointer}
+#wave-select:focus{outline:none;border-color:color-mix(in srgb,var(--accent) 60%,transparent)}
+#wave-select.active{color:var(--accent2);border-color:color-mix(in srgb,var(--accent2) 45%,transparent)}
+
+/* mobile */
+@media (max-width:560px){
+  main{padding:10px 10px calc(16px + env(safe-area-inset-bottom))}
+  .card{padding:13px;border-radius:14px}
+  #track-name{font-size:16px}
+  #art{width:60px;height:60px}
+  #vol{width:80px}
+  button{height:34px}
+}
 </style>
 </head>
 <body>
@@ -223,10 +249,26 @@ body.guest #guilds{display:none}
         <span id="conn-pill" class="badge"><span id="conn-dot"></span> <span id="conn-text">connecting…</span></span>
         <span class="badge" id="voice">🔇 not streaming</span>
         <span class="badge" id="dj-badge">🎛 DJ off</span>
-        <span class="badge" id="wave-badge" title="Autoplay mode (off / basic / smart)">🌊 Autoplay: off</span>
+      </div>
+      <select id="wave-select" data-tip="Autoplay mode (off / basic / smart)">
+        <option value="off">🌊 Autoplay: off</option>
+        <option value="basic">🌊 Autoplay: basic</option>
+        <option value="smart">🌊 Autoplay: smart</option>
+      </select>
+      <div class="menu-wrap">
+        <button id="tools-btn" data-tip="Tools &amp; effects">⋯</button>
+        <div id="tools-menu" class="menu">
+          <div class="mlabel">BASS BOOST</div>
+          <div class="mrow"><button data-bass="0">Off</button><button data-bass="5">+5</button><button data-bass="8">+8</button><button data-bass="10">+10</button></div>
+          <div class="mlabel">SPEED</div>
+          <div class="mrow"><button data-speed="1">Normal</button><button data-speed="1.25">Nightcore</button><button data-speed="0.85">Slowed</button></div>
+          <div class="mlabel">MORE</div>
+          <button data-ambient="toggle">🌌 Ambient intermission: <span id="amb-state">off</span></button>
+          <button data-voteskip="toggle">🗳 Vote-skip: <span id="vs-state">on</span></button>
+          <a href="/viz" target="_blank" rel="noopener">🎬 Open visualizer</a>
+        </div>
       </div>
       <button id="dj-toggle" data-tip="Toggle the DJ soundboard on/off">🎛</button>
-      <button id="wave-toggle" data-tip="Cycle autoplay mode: off → basic → smart">🌊</button>
       <button id="btn-push" data-tip="Enable browser notifications (YouTube / cookie alerts)">🔔</button>
     </div>
     <div id="guilds"></div>
@@ -367,7 +409,7 @@ body.guest #guilds{display:none}
   var $ = function (id) { return document.getElementById(id); };
   var el = {};
   ['voice','dj-badge','dj-toggle','sfx-status','track-name','track-meta','src-badge','art',
-   'wave-badge','wave-toggle',
+   'wave-select','tools-btn','tools-menu','amb-state','vs-state',
    'btn-push',
    'btn-play','btn-shuffle','btn-repeat','btn-prev','btn-next','btn-clear','progress','t-now','t-dur','vol',
    'queue','queue-count','queue-total','btn-jump','empty','search','btn-q-add','btn-q-play',
@@ -587,10 +629,7 @@ body.guest #guilds{display:none}
 
   function renderWave(){
     var on = waveMode!=='off';
-    el['wave-toggle'].classList.toggle('active',on);
-    el['wave-toggle'].textContent = waveMode==='smart'?'🌊':waveMode==='basic'?'🎵':'🚫';
-    el['wave-badge'].textContent='🌊 Autoplay: '+waveMode;
-    el['wave-badge'].classList.toggle('on',on);
+    if(el['wave-select']){el['wave-select'].value=waveMode;el['wave-select'].classList.toggle('active',on);}
   }
 
   function setConnected(c){
@@ -660,6 +699,8 @@ body.guest #guilds{display:none}
           if(msg.guest&&!GUEST){GUEST=true;enableGuestMode()}
           if(msg.djEnabled!=null)djEnabled=msg.djEnabled;
           if(msg.endlesswaveMode)waveMode=msg.endlesswaveMode;else if(msg.endlesswave!=null)waveMode=msg.endlesswave?'smart':'off';
+          if(msg.ambient!=null&&el['amb-state'])el['amb-state'].textContent=msg.ambient?'on':'off';
+          if(msg.voteSkip!=null&&el['vs-state'])el['vs-state'].textContent=msg.voteSkip?'on':'off';
           if(msg.theme){for(var i=0;i<THEMES.length;i++)if(THEMES[i].id===msg.theme.id)applyTheme(THEMES[i])}
           if(typeof msg.sensitivity==='number')setSens(msg.sensitivity,false);
           if(msg.voice)el.voice.textContent=msg.voice.joined?'🔊 streaming':'🔇 not streaming';
@@ -708,7 +749,19 @@ body.guest #guilds{display:none}
   };
   el['btn-clear'].onclick=function(){cmd('clear');toast('info','Queue cleared')};
   el['dj-toggle'].onclick=function(){cmd('dj',{djEnabled:!djEnabled})};
-  el['wave-toggle'].onclick=function(){var next=waveMode==='off'?'basic':waveMode==='basic'?'smart':'off';cmd('endlesswave',{mode:next})};
+  el['wave-select'].onchange=function(){cmd('endlesswave',{mode:el['wave-select'].value})};
+  (function(){
+    var menu=el['tools-menu'],btn=el['tools-btn'];if(!menu||!btn)return;
+    function close(){menu.classList.remove('open')}
+    btn.onclick=function(e){e.stopPropagation();menu.classList.toggle('open')};
+    document.addEventListener('click',function(e){if(!e.target.closest('.menu-wrap'))close()});
+    menu.querySelectorAll('button[data-bass]').forEach(function(b){b.onclick=function(){cmd('bass',{db:Number(b.getAttribute('data-bass'))});close()}});
+    menu.querySelectorAll('button[data-speed]').forEach(function(b){b.onclick=function(){cmd('speed',{factor:Number(b.getAttribute('data-speed'))});close()}});
+    var amb=menu.querySelector('button[data-ambient]');
+    if(amb)amb.onclick=function(){var on=el['amb-state'].textContent!=='on';cmd('ambient',{ambient:on});el['amb-state'].textContent=on?'on':'off';close()};
+    var vs=menu.querySelector('button[data-voteskip]');
+    if(vs)vs.onclick=function(){var on=el['vs-state'].textContent!=='on';cmd('voteskip',{voteSkip:on});el['vs-state'].textContent=on?'on':'off';close()};
+  })();
   el['btn-jump'].onclick=function(){
     var row=document.querySelector('#queue li.current');
     if(row)row.scrollIntoView({behavior:'smooth',block:'center'});

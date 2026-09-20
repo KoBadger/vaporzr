@@ -439,6 +439,30 @@ export class Bridge {
         }
         break;
       }
+      case 'bass':
+        if (msg.db != null) this.playback.setBassBoost(Math.max(0, Math.min(12, msg.db)));
+        break;
+      case 'speed':
+        if (msg.factor != null && msg.factor > 0) this.playback.setSpeed(msg.factor);
+        break;
+      case 'ambient': {
+        if (msg.ambient != null && this.primaryGuildId) {
+          this.perms.setAmbient(this.primaryGuildId, Boolean(msg.ambient));
+          const s = this.sessions.primary;
+          // Play the pad right away if the queue is already idle.
+          if (msg.ambient && s && s.voice.isJoined() && !this.queue.getState().playing) {
+            s.voice.playAmbient();
+          }
+          for (const vis of this.visualizers) this.sendSnapshot(vis.socket);
+          for (const panel of this.panels) this.sendSnapshot(panel.socket);
+        }
+        break;
+      }
+      case 'voteskip':
+        if (msg.voteSkip != null && this.primaryGuildId) {
+          this.perms.setVoteSkip(this.primaryGuildId, Boolean(msg.voteSkip));
+        }
+        break;
       case 'switchGuild':
         if (msg.guildId) {
           console.log(`[bridge] switching primary guild to ${msg.guildId}`);
@@ -715,6 +739,8 @@ export class Bridge {
             ? 'basic'
             : 'off'
         : undefined,
+      ambient: this.primaryGuildId ? this.perms.getAmbient(this.primaryGuildId) : undefined,
+      voteSkip: this.primaryGuildId ? this.perms.getVoteSkip(this.primaryGuildId) : undefined,
     };
     this.sendToSocket(socket, out);
   }

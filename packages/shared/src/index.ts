@@ -106,7 +106,11 @@ export type CommandName =
   | 'move'
   | 'playSearch'
   | 'saveVibe'
-  | 'loadVibe';
+  | 'loadVibe'
+  | 'bass'
+  | 'speed'
+  | 'ambient'
+  | 'voteskip';
 
 export interface CommandMessage {
   type: 'cmd';
@@ -130,6 +134,14 @@ export interface CommandMessage {
   active?: boolean;
   /** Autoplay mode (off | basic | smart) for command: 'endlesswave'. */
   mode?: 'off' | 'basic' | 'smart';
+  /** Bass boost in dB for command: 'bass' (0 = off). */
+  db?: number;
+  /** Playback speed factor for command: 'speed'. */
+  factor?: number;
+  /** Ambient intermission on/off for command: 'ambient'. */
+  ambient?: boolean;
+  /** Vote-to-skip on/off for command: 'voteskip'. */
+  voteSkip?: boolean;
   /** Guild to switch to for command: 'switchGuild'. */
   guildId?: string;
   /** Beat-reactivity multiplier (0.5–1.5) for command: 'sensitivity'. */
@@ -163,7 +175,7 @@ export type InboundMessage =
   | CommandMessage;
 
 export type OutboundMessage =
-  | { type: 'snapshot'; state: PlaybackState; queue: QueueSnapshot; permissions?: PermissionSnapshot; voice?: { joined: boolean; channelId?: string }; theme?: VaporzrTheme; djEnabled?: boolean; primaryGuildId?: string; guilds?: Array<{ id: string; name: string }>; sensitivity?: number; guest?: boolean; endlesswave?: boolean; endlesswaveMode?: 'off' | 'basic' | 'smart' }
+  | { type: 'snapshot'; state: PlaybackState; queue: QueueSnapshot; permissions?: PermissionSnapshot; voice?: { joined: boolean; channelId?: string }; theme?: VaporzrTheme; djEnabled?: boolean; primaryGuildId?: string; guilds?: Array<{ id: string; name: string }>; sensitivity?: number; guest?: boolean; endlesswave?: boolean; endlesswaveMode?: 'off' | 'basic' | 'smart'; ambient?: boolean; voteSkip?: boolean }
   | { type: 'state:update'; state: PlaybackState; guildId?: string }
   | { type: 'queue:update'; queue: QueueSnapshot }
   | { type: 'perm:update'; permissions: PermissionSnapshot }
