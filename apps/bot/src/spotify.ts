@@ -488,8 +488,8 @@ function mapEmbedCollection(entity: EmbedEntity, albumOverride?: string): Resolv
 
 const SERVER_TIME_URL = 'https://open.spotify.com/api/server-time';
 const WEB_TOKEN_URL = 'https://open.spotify.com/api/token';
-const ANON_TOKEN_URL = 'https://open.spotify.com/get_access_token?reason=transport&productType=web_player';
 let cachedWebToken: { token: string; expiresAt: number } | null = null;
+let cachedTotp: { key: Buffer; version: number; at: number } | null = null;
 
 function webTotpSecret(): Buffer {
   const bytes = config.spotifyTotpSecret
@@ -511,32 +511,76 @@ function hotp6(secret: Buffer, counter: number): string {
 }
 
 /**
- * Mint a web-player session token from the user's sp_dc cookie. This is the same
- * auth Spotify's own web player uses — it can read ANY public playlist in full
- * and consumes no dev-mode quota. Returns null when unavailable so callers fall
- * back to the embed scrape / OAuth paths.
+ * Extract the current web-player TOTP secret from Spotify's JS bundle. Spotify
+ * rotates it and bumps `version`; we pick the highest version and cache it, so
+ * the token flow self-heals after a rotation without a redeploy.
+ */
+async function fetchWebTotp(): Promise<{ key: Buffer; version: number } | null> {
+  const ua = { 'User-Agent': ANON_USER_AGENT };
+  const html = await (await fetchWithTimeout('https://open.spotify.com/', { headers: ua })).text();
+  const m = html.match(
+    /https:\/\/open\.spotifycdn\.com\/cdn\/build\/web-player\/web-player\.[a-f0-9]+\.js/,
+  );
+  if (!m) return null;
+  const js = await (await fetchWithTimeout(m[0], { headers: ua })).text();
+  const re = /secret:(?:'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)"),version:(\d+)/g;
+  let best: { secret: string; version: number } | null = null;
+  for (let x = re.exec(js); x; x = re.exec(js)) {
+    const secret = (x[1] ?? x[2] ?? '').replace(/\\(.)/g, '$1');
+    const version = Number(x[3]);
+    if (Number.isFinite(version) && (!best || version > best.version)) best = { secret, version };
+  }
+  if (!best) return null;
+  // The web player derives the HMAC key as: charCode ^ (index % 33 + 9), joined
+  // as a decimal string, then taken as its UTF-8 bytes.
+  const nums: string[] = [];
+  for (let t = 0; t < best.secret.length; t++) {
+    nums.push(String(best.secret.charCodeAt(t) ^ ((t % 33) + 9)));
+  }
+  return { key: Buffer.from(nums.join(''), 'utf8'), version: best.version };
+}
+
+/** Current TOTP key + version: extracted from Spotify's bundle (cached ~6h),
+ *  else the SPOTIFY_TOTP_SECRET / SPOTIFY_TOTP_VER env fallback. */
+async function webTotpParams(): Promise<{ key: Buffer; version: number } | null> {
+  if (cachedTotp && Date.now() - cachedTotp.at < 6 * 60 * 60 * 1000) return cachedTotp;
+  try {
+    const web = await fetchWebTotp();
+    if (web) {
+      cachedTotp = { ...web, at: Date.now() };
+      return cachedTotp;
+    }
+  } catch {
+    /* fall through to env */
+  }
+  if (config.spotifyTotpSecret) {
+    const key = webTotpSecret();
+    if (key.length) return { key, version: Number(config.spotifyTotpVer) || 61 };
+  }
+  return null;
+}
+
+/**
+ * Mint a web-player session token from the user's sp_dc cookie via the
+ * TOTP-protected endpoint (the legacy `get_access_token` path is gone). This is
+ * the same auth Spotify's own web player uses — it can read ANY public playlist
+ * in full and consumes no dev-mode quota. Returns null so callers fall back to
+ * the embed scrape / OAuth paths.
  */
 async function getWebPlayerToken(): Promise<string | null> {
   if (!config.spotifySpDc) return null;
   if (cachedWebToken && Date.now() < cachedWebToken.expiresAt - 60_000) return cachedWebToken.token;
   const headers = { 'User-Agent': ANON_USER_AGENT, Cookie: `sp_dc=${config.spotifySpDc}` };
   try {
-    // 1. The plain token endpoint (works when Spotify hasn't rotated the flow).
-    const simple = await fetchWithTimeout(ANON_TOKEN_URL, { headers });
-    if (simple.ok) {
-      const d = (await simple.json()) as { accessToken?: string; accessTokenExpirationTimestampMs?: number };
-      if (d.accessToken) {
-        cachedWebToken = { token: d.accessToken, expiresAt: d.accessTokenExpirationTimestampMs ?? Date.now() + 30 * 60 * 1000 };
-        return cachedWebToken.token;
-      }
-    }
-    // 2. TOTP-protected endpoint (current flow).
+    const totp = await webTotpParams();
+    if (!totp) return null;
     const stRes = await fetchWithTimeout(SERVER_TIME_URL, { headers: { 'User-Agent': ANON_USER_AGENT } });
     if (!stRes.ok) return null;
     const { serverTime } = (await stRes.json()) as { serverTime: number };
     const nowSec = Math.floor(Date.now() / 1000);
-    const code = hotp6(webTotpSecret(), Math.floor(nowSec / 30));
-    const url = `${WEB_TOKEN_URL}?reason=init&productType=web-player&totp=${code}&totpServer=${code}&totpVer=${config.spotifyTotpVer}&sTime=${serverTime}&cTime=${nowSec * 1000}&buildVer=unknown&buildDate=unknown`;
+    const code = hotp6(totp.key, Math.floor(nowSec / 30));
+    const codeServer = hotp6(totp.key, Math.floor(Number(serverTime) / 30));
+    const url = `${WEB_TOKEN_URL}?reason=init&productType=web-player&totp=${code}&totpServer=${codeServer}&totpVer=${totp.version}&sTime=${serverTime}&cTime=${nowSec * 1000}&buildVer=unknown&buildDate=unknown`;
     const res = await fetchWithTimeout(url, { headers });
     if (!res.ok) return null;
     const d = (await res.json()) as { accessToken?: string; accessTokenExpirationTimestampMs?: number };

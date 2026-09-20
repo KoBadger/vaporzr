@@ -160,20 +160,18 @@ cloudflaredPath:
   /** Resolve public Spotify data with the anonymous web-player token (no app quota). Fallback to OAuth. */
   spotifyUseAnonymous: process.env.SPOTIFY_USE_ANONYMOUS !== '0' && process.env.SPOTIFY_USE_ANONYMOUS !== 'false',
   /**
-   * Free-text search via the quota-free web-player token. OFF by default:
-   * Spotify retired the `open.spotify.com/get_access_token` endpoint (403 URL
-   * Blocked), so the anon path just wastes a request and logs a warning — the
-   * OAuth `/search` fallback is used instead. Set SPOTIFY_ANON_SEARCH=1 to
-   * re-enable (only useful again if the TOTP token flow is configured).
+   * Free-text search via the quota-free web-player token (minted from sp_dc via
+   * the TOTP flow, whose secret is extracted from Spotify's bundle at runtime).
+   * ON by default; set SPOTIFY_ANON_SEARCH=0 to force the OAuth `/search` path.
    */
-  spotifyAnonSearch: process.env.SPOTIFY_ANON_SEARCH === '1' || process.env.SPOTIFY_ANON_SEARCH === 'true',
+  spotifyAnonSearch: process.env.SPOTIFY_ANON_SEARCH !== '0' && process.env.SPOTIFY_ANON_SEARCH !== 'false',
   /** sp_dc session cookie from open.spotify.com — unlocks FULL-length resolution of any public playlist. */
   spotifySpDc: process.env.SPOTIFY_SP_DC ?? '',
   /** TOTP secret bytes (comma-separated) for the web-player token endpoint; Spotify rotates this occasionally. */
   spotifyTotpSecret:
     process.env.SPOTIFY_TOTP_SECRET ?? '',
   /** TOTP version param for the web-player token endpoint. */
-  spotifyTotpVer: process.env.SPOTIFY_TOTP_VER ?? '5',
+  spotifyTotpVer: process.env.SPOTIFY_TOTP_VER ?? '61',
   /** Player app directory (Electron) and binary used to open the player window. */
   playerDir: process.env.PLAYER_DIR ?? path.join(__dirname, '..', '..', 'player'),
 electronPath:
