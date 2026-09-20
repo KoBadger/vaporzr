@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
@@ -7,16 +7,22 @@ import type { SpotifyBackend } from './librespot.js';
 /**
  * Manages go-librespot as the bot's server-side Spotify Connect device.
  *
- * Unlike librespot-org (which pipes PCM over a TCP bridge), go-librespot plays
- * into a PulseAudio null-sink and we capture that sink's monitor with `parec`,
- * feeding the same raw 44.1 kHz stereo s16 PCM the voice pipeline expects.
+ * Unlike librespot-org (which pipes PCM over a TCP bridge), go-librespot writes
+ * decoded PCM straight to a named pipe (FIFO) via its `pipe` audio backend, and
+ * we read that FIFO — feeding the same raw 44.1 kHz stereo s16 PCM the voice
+ * pipeline expects. The pipe backend is deliberate: go-librespot's PulseAudio
+ * backend deadlocks in `PlaybackStream.Start` on the 2nd stream (track switch),
+ * whereas the pipe output opens the FIFO once and only toggles Pause/Resume.
  *
  * Its login is the remote device-code flow (spotify.com/pair?code=…), so it can
  * pair from a datacenter with no local-network discovery.
  */
 export class GoLibrespotManager implements SpotifyBackend {
   private proc: ChildProcess | null = null;
-  private parec: ChildProcess | null = null;
+  /** Reader for the go-librespot PCM FIFO (replaces the old parec capture). */
+  private capture: fs.ReadStream | null = null;
+  /** Named pipe go-librespot writes decoded PCM to (audio_backend: pipe). */
+  private readonly fifoPath = path.join(config.goLibrespotConfigDir, 'audio.fifo');
   private pcmHandler: ((data: Buffer) => boolean) | null = null;
   private stopped = true;
   private startedAt = 0;
@@ -51,7 +57,7 @@ export class GoLibrespotManager implements SpotifyBackend {
     this.pcmBytes = Math.round((Math.max(0, ms) / 1000) * GoLibrespotManager.PCM_BYTES_PER_SEC);
   }
 
-  /** No-op (parec has no socket); present for LibrespotManager parity. */
+  /** No-op (the PCM FIFO has no socket); present for LibrespotManager parity. */
   resumeSocket(): void {}
   pauseSocket(): void {}
 
@@ -91,21 +97,10 @@ export class GoLibrespotManager implements SpotifyBackend {
   async start(): Promise<void> {
     if (this.isRunning()) return;
     this.stopped = false;
-    // Pin PulseAudio's runtime dir BEFORE starting pulseaudio, so pulseaudio,
-    // go-librespot and parec all agree on the socket path. Without this,
-    // pulseaudio picks a random /tmp/pulse-XXXX dir and go-librespot can't find
-    // the server ("dial unix pulse/native: no such file or directory").
-    if (!process.env.XDG_RUNTIME_DIR) process.env.XDG_RUNTIME_DIR = '/tmp/vz-runtime';
-    try {
-      fs.mkdirSync(process.env.XDG_RUNTIME_DIR, { recursive: true });
-    } catch {
-      /* ignore */
-    }
     fs.mkdirSync(config.goLibrespotConfigDir, { recursive: true });
     const cfgPath = path.join(config.goLibrespotConfigDir, 'config.yml');
-    // Always (re)write the managed config so the audio backend can't drift
-    // (e.g. a carried-over config with the FIFO pipe backend). Credentials live
-    // in state.json, which is untouched.
+    // Always (re)write the managed config so the audio backend can't drift.
+    // Credentials live in state.json, which is untouched.
     fs.writeFileSync(
       cfgPath,
       [
@@ -118,8 +113,13 @@ export class GoLibrespotManager implements SpotifyBackend {
         // which the bot never queued (the "different song for 2s" glitch).
         'disable_autoplay: true',
         'crossfade_duration: 0',
-        'audio_backend: pulseaudio',
-        `audio_device: "${config.pulseSinkName}"`,
+        // Decoded PCM out to a FIFO. The PulseAudio backend hangs in
+        // PlaybackStream.Start on the 2nd stream (track switch); the pipe
+        // backend opens the FIFO once and only toggles Pause/Resume.
+        'audio_backend: pipe',
+        `audio_output_pipe: "${this.fifoPath}"`,
+        'audio_output_pipe_format: s16le',
+        'audio_output_pipe_wait_for_reader: true',
         // On-disk audio cache: repeat/known tracks start from local disk instead
         // of re-downloading from Spotify every time.
         'cache:',
@@ -135,7 +135,11 @@ export class GoLibrespotManager implements SpotifyBackend {
         '',
       ].join('\n'),
     );
-    await this.ensurePulse();
+    // Create the FIFO and open our read end BEFORE spawning go-librespot, so its
+    // blocking (wait_for_reader) writer open always finds a reader and never
+    // wedges startup.
+    this.ensureFifo();
+    this.startCapture();
     const log = fs.openSync(path.join(config.goLibrespotConfigDir, 'stderr.log'), 'a');
     this.proc = spawn(config.goLibrespotPath, ['--config_dir', config.goLibrespotConfigDir], {
       stdio: ['ignore', log, log],
@@ -244,65 +248,58 @@ export class GoLibrespotManager implements SpotifyBackend {
     });
   }
 
-  /** Start PulseAudio and ensure the null-sink exists (retrying around startup races). */
-  private async ensurePulse(): Promise<void> {
-    await this.run('pulseaudio', ['--start', '--exit-idle-time=-1']);
-    for (let i = 0; i < 12; i++) {
-      if (await this.sinkExists()) {
-        await this.run('pactl', ['set-default-sink', config.pulseSinkName]);
-        return;
+  /** Create the PCM FIFO if it is missing (or replace a stale non-FIFO file). */
+  private ensureFifo(): void {
+    try {
+      fs.mkdirSync(path.dirname(this.fifoPath), { recursive: true });
+      let isFifo = false;
+      try {
+        isFifo = fs.statSync(this.fifoPath).isFIFO();
+      } catch {
+        /* missing */
       }
-      await this.run('pactl', [
-        'load-module',
-        'module-null-sink',
-        `sink_name=${config.pulseSinkName}`,
-        'sink_properties=device.description=Vaporzr',
-      ]);
-      await new Promise((r) => {
-        const t = setTimeout(r, 500);
-        t.unref?.();
-      });
+      if (!isFifo) {
+        try {
+          fs.rmSync(this.fifoPath, { force: true });
+        } catch {
+          /* ignore */
+        }
+        spawnSync('mkfifo', [this.fifoPath]);
+      }
+    } catch {
+      /* ignore */
     }
   }
 
-  private run(cmd: string, args: string[]): Promise<void> {
-    return new Promise((resolve) => {
-      const p = spawn(cmd, args, { stdio: 'ignore' });
-      p.on('error', () => resolve());
-      p.on('exit', () => resolve());
-    });
-  }
-
-  private sinkExists(): Promise<boolean> {
-    return new Promise((resolve) => {
-      const p = spawn('pactl', ['list', 'short', 'sinks'], { stdio: ['ignore', 'pipe', 'ignore'] });
-      let out = '';
-      p.stdout?.on('data', (d: Buffer) => (out += d.toString()));
-      p.on('error', () => resolve(false));
-      p.on('exit', () => resolve(out.includes(config.pulseSinkName)));
-    });
-  }
-
+  /** Read decoded PCM from go-librespot's FIFO. Opening the read end unblocks
+   *  go-librespot's (wait_for_reader) writer; we keep it open across tracks so a
+   *  stream switch never sees a closed pipe. */
   private startCapture(): void {
-    if (this.parec) return;
-    const p = spawn(
-      'parec',
-      ['-d', `${config.pulseSinkName}.monitor`, '--format=s16le', '--rate=44100', '--channels=2', '--raw'],
-      { stdio: ['ignore', 'pipe', 'ignore'] },
-    );
-    this.parec = p;
-    p.stdout?.on('data', (d: Buffer) => {
-      this.pcmBytes += d.length;
+    if (this.capture) return;
+    this.ensureFifo();
+    let s: fs.ReadStream;
+    try {
+      s = fs.createReadStream(this.fifoPath, { highWaterMark: 1 << 16 });
+    } catch {
+      return;
+    }
+    this.capture = s;
+    s.on('data', (d) => {
+      const buf = typeof d === 'string' ? Buffer.from(d) : (d as Buffer);
+      this.pcmBytes += buf.length;
       this.lastPcmAt = Date.now();
       try {
-        this.pcmHandler?.(d);
+        this.pcmHandler?.(buf);
       } catch {
         /* ignore */
       }
     });
-    p.on('error', () => {});
-    p.on('exit', () => {
-      this.parec = null;
+    s.on('error', () => {
+      /* transient (e.g. writer not open yet) — 'close' reopens below */
+    });
+    s.on('close', () => {
+      if (this.capture !== s) return;
+      this.capture = null;
       if (!this.stopped) {
         const t = setTimeout(() => this.startCapture(), 2000);
         t.unref?.();
@@ -317,11 +314,11 @@ export class GoLibrespotManager implements SpotifyBackend {
       this.watchdog = null;
     }
     try {
-      this.parec?.kill();
+      this.capture?.destroy();
     } catch {
       /* ignore */
     }
-    this.parec = null;
+    this.capture = null;
     try {
       this.proc?.kill();
     } catch {
@@ -403,11 +400,11 @@ export class GoLibrespotManager implements SpotifyBackend {
     }
     this.proc = null;
     try {
-      this.parec?.kill();
+      this.capture?.destroy();
     } catch {
       /* ignore */
     }
-    this.parec = null;
+    this.capture = null;
     void this.start();
   }
 }
