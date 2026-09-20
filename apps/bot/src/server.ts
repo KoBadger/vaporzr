@@ -491,6 +491,7 @@ async function handleRoute(
           totalQueued: gid ? statsStore.totalQueued(gid) : 0,
           users: gid ? statsStore.topUsers(gid, 10) : [],
           artists: gid ? statsStore.topArtists(gid, 10) : [],
+          history: gid ? statsStore.history(gid, 30) : [],
         });
         res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
         res.end(body);

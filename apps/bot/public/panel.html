@@ -204,6 +204,8 @@ body.guest #guilds{display:none}
 .qhint{font-size:10.5px;color:var(--muted);opacity:.75;margin-top:4px}
 .stat-row{display:flex;justify-content:space-between;gap:10px;padding:2px 0;font-size:12px}
 .stat-row b{color:var(--text)}
+.stat-chart{display:flex;align-items:flex-end;gap:2px;height:44px;margin:6px 0 2px}
+.stat-chart i{flex:1;min-height:2px;border-radius:2px;background:linear-gradient(180deg,var(--accent),var(--accent2));opacity:.85}
 </style>
 </head>
 <body>
@@ -289,6 +291,7 @@ body.guest #guilds{display:none}
         <span class="section-label">📊 LEADERBOARD</span>
         <button id="btn-stats-refresh" class="icon" data-tip="Refresh stats" style="height:26px;min-width:26px;font-size:12px">↻</button>
       </div>
+      <div id="stats-chart" class="stat-chart"></div>
       <div id="stats-body" style="font-size:12px;color:var(--muted)">Loading…</div>
     </div>
 
@@ -367,7 +370,7 @@ body.guest #guilds{display:none}
    'btn-play','btn-shuffle','btn-repeat','btn-prev','btn-next','btn-clear','progress','t-now','t-dur','vol',
    'queue','queue-count','queue-total','btn-jump','empty','search','btn-q-add','btn-q-play',
    'q-selbar','q-selcount','q-sel-remove','q-sel-clear',
-   'stats-body','btn-stats-refresh',
+   'stats-body','btn-stats-refresh','stats-chart',
    'vibe-name','btn-vibe-save','btn-vibe-load','vibe-list','btn-vibes-refresh',
    'swatches','sens','sens-val','link-viz','guilds','toasts',
    'conn-dot','conn-text'].forEach(function (id) { el[id] = $(id); });
@@ -728,9 +731,19 @@ body.guest #guilds{display:none}
 
   /* ---------- leaderboard stats ---------- */
   function renderStats(d){
-    var wrap=el['stats-body'];wrap.innerHTML='';
+    var wrap=el['stats-body'];wrap.innerHTML='';el['stats-chart'].innerHTML='';
     if(!d||!d.totalQueued){wrap.textContent='No stats yet — queue something!';return}
     var h=document.createElement('div');h.style.cssText='font-size:11px;margin-bottom:6px';h.textContent=d.totalQueued+' tracks queued all-time';wrap.appendChild(h);
+    if(d.history&&d.history.length){
+      var max=1;for(var ci=0;ci<d.history.length;ci++){var cv=(d.history[ci].played||0)+(d.history[ci].queued||0);if(cv>max)max=cv;}
+      d.history.forEach(function(x){
+        var bar=document.createElement('i');
+        var v=(x.played||0)+(x.queued||0);
+        bar.style.height=Math.max(2,Math.round((v/max)*100))+'%';
+        bar.setAttribute('data-tip',x.date+': '+(x.played||0)+' played, '+(x.queued||0)+' queued');
+        el['stats-chart'].appendChild(bar);
+      });
+    }
     function section(title,rows,key){
       if(!rows||!rows.length)return;
       var t=document.createElement('div');t.className='section-label';t.style.cssText='font-size:10px;margin-top:8px';t.textContent=title;wrap.appendChild(t);
