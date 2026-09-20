@@ -368,13 +368,19 @@ async function handleRoute(
     if (url.pathname.startsWith('/vendor/')) {
       const rel = url.pathname.slice('/vendor/'.length);
       if (/^[\w.-]+\.js$/.test(rel)) {
-        const file = fs.readFileSync(path.join(__dirname, '..', 'public', 'vendor', rel));
-        res.writeHead(200, {
-          'Content-Type': 'application/javascript; charset=utf-8',
-          'Cache-Control': 'public, max-age=86400',
-        });
-        res.end(file);
-        return;
+        try {
+          const file = fs.readFileSync(path.join(__dirname, '..', 'public', 'vendor', rel));
+          res.writeHead(200, {
+            'Content-Type': 'application/javascript; charset=utf-8',
+            'Cache-Control': 'public, max-age=86400',
+          });
+          res.end(file);
+          return;
+        } catch {
+          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('Not found.');
+          return;
+        }
       }
       res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
       res.end('Not found.');

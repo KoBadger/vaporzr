@@ -6,6 +6,6 @@ apps/player/dist
 apps/player/www
 apps/spicetify/www
 **/.env
-vendor
+/vendor
 Dockerfile
 .dockerignore

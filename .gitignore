@@ -50,6 +50,9 @@ viz3.txt
 
 # Vendored binaries (all downloadable)
 vendor/
+# ...but the web visualizer's JS bundles are source assets we ship in the image.
+!apps/bot/public/vendor/
+!apps/bot/public/vendor/**
 voiceapi.txt
 
 # Personal / sensitive
