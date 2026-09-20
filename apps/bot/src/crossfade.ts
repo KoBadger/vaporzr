@@ -20,6 +20,20 @@ export function equalPowerOut(t: number): number {
 }
 
 /**
+ * How much to time-stretch the incoming track's head so it matches the outgoing
+ * track's tempo (BPM). Returns 1 (no stretch) when either tempo is unknown, out
+ * of range, or so far apart that stretching would sound worse than not matching.
+ * Result is clamped to a musically-safe band.
+ */
+export function tempoMatchRatio(outTempo: number | null | undefined, inTempo: number | null | undefined): number {
+  const ok = (t: number | null | undefined): t is number => typeof t === 'number' && t >= 40 && t <= 240;
+  if (!ok(outTempo) || !ok(inTempo)) return 1;
+  const ratio = outTempo / inTempo;
+  if (ratio < 0.85 || ratio > 1.18) return 1; // too far apart — leave it alone
+  return ratio;
+}
+
+/**
  * When to start the crossfade overlay, in ms after the current stream started.
  * `startOffsetMs` is how far into the track that stream began (non-zero when the
  * outgoing track was itself crossfaded into) — ignoring it makes the overlay

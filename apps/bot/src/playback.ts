@@ -12,7 +12,8 @@ import type { VoiceManager } from './voice.js';
 import { librespotDeviceId, type SpotifyBackend } from './librespot.js';
 import { config } from './config.js';
 import { analyzer } from './analyzer.js';
-import { fadeInPcm, planCrossfade } from './crossfade.js';
+import { fadeInPcm, planCrossfade, tempoMatchRatio } from './crossfade.js';
+import * as EW from './endlesswave.js';
 import {
   spotifyPause,
   spotifyPlay,
@@ -386,12 +387,37 @@ export class PlaybackController {
     const video = this.streamCache.get(next.uri);
     const url = video?.streamUrl ?? (next.source === 'local' ? next.filePath : undefined);
     if (!url) return;
-    const head = await this.voice.decodeHeadPcm(url, xfadeMs + 120);
+    // Tempo-match the incoming head to the outgoing track when we have Spotify
+    // features for both (best-effort with a short timeout — never blocks the blend).
+    const [outTempo, inTempo] = await Promise.all([
+      this.trackTempo(this.queue.getCurrentTrack()),
+      this.trackTempo(next),
+    ]);
+    const ratio = tempoMatchRatio(outTempo, inTempo);
+    const head = await this.voice.decodeHeadPcm(url, xfadeMs, ratio);
     if (!head) return;
     // The track may have changed while decoding — don't mix over the wrong song.
     if (!outgoingUri || this.queue.getCurrentTrack()?.uri !== outgoingUri) return;
     this.voice.queueSfxPcm(fadeInPcm(head, xfadeMs));
-    this.pendingXfadeSeekMs = xfadeMs;
+    // Stretching consumed `xfadeMs * ratio` of the incoming track's native time.
+    this.pendingXfadeSeekMs = Math.round(xfadeMs * ratio);
+  }
+
+  /** Spotify tempo (BPM) for a track, best-effort (cached; short timeout). */
+  private async trackTempo(track: TrackInfo | undefined): Promise<number | null> {
+    if (!track?.uri?.startsWith('spotify:track:')) return null;
+    try {
+      const feat = await Promise.race([
+        EW.fetchFeatures(track),
+        new Promise<null>((resolve) => {
+          const t = setTimeout(() => resolve(null), 1500);
+          t.unref?.();
+        }),
+      ]);
+      return feat?.tempo ?? null;
+    } catch {
+      return null;
+    }
   }
 
   /** Pre-resolve the next track's stream URL so it can start with no yt-dlp delay. */

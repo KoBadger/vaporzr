@@ -867,7 +867,7 @@ export class VoiceManager {
    * sources (avoids the googlevideo TLS-fingerprint 403 the normal path dodges);
    * returns null for HLS playlists or on any failure so callers fall back.
    */
-  async decodeHeadPcm(url: string, ms: number): Promise<Buffer | null> {
+  async decodeHeadPcm(url: string, ms: number, tempo = 1): Promise<Buffer | null> {
     const seconds = Math.max(0.5, ms / 1000);
     const maxBytes = Math.ceil(seconds * 48000) * 4;
     const isHttp = /^https?:\/\//i.test(url);
@@ -876,7 +876,11 @@ export class VoiceManager {
     const args = ['-hide_banner', '-loglevel', 'error'];
     if (isHttp) args.push('-i', 'pipe:0', '-t', String(seconds));
     else args.push('-t', String(seconds), '-i', url);
-    args.push('-vn', '-ac', '2', '-ar', '48000', '-f', 's16le', 'pipe:1');
+    args.push('-vn', '-ac', '2', '-ar', '48000');
+    // Time-stretch so the incoming head matches the outgoing tempo (-t caps the
+    // stretched output, so native input consumed = seconds * tempo).
+    if (Math.abs(tempo - 1) > 0.01) args.push('-af', `atempo=${tempo.toFixed(3)}`);
+    args.push('-f', 's16le', 'pipe:1');
     return await new Promise<Buffer | null>((resolve) => {
       let settled = false;
       const out: Buffer[] = [];

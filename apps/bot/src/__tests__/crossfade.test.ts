@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { crossfadePcm, equalPowerIn, equalPowerOut, fadeInPcm, linearIn, planCrossfade } from '../crossfade.js';
+import { crossfadePcm, equalPowerIn, equalPowerOut, fadeInPcm, linearIn, planCrossfade, tempoMatchRatio } from '../crossfade.js';
 
 /** Build `frames` of 48 kHz stereo Int16 PCM with a constant sample value. */
 function pcm(frames: number, value = 1000): Buffer {
@@ -90,5 +90,24 @@ describe('planCrossfade', () => {
   it('returns null when there is not enough track left to blend', () => {
     expect(planCrossfade(3000, 0, 0, 2500)).toBeNull();
     expect(planCrossfade(240_000, 239_000, 0, 2500)).toBeNull();
+  });
+});
+
+describe('tempoMatchRatio', () => {
+  it('returns 1 when a tempo is unknown or out of range', () => {
+    expect(tempoMatchRatio(null, 120)).toBe(1);
+    expect(tempoMatchRatio(120, undefined)).toBe(1);
+    expect(tempoMatchRatio(0, 120)).toBe(1);
+    expect(tempoMatchRatio(300, 120)).toBe(1);
+  });
+
+  it('matches close tempos', () => {
+    expect(tempoMatchRatio(120, 128)).toBeCloseTo(0.9375, 3);
+    expect(tempoMatchRatio(128, 120)).toBeCloseTo(1.0667, 3);
+  });
+
+  it('leaves very different tempos alone rather than stretching badly', () => {
+    expect(tempoMatchRatio(90, 160)).toBe(1); // 0.56x
+    expect(tempoMatchRatio(180, 90)).toBe(1); // 2x
   });
 });
