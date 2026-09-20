@@ -225,12 +225,27 @@ body.guest #guilds{display:none}
 
 /* mobile */
 @media (max-width:560px){
+  body{padding-bottom:150px}
   main{padding:10px 10px calc(16px + env(safe-area-inset-bottom))}
   .card{padding:13px;border-radius:14px}
   #track-name{font-size:16px}
   #art{width:60px;height:60px}
   #vol{width:80px}
   button{height:34px}
+}
+/* sticky mini now-playing bar (mobile) */
+#mini-bar{position:fixed;left:0;right:0;bottom:0;z-index:60;display:none;align-items:center;gap:10px;padding:8px 12px calc(8px + env(safe-area-inset-bottom));background:rgba(10,14,32,.94);border-top:1px solid var(--line);backdrop-filter:blur(14px)}
+#mini-bar.show{display:flex}
+#mini-bar img{width:38px;height:38px;border-radius:9px;object-fit:cover;background:#141a33;flex-shrink:0}
+#mini-bar .mname{flex:1;min-width:0;font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#mini-bar button{height:38px;min-width:38px}
+@media(min-width:561px){#mini-bar{display:none !important}}
+/* collapsible secondary cards (mobile) */
+@media(max-width:560px){
+  .card.collapsible > #queue-info,.card.collapsible > .section-label{cursor:pointer;user-select:none}
+  .card.collapsible > #queue-info::after,.card.collapsible > .section-label::after{content:" \25BE";opacity:.5;font-size:10px}
+  .card.collapsible.collapsed > #queue-info::after,.card.collapsible.collapsed > .section-label::after{content:" \25B8"}
+  .card.collapsible.collapsed > *:not(#queue-info):not(.section-label){display:none}
 }
 </style>
 </head>
@@ -266,6 +281,7 @@ body.guest #guilds{display:none}
           <button data-ambient="toggle">🌌 Ambient intermission: <span id="amb-state">off</span></button>
           <button data-voteskip="toggle">🗳 Vote-skip: <span id="vs-state">on</span></button>
           <a href="/viz" target="_blank" rel="noopener">🎬 Open visualizer</a>
+          <button data-reload="1">⟳ Reload panel</button>
         </div>
       </div>
       <button id="dj-toggle" data-tip="Toggle the DJ soundboard on/off">🎛</button>
@@ -339,7 +355,7 @@ body.guest #guilds{display:none}
     </div>
 
     <!-- Leaderboard -->
-    <div class="card">
+    <div class="card collapsible">
       <div id="queue-info">
         <span class="section-label">📊 LEADERBOARD</span>
         <button id="btn-stats-refresh" class="icon" data-tip="Refresh stats" style="height:26px;min-width:26px;font-size:12px">↻</button>
@@ -349,7 +365,7 @@ body.guest #guilds{display:none}
     </div>
 
     <!-- Vibes (saved queues) -->
-    <div class="card">
+    <div class="card collapsible">
       <div id="queue-info">
         <span class="section-label">🌙 VIBES</span>
         <button id="btn-vibes-refresh" class="icon" data-tip="Refresh saved vibes" style="height:26px;min-width:26px;font-size:12px">↻</button>
@@ -384,7 +400,7 @@ body.guest #guilds{display:none}
     </div>
 
     <!-- Look & feel -->
-    <div class="card">
+    <div class="card collapsible">
       <div class="section-label">🎨 LOOK &amp; FEEL</div>
       <div id="swatches"></div>
       <div class="sens-wrap">
@@ -412,6 +428,12 @@ body.guest #guilds{display:none}
     </div>
   </div>
 </main>
+<div id="mini-bar">
+  <img id="mini-art" alt="" />
+  <div class="mname" id="mini-name">Nothing playing</div>
+  <button id="mini-play" class="primary" data-tip="Play / Pause">&#9654;</button>
+  <button id="mini-next" class="icon" data-tip="Skip">&#9197;</button>
+</div>
 <div id="toasts"></div>
 
 <script>
@@ -419,7 +441,7 @@ body.guest #guilds{display:none}
   var $ = function (id) { return document.getElementById(id); };
   var el = {};
   ['voice','dj-badge','dj-toggle','sfx-status','track-name','track-meta','src-badge','art',
-   'wave-select','tools-btn','tools-menu','amb-state','vs-state','q-tools-btn','q-tools-menu','btn-install',
+   'wave-select','tools-btn','tools-menu','amb-state','vs-state','q-tools-btn','q-tools-menu','btn-install','mini-bar','mini-art','mini-name','mini-play','mini-next',
    'btn-push',
    'btn-play','btn-shuffle','btn-repeat','btn-prev','btn-next','btn-clear','progress','t-now','t-dur','vol',
    'queue','queue-count','queue-total','btn-jump','empty','search','btn-q-add','btn-q-play',
@@ -548,6 +570,8 @@ body.guest #guilds{display:none}
       paintProgress();
       document.querySelector('.hero-card').classList.toggle('paused',!state.playing);
     }
+    var mb=el['mini-bar'];
+    if(mb){mb.classList.toggle('show',!!t);if(t){el['mini-art'].src=t.image||'';el['mini-name'].textContent=t.name||'';el['mini-play'].textContent=(state&&state.playing)?'\u275A\u275A':'\u25B6';}}
     renderQueue();renderDj();
   }
 
@@ -771,6 +795,8 @@ body.guest #guilds{display:none}
     if(amb)amb.onclick=function(){var on=el['amb-state'].textContent!=='on';cmd('ambient',{ambient:on});el['amb-state'].textContent=on?'on':'off';close()};
     var vs=menu.querySelector('button[data-voteskip]');
     if(vs)vs.onclick=function(){var on=el['vs-state'].textContent!=='on';cmd('voteskip',{voteSkip:on});el['vs-state'].textContent=on?'on':'off';close()};
+    var rl=menu.querySelector('button[data-reload]');
+    if(rl)rl.onclick=function(){location.reload()};
   })();
   (function(){
     var qm=el['q-tools-menu'],qb=el['q-tools-btn'];if(!qm||!qb)return;
@@ -788,6 +814,13 @@ body.guest #guilds{display:none}
   })();
   window.addEventListener('beforeinstallprompt',function(e){e.preventDefault();window.__vzInstall=e;if(el['btn-install'])el['btn-install'].style.display='inline-block'});
   if(el['btn-install'])el['btn-install'].onclick=function(){var p=window.__vzInstall;if(p){p.prompt();window.__vzInstall=null;el['btn-install'].style.display='none'}};
+  if('serviceWorker' in navigator){navigator.serviceWorker.addEventListener('controllerchange',function(){try{toast('info','Panel updated — reloading…');setTimeout(function(){location.reload()},800)}catch(e){}})}
+  document.querySelectorAll('.card.collapsible').forEach(function(c){
+    var head=c.querySelector(':scope > #queue-info')||c.querySelector(':scope > .section-label');
+    if(head)head.addEventListener('click',function(e){if(e.target.closest('button,a,input'))return;c.classList.toggle('collapsed')});
+  });
+  if(el['mini-play'])el['mini-play'].onclick=function(){cmd('toggle')};
+  if(el['mini-next'])el['mini-next'].onclick=function(){cmd('next')};
   el['btn-jump'].onclick=function(){
     var row=document.querySelector('#queue li.current');
     if(row)row.scrollIntoView({behavior:'smooth',block:'center'});
