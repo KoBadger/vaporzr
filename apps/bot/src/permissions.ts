@@ -21,6 +21,8 @@ interface GuildConfig {
    * where it was explicitly told to.
    */
   npChannel?: string | null;
+  /** Play a generative ambient pad when the queue ends (default false). */
+  ambient?: boolean;
 }
 
 const DEFAULT_COMMAND_LEVELS: Record<string, PermissionLevel> = {
@@ -237,6 +239,17 @@ export class PermissionsManager {
     this.save(guildId);
   }
 
+  /** Whether the ambient queue-end intermission is enabled (default false). */
+  getAmbient(guildId: string): boolean {
+    return this.load(guildId).ambient === true;
+  }
+
+  setAmbient(guildId: string, on: boolean): void {
+    const cfg = this.load(guildId);
+    cfg.ambient = on;
+    this.save(guildId);
+  }
+
   /** True when a member may act as DJ: mod/admin/owner, or a holder of the DJ role. */
   isDj(
     guild: Guild,
@@ -260,6 +273,7 @@ export class PermissionsManager {
       duckMode: cfg.duckMode ?? 'off',
       tts: cfg.tts === true,
       npChannel: cfg.npChannel ?? null,
+      ambient: cfg.ambient === true,
     };
   }
 }

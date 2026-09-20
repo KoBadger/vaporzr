@@ -519,8 +519,6 @@ export class DiscordBot {
   /** guildId -> last voice-status text posted (rate-limit aware). */
   private voiceStatusText = new Map<string, string>();
   private voiceStatusAt = new Map<string, number>();
-  /** guildId -> play a generative ambient pad when the queue empties. */
-  private ambientGuilds = new Set<string>();
   /** guildId -> fire a short SFX on strong beats (auto-hype). */
   private hypeGuilds = new Set<string>();
   private lastHypeAt = new Map<string, number>();
@@ -693,18 +691,25 @@ export class DiscordBot {
       // wondering why the music stopped. An active wave ignores the backoff here
       // and refills right away so silence doesn't hang.
       s.playback.onQueueEnd = () => {
-        if (EW.isAutoActive(s.endlessWave)) {
-          this.ewRetryAfter.delete(s.guildId);
-          void this.topUpWave(s).catch((err) => {
-            console.warn(`[endlesswave] queue-end refill failed: ${err instanceof Error ? err.message : err}`);
-          });
-          return;
-        }
-        if (this.ambientGuilds.has(s.guildId) && s.voice.isJoined()) {
-          s.voice.playAmbient();
-          return;
-        }
-        void this.notifyQueueEnded(s.guildId);
+        void (async () => {
+          if (EW.isAutoActive(s.endlessWave)) {
+            this.ewRetryAfter.delete(s.guildId);
+            const before = s.queue.getSnapshot().tracks.length;
+            try {
+              await this.topUpWave(s);
+            } catch (err) {
+              console.warn(`[endlesswave] queue-end refill failed: ${err instanceof Error ? err.message : err}`);
+            }
+            // Wave refilled the queue — keep playing. If it couldn't (dead-end /
+            // backoff), fall through so the ambient pad or notice still fires.
+            if (s.queue.getSnapshot().tracks.length > before) return;
+          }
+          if (this.perms.getAmbient(s.guildId) && s.voice.isJoined()) {
+            s.voice.playAmbient();
+            return;
+          }
+          void this.notifyQueueEnded(s.guildId);
+        })();
       };
       // Playback stopped because several tracks in a row couldn't start.
       s.playback.onPlaybackStalled = () => {
@@ -1658,9 +1663,9 @@ export class DiscordBot {
         const gid = interaction.guildId;
         if (!gid) return void (await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral }));
         const enabled = interaction.options.getBoolean('enabled');
-        if (enabled === true) this.ambientGuilds.add(gid);
-        else if (enabled === false) this.ambientGuilds.delete(gid);
-        const on = this.ambientGuilds.has(gid);
+        if (enabled === true) this.perms.setAmbient(gid, true);
+        else if (enabled === false) this.perms.setAmbient(gid, false);
+        const on = this.perms.getAmbient(gid);
         await interaction.reply({
           content: on
             ? '🌌 Ambient intermission **on** — when the queue ends I\'ll play a generative pad instead of going quiet.'
@@ -2525,9 +2530,9 @@ export class DiscordBot {
           if (!canUse('ambient')) return void (await deny());
           if (!message.guildId) return void (await message.reply('Must be used in a server.'));
           const a = args.trim().toLowerCase();
-          if (/^(on|start|1|true)$/.test(a)) this.ambientGuilds.add(message.guildId);
-          else if (/^(off|stop|0|false)$/.test(a)) this.ambientGuilds.delete(message.guildId);
-          const on = this.ambientGuilds.has(message.guildId);
+          if (/^(on|start|1|true)$/.test(a)) this.perms.setAmbient(message.guildId, true);
+          else if (/^(off|stop|0|false)$/.test(a)) this.perms.setAmbient(message.guildId, false);
+          const on = this.perms.getAmbient(message.guildId);
           await message.reply(
             on
               ? '🌌 Ambient intermission **on** — when the queue ends I\'ll play a generative pad.'

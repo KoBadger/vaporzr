@@ -720,13 +720,13 @@ describe('pickNextTrack (smoke)', () => {
     expect(pick).toBeNull();
   });
 
-  it('excludes candidates from artists on cooldown', async () => {
+  it('falls back to a cooldown artist rather than going silent when it is the only candidate', async () => {
     const s = createState();
     activate(s);
     markPlayed(s, 'spotify:track:zzz000000000000000001', 'Earlier Song', ['Fresh Artist']);
     mocks.getRecommendations.mockResolvedValue([recCandidate()]);
     const pick = await pickNextTrack(s, [fakeTrack({ uri: 'spotify:track:aaaaaaaaaaaaaaaaaaaaaa' })]);
-    expect(pick).toBeNull();
+    expect(pick?.uri).toBe('spotify:track:rec000000000000000001');
   });
 
   it('excludes remix/cover variants of played tracks', async () => {

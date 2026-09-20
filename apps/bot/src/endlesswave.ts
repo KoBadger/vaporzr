@@ -849,6 +849,19 @@ export async function pickNextTrack(
     }
   }
 
+  // Still nothing? Drop the artist cooldown entirely — a *different* song by an
+  // artist we just played beats letting the wave die. Exact repeats and
+  // same-song variants are still filtered by `viable`.
+  if (survivors.length === 0 && allCandidates.length > 0) {
+    cooldownArtists = new Set<string>();
+    for (const a of upcomingArtists) cooldownArtists.add(a);
+    survivors = viable(allCandidates);
+    if (survivors.length > 0) {
+      console.log('[endlesswave] dropped artist cooldown to keep the wave going');
+      return survivors[0];
+    }
+  }
+
   return null;
 }
 
