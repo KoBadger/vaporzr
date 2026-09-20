@@ -120,6 +120,13 @@ cloudflaredPath:
   librespotBitrate: Number(process.env.LIBRESPOT_BITRATE ?? 320),
   /** Tail fade-out applied to decoded streams, in ms (0 disables it). */
   crossfadeMs: Number(process.env.CROSSFADE_MS ?? 2500),
+  /**
+   * ffmpeg normalization stage applied to every stream. Default is a transparent
+   * peak limiter — dynamic `loudnorm` gain-rides music (audible "pumping"). Set
+   * AUDIO_NORM_FILTER to override, e.g. "loudnorm=I=-14:TP=-1.5:LRA=11" for the
+   * old behavior or "loudnorm=I=-14:TP=-1.5:LRA=14" for a milder dynamic one.
+   */
+  audioNormFilter: process.env.AUDIO_NORM_FILTER ?? 'alimiter=limit=0.95',
   /** Opt-in true crossfade (overlap) for decoded tracks; off by default. */
   crossfadeOverlap: process.env.CROSSFADE_OVERLAP === '1' || process.env.CROSSFADE_OVERLAP === 'true',
   /**

@@ -55,7 +55,7 @@ const RESAMPLE_ARGS = (fx: string): string[] => [
   '-ac',
   '2',
   '-af',
-  fx ? `loudnorm=I=-14:TP=-1.5:LRA=11,afade=t=in:st=0:d=0.4,${fx}` : 'loudnorm=I=-14:TP=-1.5:LRA=11,afade=t=in:st=0:d=0.4',
+  fx ? `${config.audioNormFilter},afade=t=in:st=0:d=0.4,${fx}` : `${config.audioNormFilter},afade=t=in:st=0:d=0.4`,
   '-f',
   's16le',
   'pipe:1',

@@ -694,15 +694,12 @@ export class VoiceManager {
       args.push('-i', url);
     }
     args.push('-vn', '-ac', '2', '-ar', '48000');
-    // Force consistent loudness across every source (YouTube/SoundCloud/local/
-    // Apple/Suno). Without this, a hot-mastered YouTube upload can be far louder
-    // than a Spotify track that already lands at ~-14 LUFS. Single-pass dynamic
-    // mode keeps latency low while still riding gain to the target — but it is
-    // reactive, so the first ~1-3s pass through un-attenuated; the short fade-in
-    // stops hot intros from punching through before the gain rider catches up.
-    const filters = ['loudnorm=I=-14:TP=-1.5:LRA=11', 'afade=t=in:st=0:d=0.4'];
+    // Normalization stage (config.audioNormFilter). Default is a transparent peak
+    // limiter; override with AUDIO_NORM_FILTER (e.g. a loudnorm) if you want
+    // cross-source loudness matching at the cost of some gain-riding.
+    const filters = [config.audioNormFilter, 'afade=t=in:st=0:d=0.4'];
     // Tail fade so a track eases out instead of cutting off. Sits downstream of
-    // loudnorm; skipped for very short tracks, resumes near the end, or when off.
+    // the normalize stage; skipped for very short tracks, resumes near the end, or when off.
     const fade = this.fadeOutSec;
     if (fade > 0 && opts.durationMs && opts.durationMs > 0) {
       const remainSec = (opts.durationMs - requestedSeekMs) / 1000;
