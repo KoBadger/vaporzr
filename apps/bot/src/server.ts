@@ -291,10 +291,16 @@ async function handleRoute(
       );
     }
     // Brand assets.
-    if (url.pathname === '/favicon.png' || url.pathname === '/logo.png') {
+    const BRAND_ASSETS: Record<string, string> = {
+      '/favicon.png': 'image/png',
+      '/logo.png': 'image/png',
+      '/logo.gif': 'image/gif',
+    };
+    const brandType = BRAND_ASSETS[url.pathname];
+    if (brandType) {
       try {
         const file = fs.readFileSync(path.join(__dirname, '..', 'public', url.pathname.slice(1)));
-        res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' });
+        res.writeHead(200, { 'Content-Type': brandType, 'Cache-Control': 'public, max-age=86400' });
         res.end(file);
         return;
       } catch {
