@@ -272,6 +272,7 @@ body.guest #guilds{display:none}
       <button id="btn-push" data-tip="Enable browser notifications (YouTube / cookie alerts)">🔔</button>
     </div>
     <div id="guilds"></div>
+    <button id="btn-install" style="display:none;margin-top:8px" data-tip="Install Vaporzr as an app">Install app</button>
   </div>
 
   <!-- Now playing -->
@@ -317,6 +318,15 @@ body.guest #guilds{display:none}
       <div id="queue-info">
         <span class="section-label">📜 QUEUE</span>
         <span style="font-size:11px;color:var(--muted)"><span id="queue-count">0 tracks</span> <span id="queue-total"></span></span>
+        <div class="menu-wrap">
+          <button id="q-tools-btn" class="icon" data-tip="Queue tools" style="height:26px;min-width:26px;font-size:12px">&#8943;</button>
+          <div id="q-tools-menu" class="menu">
+            <button data-q="shuffle">Shuffle upcoming</button>
+            <button data-q="jump">Jump to current</button>
+            <button data-q="vibe">Save as vibe</button>
+            <button data-q="clear">Clear queue</button>
+          </div>
+        </div>
         <button id="btn-jump" class="icon" data-tip="Scroll to the playing track" style="height:26px;min-width:26px;font-size:12px">⌖</button>
       </div>
       <div id="q-selbar">
@@ -409,7 +419,7 @@ body.guest #guilds{display:none}
   var $ = function (id) { return document.getElementById(id); };
   var el = {};
   ['voice','dj-badge','dj-toggle','sfx-status','track-name','track-meta','src-badge','art',
-   'wave-select','tools-btn','tools-menu','amb-state','vs-state',
+   'wave-select','tools-btn','tools-menu','amb-state','vs-state','q-tools-btn','q-tools-menu','btn-install',
    'btn-push',
    'btn-play','btn-shuffle','btn-repeat','btn-prev','btn-next','btn-clear','progress','t-now','t-dur','vol',
    'queue','queue-count','queue-total','btn-jump','empty','search','btn-q-add','btn-q-play',
@@ -762,6 +772,22 @@ body.guest #guilds{display:none}
     var vs=menu.querySelector('button[data-voteskip]');
     if(vs)vs.onclick=function(){var on=el['vs-state'].textContent!=='on';cmd('voteskip',{voteSkip:on});el['vs-state'].textContent=on?'on':'off';close()};
   })();
+  (function(){
+    var qm=el['q-tools-menu'],qb=el['q-tools-btn'];if(!qm||!qb)return;
+    function qclose(){qm.classList.remove('open')}
+    qb.onclick=function(e){e.stopPropagation();qm.classList.toggle('open')};
+    document.addEventListener('click',function(e){if(!e.target.closest('.menu-wrap'))qclose()});
+    qm.querySelectorAll('button[data-q]').forEach(function(b){b.onclick=function(){
+      var a=b.getAttribute('data-q');
+      if(a==='shuffle')cmd('shuffle',{shuffle:true});
+      else if(a==='clear')cmd('clear');
+      else if(a==='jump'){var row=document.querySelector('#queue li.current');if(row)row.scrollIntoView({behavior:'smooth',block:'center'});}
+      else if(a==='vibe'&&el['btn-vibe-save'])el['btn-vibe-save'].click();
+      qclose();
+    }});
+  })();
+  window.addEventListener('beforeinstallprompt',function(e){e.preventDefault();window.__vzInstall=e;if(el['btn-install'])el['btn-install'].style.display='inline-block'});
+  if(el['btn-install'])el['btn-install'].onclick=function(){var p=window.__vzInstall;if(p){p.prompt();window.__vzInstall=null;el['btn-install'].style.display='none'}};
   el['btn-jump'].onclick=function(){
     var row=document.querySelector('#queue li.current');
     if(row)row.scrollIntoView({behavior:'smooth',block:'center'});
