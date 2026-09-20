@@ -295,6 +295,9 @@ async function handleRoute(
       '/favicon.png': 'image/png',
       '/logo.png': 'image/png',
       '/logo.gif': 'image/gif',
+      '/icon-192.png': 'image/png',
+      '/icon-512.png': 'image/png',
+      '/icon-maskable.png': 'image/png',
     };
     const brandType = BRAND_ASSETS[url.pathname];
     if (brandType) {
