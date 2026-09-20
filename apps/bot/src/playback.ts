@@ -1255,6 +1255,11 @@ export class PlaybackController {
     const state = this.queue.getState();
     if (!state.track) return;
     const pos = this.voice.getPositionMs() || state.positionMs || 0;
+    console.log(
+      `[playback] fx restart: source=${this.currentSource()} viaServer=${this.usingServerStream()} ` +
+        `fallback=${this.spotifyFallback} playing=${state.playing} pos=${Math.round(pos)}ms ` +
+        `dur=${Math.round(state.durationMs ?? 0)}ms`,
+    );
     this.applyAudioFx();
     if (this.usingServerStream()) {
       this.seekServerStream(pos + 1); // +1ms so the decode+discard lands on the right spot
