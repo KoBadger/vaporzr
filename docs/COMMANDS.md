@@ -83,6 +83,10 @@ Names autocomplete. Up to 25 playlists/server, 200 tracks each.
 | `/duck [seconds]` | `V@duck [seconds]` | Manually lower the music so people can talk (default 30s; `cancel` stops it). |
 | `/duckmode off\|auto\|hosts` | `V@dmode` | Auto-duck while people talk (mod): `off` (default), `auto` (any speaker), `hosts` (DJ/owner only). |
 | `/npchannel` | `V@npc` | Post the live now-playing strip in this channel (mod). `off` disables it. **The bot never posts it anywhere else.** |
+| `/ambient on\|off` | `V@ambient` | Play a generative ambient pad when the queue ends (mod). Persisted per guild. Only fires when Endless Wave can't refill the queue. |
+
+Queue-add confirmations ("Added to queue") auto-delete after ~12s so busy
+channels don't fill with bot replies.
 
 Members with the **DJ role** (or mod/admin/owner) skip and control playback
 instantly; everyone else triggers a majority **vote-to-skip** among the humans

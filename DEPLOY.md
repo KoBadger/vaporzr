@@ -115,18 +115,26 @@ YOUTUBE_COOKIES_PATH=/app/data/cookies.txt
 -v /opt/vaporzr/cookies.txt:/app/data/cookies.txt:ro
 ```
 
-## Enabling librespot on the VPS (optional — native Spotify)
+## Native Spotify (go-librespot)
 
-The image ships librespot and points `LIBRESPOT_PATH` at it. **Anonymous playback works by default** (`SPOTIFY_PREFER_YOUTUBE=0` + `SPOTIFY_USE_ANONYMOUS=1`), so no account linking is required for most use cases. To enable native Spotify playback via librespot (can improve quality/reliability and enables the `/device` commands), authorize it **once** so Spotify's OAuth credentials are cached in the volume (this cmd runs your own Premium account through librespot's OAuth flow):
+`SPOTIFY_PREFER_YOUTUBE=0` routes Spotify tracks through the bundled
+**go-librespot** (`SPOTIFY_BACKEND=soloist`, pinned in `apps/bot/Dockerfile`).
+It logs in with the remote **device-code** flow (`spotify.com/pair?code=…`), so it
+pairs from a datacenter with no local-network discovery. State lives in the data
+volume (`go-librespot/state.json`); the managed config is rewritten on every boot.
 
-```bash
-docker exec -it vaporzr librespot \
-  --cache /app/data/librespot --enable-oauth
-```
+Audio capture: go-librespot writes decoded PCM to a **named pipe** (FIFO) via its
+`pipe` backend (`audio_backend: pipe`, `audio_output_pipe: …/go-librespot/audio.fifo`)
+and the bot reads it with `fs.read`, **pacing to 1× realtime** — the pipe output is
+otherwise unpaced (~30×), which would race the bot's position model. We deliberately
+avoid go-librespot's PulseAudio backend: its client deadlocks in
+`PlaybackStream.Start` on the 2nd stream (i.e. on track switch).
 
-Follow the browser OAuth flow, then restart the container. On Linux the subprocess sink is more reliable than on Windows, so this is often the cleanest way to eliminate Spotify→YouTube fallback stalls.
-
-In a multi-guild setup the device is shared — every server's Spotify playback routes through this one librespot instance (see the Dockerfile note about `SPOTIFY_PREFER_YOUTUBE=0`). Rename the device with `/device select <name>`.
+Notes:
+- All guilds share this one device; rename it with `/device select <name>`.
+- Debug: `/health` → `librespot`, plus `/app/data/go-librespot/stderr.log`.
+- Quick fallback if native playback misbehaves: set `SPOTIFY_PREFER_YOUTUBE=1`
+  and redeploy (plays Spotify tracks via YouTube).
 
 ## 4. Run
 
@@ -200,7 +208,7 @@ ssh root@<vps> "bash /opt/vps-redeploy.sh"
 | `/health` → `youtube: "auth"`, or tracks fail with "needs fresh cookies" | Refresh cookies (below). The bot also DMs the owner when this flips. |
 | `cookiesAgeDays` climbing past ~21 | Refresh cookies before they expire (a startup warning fires too). |
 | `/health` → `youtube: "down"` | Network/proxy problem. If a proxy is set it must be **sticky** (same exit IP). |
-| Spotify device churn / "no Spotify device" | Keep `SPOTIFY_PREFER_YOUTUBE=1` (default here) — plays Spotify tracks via YouTube. |
+| Spotify device churn / "no Spotify device" | Check `/health` → `librespot` and `/app/data/go-librespot/stderr.log`. Quick fallback: set `SPOTIFY_PREFER_YOUTUBE=1` and redeploy. |
 | Bad deploy | Run the previous image (last 6 are kept): `docker run -d --name vaporzr --restart unless-stopped --network host --env-file /opt/vaporzr/.env -e BIND_ADDRESS=127.0.0.1 -v vaporzr-data:/app/data ghcr.io/kobadger/vaporzr/vaporzr-bot:<prev-sha>` |
 
 ### Refresh YouTube cookies (they expire every few weeks)
@@ -221,7 +229,9 @@ unset to go direct, which works with cookies + the bundled PO-token provider.
 
 | Env | Effect |
 |---|---|
-| `SPOTIFY_PREFER_YOUTUBE=1` | Play Spotify requests via YouTube (no Spotify device needed). |
+| `SPOTIFY_PREFER_YOUTUBE=1` | Play Spotify requests via YouTube (no Spotify device needed). Default here is `0` (native go-librespot). |
+| `SPOTIFY_BACKEND` | `soloist` (go-librespot) — the default. |
+| `SPOTIFY_ANON_SEARCH=1` | Re-enable the (now dead) quota-free web-player search. Default off — OAuth `/search` is used. |
 | `AUDIO_NORM_FILTER` | ffmpeg normalize stage (default `alimiter=limit=0.95`; e.g. `loudnorm=I=-14:TP=-1.5:LRA=14`). |
 | `CROSSFADE_OVERLAP=1`, `CROSSFADE_MS` | Enable real crossfade; blend length (default 2000 ms). |
 | `KEEP_PAUSED_QUEUE=1` | Keep paused queues across restarts. |
