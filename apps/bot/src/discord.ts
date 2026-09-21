@@ -4841,7 +4841,17 @@ export class DiscordBot {
     try {
       await work();
     } catch (err) {
-      const text = `❌ ${err instanceof Error ? err.message : String(err)}`;
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[discord] "${label}" failed: ${msg}`);
+      // Node surfaces a failed multi-address connect as `AggregateError:
+      // "Received one or more errors"` — a transient network blip, not a bad
+      // link. Give the user something actionable instead of the raw text.
+      const friendly = /Received one or more errors|fetch failed|ENOTFOUND|ETIMEDOUT|ECONNRESET|EAI_AGAIN/i.test(
+        msg,
+      )
+        ? 'Network hiccup reaching Discord/YouTube — give it another try.'
+        : msg;
+      const text = `❌ ${friendly}`;
       if (ack) await ack.edit(text).catch(() => {});
       else await message.reply(text).catch(() => {});
       return;
