@@ -480,9 +480,11 @@ async function handleRoute(
       case '/viz':
       case '/viz.html': {
         try {
+          const build = (process.env.VAPORZR_BUILD ?? 'dev').slice(0, 7);
           const file = fs
             .readFileSync(path.join(__dirname, '..', 'public', 'viz.html'), 'utf8')
-            .replace(/\{\{ORIGIN\}\}/g, origin);
+            .replace(/\{\{ORIGIN\}\}/g, origin)
+            .replace(/\{\{BUILD\}\}/g, build);
           res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
           res.end(file);
         } catch {
