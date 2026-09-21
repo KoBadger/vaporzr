@@ -1264,21 +1264,11 @@ export class PlaybackController {
 
   /** Re-apply audio FX by restarting the current track from its position. */
   private restartCurrent(): void {
-    const state = this.queue.getState();
-    if (!state.track) return;
+    // Bass/speed are applied to the ffmpeg chain of the NEXT stream. We never
+    // restart the current track: on the Spotify raw feed the resampler rebuild
+    // can break the PCM feed, and on ffmpeg streams the seek + re-resolve can
+    // stall the song - both read to the user as "the song stopped".
     this.applyAudioFx();
-    if (this.usingServerStream()) {
-      // No-interrupt: restarting the ffmpeg stream mid-track (seek + re-resolve)
-      // can stall or stop the song on some URLs, so leave this track alone — the
-      // new FX is picked up by the next track. (Spotify below switches seamlessly.)
-      return;
-    } else if (this.currentSource() === 'spotify' && !this.spotifyFallback) {
-      // Restart the resample feed so the FX chain rebuilds with the new filter.
-      // The librespot socket keeps streaming real-time PCM, so position survives.
-      this.stopSpotifyFeed();
-      this.startSpotifyFeed();
-      if (!state.playing) this.voice.setExpectingPcm(false);
-    }
   }
 
   /** Queue-end intermission: play a quiet curated lo-fi/ambient track, looping
