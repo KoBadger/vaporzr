@@ -28,11 +28,11 @@ body::before{content:'';position:absolute;inset:0;
    #viz img (desktop player frames) > #bc (MilkDrop) > #canvas (bars) */
 #bc{position:absolute;inset:0;width:100%;height:100%;z-index:1;display:none}
 body.calm #bc{filter:brightness(.75) saturate(.85)}
-#ew{position:absolute;inset:0;width:100%;height:100%;z-index:1;display:none}
+#ew{position:absolute;inset:0;width:100%;height:100%;z-index:2;display:none}
 /* CRT scanline overlay — only visible in synthwave mode (pure CSS, zero frame cost) */
-#ew-crt{position:absolute;inset:0;z-index:2;pointer-events:none;display:none;
+#ew-crt{position:absolute;inset:0;z-index:3;pointer-events:none;display:none;
   background:repeating-linear-gradient(0deg,rgba(4,0,10,.16) 0,rgba(4,0,10,.16) 1px,transparent 1px,transparent 3px)}
-/* Real VISUALDON wallpaper loop underneath the reactive overlay (same layer as #ew) */
+/* Real VISUALDON wallpaper loop UNDER the reactive overlay (#ew sits above it) */
 #ew-video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:1;display:none;background:#05060f}
 /* Easter egg: the synthwave-road toggle stays invisible until Endless Wave
    (V@ew on) has been activated at least once this session. */
