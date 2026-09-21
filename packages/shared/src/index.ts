@@ -110,7 +110,8 @@ export type CommandName =
   | 'bass'
   | 'speed'
   | 'ambient'
-  | 'voteskip';
+  | 'voteskip'
+  | 'dedupe';
 
 export interface CommandMessage {
   type: 'cmd';

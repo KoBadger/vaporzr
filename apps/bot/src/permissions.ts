@@ -64,6 +64,7 @@ const DEFAULT_COMMAND_LEVELS: Record<string, PermissionLevel> = {
   cover: 'user',
   hype: 'user',
   mix: 'user',
+  dedupe: 'user',
   quiz: 'user',
   guess: 'user',
   djrole: 'mod',

@@ -159,6 +159,32 @@ export class QueueManager {
     this.emitQueue();
   }
 
+  /** Remove duplicate *upcoming* tracks (same uri), keeping the first occurrence.
+   *  Played tracks and the current track are left alone. Returns the count removed. */
+  dedupe(): number {
+    const seen = new Set<string>();
+    const keep: TrackInfo[] = [];
+    let removed = 0;
+    this.tracks.forEach((t, i) => {
+      if (i <= this.currentIndex) {
+        keep.push(t);
+        if (t.uri) seen.add(t.uri);
+        return;
+      }
+      if (t.uri && seen.has(t.uri)) {
+        removed++;
+        return;
+      }
+      if (t.uri) seen.add(t.uri);
+      keep.push(t);
+    });
+    if (removed > 0) {
+      this.tracks = keep;
+      this.emitQueue();
+    }
+    return removed;
+  }
+
   remove(index: number): TrackInfo | undefined {
     if (index < 0 || index >= this.tracks.length) return undefined;
     const [removed] = this.tracks.splice(index, 1);

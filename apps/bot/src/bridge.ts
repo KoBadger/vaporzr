@@ -463,6 +463,9 @@ export class Bridge {
           this.perms.setVoteSkip(this.primaryGuildId, Boolean(msg.voteSkip));
         }
         break;
+      case 'dedupe':
+        this.queue.dedupe();
+        break;
       case 'switchGuild':
         if (msg.guildId) {
           console.log(`[bridge] switching primary guild to ${msg.guildId}`);

@@ -688,14 +688,16 @@ export async function searchCandidates(input: string, limit = 5): Promise<Resolv
   return results.slice(0, limit);
 }
 
-let lastWebTokenWarnAt = 0;
-/** Throttled warning when the web-player token is configured but unusable —
- *  usually a rotated/invalid sp_dc cookie or TOTP secret. */
+let webTokenNoticeShown = false;
+/** One-time notice. Spotify's partner API now requires a rotating
+ *  persisted-query hash, so the quota-free web-player search can't be restored;
+ *  we use the OAuth search (quota-limited). Logged once, not on every call. */
 function warnWebTokenUnavailable(): void {
-  const now = Date.now();
-  if (now - lastWebTokenWarnAt < 5 * 60 * 1000) return;
-  lastWebTokenWarnAt = now;
-  console.warn('[spotify] web-player search unavailable — refresh SPOTIFY_SP_DC (or SPOTIFY_TOTP_SECRET) to restore quota-free search');
+  if (webTokenNoticeShown) return;
+  webTokenNoticeShown = true;
+  console.info(
+    '[spotify] quota-free web-player search is retired (Spotify now requires a persisted-query hash) — using OAuth search.',
+  );
 }
 
 function isSpotifyUrl(input: string): boolean {

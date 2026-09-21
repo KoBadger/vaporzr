@@ -439,6 +439,9 @@ const COMMANDS = [
     .setDescription('Fire short hype SFX on strong beats (auto-hype)')
     .addBooleanOption((o) => o.setName('enabled').setDescription('Turn auto-hype on or off').setRequired(false)),
   new SlashCommandBuilder()
+    .setName('dedupe')
+    .setDescription('Remove duplicate tracks from the upcoming queue'),
+  new SlashCommandBuilder()
     .setName('mix')
     .setDescription('Crossfade two tracks into one DJ-style mix')
     .addStringOption((o) => o.setName('a').setDescription('First track (link or name)').setRequired(true))
@@ -1855,6 +1858,17 @@ export class DiscordBot {
         break;
       }
 
+      case 'dedupe': {
+        if (!this.requireLevel('dedupe', interaction)) return this.deny(interaction);
+        const n = s.queue.dedupe();
+        await interaction.reply(
+          n > 0
+            ? `🧹 Removed ${n} duplicate track${n > 1 ? 's' : ''} from the queue.`
+            : 'No duplicates in the queue.',
+        );
+        break;
+      }
+
       case 'quiz': {
         if (!this.requireLevel('quiz', interaction)) return this.deny(interaction);
         await interaction.deferReply();
@@ -2270,6 +2284,7 @@ export class DiscordBot {
       dna: 'dna', cover: 'cover',
       hype: 'hype',
       mix: 'mix',
+      dedupe: 'dedupe', dd: 'dedupe',
       quiz: 'quiz', guess: 'guess',
     };
     const canonical = alias[cmd];
@@ -2710,6 +2725,17 @@ export class DiscordBot {
           if (parts.length < 2) return void (await message.reply('Usage: `V@mix <a> | <b> [seconds]` (or `/mix`).'));
           const sec = parts[2] ? parseInt(parts[2], 10) : 6;
           await message.reply(await this.mixTracks(s, parts[0], parts[1], Number.isFinite(sec) ? sec : 6));
+          break;
+        }
+
+        case 'dedupe': {
+          if (!canUse('dedupe')) return void (await deny());
+          const n = s.queue.dedupe();
+          await message.reply(
+            n > 0
+              ? `🧹 Removed ${n} duplicate track${n > 1 ? 's' : ''} from the queue.`
+              : 'No duplicates in the queue.',
+          );
           break;
         }
 

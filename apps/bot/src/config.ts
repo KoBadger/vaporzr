@@ -160,11 +160,12 @@ cloudflaredPath:
   /** Resolve public Spotify data with the anonymous web-player token (no app quota). Fallback to OAuth. */
   spotifyUseAnonymous: process.env.SPOTIFY_USE_ANONYMOUS !== '0' && process.env.SPOTIFY_USE_ANONYMOUS !== 'false',
   /**
-   * Free-text search via the quota-free web-player token (minted from sp_dc via
-   * the TOTP flow, whose secret is extracted from Spotify's bundle at runtime).
-   * ON by default; set SPOTIFY_ANON_SEARCH=0 to force the OAuth `/search` path.
+   * Free-text search via the quota-free web-player token. OFF by default:
+   * Spotify's partner API now requires a rotating persisted-query hash, so this
+   * path fails and just wastes a request. Set SPOTIFY_ANON_SEARCH=1 to try it
+   * anyway (it falls back to the OAuth `/search` on failure).
    */
-  spotifyAnonSearch: process.env.SPOTIFY_ANON_SEARCH !== '0' && process.env.SPOTIFY_ANON_SEARCH !== 'false',
+  spotifyAnonSearch: process.env.SPOTIFY_ANON_SEARCH === '1' || process.env.SPOTIFY_ANON_SEARCH === 'true',
   /** sp_dc session cookie from open.spotify.com — unlocks FULL-length resolution of any public playlist. */
   spotifySpDc: process.env.SPOTIFY_SP_DC ?? '',
   /** TOTP secret bytes (comma-separated) for the web-player token endpoint; Spotify rotates this occasionally. */

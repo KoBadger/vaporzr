@@ -340,6 +340,7 @@ body.guest #guilds{display:none}
           <div id="q-tools-menu" class="menu">
             <button data-q="shuffle">Shuffle upcoming</button>
             <button data-q="jump">Jump to current</button>
+            <button data-q="dedupe">Remove duplicates</button>
             <button data-q="vibe">Save as vibe</button>
             <button data-q="clear">Clear queue</button>
           </div>
@@ -808,6 +809,7 @@ body.guest #guilds{display:none}
     qm.querySelectorAll('button[data-q]').forEach(function(b){b.onclick=function(){
       var a=b.getAttribute('data-q');
       if(a==='shuffle')cmd('shuffle',{shuffle:true});
+      else if(a==='dedupe')cmd('dedupe');
       else if(a==='clear')cmd('clear');
       else if(a==='jump'){var row=document.querySelector('#queue li.current');if(row)row.scrollIntoView({behavior:'smooth',block:'center'});}
       else if(a==='vibe'&&el['btn-vibe-save'])el['btn-vibe-save'].click();

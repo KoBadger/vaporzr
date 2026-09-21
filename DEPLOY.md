@@ -117,6 +117,12 @@ YOUTUBE_COOKIES_PATH=/app/data/cookies.txt
 
 ## Native Spotify (go-librespot)
 
+> **Status: experimental / intermittent.** Native playback works, but
+> go-librespot occasionally loads a track without the bot receiving any PCM (the
+> now-playing shows `PAUSED 0:00` and the queue then advances). The default here
+> is therefore **`SPOTIFY_PREFER_YOUTUBE=1`** — Spotify tracks play via YouTube,
+> which is reliable. Only set `=0` if you're willing to chase that capture stall.
+
 `SPOTIFY_PREFER_YOUTUBE=0` routes Spotify tracks through the bundled
 **go-librespot** (`SPOTIFY_BACKEND=soloist`, pinned in `apps/bot/Dockerfile`).
 It logs in with the remote **device-code** flow (`spotify.com/pair?code=…`), so it
