@@ -23,6 +23,8 @@ interface GuildConfig {
   npChannel?: string | null;
   /** Play a generative ambient pad when the queue ends (default false). */
   ambient?: boolean;
+  /** Allow /skipto — jump to a future queued track, dropping the ones skipped. */
+  skipForward?: boolean;
 }
 
 const DEFAULT_COMMAND_LEVELS: Record<string, PermissionLevel> = {
@@ -65,6 +67,9 @@ const DEFAULT_COMMAND_LEVELS: Record<string, PermissionLevel> = {
   hype: 'user',
   mix: 'user',
   dedupe: 'user',
+  bulk: 'user',
+  skipto: 'user',
+  skiptoggle: 'mod',
   quiz: 'user',
   guess: 'user',
   djrole: 'mod',
@@ -251,6 +256,17 @@ export class PermissionsManager {
     this.save(guildId);
   }
 
+  /** Whether /skipto (jump to a future track, dropping the skipped ones) is allowed. */
+  getSkipForward(guildId: string): boolean {
+    return this.load(guildId).skipForward === true;
+  }
+
+  setSkipForward(guildId: string, on: boolean): void {
+    const cfg = this.load(guildId);
+    cfg.skipForward = on;
+    this.save(guildId);
+  }
+
   /** True when a member may act as DJ: mod/admin/owner, or a holder of the DJ role. */
   isDj(
     guild: Guild,
@@ -275,6 +291,7 @@ export class PermissionsManager {
       tts: cfg.tts === true,
       npChannel: cfg.npChannel ?? null,
       ambient: cfg.ambient === true,
+      skipForward: cfg.skipForward === true,
     };
   }
 }

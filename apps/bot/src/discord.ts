@@ -442,6 +442,19 @@ const COMMANDS = [
     .setName('dedupe')
     .setDescription('Remove duplicate tracks from the upcoming queue'),
   new SlashCommandBuilder()
+    .setName('bulk')
+    .setDescription('Queue a list of songs at once (one per line, max 10)')
+    .addStringOption((o) =>
+      o.setName('tracks').setDescription('One song per line (max 10)').setRequired(true).setMaxLength(1500),
+    ),
+  new SlashCommandBuilder()
+    .setName('skipto')
+    .setDescription('Jump to a future queued track (drops the ones skipped)'),
+  new SlashCommandBuilder()
+    .setName('skiptoggle')
+    .setDescription('Allow /skipto in this server (mod)')
+    .addBooleanOption((o) => o.setName('enabled').setDescription('Enable or disable /skipto').setRequired(true)),
+  new SlashCommandBuilder()
     .setName('mix')
     .setDescription('Crossfade two tracks into one DJ-style mix')
     .addStringOption((o) => o.setName('a').setDescription('First track (link or name)').setRequired(true))
@@ -514,6 +527,8 @@ export class DiscordBot {
     string,
     { guildId: string; userId: string; candidates: ResolvedTrack[]; createdAt: number }
   >();
+  /** token -> pending /skipto picker. */
+  private pendingSkipTo = new Map<string, { guildId: string; createdAt: number }>();
   /** guildId -> in-flight vote-to-skip. */
   private skipVotes = new Map<
     string,
@@ -989,6 +1004,8 @@ export class DiscordBot {
         }
       } else if (interaction.customId.startsWith('vzsearch:')) {
         await this.handleSearchPick(interaction);
+      } else if (interaction.customId.startsWith('skipto:')) {
+        await this.handleSkipToPick(interaction);
       }
       return;
     }
@@ -1869,6 +1886,83 @@ export class DiscordBot {
         break;
       }
 
+      case 'bulk': {
+        if (!this.requireLevel('bulk', interaction)) return this.deny(interaction);
+        await interaction.deferReply();
+        const items = interaction.options
+          .getString('tracks', true)
+          .split(/[\n;|]+/)
+          .map((x) => x.trim())
+          .filter(Boolean)
+          .slice(0, 10);
+        const resolved: ResolvedTrack[] = [];
+        for (const q of items) {
+          try {
+            const t = await resolvePlayInput(q);
+            if (t[0]) resolved.push(t[0]);
+          } catch {
+            /* skip an unresolvable item */
+          }
+        }
+        if (resolved.length === 0) {
+          await interaction.editReply('None of those could be resolved.');
+          break;
+        }
+        const who = interaction.user.username;
+        if (this.userQueueMode(s) === 'insert') s.queue.insertAfterCurrent(resolved, who);
+        else s.queue.enqueueMany(resolved, who);
+        this.stats.noteQueued(s.guildId ?? '', who, resolved.flatMap((t) => t.artists));
+        try {
+          await this.ensureJoinedForPlayback(interaction, s);
+          if (!s.queue.getState().playing) await s.playback.play();
+        } catch {
+          /* queued anyway */
+        }
+        await interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle(`Added ${resolved.length} track${resolved.length > 1 ? 's' : ''}`)
+              .setDescription(
+                resolved.map((t, i) => `${i + 1}. ${srcEmoji(t.source)} **${truncate(t.name, 60)}**`).join('\n'),
+              )
+              .setColor(this.themeColor()),
+          ],
+        });
+        break;
+      }
+
+      case 'skipto': {
+        if (!this.requireLevel('skipto', interaction)) return this.deny(interaction);
+        if (!this.perms.getSkipForward(interaction.guildId ?? '')) {
+          await interaction.reply({
+            content: '⏭ Skip-to is **off** here — a mod can enable it with `/skiptoggle`.',
+            flags: MessageFlags.Ephemeral,
+          });
+          break;
+        }
+        await interaction.deferReply();
+        await this.presentSkipTo(interaction);
+        break;
+      }
+
+      case 'skiptoggle': {
+        if (!this.requireLevel('skiptoggle', interaction)) return this.deny(interaction);
+        const gid = interaction.guildId;
+        if (!gid) {
+          await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral });
+          break;
+        }
+        const on = interaction.options.getBoolean('enabled', true);
+        this.perms.setSkipForward(gid, on);
+        await interaction.reply({
+          content: on
+            ? '⏭ Skip-to **on** — use `/skipto` to jump ahead (drops the tracks you skip).'
+            : '⏭ Skip-to **off** — `/skipto` is disabled here.',
+          flags: MessageFlags.Ephemeral,
+        });
+        break;
+      }
+
       case 'quiz': {
         if (!this.requireLevel('quiz', interaction)) return this.deny(interaction);
         await interaction.deferReply();
@@ -2285,6 +2379,9 @@ export class DiscordBot {
       hype: 'hype',
       mix: 'mix',
       dedupe: 'dedupe', dd: 'dedupe',
+      bulk: 'bulk',
+      skipto: 'skipto',
+      skiptoggle: 'skiptoggle',
       quiz: 'quiz', guess: 'guess',
     };
     const canonical = alias[cmd];
@@ -2735,6 +2832,68 @@ export class DiscordBot {
             n > 0
               ? `🧹 Removed ${n} duplicate track${n > 1 ? 's' : ''} from the queue.`
               : 'No duplicates in the queue.',
+          );
+          break;
+        }
+
+        case 'bulk': {
+          if (!canUse('bulk')) return void (await deny());
+          const items = args.split(/[\n;|]+/).map((x) => x.trim()).filter(Boolean).slice(0, 10);
+          if (items.length === 0)
+            return void (await message.reply('Usage: `V@bulk <song>; <song>; …` — one per line or `;`, max 10.'));
+          await this.withAck(message, `🔎 Resolving ${items.length} track(s)…`, async () => {
+            const resolved: ResolvedTrack[] = [];
+            for (const q of items) {
+              try {
+                const t = await resolvePlayInput(q);
+                if (t[0]) resolved.push(t[0]);
+              } catch {
+                /* skip an unresolvable item */
+              }
+            }
+            if (resolved.length === 0) throw new Error('None of those could be resolved.');
+            const who = message.author.username;
+            if (this.userQueueMode(s) === 'insert') s.queue.insertAfterCurrent(resolved, who);
+            else s.queue.enqueueMany(resolved, who);
+            this.stats.noteQueued(s.guildId ?? '', who, resolved.flatMap((t) => t.artists));
+            try {
+              await this.ensureJoinedForMessage(message, s);
+              if (!s.queue.getState().playing) await s.playback.play();
+            } catch {
+              /* queued anyway */
+            }
+            const embed = new EmbedBuilder()
+              .setTitle(`Added ${resolved.length} track${resolved.length > 1 ? 's' : ''}`)
+              .setDescription(
+                resolved.map((t, i) => `${i + 1}. ${srcEmoji(t.source)} **${truncate(t.name, 60)}**`).join('\n'),
+              )
+              .setColor(this.themeColor());
+            await message.reply({ embeds: [embed] });
+          });
+          break;
+        }
+
+        case 'skipto': {
+          if (!canUse('skipto')) return void (await deny());
+          if (!this.perms.getSkipForward(message.guildId ?? ''))
+            return void (
+              await message.reply('⏭ Skip-to is **off** here — a mod can enable it with `/skiptoggle enabled:true`.')
+            );
+          await this.presentSkipTo(message);
+          break;
+        }
+
+        case 'skiptoggle': {
+          if (!canUse('skiptoggle')) return void (await deny());
+          if (!message.guildId) return void (await message.reply('Must be used in a server.'));
+          const a = args.trim().toLowerCase();
+          if (/^(on|1|true)$/.test(a)) this.perms.setSkipForward(message.guildId, true);
+          else if (/^(off|0|false)$/.test(a)) this.perms.setSkipForward(message.guildId, false);
+          const on = this.perms.getSkipForward(message.guildId);
+          await message.reply(
+            on
+              ? '⏭ Skip-to **on** — use `V@skipto` to jump ahead (drops the tracks you skip).'
+              : '⏭ Skip-to **off** — `V@skipto` is disabled here.',
           );
           break;
         }
@@ -4989,6 +5148,58 @@ export class DiscordBot {
     } catch {
       /* gone */
     }
+  }
+
+  private async handleSkipToPick(interaction: StringSelectMenuInteraction): Promise<void> {
+    const token = interaction.customId.slice('skipto:'.length);
+    this.pendingSkipTo.delete(token);
+    const s = this.sessionFor(interaction.guildId);
+    const idx = parseInt(interaction.values[0] ?? '-1', 10);
+    const removed = s.queue.removeUpTo(idx);
+    await interaction
+      .update({
+        content: `⏭ Jumping ahead — skipped ${removed} track${removed === 1 ? '' : 's'}.`,
+        embeds: [],
+        components: [],
+      })
+      .catch(() => {});
+    s.playback.next();
+  }
+
+  /** Show a picker of upcoming tracks; choosing one jumps to it, dropping the rest. */
+  private async presentSkipTo(target: Message | ChatInputCommandInteraction): Promise<void> {
+    const gid = target.guildId ?? '';
+    const s = this.sessionFor(gid);
+    const snap = s.queue.getSnapshot();
+    const upcoming = snap.tracks
+      .map((t, i) => ({ t, i }))
+      .filter(({ i }) => i > snap.currentIndex)
+      .slice(0, 25);
+    if (upcoming.length === 0) {
+      const msg = 'Nothing queued ahead to jump to.';
+      if ('editReply' in target) await target.editReply(msg).catch(() => {});
+      else await target.reply(msg).catch(() => {});
+      return;
+    }
+    const token = randomBytes(6).toString('hex');
+    this.pendingSkipTo.set(token, { guildId: gid, createdAt: Date.now() });
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId(`skipto:${token}`)
+      .setPlaceholder('Jump to a future track…')
+      .addOptions(
+        upcoming.map(({ t, i }) => ({
+          label: truncate(t.name || 'Untitled', 90),
+          description: truncate((t.artists ?? []).join(', ') || `#${i}`, 90),
+          value: String(i),
+        })),
+      );
+    const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu);
+    const embed = new EmbedBuilder()
+      .setTitle('⏭ Skip to a track')
+      .setDescription(upcoming.map(({ t, i }) => `\`${i}\` ${truncate(t.name, 60)}`).join('\n'))
+      .setColor(this.themeColor());
+    if ('editReply' in target) await target.editReply({ embeds: [embed], components: [row] });
+    else await target.reply({ embeds: [embed], components: [row] });
   }
 
   private async handleSearchPick(interaction: StringSelectMenuInteraction): Promise<void> {

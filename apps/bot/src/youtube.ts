@@ -445,6 +445,14 @@ function scoreHit(
 
   if (!VARIANT_RE.test(query) && !VARIANT_RE.test(opts.name ?? '') && VARIANT_RE.test(hit.title)) score -= 8;
 
+  // Prefer the clean song over theatrical music videos, which carry long
+  // intros/interludes/outros. "Artist - Topic" uploads are already boosted
+  // above; here we penalise video cuts and nudge up audio/lyric uploads.
+  const raw = hit.title.toLowerCase();
+  if (/\b(official\s+)?(music\s+video|video\s+clip|videoclip|m\/v|mv|pv)\b/.test(raw)) score -= 8;
+  else if (/\bofficial\s+video\b/.test(raw)) score -= 5;
+  if (/\b(audio|topic|lyric|visuali[sz]er)\b/.test(raw)) score += 3;
+
   const wantMs = opts.durationMs ?? 0;
   if (wantMs > 0 && hit.durationSec > 0) {
     const d = Math.abs(hit.durationSec * 1000 - wantMs);

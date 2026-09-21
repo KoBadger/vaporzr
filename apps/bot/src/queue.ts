@@ -185,6 +185,17 @@ export class QueueManager {
     return removed;
   }
 
+  /** Skip-forward: drop every upcoming track before `index` so the chosen one
+   *  plays next. Returns how many were removed. */
+  removeUpTo(index: number): number {
+    if (index <= this.currentIndex + 1 || index >= this.tracks.length) return 0;
+    const from = this.currentIndex + 1;
+    const removed = index - from;
+    this.tracks.splice(from, removed);
+    this.emitQueue();
+    return removed;
+  }
+
   remove(index: number): TrackInfo | undefined {
     if (index < 0 || index >= this.tracks.length) return undefined;
     const [removed] = this.tracks.splice(index, 1);

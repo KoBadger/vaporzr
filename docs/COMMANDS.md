@@ -33,6 +33,10 @@ Legend: `[/cmd]` = slash, `[V@x]` = prefix.
 | `/queue` | `V@q` | Show the queue (paged). |
 | `/shuffle` | `V@sh` | Shuffle the queue. |
 | `/remove <#>` | `V@rem <#>` | Remove a queued track (autocompletes). |
+| `/dedupe` | `V@dd` | Remove duplicate upcoming tracks. |
+| `/bulk <tracks>` | `V@bulk <a; b; c>` | Queue a list at once (one per line or `;`, max 10). |
+| `/skipto` | `V@skipto` | Pick a future queued track to jump to — drops the tracks it skips. Off by default; a mod enables it with `/skiptoggle`. |
+| `/skiptoggle <on\|off>` | `V@skiptoggle` | Allow `/skipto` in this server (mod). |
 
 ## 🌊 Autoplay
 
