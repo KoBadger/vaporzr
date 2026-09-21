@@ -4201,8 +4201,12 @@ export class DiscordBot {
    */
   private async syncBotAvatar(): Promise<void> {
     try {
-      const logoPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public', 'logo.png');
-      const logo = await fs.readFile(logoPath);
+      const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
+      // Prefer the animated GIF so the avatar animates in Discord embeds (the
+      // VC-chat now-playing post uses displayAvatarURL() as the author icon).
+      const logo = await fs
+        .readFile(path.join(dir, 'avatar.gif'))
+        .catch(() => fs.readFile(path.join(dir, 'logo.png')));
       const hash = createHash('sha256').update(logo).digest('hex');
       const hashFile = path.join(config.dataDir, 'avatar.hash');
       let last = '';
