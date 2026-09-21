@@ -471,50 +471,6 @@ export class VoiceManager {
     this.paused = false;
   }
 
-  /** Generative ambient pad for an empty queue — synthesised live by ffmpeg
-   *  (detuned sines + tremolo + echo). Runs until a real stream replaces it. */
-  playAmbient(): void {
-    if (!this.player) return;
-    this.clearIdleTimer();
-    this.stopStream();
-    // A soft, higher major triad (A3/C#4/E4/A4) — the old low A2 drone read as a
-    // muddy rumble on small speakers. Gentle tremolo + lowpass, no echo (the
-    // echo made it ring). Kept well below the music level.
-    const freqs = [220, 277.18, 329.63, 440];
-    const args = ['-hide_banner', '-loglevel', 'error'];
-    for (const f of freqs) args.push('-f', 'lavfi', '-i', `sine=frequency=${f}:sample_rate=48000`);
-    const ins = freqs.map((_, i) => `[${i}:a]`).join('');
-    args.push(
-      '-filter_complex',
-      `${ins}amix=inputs=${freqs.length}:normalize=1,tremolo=f=0.08:d=0.3,lowpass=f=2200,volume=0.5,afade=t=in:st=0:d=3`,
-      '-ac', '2', '-ar', '48000', '-f', 's16le', 'pipe:1',
-    );
-    const proc = spawn(config.ffmpegPath, args, { windowsHide: true });
-    this.ffmpeg = proc;
-    this.streamStartTime = Date.now();
-    this.pausedPositionMs = 0;
-    const stream = this.makeMixStream();
-    this.stream = stream;
-    proc.stdout.on('data', (d) => {
-      this.chunksSinceLog++;
-      this.bytesSinceLog += d.length;
-    });
-    proc.stderr.on('data', (d) => {
-      const l = d.toString().trim();
-      if (l) console.warn(`[voice] ambient: ${l.slice(0, 200)}`);
-    });
-    proc.stdout.pipe(stream);
-    const resource = createAudioResource(stream, { inputType: StreamType.Raw, inlineVolume: true });
-    this.resource = resource;
-    this.applyVolumeToResource();
-    this.player.play(resource);
-    this.paused = false;
-    proc.on('exit', () => {
-      if (this.ffmpeg === proc) this.ffmpeg = null;
-    });
-    console.log('[voice] ambient intermission started');
-  }
-
   /** Crossfade two source URLs into one continuous mix (ffmpeg acrossfade). */
   playMix(
     urlA: string,

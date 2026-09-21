@@ -413,7 +413,7 @@ const COMMANDS = [
     .addStringOption((o) => o.setName('query').setDescription('Words from the lyric line to jump to').setRequired(true)),
   new SlashCommandBuilder()
     .setName('ambient')
-    .setDescription('Play a generative ambient pad when the queue ends (intermission)')
+    .setDescription('Play a quiet lo-fi/ambient track when the queue ends (intermission)')
     .addBooleanOption((o) => o.setName('enabled').setDescription('Turn ambient intermission on or off').setRequired(false)),
   new SlashCommandBuilder()
     .setName('mood')
@@ -705,7 +705,7 @@ export class DiscordBot {
             if (s.queue.getSnapshot().tracks.length > before) return;
           }
           if (this.perms.getAmbient(s.guildId) && s.voice.isJoined()) {
-            s.voice.playAmbient();
+            void s.playback.startAmbient();
             return;
           }
           void this.notifyQueueEnded(s.guildId);
@@ -1668,7 +1668,7 @@ export class DiscordBot {
         const on = this.perms.getAmbient(gid);
         await interaction.reply({
           content: on
-            ? '🌌 Ambient intermission **on** — when the queue ends I\'ll play a generative pad instead of going quiet.'
+            ? '🌙 Lo-fi intermission **on** — when the queue ends I\'ll play a quiet lo-fi track instead of going quiet.'
             : 'Ambient intermission **off** — the queue ends quietly.',
           flags: MessageFlags.Ephemeral,
         });
@@ -2535,7 +2535,7 @@ export class DiscordBot {
           const on = this.perms.getAmbient(message.guildId);
           await message.reply(
             on
-              ? '🌌 Ambient intermission **on** — when the queue ends I\'ll play a generative pad.'
+              ? '🌙 Lo-fi intermission **on** — when the queue ends I\'ll play a quiet lo-fi track.'
               : '🌌 Ambient intermission **off**. Use `V@ambient on` to enable.',
           );
           break;
@@ -5789,7 +5789,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/autoplay now:true` — queue one more track right now',
       '`/autoplay count:<1-10>` — how many tracks to buffer ahead',
       '`/endwav on|off|status` · `V@ew` — Endless Wave shortcut',
-      '`/ambient on|off` · `V@ambient` — generative ambient pad when the queue empties',
+      '`/ambient on|off` · `V@ambient` — quiet lo-fi intermission when the queue empties',
       '`/vibe [mood]` · `V@vibe` — auto-DJ set for your mood / time of day / weather',
     ],
   },

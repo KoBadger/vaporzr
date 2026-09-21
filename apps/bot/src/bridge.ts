@@ -451,7 +451,7 @@ export class Bridge {
           const s = this.sessions.primary;
           // Play the pad right away if the queue is already idle.
           if (msg.ambient && s && s.voice.isJoined() && !this.queue.getState().playing) {
-            s.voice.playAmbient();
+            void s.playback.startAmbient();
           }
           for (const vis of this.visualizers) this.sendSnapshot(vis.socket);
           for (const panel of this.panels) this.sendSnapshot(panel.socket);

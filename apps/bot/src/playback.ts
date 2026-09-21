@@ -112,6 +112,15 @@ export class PlaybackController {
   private speedFactor = 1;
   /** Bass boost gain in dB (0 = off). */
   private bassBoostDb = 0;
+  /** Ambient intermission (queue-end): a quiet curated lo-fi track, looping. */
+  private ambientActive = false;
+  private ambientQueryIdx = 0;
+  private static readonly AMBIENT_QUERIES = [
+    'ambient music mix',
+    'lofi hip hop mix',
+    'chill ambient study music',
+    'downtempo chill mix',
+  ];
   /** Invalidates in-flight play() calls when skip/previous/stop changes the cursor. */
   private playGeneration = 0;
   /** Cumulative number of tracks that have started playing. */
@@ -525,6 +534,7 @@ export class PlaybackController {
 
   async play(): Promise<void> {
     const generation = ++this.playGeneration;
+    this.stopAmbient();
     this.clearSpotifyRetry();
     this.applyAudioFx();
     const current = this.queue.getCurrentTrack();
@@ -1256,14 +1266,12 @@ export class PlaybackController {
   private restartCurrent(): void {
     const state = this.queue.getState();
     if (!state.track) return;
-    const pos = this.voice.getPositionMs() || state.positionMs || 0;
     this.applyAudioFx();
     if (this.usingServerStream()) {
-      this.seekServerStream(pos + 1); // +1ms so the decode+discard lands on the right spot
-      if (!state.playing) this.voice.pause();
-      this.queue.setState({ positionMs: pos });
-      if (state.playing) this.scheduleEnd(state.durationMs, pos);
-      this.schedulePreload(state.durationMs, pos);
+      // No-interrupt: restarting the ffmpeg stream mid-track (seek + re-resolve)
+      // can stall or stop the song on some URLs, so leave this track alone — the
+      // new FX is picked up by the next track. (Spotify below switches seamlessly.)
+      return;
     } else if (this.currentSource() === 'spotify' && !this.spotifyFallback) {
       // Restart the resample feed so the FX chain rebuilds with the new filter.
       // The librespot socket keeps streaming real-time PCM, so position survives.
@@ -1271,6 +1279,42 @@ export class PlaybackController {
       this.startSpotifyFeed();
       if (!state.playing) this.voice.setExpectingPcm(false);
     }
+  }
+
+  /** Queue-end intermission: play a quiet curated lo-fi/ambient track, looping
+   *  until a real track resumes. Falls back to silence if it can't resolve. */
+  async startAmbient(): Promise<void> {
+    if (this.ambientActive) return;
+    this.ambientActive = true;
+    await this.playAmbientLoop();
+  }
+
+  private async playAmbientLoop(): Promise<void> {
+    if (!this.ambientActive) return;
+    const queries = PlaybackController.AMBIENT_QUERIES;
+    const q = queries[this.ambientQueryIdx % queries.length];
+    this.ambientQueryIdx++;
+    try {
+      const v = await searchAndResolveYoutube(q, {});
+      if (!v?.streamUrl || !this.ambientActive) {
+        this.ambientActive = false;
+        return;
+      }
+      this.voice.playFfmpegUrl(v.streamUrl, {
+        durationMs: v.durationMs,
+        onEnd: () => {
+          if (this.ambientActive) void this.playAmbientLoop();
+        },
+        refreshUrl: () => resolveYoutubeVideo(v.videoId).then((x) => x.streamUrl),
+      });
+    } catch {
+      this.ambientActive = false;
+    }
+  }
+
+  /** Stop the ambient intermission (a real track is starting). */
+  stopAmbient(): void {
+    this.ambientActive = false;
   }
 
   /**
