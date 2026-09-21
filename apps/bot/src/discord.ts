@@ -1233,7 +1233,8 @@ export class DiscordBot {
           await interaction.editReply('Give a track name/link, or attach an audio/video file.');
         } else if (isUrlPlayInput(query)) {
           const tracks = await resolvePlayInput(query);
-          await this.addToQueue(interaction, tracks);
+          if (this.userQueueMode(s) === 'insert') await this.insertToQueue(interaction, tracks);
+          else await this.addToQueue(interaction, tracks);
         } else {
           await this.presentSearch(interaction, query);
         }
@@ -2297,7 +2298,8 @@ export class DiscordBot {
             const run = async (): Promise<void> => {
               if (isUrlPlayInput(args)) {
                 const tracks = await resolvePlayInput(args);
-                await this.addToQueueMsg(message, tracks);
+                if (this.userQueueMode(s) === 'insert') await this.insertToQueueMsg(message, tracks);
+                else await this.addToQueueMsg(message, tracks);
               } else {
                 await this.presentSearch(message, args);
               }
@@ -4871,6 +4873,13 @@ export class DiscordBot {
     if (ack) await ack.delete().catch(() => {});
   }
 
+  /** When autoplay/Endless Wave is on, user picks should jump ahead of the
+   *  autoplay fills (insert right after the current track) instead of landing
+   *  behind them. With autoplay off, normal append behaviour is kept. */
+  private userQueueMode(s: Session): 'queue' | 'insert' {
+    return EW.isAutoActive(s.endlessWave) ? 'insert' : 'queue';
+  }
+
   private async presentSearch(target: Message | ChatInputCommandInteraction, query: string): Promise<void> {
     let candidates: ResolvedTrack[] = [];
     const isMsg = 'author' in target;
@@ -4897,8 +4906,15 @@ export class DiscordBot {
     // Play the best match immediately so a plain `V@p <text>` just works; the
     // dropdown below is an "alternatives" picker in case the guess was wrong.
     const best = candidates[0];
-    if (isMsg) await this.addToQueueMsg(target as Message, [best]);
-    else await this.addToQueue(target as ChatInputCommandInteraction, [best]);
+    const s = this.sessionFor(target.guildId);
+    const insert = this.userQueueMode(s) === 'insert';
+    if (isMsg) {
+      if (insert) await this.insertToQueueMsg(target as Message, [best]);
+      else await this.addToQueueMsg(target as Message, [best]);
+    } else {
+      if (insert) await this.insertToQueue(target as ChatInputCommandInteraction, [best]);
+      else await this.addToQueue(target as ChatInputCommandInteraction, [best]);
+    }
     if (candidates.length === 1) return;
 
     const token = randomBytes(6).toString('hex');
@@ -4962,8 +4978,12 @@ export class DiscordBot {
     // stream can take longer (this was the "didn't respond in time" cause).
     await interaction.deferUpdate().catch(() => {});
     const s = this.sessionFor(interaction.guildId);
-    const playbackFailed = await this.playTracks(s, [track], interaction.user.username, () =>
-      this.ensureJoinedForPlayback(interaction, s),
+    const playbackFailed = await this.playTracks(
+      s,
+      [track],
+      interaction.user.username,
+      () => this.ensureJoinedForPlayback(interaction, s),
+      this.userQueueMode(s),
     );
     const embed = new EmbedBuilder()
       .setTitle('Added to queue')
