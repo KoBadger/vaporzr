@@ -4139,7 +4139,7 @@ export class DiscordBot {
       .setColor(this.themeColor())
       .setTimestamp();
     if (this.client.user) {
-      embed.setAuthor({ name: st.playing ? 'PLAYING NOW' : 'PAUSED', iconURL: this.client.user.displayAvatarURL() });
+      embed.setAuthor({ name: st.playing ? 'PLAYING NOW' : 'PAUSED', iconURL: this.client.user.displayAvatarURL({ extension: 'gif', size: 128 }) });
     }
     if (track) {
       const snap = s.queue.getSnapshot();
@@ -4215,7 +4215,7 @@ export class DiscordBot {
     try {
       const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
       // Prefer the animated GIF so the avatar animates in Discord embeds (the
-      // VC-chat now-playing post uses displayAvatarURL() as the author icon).
+      // VC-chat now-playing post uses displayAvatarURL({ extension: 'gif', size: 128 }) as the author icon).
       const logo = await fs
         .readFile(path.join(dir, 'avatar.gif'))
         .catch(() => fs.readFile(path.join(dir, 'logo.png')));
@@ -4311,7 +4311,7 @@ export class DiscordBot {
     const bar = '⬤' + '─'.repeat(slots - 1);
     const embed = new EmbedBuilder()
       .setColor(this.themeColor())
-      .setAuthor({ name: 'NOW PLAYING', iconURL: this.client.user?.displayAvatarURL() })
+      .setAuthor({ name: 'NOW PLAYING', iconURL: this.client.user?.displayAvatarURL({ extension: 'gif', size: 128 }) })
       .setTitle(`${srcEmoji(t.source)} ${t.name}`)
       .setDescription(`${truncate((t.artists ?? []).join(', '), 80)}\n\n\`${bar}\`\n▶️ \`0:00 / ${fmtMs(dur)}\``)
       .setFooter({ text: action });
@@ -4341,7 +4341,7 @@ export class DiscordBot {
 
     const embed = new EmbedBuilder().setColor(this.themeColor()).setTimestamp();
     if (this.client.user) {
-      embed.setAuthor({ name: 'VAPORZR', iconURL: this.client.user.displayAvatarURL() });
+      embed.setAuthor({ name: 'VAPORZR', iconURL: this.client.user.displayAvatarURL({ extension: 'gif', size: 128 }) });
     }
     if (track) {
       embed
