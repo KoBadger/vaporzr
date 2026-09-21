@@ -700,9 +700,14 @@ export class DiscordBot {
             } catch (err) {
               console.warn(`[endlesswave] queue-end refill failed: ${err instanceof Error ? err.message : err}`);
             }
-            // Wave refilled the queue — keep playing. If it couldn't (dead-end /
-            // backoff), fall through so the ambient pad or notice still fires.
-            if (s.queue.getSnapshot().tracks.length > before) return;
+            // Wave refilled the queue — resume on the first refilled track so
+            // the wave actually plays (the refill alone left the bot idle with a
+            // queue). If it couldn't (dead-end / backoff), fall through so the
+            // ambient pad or queue-ended notice still fires.
+            if (s.queue.getSnapshot().tracks.length > before) {
+              if (!s.queue.getState().playing) s.playback.playAt(before);
+              return;
+            }
           }
           if (this.perms.getAmbient(s.guildId) && s.voice.isJoined()) {
             void s.playback.startAmbient();
