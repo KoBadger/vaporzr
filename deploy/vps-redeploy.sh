@@ -44,10 +44,18 @@ if ! docker pull "$REF"; then
   # fail even though CI can push. Don't hard-abort with the old container still
   # running stale config — fall back to the local image when there is one.
   if docker image inspect "$REF" >/dev/null 2>&1; then
-    echo "!! Pull failed — falling back to the local $REF image and continuing."
+    echo "!! Pull failed - falling back to the local $REF image and continuing."
   else
-    echo "!! Pull failed and no local $REF image exists — aborting before touching the container."
-    exit 1
+    # CI tags by git sha (not :latest), so the local tag is often absent. Fall
+    # back to whatever image the running container is already on.
+    RUNNING_IMG=$(docker inspect -f '{{.Config.Image}}' "$CONTAINER" 2>/dev/null || true)
+    if [ -n "$RUNNING_IMG" ] && docker image inspect "$RUNNING_IMG" >/dev/null 2>&1; then
+      echo "!! Pull failed - falling back to the running container's image ($RUNNING_IMG)."
+      REF="$RUNNING_IMG"
+    else
+      echo "!! Pull failed and no usable local image exists - aborting before touching the container."
+      exit 1
+    fi
   fi
 fi
 
