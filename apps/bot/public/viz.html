@@ -608,7 +608,10 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
     barsCanvas.style.display=(frameMode||milkMode||synthMode)?'none':'block';
 
     if(frameMode)return;
-    if(synthMode){drawSynth(now);return;}
+    if(synthMode){
+      try{drawSynth(now)}catch(e){console.error('[viz] synth render failed:',e)}
+      return;
+    }
     if(milkMode){
       try{bcViz.render()}catch(e){
         console.error('[viz] butterchurn render failed:',e);
@@ -718,6 +721,52 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
       sctx.fillText(synthTrack.artists||'',24,H-20);
       sctx.shadowBlur=0;
     }
+    // ---- reactive overlays (kept over the base image) ----
+    // kick ripples: expanding rings from the horizon
+    if(!drawSynthOverlay._ripples)drawSynthOverlay._ripples=[];
+    if(kickBoost>0.5&&now-(drawSynthOverlay._lastKick||0)>110){
+      drawSynthOverlay._lastKick=now;
+      drawSynthOverlay._ripples.push({r:Math.max(W,H)*0.05,a:0.45+0.4*kickBoost});
+      if(drawSynthOverlay._ripples.length>10)drawSynthOverlay._ripples.shift();
+    }
+    for(i=drawSynthOverlay._ripples.length-1;i>=0;i--){
+      var rp=drawSynthOverlay._ripples[i];
+      rp.r+=Math.max(2,W*0.006*(1+bassLevel*2));rp.a*=0.96;
+      if(rp.a<0.02){drawSynthOverlay._ripples.splice(i,1);continue;}
+      sctx.beginPath();sctx.arc(W/2,H*0.62,rp.r,0,Math.PI*2);
+      sctx.lineWidth=Math.max(1.5,3*dpr*(0.4+bassLevel));
+      sctx.strokeStyle='rgba(120,240,255,'+rp.a.toFixed(3)+')';
+      sctx.shadowColor='rgba(255,80,180,0.6)';sctx.shadowBlur=18*dpr;sctx.stroke();
+    }
+    sctx.shadowBlur=0;
+    // aurora band: hue drifts, opacity follows treble
+    var hue=(now*0.03)%360;
+    var aur=sctx.createLinearGradient(0,0,W,H*0.6);
+    aur.addColorStop(0,'hsla('+hue+',90%,60%,0)');
+    aur.addColorStop(0.5,'hsla('+((hue+60)%360)+',90%,62%,'+(0.05+trebleLevel*0.12).toFixed(3)+')');
+    aur.addColorStop(1,'hsla('+((hue+140)%360)+',90%,60%,0)');
+    sctx.save();sctx.globalCompositeOperation='screen';sctx.fillStyle=aur;sctx.fillRect(0,0,W,H*0.6);sctx.restore();
+    // speed streaks: count/opacity follow overall energy
+    var energy=prefersReduced?0:lastEnergy;
+    if(energy>0.02){
+      sctx.save();sctx.globalCompositeOperation='screen';
+      sctx.strokeStyle='rgba(255,255,255,'+Math.min(0.18,energy*0.5).toFixed(3)+')';sctx.lineWidth=1*dpr;
+      var streaks=Math.round(6+energy*18);
+      for(i=0;i<streaks;i++){
+        var sy=(((now*0.06*(0.5+energy)+(i*97)%1000)/1000)%1);
+        var sx=((i*53)%100)/100;var len=W*(0.05+0.12*energy);
+        sctx.beginPath();sctx.moveTo(sx*W,sy*H);sctx.lineTo(sx*W+len,sy*H);sctx.stroke();
+      }
+      sctx.restore();
+    }
+    // beat scanline sweeping down
+    var scanY=((now*0.08)%1)*H;
+    sctx.save();sctx.globalCompositeOperation='screen';
+    var sg=sctx.createLinearGradient(0,scanY-40*dpr,0,scanY+40*dpr);
+    sg.addColorStop(0,'rgba(255,255,255,0)');
+    sg.addColorStop(0.5,'rgba(180,240,255,'+(0.05+kickBoost*0.18).toFixed(3)+')');
+    sg.addColorStop(1,'rgba(255,255,255,0)');
+    sctx.fillStyle=sg;sctx.fillRect(0,scanY-40*dpr,W,80*dpr);sctx.restore();
     // film grain
     if(!drawSynthOverlay._grain){
       var gc=document.createElement('canvas');
@@ -741,15 +790,16 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
     // vignette
     var vig=sctx.createRadialGradient(W/2,H/2,H*0.3,W/2,H/2,H*0.8);
     vig.addColorStop(0,'rgba(0,0,0,0)');
-    vig.addColorStop(1,'rgba(0,0,0,0.7)');
+    vig.addColorStop(1,'rgba(0,0,0,'+(0.55+0.25*Math.min(1,bassLevel*1.6)).toFixed(2)+')');
     sctx.fillStyle=vig;
     sctx.fillRect(0,0,W,H);
   }
-  function resizeSynth(){synthCanvas.width=innerWidth*dpr;synthCanvas.height=innerHeight*dpr}
+  function resizeSynth(){synthCanvas.width=Math.max(2,Math.round(innerWidth*dpr));synthCanvas.height=Math.max(2,Math.round(innerHeight*dpr))}
   window.addEventListener('resize',resizeSynth);
 
   function drawSynth(now){
     var W=synthCanvas.width,H=synthCanvas.height;
+    if(!W||!H||!isFinite(W)||!isFinite(H))return;
     sctx.clearRect(0,0,W,H);
     kickBoost=Math.max(0,kickBoost*0.9);
     // Real VISUALDON wallpaper video underneath — canvas is just the overlay.
