@@ -2294,11 +2294,23 @@ export class DiscordBot {
           }
           if (!args) return void (await message.reply('Usage: `V@p <track name or link>` — or attach a file'));
           await this.withAck(message, '🔎 Working on it…', async () => {
-            if (isUrlPlayInput(args)) {
-              const tracks = await resolvePlayInput(args);
-              await this.addToQueueMsg(message, tracks);
-            } else {
-              await this.presentSearch(message, args);
+            const run = async (): Promise<void> => {
+              if (isUrlPlayInput(args)) {
+                const tracks = await resolvePlayInput(args);
+                await this.addToQueueMsg(message, tracks);
+              } else {
+                await this.presentSearch(message, args);
+              }
+            };
+            const before = s.queue.getSnapshot().tracks.length;
+            try {
+              await run();
+            } catch (err) {
+              // A transient network blip shouldn't lose the command — retry once,
+              // unless the first attempt already changed the queue (no double-add).
+              if (!isTransientNetError(err) || s.queue.getSnapshot().tracks.length !== before) throw err;
+              await new Promise((r) => setTimeout(r, 800));
+              await run();
             }
           });
           break;
@@ -5937,6 +5949,15 @@ function hslToInt(h: number, s: number, l: number): number {
   else [r, g, b] = [c, 0, x];
   const m = lN - c / 2;
   return (Math.round((r + m) * 255) << 16) | (Math.round((g + m) * 255) << 8) | Math.round((b + m) * 255);
+}
+
+/** Transient network/connect errors (Node AggregateError, undici fetch failures). */
+function isTransientNetError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  const cause = err instanceof Error && err.cause ? String(err.cause) : '';
+  return /Received one or more errors|fetch failed|ENOTFOUND|ETIMEDOUT|ECONNRESET|EAI_AGAIN|ECONNREFUSED|socket hang up|other side closed|terminated/i.test(
+    `${msg} ${cause}`,
+  );
 }
 
 /** True when the play input is a direct link (resolve it) rather than a text
