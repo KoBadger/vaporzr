@@ -74,6 +74,7 @@ COPY librespot /usr/local/bin/librespot
 ENV NODE_ENV=production \
     VAPORZR_BUILD=$GIT_SHA \
     TORCH_HOME=/app/data/torch \
+    HF_HOME=/app/data/hf \
     SPOTIFY_BACKEND=librespot \
     GO_LIBRESPOT_PATH=/usr/local/bin/go-librespot \
     PORT=4876 \
