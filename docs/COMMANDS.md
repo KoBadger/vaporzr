@@ -81,6 +81,8 @@ Names autocomplete. Up to 25 playlists/server, 200 tracks each.
 | `/speed <mode>` | `V@speed` | `nightcore`, `slowed`, `normal`. |
 | `/bassboost <5\|8\|10>` | `V@bass` | Bass boost in dB. |
 | `/mashup <a> <b>` | `V@mashup <a> \| <b>` | Render a tempo/key-matched blend of two songs (downloadable MP3) + 5 similar tracks. |
+| `/mashupgame` | `V@mg` | Game: auto-pick two queued songs, render a stem mashup (2 variants), and post a vote. |
+| `/mashups` | `V@mh` | List past mashups + winners. |
 | `/sfx <id>` | `V@sfx` | Play a sound effect (autocompletes). |
 | `/dj` | `V@dj` | Toggle the soundboard (mod). |
 | `/djrole @role` | `V@djrole @role` | Set the DJ role (mod). `off` clears it. |

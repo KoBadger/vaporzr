@@ -24,6 +24,7 @@ import {
   StringSelectMenuBuilder,
   StringSelectMenuInteraction,
   StringSelectMenuOptionBuilder,
+  type ButtonInteraction,
   type ChatInputCommandInteraction,
   type Guild,
   type GuildBasedChannel,
@@ -467,6 +468,12 @@ const COMMANDS = [
         .setMinValue(30)
         .setMaxValue(180),
     ),
+  new SlashCommandBuilder()
+    .setName('mashupgame')
+    .setDescription('Mashup game: auto-pick two queued songs, render stems, vote for the best'),
+  new SlashCommandBuilder()
+    .setName('mashups')
+    .setDescription('Show past mashup games and their winners'),
   new SlashCommandBuilder()
     .setName('mix')
     .setDescription('Crossfade two tracks into one DJ-style mix')
@@ -982,6 +989,10 @@ export class DiscordBot {
     if (interaction.isButton()) {
       if (interaction.customId.startsWith('lyrics_karaoke:')) {
         await this.startLyricsKaraoke(interaction);
+      } else if (interaction.customId.startsWith('mashvote:')) {
+        await this.handleMashVote(interaction);
+      } else if (interaction.customId.startsWith('mashreveal:')) {
+        await this.handleMashReveal(interaction);
       } else if (interaction.customId.startsWith('vzhelp:')) {
         const id = interaction.customId.slice('vzhelp:'.length);
         const embed = this.helpCategoryEmbed(id);
@@ -1901,6 +1912,48 @@ export class DiscordBot {
         break;
       }
 
+      case 'mashupgame': {
+        if (!this.requireLevel('mashupgame', interaction)) return this.deny(interaction);
+        await interaction.deferReply();
+        const ch = interaction.channel;
+        const pair = this.suggestMashupPair(s);
+        if (!pair) {
+          await interaction.editReply('Need at least 2 tracks queued — or use `/mashup a:… b:…`.');
+          break;
+        }
+        await interaction.editReply(
+          `🎲 **Mashup game!** Suggesting **${pair.a}** × **${pair.b}** — rendering both stem blends (a few minutes)…`,
+        );
+        if (ch && 'send' in ch) {
+          void this.runMashupGame((p) => ch.send(p), interaction.guildId ?? '', pair.a, pair.b);
+        }
+        break;
+      }
+
+      case 'mashups': {
+        if (!this.requireLevel('mashups', interaction)) return this.deny(interaction);
+        const hist = await loadMashupHistory();
+        if (!hist.length) {
+          await interaction.reply('No mashups yet — start one with `/mashupgame`.');
+          break;
+        }
+        const lines = hist
+          .slice(0, 10)
+          .map(
+            (h, i) =>
+              `${i + 1}. **${truncate(h.a, 40)}** × **${truncate(h.b, 40)}**${h.winner ? ` — 🏆 ${h.winner}` : ''}`,
+          );
+        await interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle('🎲 Mashup history')
+              .setDescription(lines.join('\n'))
+              .setColor(this.themeColor()),
+          ],
+        });
+        break;
+      }
+
       case 'dedupe': {
         if (!this.requireLevel('dedupe', interaction)) return this.deny(interaction);
         const n = s.queue.dedupe();
@@ -2405,6 +2458,8 @@ export class DiscordBot {
       hype: 'hype',
       mix: 'mix',
       mashup: 'mashup', msh: 'mashup',
+      mashupgame: 'mashupgame', mg: 'mashupgame',
+      mashups: 'mashups', mh: 'mashups',
       dedupe: 'dedupe', dd: 'dedupe',
       bulk: 'bulk',
       skipto: 'skipto',
@@ -2865,6 +2920,45 @@ export class DiscordBot {
           if (!('send' in ch)) return void (await message.reply('Cannot post here.'));
           await message.reply('🎛️ Rendering stem mashup — separating both songs (this can take several minutes)…');
           void this.startMashupRender((p) => ch.send(p), message.guildId ?? '', parts[0], parts[1]);
+          break;
+        }
+
+        case 'mashupgame': {
+          if (!canUse('mashupgame')) return void (await deny());
+          const ch = message.channel;
+          if (!('send' in ch)) return void (await message.reply('Cannot post here.'));
+          const pair = this.suggestMashupPair(s);
+          if (!pair)
+            return void (
+              await message.reply(
+                'Need at least 2 tracks queued to suggest a mashup pair — or use `V@mashup <a> | <b>`.',
+              )
+            );
+          await message.reply(
+            `🎲 **Mashup game!** Suggesting:\n• **${pair.a}**\n• **${pair.b}**\n\nRendering both stem blends — this takes several minutes…`,
+          );
+          void this.runMashupGame((p) => ch.send(p), message.guildId ?? '', pair.a, pair.b);
+          break;
+        }
+
+        case 'mashups': {
+          if (!canUse('mashups')) return void (await deny());
+          const hist = await loadMashupHistory();
+          if (!hist.length) return void (await message.reply('No mashups yet — start one with `V@mashupgame`.'));
+          const lines = hist
+            .slice(0, 10)
+            .map(
+              (h, i) =>
+                `${i + 1}. **${truncate(h.a, 40)}** × **${truncate(h.b, 40)}**${h.winner ? ` — 🏆 ${h.winner}` : ''}`,
+            );
+          await message.reply({
+            embeds: [
+              new EmbedBuilder()
+                .setTitle('🎲 Mashup history')
+                .setDescription(lines.join('\n'))
+                .setColor(this.themeColor()),
+            ],
+          });
           break;
         }
 
@@ -5756,12 +5850,7 @@ export class DiscordBot {
   /** One mashup render per guild at a time; posts the result as a NEW message
    *  (a render can outlast Discord's interaction window). */
   private mashupBusy = new Set<string>();
-  private async startMashupRender(
-    send: (payload: { embeds: EmbedBuilder[]; files: AttachmentBuilder[] }) => Promise<unknown>,
-    guildId: string,
-    a: string,
-    b: string,
-  ): Promise<void> {
+  private async startMashupRender(send: MashupSend, guildId: string, a: string, b: string): Promise<void> {
     if (this.mashupBusy.has(guildId)) {
       await send({
         embeds: [
@@ -5790,6 +5879,132 @@ export class DiscordBot {
       this.mashupBusy.delete(guildId);
       for (const f of cleanup) await fs.rm(f, { force: true, recursive: true }).catch(() => {});
     }
+  }
+
+  /** Vote tallies for active mashup games (in-memory; resets on restart). */
+  private mashupVotes = new Map<string, { v1: Set<string>; v2: Set<string> }>();
+
+  /** Suggest a pair of queued tracks for the mashup game. */
+  private suggestMashupPair(s: Session): { a: string; b: string } | null {
+    const snap = s.queue.getSnapshot();
+    const tracks = snap.tracks;
+    if (tracks.length < 2) return null;
+    const a = tracks[Math.max(0, snap.currentIndex)] ?? tracks[0];
+    const others = tracks.filter((t) => t.uri !== a.uri);
+    const b = others[Math.floor(Math.random() * others.length)];
+    if (!a || !b) return null;
+    const q = (t: { name: string; artists?: string[] }): string =>
+      `${t.name} ${(t.artists ?? [])[0] ?? ''}`.trim();
+    return { a: q(a), b: q(b) };
+  }
+
+  /** Phase-3: render a stem mashup and post it with voting buttons. */
+  private async runMashupGame(send: MashupSend, guildId: string, a: string, b: string): Promise<void> {
+    if (this.mashupBusy.has(guildId)) {
+      await send({
+        embeds: [
+          new EmbedBuilder().setColor(this.themeColor()).setDescription('⏳ Already rendering a mashup here — give it a few minutes.'),
+        ],
+        files: [],
+      }).catch(() => {});
+      return;
+    }
+    this.mashupBusy.add(guildId);
+    const cleanup: string[] = [];
+    try {
+      const r = await this.renderMashupStems(a, b, 60, cleanup);
+      if (!r.ok || r.files.length === 0) {
+        await send({ embeds: [this.mashupEmbed(`❌ ${r.text}`, [])], files: [] }).catch(() => {});
+        return;
+      }
+      const id = randomBytes(4).toString('hex');
+      this.mashupVotes.set(id, { v1: new Set(), v2: new Set() });
+      const hist = await loadMashupHistory();
+      hist.unshift({ id, a, b, at: Date.now() });
+      await saveMashupHistory(hist);
+      const files = r.files.map((f, i) => new AttachmentBuilder(f, { name: `vaporzr-mashup-v${i + 1}.mp3` }));
+      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`mashvote:${id}:1`)
+          .setLabel('Vote v1')
+          .setEmoji('1️⃣')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId(`mashvote:${id}:2`)
+          .setLabel('Vote v2')
+          .setEmoji('2️⃣')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId(`mashreveal:${id}`)
+          .setLabel('Close & reveal')
+          .setStyle(ButtonStyle.Secondary),
+      );
+      await send({
+        embeds: [
+          this.mashupEmbed(
+            `🎲 **Mashup game!** Listen to both blends and vote for the best.\n${r.text}`,
+            r.similar,
+          ),
+        ],
+        files,
+        components: [row],
+      }).catch(() => {});
+    } catch (err) {
+      await send({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(this.themeColor())
+            .setDescription(`❌ Mashup game failed: ${err instanceof Error ? err.message : err}`),
+        ],
+        files: [],
+      }).catch(() => {});
+    } finally {
+      this.mashupBusy.delete(guildId);
+      for (const f of cleanup) await fs.rm(f, { force: true, recursive: true }).catch(() => {});
+    }
+  }
+
+  private async handleMashVote(i: ButtonInteraction): Promise<void> {
+    const parts = i.customId.split(':');
+    const id = parts[1] ?? '';
+    const pick = parts[2];
+    const v = this.mashupVotes.get(id);
+    if (!v) {
+      await i.reply({ content: '⌛ This vote has closed.', flags: MessageFlags.Ephemeral }).catch(() => {});
+      return;
+    }
+    (pick === '1' ? v.v1 : v.v2).add(i.user.id);
+    (pick === '1' ? v.v2 : v.v1).delete(i.user.id);
+    await i
+      .reply({
+        content: `🗳️ Voted for **v${pick}** — v1: ${v.v1.size} · v2: ${v.v2.size}`,
+        flags: MessageFlags.Ephemeral,
+      })
+      .catch(() => {});
+  }
+
+  private async handleMashReveal(i: ButtonInteraction): Promise<void> {
+    const id = i.customId.slice('mashreveal:'.length);
+    const v = this.mashupVotes.get(id);
+    if (!v) {
+      await i.reply({ content: '⌛ Already revealed.', flags: MessageFlags.Ephemeral }).catch(() => {});
+      return;
+    }
+    this.mashupVotes.delete(id);
+    const winner: 'v1' | 'v2' | 'tie' = v.v1.size === v.v2.size ? 'tie' : v.v1.size > v.v2.size ? 'v1' : 'v2';
+    const hist = await loadMashupHistory();
+    const rec = hist.find((h) => h.id === id);
+    if (rec) {
+      rec.winner = winner;
+      await saveMashupHistory(hist);
+    }
+    await i
+      .update({
+        content: `🏆 **Winner: ${winner}** (v1: ${v.v1.size} · v2: ${v.v2.size})`,
+        embeds: [],
+        components: [],
+      })
+      .catch(() => {});
   }
 
   /** Embed for a rendered mashup: the blend description + similar-track list. */  private mashupEmbed(text: string, similar: ResolvedTrack[]): EmbedBuilder {
@@ -6557,6 +6772,8 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/hype on|off` · `V@hype` — auto-hype: drop a hit on strong beats',
       '`/mix <a> <b>` · `V@mix <a> | <b>` — crossfade two tracks into one mix',
       '`/mashup <a> <b>` · `V@mashup <a> | <b>` — render a tempo/key-matched blend (downloadable) + 5 similar tracks',
+      '`/mashupgame` · `V@mashupgame` (`V@mg`) — auto-pick two queued songs, render stem blends, vote for the best',
+      '`/mashups` · `V@mashups` (`V@mh`) — past mashups + winners',
     ],
   },
   {
@@ -6672,6 +6889,39 @@ function isUrlPlayInput(query: string): boolean {
     isGenericMediaUrl(query) ||
     /^(spotify:|https?:\/\/(open|play|embed)\.spotify\.com\/)/i.test(query)
   );
+}
+
+/** Payload poster shared by the mashup render/game (a channel `.send`). */
+type MashupSend = (payload: {
+  embeds: EmbedBuilder[];
+  files: AttachmentBuilder[];
+  components?: ActionRowBuilder<ButtonBuilder>[];
+}) => Promise<unknown>;
+
+interface MashupRecord {
+  id: string;
+  a: string;
+  b: string;
+  winner?: 'v1' | 'v2' | 'tie';
+  at: number;
+}
+
+const MASHUP_HISTORY_FILE = (): string => path.join(config.dataDir, 'mashup-history.json');
+
+async function loadMashupHistory(): Promise<MashupRecord[]> {
+  try {
+    return JSON.parse(await fs.readFile(MASHUP_HISTORY_FILE(), 'utf8')) as MashupRecord[];
+  } catch {
+    return [];
+  }
+}
+
+async function saveMashupHistory(recs: MashupRecord[]): Promise<void> {
+  try {
+    await fs.writeFile(MASHUP_HISTORY_FILE(), JSON.stringify(recs.slice(0, 50), null, 2));
+  } catch {
+    /* ignore */
+  }
 }
 
 async function resolvePlayInput(query: string): Promise<ResolvedTrack[]> {

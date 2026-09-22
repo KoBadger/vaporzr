@@ -67,6 +67,8 @@ const DEFAULT_COMMAND_LEVELS: Record<string, PermissionLevel> = {
   hype: 'user',
   mix: 'user',
   mashup: 'user',
+  mashupgame: 'user',
+  mashups: 'user',
   dedupe: 'user',
   bulk: 'user',
   skipto: 'user',
