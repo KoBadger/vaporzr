@@ -4858,6 +4858,29 @@ export class DiscordBot {
       menu.addOptions(opts);
       components.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu));
     }
+    // Optional skip-to picker (jump ahead, dropping the skipped tracks) when a
+    // mod has enabled it for this guild.
+    if (this.perms.getSkipForward(s.guildId)) {
+      const upcoming = tracks
+        .map((t, i) => ({ t, i }))
+        .filter(({ i }) => i > snap.currentIndex)
+        .slice(0, 25);
+      if (upcoming.length > 0) {
+        const token = randomBytes(6).toString('hex');
+        this.pendingSkipTo.set(token, { guildId: s.guildId, createdAt: Date.now() });
+        const menu = new StringSelectMenuBuilder()
+          .setCustomId(`skipto:${token}`)
+          .setPlaceholder('⏭ Skip to a future track…')
+          .addOptions(
+            upcoming.map(({ t, i }) => ({
+              label: truncate(t.name || 'Untitled', 90),
+              description: truncate((t.artists ?? []).join(', ') || `#${i}`, 90),
+              value: String(i),
+            })),
+          );
+        components.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu));
+      }
+    }
     return { embeds: [embed], components };
   }
 
@@ -4970,6 +4993,13 @@ export class DiscordBot {
         {
           name: 'YouTube',
           value: `canary \`${yt}\` · cookies ${cookieAge === null ? '`missing`' : `\`${cookieAge}d\``}`,
+          inline: true,
+        },
+        {
+          name: 'Playback',
+          value: `path \`${config.spotifyPreferYoutube ? 'youtube' : 'librespot'}\` · search \`${
+            config.spotifyAnonSearch ? 'anon' : 'oauth'
+          }\` · autoplay \`${s ? EW.modeOf(s.endlessWave) : 'n/a'}\``,
           inline: true,
         },
         { name: 'Web Push', value: `${pushSubscriptionCount()} subscriber(s)`, inline: true },

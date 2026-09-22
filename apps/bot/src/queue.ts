@@ -159,23 +159,40 @@ export class QueueManager {
     this.emitQueue();
   }
 
-  /** Remove duplicate *upcoming* tracks (same uri), keeping the first occurrence.
-   *  Played tracks and the current track are left alone. Returns the count removed. */
+  /** Remove duplicate *upcoming* tracks, keeping the first occurrence. Matches
+   *  on exact uri OR the same normalised "title|artist" — so the same song from a
+   *  different upload is caught too. Played tracks and the current track are left
+   *  alone. Returns the count removed. */
   dedupe(): number {
+    const norm = (x: string): string => x.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    const keyOf = (t: TrackInfo): string => {
+      const name = norm(t.name ?? '')
+        // Strip the boilerplate that differs between uploads of the same song.
+        .replace(/\b(official|audio|lyric|lyrics|video|visuali[sz]er|hd|hq|remaster|remastered|mv)\b/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!name) return '';
+      const artist = norm((t.artists ?? [])[0] ?? '')
+        .replace(/\btopic\b/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      return `${name}|${artist}`;
+    };
     const seen = new Set<string>();
     const keep: TrackInfo[] = [];
     let removed = 0;
     this.tracks.forEach((t, i) => {
+      const keys = [t.uri ? `u:${t.uri}` : '', keyOf(t) ? `k:${keyOf(t)}` : ''].filter(Boolean);
       if (i <= this.currentIndex) {
         keep.push(t);
-        if (t.uri) seen.add(t.uri);
+        for (const k of keys) seen.add(k);
         return;
       }
-      if (t.uri && seen.has(t.uri)) {
+      if (keys.some((k) => seen.has(k))) {
         removed++;
         return;
       }
-      if (t.uri) seen.add(t.uri);
+      for (const k of keys) seen.add(k);
       keep.push(t);
     });
     if (removed > 0) {

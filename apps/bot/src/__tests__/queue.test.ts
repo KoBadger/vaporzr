@@ -169,3 +169,76 @@ describe('QueueManager regressions', () => {
     expect(st.durationMs).toBe(0);
   });
 });
+
+describe('QueueManager.dedupe', () => {
+  it('removes duplicate upcoming tracks by uri, keeping the first', () => {
+    const q = new QueueManager();
+    q.setState({ playing: true });
+    q.enqueue(track('spotify:track:a', 'A'), 'u');
+    q.enqueue(track('spotify:track:b', 'B'), 'u');
+    q.enqueue(track('spotify:track:a', 'A'), 'u');
+    q.enqueue(track('spotify:track:c', 'C'), 'u');
+    expect(q.dedupe()).toBe(1);
+    expect(q.getSnapshot().tracks.map((t) => t.uri)).toEqual([
+      'spotify:track:a',
+      'spotify:track:b',
+      'spotify:track:c',
+    ]);
+  });
+
+  it('catches the same song from a different upload (title+artist)', () => {
+    const q = new QueueManager();
+    q.setState({ playing: true });
+    q.enqueue(track('youtube:video:x', 'Fix It'), 'u');
+    q.enqueue(track('youtube:video:y', 'Fix It (Official Audio)'), 'u');
+    expect(q.dedupe()).toBe(1);
+    expect(q.getSnapshot().tracks).toHaveLength(1);
+  });
+
+  it('never touches played tracks or the current track', () => {
+    const q = new QueueManager();
+    q.setState({ playing: true });
+    q.enqueue(track('spotify:track:a', 'A'), 'u'); // current (idx 0)
+    q.enqueue(track('spotify:track:a', 'A'), 'u'); // duplicate upcoming
+    q.enqueue(track('spotify:track:b', 'B'), 'u');
+    expect(q.dedupe()).toBe(1);
+    expect(q.getSnapshot().tracks).toHaveLength(2);
+    expect(q.getSnapshot().currentIndex).toBe(0);
+  });
+
+  it('returns 0 when there is nothing to remove', () => {
+    const q = new QueueManager();
+    q.setState({ playing: true });
+    q.enqueue(track('spotify:track:a', 'A'), 'u');
+    q.enqueue(track('spotify:track:b', 'B'), 'u');
+    expect(q.dedupe()).toBe(0);
+  });
+});
+
+describe('QueueManager.removeUpTo (skip-to)', () => {
+  it('drops the upcoming tracks before the chosen one', () => {
+    const q = new QueueManager();
+    q.setState({ playing: true });
+    q.enqueue(track('spotify:track:a', 'A'), 'u');
+    q.enqueue(track('spotify:track:b', 'B'), 'u');
+    q.enqueue(track('spotify:track:c', 'C'), 'u');
+    q.enqueue(track('spotify:track:d', 'D'), 'u');
+    // current = index 0; jump to index 3 removes b and c
+    expect(q.removeUpTo(3)).toBe(2);
+    const snap = q.getSnapshot();
+    expect(snap.tracks.map((t) => t.uri)).toEqual(['spotify:track:a', 'spotify:track:d']);
+    expect(snap.currentIndex).toBe(0);
+  });
+
+  it('is a no-op for the current/next track or an out-of-range index', () => {
+    const q = new QueueManager();
+    q.setState({ playing: true });
+    q.enqueue(track('spotify:track:a', 'A'), 'u');
+    q.enqueue(track('spotify:track:b', 'B'), 'u');
+    q.enqueue(track('spotify:track:c', 'C'), 'u');
+    expect(q.removeUpTo(0)).toBe(0);
+    expect(q.removeUpTo(1)).toBe(0);
+    expect(q.removeUpTo(9)).toBe(0);
+    expect(q.getSnapshot().tracks).toHaveLength(3);
+  });
+});

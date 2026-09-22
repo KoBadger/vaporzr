@@ -466,6 +466,13 @@ export class Bridge {
       case 'dedupe':
         this.queue.dedupe();
         break;
+      case 'skipto':
+        // Jump to a future queued track, dropping everything it skips.
+        if (msg.index != null) {
+          this.queue.removeUpTo(msg.index);
+          this.playback.next();
+        }
+        break;
       case 'switchGuild':
         if (msg.guildId) {
           console.log(`[bridge] switching primary guild to ${msg.guildId}`);
@@ -744,6 +751,7 @@ export class Bridge {
         : undefined,
       ambient: this.primaryGuildId ? this.perms.getAmbient(this.primaryGuildId) : undefined,
       voteSkip: this.primaryGuildId ? this.perms.getVoteSkip(this.primaryGuildId) : undefined,
+      skipForward: this.primaryGuildId ? this.perms.getSkipForward(this.primaryGuildId) : undefined,
     };
     this.sendToSocket(socket, out);
   }

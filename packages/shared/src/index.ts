@@ -111,7 +111,8 @@ export type CommandName =
   | 'speed'
   | 'ambient'
   | 'voteskip'
-  | 'dedupe';
+  | 'dedupe'
+  | 'skipto';
 
 export interface CommandMessage {
   type: 'cmd';
@@ -176,7 +177,7 @@ export type InboundMessage =
   | CommandMessage;
 
 export type OutboundMessage =
-  | { type: 'snapshot'; state: PlaybackState; queue: QueueSnapshot; permissions?: PermissionSnapshot; voice?: { joined: boolean; channelId?: string }; theme?: VaporzrTheme; djEnabled?: boolean; primaryGuildId?: string; guilds?: Array<{ id: string; name: string }>; sensitivity?: number; guest?: boolean; endlesswave?: boolean; endlesswaveMode?: 'off' | 'basic' | 'smart'; ambient?: boolean; voteSkip?: boolean }
+  | { type: 'snapshot'; state: PlaybackState; queue: QueueSnapshot; permissions?: PermissionSnapshot; voice?: { joined: boolean; channelId?: string }; theme?: VaporzrTheme; djEnabled?: boolean; primaryGuildId?: string; guilds?: Array<{ id: string; name: string }>; sensitivity?: number; guest?: boolean; endlesswave?: boolean; endlesswaveMode?: 'off' | 'basic' | 'smart'; ambient?: boolean; voteSkip?: boolean; skipForward?: boolean }
   | { type: 'state:update'; state: PlaybackState; guildId?: string }
   | { type: 'queue:update'; queue: QueueSnapshot }
   | { type: 'perm:update'; permissions: PermissionSnapshot }

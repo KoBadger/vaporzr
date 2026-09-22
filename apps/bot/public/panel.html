@@ -457,6 +457,7 @@ body.guest #guilds{display:none}
   var ws = null, state = null, queue = [], djEnabled = false, connected = false;
   var sensitivity = 1.0, themeId = 'vaporzr';
   var waveMode = 'off';
+  var skipForward = false;
   var selected = new Set(), dragIndex = -1;
 
   var THEMES = [
@@ -636,6 +637,7 @@ body.guest #guilds{display:none}
         bt.onclick=function(ev){ev.stopPropagation();fn()};return bt;
       }
       acts.appendChild(mk('▶','Play now',function(){cmd('playAt',{index:i})}));
+      if(skipForward)acts.appendChild(mk('⏭','Skip to here — drops the tracks in between',function(){cmd('skipto',{index:i})}));
       acts.appendChild(mk('▲','Move up one',function(){if(i>0)cmd('move',{index:i,to:i-1})}));
       acts.appendChild(mk('▼','Move down one',function(){if(i<queue.length-1)cmd('move',{index:i,to:i+1})}));
       acts.appendChild(mk('✕','Remove from queue',function(){cmd('remove',{index:i})},'danger'));
@@ -738,6 +740,7 @@ body.guest #guilds{display:none}
           if(msg.endlesswaveMode)waveMode=msg.endlesswaveMode;else if(msg.endlesswave!=null)waveMode=msg.endlesswave?'smart':'off';
           if(msg.ambient!=null&&el['amb-state'])el['amb-state'].textContent=msg.ambient?'on':'off';
           if(msg.voteSkip!=null&&el['vs-state'])el['vs-state'].textContent=msg.voteSkip?'on':'off';
+          if(msg.skipForward!=null)skipForward=msg.skipForward;
           if(msg.theme){for(var i=0;i<THEMES.length;i++)if(THEMES[i].id===msg.theme.id)applyTheme(THEMES[i])}
           if(typeof msg.sensitivity==='number')setSens(msg.sensitivity,false);
           if(msg.voice)el.voice.textContent=msg.voice.joined?'🔊 streaming':'🔇 not streaming';
