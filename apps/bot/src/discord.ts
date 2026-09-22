@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs/promises';
-import { statSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -461,11 +461,11 @@ const COMMANDS = [
     .addStringOption((o) => o.setName('b').setDescription('Second song (link or name)').setRequired(true))
     .addIntegerOption((o) =>
       o
-        .setName('crossfade')
-        .setDescription('Crossfade seconds (4–20, default 12)')
+        .setName('length')
+        .setDescription('Excerpt length in seconds (30–180, default 90)')
         .setRequired(false)
-        .setMinValue(4)
-        .setMaxValue(20),
+        .setMinValue(30)
+        .setMaxValue(180),
     ),
   new SlashCommandBuilder()
     .setName('mix')
@@ -1893,19 +1893,10 @@ export class DiscordBot {
         await interaction.deferReply();
         const a = interaction.options.getString('a', true);
         const b = interaction.options.getString('b', true);
-        const sec = interaction.options.getInteger('crossfade') ?? 12;
-        const r = await this.mashupTracks(a, b, sec);
-        if (!r.file) {
-          await interaction.editReply(r.text);
-          break;
-        }
-        try {
-          await interaction.editReply({
-            embeds: [this.mashupEmbed(r.text, r.similar)],
-            files: [new AttachmentBuilder(r.file, { name: 'vaporzr-mashup.mp3' })],
-          });
-        } finally {
-          for (const f of r.cleanup) await fs.rm(f, { force: true }).catch(() => {});
+        const ch = interaction.channel;
+        await interaction.editReply('🎛️ Rendering stem mashup — separating both songs (this can take several minutes)…');
+        if (ch && 'send' in ch) {
+          void this.startMashupRender((p) => ch.send(p), interaction.guildId ?? '', a, b);
         }
         break;
       }
@@ -2867,22 +2858,13 @@ export class DiscordBot {
           if (parts.length < 2)
             return void (
               await message.reply(
-                'Usage: `V@mashup <song A> | <song B> [crossfade]` — renders a beat/key-matched blend (attached) + 5 similar songs.',
+                'Usage: `V@mashup <song A> | <song B>` — separates both songs and cross-layers their stems into 2 downloadable blends + 5 similar songs. Takes a few minutes.',
               )
             );
-          const sec = parts[2] ? parseInt(parts[2], 10) : 12;
-          await this.withAck(message, '🎛️ Rendering your mashup…', async () => {
-            const r = await this.mashupTracks(parts[0], parts[1], Number.isFinite(sec) ? sec : 12);
-            if (!r.file) throw new Error(r.text);
-            try {
-              await message.reply({
-                embeds: [this.mashupEmbed(r.text, r.similar)],
-                files: [new AttachmentBuilder(r.file, { name: 'vaporzr-mashup.mp3' })],
-              });
-            } finally {
-              for (const f of r.cleanup) await fs.rm(f, { force: true }).catch(() => {});
-            }
-          });
+          const ch = message.channel;
+          if (!('send' in ch)) return void (await message.reply('Cannot post here.'));
+          await message.reply('🎛️ Rendering stem mashup — separating both songs (this can take several minutes)…');
+          void this.startMashupRender((p) => ch.send(p), message.guildId ?? '', parts[0], parts[1]);
           break;
         }
 
@@ -5595,8 +5577,222 @@ export class DiscordBot {
     };
   }
 
-  /** Embed for a rendered mashup: the blend description + similar-track list. */
-  private mashupEmbed(text: string, similar: ResolvedTrack[]): EmbedBuilder {
+  /** Separate a track into stems with Demucs (CPU; vocals/other only — the two
+   *  we mix). Returns stem paths and a cleanup list. Cached by demucs itself. */
+  private async separateStems(
+    file: string,
+    cleanup: string[],
+  ): Promise<{ vocals: string; other: string } | null> {
+    const outDir = path.join(config.dataDir, 'uploads', `stems-${Date.now()}-${Math.floor(Math.random() * 1e6)}`);
+    cleanup.push(outDir);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const p = spawn(
+          'demucs',
+          // `--two-stems=vocals` produces vocals.wav + no_vocals.wav and is
+          // noticeably faster than the full 4-stem separation on CPU.
+          ['-n', 'htdemucs', '--two-stems=vocals', '-o', outDir, file],
+          { windowsHide: true },
+        );
+        let err = '';
+        p.stderr?.on('data', (d: Buffer) => {
+          err += d.toString();
+        });
+        p.on('error', reject);
+        p.on('exit', (code) =>
+          code === 0 ? resolve() : reject(new Error(err.slice(-300) || `demucs exited ${code}`)),
+        );
+      });
+    } catch (e) {
+      console.warn(`[mashup] demucs failed: ${e instanceof Error ? e.message : e}`);
+      return null;
+    }
+    const base = path.join(outDir, 'htdemucs', path.basename(file).replace(/\.[^.]+$/, ''));
+    const vocals = path.join(base, 'vocals.wav');
+    const other = path.join(base, 'no_vocals.wav');
+    if (!existsSync(vocals) || !existsSync(other)) return null;
+    return { vocals, other };
+  }
+
+  /** Resolve + download both mashup inputs into a work dir. */
+  private async prepareMashupInputs(
+    a: string,
+    b: string,
+    cleanup: string[],
+  ): Promise<
+    | { ok: false; text: string }
+    | { ok: true; ra: ResolvedTrack; rb: ResolvedTrack; ia: string; ib: string; dir: string }
+  > {
+    const ra = (await resolvePlayInput(a).catch(() => []))[0];
+    const rb = (await resolvePlayInput(b).catch(() => []))[0];
+    if (!ra || !rb) return { ok: false, text: 'Need two resolvable tracks (links or names).' };
+    const ta = await EW.resolveCandidate(ra).catch(() => null);
+    const tb = await EW.resolveCandidate(rb).catch(() => null);
+    const ua = ra.streamUrl ?? ta?.streamUrl;
+    const ub = rb.streamUrl ?? tb?.streamUrl;
+    if (!ua || !ub) return { ok: false, text: 'Could not resolve a playable stream for one of those.' };
+    const dir = path.join(config.dataDir, 'uploads', `mash-${Date.now()}`);
+    await fs.mkdir(dir, { recursive: true });
+    cleanup.push(dir);
+    const grab = async (url: string, base: string): Promise<string | null> => {
+      if (!/^https?:\/\//i.test(url)) return url;
+      const tmp = await downloadToTempFile(url);
+      if (!tmp) return null;
+      cleanup.push(tmp);
+      const dest = path.join(dir, `${base}${path.extname(tmp) || '.mp3'}`);
+      await fs.copyFile(tmp, dest);
+      return dest;
+    };
+    const ia = await grab(ua, 'a');
+    const ib = await grab(ub, 'b');
+    if (!ia || !ib) return { ok: false, text: 'Could not download one of those tracks.' };
+    return { ok: true, ra, rb, ia, ib, dir };
+  }
+
+  private async mashupTuning(ra: ResolvedTrack, rb: ResolvedTrack) {
+    type FeatArg = Parameters<typeof EW.fetchFeatures>[0];
+    const fa = await EW.fetchFeatures(ra as unknown as FeatArg).catch(() => null);
+    const fb = await EW.fetchFeatures(rb as unknown as FeatArg).catch(() => null);
+    return { fa, fb };
+  }
+
+  /** rubberband chain that matches `src` to `target`'s tempo + key. */
+  private stretchChain(
+    targetTempo: number,
+    targetKey: number | null | undefined,
+    srcTempo: number,
+    srcKey: number | null | undefined,
+  ): string {
+    let semis = 0;
+    if (targetKey != null && srcKey != null) {
+      semis = (((targetKey - srcKey) % 12) + 12) % 12;
+      if (semis > 6) semis -= 12;
+    }
+    const pitch = Math.pow(2, semis / 12);
+    const tempo = targetTempo > 0 && srcTempo > 0 ? Math.max(0.7, Math.min(1.4, targetTempo / srcTempo)) : 1;
+    return `rubberband=tempo=${tempo.toFixed(4)}:pitch=${pitch.toFixed(4)},aresample=48000`;
+  }
+
+  /** Phase-2 render: separate both tracks and cross-layer their stems into two
+   *  variants (A vocals over B backing, and the reverse). Falls back to the
+   *  Phase-1 blend if Demucs is unavailable. */
+  private async renderMashupStems(
+    a: string,
+    b: string,
+    durSec: number,
+    cleanup: string[],
+  ): Promise<{ ok: boolean; text: string; files: string[]; similar: ResolvedTrack[] }> {
+    const prep = await this.prepareMashupInputs(a, b, cleanup);
+    if (!prep.ok) return { ok: false, text: prep.text, files: [], similar: [] };
+    const { ra, rb, ia, ib, dir } = prep;
+    const [sa, sb] = await Promise.all([this.separateStems(ia, cleanup), this.separateStems(ib, cleanup)]);
+    if (!sa || !sb) {
+      const blend = await this.mashupTracks(a, b, 12);
+      cleanup.push(...blend.cleanup);
+      return {
+        ok: !!blend.file,
+        text: `${blend.text}\n_(stem separation unavailable here — posted a beat/key-matched blend instead)_`,
+        files: blend.file ? [blend.file] : [],
+        similar: blend.similar,
+      };
+    }
+    const { fa, fb } = await this.mashupTuning(ra, rb);
+    const dur = Math.max(30, Math.min(180, durSec || 90));
+    const v1 = path.join(dir, 'v1.mp3');
+    const v2 = path.join(dir, 'v2.mp3');
+    const fade = `alimiter=limit=0.95,afade=t=in:st=0:d=2,afade=t=out:st=${dur - 3}:d=3`;
+    const mk = (voc: string, inst: string, chain: string, out: string): string[] => [
+      '-hide_banner',
+      '-loglevel',
+      'error',
+      '-i',
+      voc,
+      '-i',
+      inst,
+      '-filter_complex',
+      `[0:a]aresample=48000[v];[1:a]${chain}[i];[v][i]amix=inputs=2:duration=shortest:normalize=0,${fade}[out]`,
+      '-map',
+      '[out]',
+      '-t',
+      String(dur),
+      '-c:a',
+      'libmp3lame',
+      '-b:a',
+      '192k',
+      '-y',
+      out,
+    ];
+    try {
+      await this.runFfmpeg(
+        mk(sa.vocals, sb.other, this.stretchChain(fa?.tempo ?? 0, fa?.key, fb?.tempo ?? 0, fb?.key), v1),
+      );
+      await this.runFfmpeg(
+        mk(sb.vocals, sa.other, this.stretchChain(fb?.tempo ?? 0, fb?.key, fa?.tempo ?? 0, fa?.key), v2),
+      );
+    } catch (err) {
+      return { ok: false, text: `Render failed: ${err instanceof Error ? err.message : err}`, files: [], similar: [] };
+    }
+    cleanup.push(v1, v2);
+
+    const seeds = [ra.uri, rb.uri]
+      .filter((u) => u.startsWith('spotify:track:'))
+      .map((u) => u.split(':')[2]);
+    const similar = seeds.length
+      ? await getRecommendations({ seedTracks: seeds, limit: 5 }).catch(() => [])
+      : [];
+    const keyNote = fa && fb ? ` · keys ${DiscordBot.KEY_NAMES[fa.key] ?? '?'}/${DiscordBot.KEY_NAMES[fb.key] ?? '?'}` : '';
+    const tempoNote = fa?.tempo && fb?.tempo ? ` · ${Math.round(fa.tempo)}/${Math.round(fb.tempo)} BPM` : '';
+    return {
+      ok: true,
+      text:
+        `🎛️ **${truncate(ra.name, 45)}** × **${truncate(rb.name, 45)}** — stem mashup (${dur}s)${tempoNote}${keyNote}\n` +
+        `• **v1** — ${truncate(ra.name, 30)} vocals over ${truncate(rb.name, 30)} backing\n` +
+        `• **v2** — ${truncate(rb.name, 30)} vocals over ${truncate(ra.name, 30)} backing`,
+      files: [v1, v2],
+      similar,
+    };
+  }
+
+  /** One mashup render per guild at a time; posts the result as a NEW message
+   *  (a render can outlast Discord's interaction window). */
+  private mashupBusy = new Set<string>();
+  private async startMashupRender(
+    send: (payload: { embeds: EmbedBuilder[]; files: AttachmentBuilder[] }) => Promise<unknown>,
+    guildId: string,
+    a: string,
+    b: string,
+  ): Promise<void> {
+    if (this.mashupBusy.has(guildId)) {
+      await send({
+        embeds: [
+          new EmbedBuilder().setColor(this.themeColor()).setDescription('⏳ Already rendering a mashup here — give it a few minutes.'),
+        ],
+        files: [],
+      }).catch(() => {});
+      return;
+    }
+    this.mashupBusy.add(guildId);
+    const cleanup: string[] = [];
+    try {
+      const r = await this.renderMashupStems(a, b, 90, cleanup);
+      const files = r.files.map((f, i) => new AttachmentBuilder(f, { name: `vaporzr-mashup-${i + 1}.mp3` }));
+      await send({ embeds: [this.mashupEmbed(r.text, r.similar)], files }).catch(() => {});
+    } catch (err) {
+      await send({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(this.themeColor())
+            .setDescription(`❌ Mashup failed: ${err instanceof Error ? err.message : err}`),
+        ],
+        files: [],
+      }).catch(() => {});
+    } finally {
+      this.mashupBusy.delete(guildId);
+      for (const f of cleanup) await fs.rm(f, { force: true, recursive: true }).catch(() => {});
+    }
+  }
+
+  /** Embed for a rendered mashup: the blend description + similar-track list. */  private mashupEmbed(text: string, similar: ResolvedTrack[]): EmbedBuilder {
     const lines = [text];
     if (similar.length) {
       lines.push('', '**Similar vibes:**');

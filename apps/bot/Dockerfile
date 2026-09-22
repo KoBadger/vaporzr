@@ -54,6 +54,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && python3 -m venv /opt/ytvenv \
     && /opt/ytvenv/bin/pip install --no-cache-dir --upgrade yt-dlp bgutil-ytdlp-pot-provider \
     && ln -s /opt/ytvenv/bin/yt-dlp /usr/local/bin/yt-dlp \
+    && /opt/ytvenv/bin/pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch torchaudio \
+    && /opt/ytvenv/bin/pip install --no-cache-dir demucs \
+    && ln -s /opt/ytvenv/bin/demucs /usr/local/bin/demucs \
     && curl -fsSL -o /tmp/glr.tar.gz https://github.com/devgianlu/go-librespot/releases/download/v0.10.0/go-librespot_linux_x86_64.tar.gz \
     && tar -xzf /tmp/glr.tar.gz -C /tmp \
     && install -m 755 /tmp/go-librespot /usr/local/bin/go-librespot \
@@ -70,6 +73,7 @@ COPY librespot /usr/local/bin/librespot
 
 ENV NODE_ENV=production \
     VAPORZR_BUILD=$GIT_SHA \
+    TORCH_HOME=/app/data/torch \
     SPOTIFY_BACKEND=librespot \
     GO_LIBRESPOT_PATH=/usr/local/bin/go-librespot \
     PORT=4876 \
