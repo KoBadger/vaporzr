@@ -6062,6 +6062,10 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/queue` · `V@q` — view the queue (paged)',
       '`/shuffle` · `V@sh` — shuffle the queue',
       '`/remove <#>` · `V@rem <#>` — remove a queued track',
+      '`/dedupe` · `V@dd` — remove duplicate upcoming tracks',
+      '`/bulk <tracks>` · `V@bulk` — queue a list at once (one per line, max 10)',
+      '`/skipto` · `V@skipto` — jump to a future track (drops the ones skipped; off by default)',
+      '`/skiptoggle on|off` · `V@skiptoggle` — allow /skipto here (mod)',
     ],
   },
   {
