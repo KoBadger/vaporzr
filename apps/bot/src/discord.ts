@@ -5675,17 +5675,27 @@ export class DiscordBot {
    *  we mix). Returns stem paths and a cleanup list. Cached by demucs itself. */
   private async separateStems(
     file: string,
+    cacheKey: string,
     cleanup: string[],
   ): Promise<{ vocals: string; other: string } | null> {
+    // Reuse cached stems when we've separated this track before — the slow part
+    // (the game re-uses tracks a lot, and repeat pairs become near-instant).
+    const cacheDir = path.join(config.dataDir, 'stems', cacheKey);
+    const cVoc = path.join(cacheDir, 'vocals.mp3');
+    const cOth = path.join(cacheDir, 'no_vocals.mp3');
+    if (existsSync(cVoc) && existsSync(cOth)) {
+      console.log(`[mashup] stems cache hit (${cacheKey})`);
+      return { vocals: cVoc, other: cOth };
+    }
     const outDir = path.join(config.dataDir, 'uploads', `stems-${Date.now()}-${Math.floor(Math.random() * 1e6)}`);
     cleanup.push(outDir);
     try {
       await new Promise<void>((resolve, reject) => {
         const p = spawn(
           'demucs',
-          // `--two-stems=vocals` produces vocals.wav + no_vocals.wav and is
-          // noticeably faster than the full 4-stem separation on CPU.
-          ['-n', 'htdemucs', '--two-stems=vocals', '-o', outDir, file],
+          // `--two-stems=vocals` (vocals + no_vocals) is much faster than the
+          // full 4-stem split on CPU; `--mp3` keeps the cached stems small.
+          ['-n', 'htdemucs', '--two-stems=vocals', '--mp3', '--mp3-bitrate', '192', '-o', outDir, file],
           { windowsHide: true },
         );
         let err = '';
@@ -5702,10 +5712,42 @@ export class DiscordBot {
       return null;
     }
     const base = path.join(outDir, 'htdemucs', path.basename(file).replace(/\.[^.]+$/, ''));
-    const vocals = path.join(base, 'vocals.wav');
-    const other = path.join(base, 'no_vocals.wav');
+    const vocals = path.join(base, 'vocals.mp3');
+    const other = path.join(base, 'no_vocals.mp3');
     if (!existsSync(vocals) || !existsSync(other)) return null;
-    return { vocals, other };
+    try {
+      await fs.mkdir(cacheDir, { recursive: true });
+      await fs.rename(vocals, cVoc);
+      await fs.rename(other, cOth);
+      void this.pruneStems();
+      return { vocals: cVoc, other: cOth };
+    } catch {
+      // Couldn't persist — fall back to the temp copies (removed with cleanup).
+      return { vocals, other };
+    }
+  }
+
+  /** Keep the stems cache bounded (newest 60 tracks). */
+  private pruneStems(): void {
+    void (async () => {
+      try {
+        const root = path.join(config.dataDir, 'stems');
+        const entries = await fs.readdir(root).catch(() => [] as string[]);
+        if (entries.length <= 60) return;
+        const stats = await Promise.all(
+          entries.map(async (e) => ({
+            e,
+            m: (await fs.stat(path.join(root, e)).catch(() => null))?.mtimeMs ?? 0,
+          })),
+        );
+        stats.sort((a, b) => b.m - a.m);
+        for (const { e } of stats.slice(60)) {
+          await fs.rm(path.join(root, e), { force: true, recursive: true }).catch(() => {});
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
   }
 
   /** Resolve + download both mashup inputs into a work dir. */
@@ -5779,7 +5821,12 @@ export class DiscordBot {
     const prep = await this.prepareMashupInputs(a, b, cleanup);
     if (!prep.ok) return { ok: false, text: prep.text, files: [], similar: [] };
     const { ra, rb, ia, ib, dir } = prep;
-    const [sa, sb] = await Promise.all([this.separateStems(ia, cleanup), this.separateStems(ib, cleanup)]);
+    const keyA = createHash('sha1').update(ra.uri).digest('hex').slice(0, 16);
+    const keyB = createHash('sha1').update(rb.uri).digest('hex').slice(0, 16);
+    const [sa, sb] = await Promise.all([
+      this.separateStems(ia, keyA, cleanup),
+      this.separateStems(ib, keyB, cleanup),
+    ]);
     if (!sa || !sb) {
       const blend = await this.mashupTracks(a, b, 12);
       cleanup.push(...blend.cleanup);
@@ -5794,7 +5841,10 @@ export class DiscordBot {
     const dur = Math.max(30, Math.min(180, durSec || 90));
     const v1 = path.join(dir, 'v1.mp3');
     const v2 = path.join(dir, 'v2.mp3');
-    const fade = `alimiter=limit=0.95,afade=t=in:st=0:d=2,afade=t=out:st=${dur - 3}:d=3`;
+    // Trim the theatrical intro (leading near-silence) from both stems so the
+    // vocals and the backing actually start together, then loudness-match.
+    const trim = 'silenceremove=start_periods=1:start_silence=0.05:start_threshold=-45dB';
+    const fade = `loudnorm=I=-14:TP=-1.5:LRA=11,alimiter=limit=0.95,afade=t=in:st=0:d=2,afade=t=out:st=${dur - 3}:d=3`;
     const mk = (voc: string, inst: string, chain: string, out: string): string[] => [
       '-hide_banner',
       '-loglevel',
@@ -5804,7 +5854,7 @@ export class DiscordBot {
       '-i',
       inst,
       '-filter_complex',
-      `[0:a]aresample=48000[v];[1:a]${chain}[i];[v][i]amix=inputs=2:duration=shortest:normalize=0,${fade}[out]`,
+      `[0:a]${trim},aresample=48000[v];[1:a]${trim},${chain}[i];[v][i]amix=inputs=2:duration=longest:normalize=0,${fade}[out]`,
       '-map',
       '[out]',
       '-t',
@@ -5882,7 +5932,10 @@ export class DiscordBot {
   }
 
   /** Vote tallies for active mashup games (in-memory; resets on restart). */
-  private mashupVotes = new Map<string, { v1: Set<string>; v2: Set<string> }>();
+  private mashupVotes = new Map<
+    string,
+    { v1: Set<string>; v2: Set<string>; timer?: NodeJS.Timeout; message?: Message }
+  >();
 
   /** Suggest a pair of queued tracks for the mashup game. */
   private suggestMashupPair(s: Session): { a: string; b: string } | null {
@@ -5939,7 +5992,7 @@ export class DiscordBot {
           .setLabel('Close & reveal')
           .setStyle(ButtonStyle.Secondary),
       );
-      await send({
+      const sent = await send({
         embeds: [
           this.mashupEmbed(
             `🎲 **Mashup game!** Listen to both blends and vote for the best.\n${r.text}`,
@@ -5948,7 +6001,15 @@ export class DiscordBot {
         ],
         files,
         components: [row],
-      }).catch(() => {});
+      }).catch(() => null);
+      const state = this.mashupVotes.get(id);
+      if (state) {
+        if (sent && typeof sent === 'object' && 'edit' in sent) state.message = sent as Message;
+        // Auto-reveal after 3 minutes so the game never hangs waiting.
+        const t = setTimeout(() => void this.revealMashup(id), 3 * 60 * 1000);
+        t.unref?.();
+        state.timer = t;
+      }
     } catch (err) {
       await send({
         embeds: [
@@ -5981,33 +6042,63 @@ export class DiscordBot {
         flags: MessageFlags.Ephemeral,
       })
       .catch(() => {});
+    void this.maybeAutoReveal(id);
   }
 
-  private async handleMashReveal(i: ButtonInteraction): Promise<void> {
-    const id = i.customId.slice('mashreveal:'.length);
-    const v = this.mashupVotes.get(id);
-    if (!v) {
-      await i.reply({ content: '⌛ Already revealed.', flags: MessageFlags.Ephemeral }).catch(() => {});
-      return;
-    }
+  /** Close voting when every human in the bot's voice channel has voted. */
+  private async maybeAutoReveal(id: string): Promise<void> {
+    const st = this.mashupVotes.get(id);
+    const guild = st?.message?.guild ?? null;
+    if (!st || !guild) return;
+    const s = this.sessionFor(guild.id);
+    const chanId = s.voice.getChannelId();
+    if (!chanId) return;
+    const ch = await guild.channels.fetch(chanId).catch(() => null);
+    const members =
+      ch && 'members' in ch
+        ? [
+            ...(
+              ch as unknown as { members: Map<string, { id: string; user: { bot: boolean } }> }
+            ).members.values(),
+          ]
+        : [];
+    const humans = members.filter((m) => !m.user.bot).map((m) => m.id);
+    const voted = new Set([...st.v1, ...st.v2]);
+    if (humans.length > 0 && humans.every((h) => voted.has(h))) void this.revealMashup(id);
+  }
+
+  /** Announce the winner, record it, and drop the vote buttons. */
+  private async revealMashup(id: string): Promise<void> {
+    const st = this.mashupVotes.get(id);
+    if (!st) return;
+    if (st.timer) clearTimeout(st.timer);
     this.mashupVotes.delete(id);
-    const winner: 'v1' | 'v2' | 'tie' = v.v1.size === v.v2.size ? 'tie' : v.v1.size > v.v2.size ? 'v1' : 'v2';
+    const winner: 'v1' | 'v2' | 'tie' = st.v1.size === st.v2.size ? 'tie' : st.v1.size > st.v2.size ? 'v1' : 'v2';
     const hist = await loadMashupHistory();
     const rec = hist.find((h) => h.id === id);
     if (rec) {
       rec.winner = winner;
       await saveMashupHistory(hist);
     }
-    await i
-      .update({
-        content: `🏆 **Winner: ${winner}** (v1: ${v.v1.size} · v2: ${v.v2.size})`,
-        embeds: [],
-        components: [],
-      })
-      .catch(() => {});
+    if (st.message) {
+      await st.message
+        .edit({ content: `🏆 **Winner: ${winner}** (v1: ${st.v1.size} · v2: ${st.v2.size})`, components: [] })
+        .catch(() => {});
+    }
   }
 
-  /** Embed for a rendered mashup: the blend description + similar-track list. */  private mashupEmbed(text: string, similar: ResolvedTrack[]): EmbedBuilder {
+  private async handleMashReveal(i: ButtonInteraction): Promise<void> {
+    const id = i.customId.slice('mashreveal:'.length);
+    if (!this.mashupVotes.has(id)) {
+      await i.reply({ content: '⌛ Already revealed.', flags: MessageFlags.Ephemeral }).catch(() => {});
+      return;
+    }
+    await i.deferUpdate().catch(() => {});
+    await this.revealMashup(id);
+  }
+
+  /** Embed for a rendered mashup: the blend description + similar-track list. */
+  private mashupEmbed(text: string, similar: ResolvedTrack[]): EmbedBuilder {
     const lines = [text];
     if (similar.length) {
       lines.push('', '**Similar vibes:**');
