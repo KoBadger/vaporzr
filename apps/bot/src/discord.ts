@@ -37,7 +37,7 @@ import {
 } from 'discord.js';
 import { generateDependencyReport } from '@discordjs/voice';
 import { config } from './config.js';
-import { resolveTracks, searchCandidates, SpotifyError, type ResolvedTrack } from './spotify.js';
+import { getRecommendations, resolveTracks, searchCandidates, SpotifyError, type ResolvedTrack } from './spotify.js';
 import { THEMES, themeById } from './themes.js';
 import {
   isGenericMediaUrl,
@@ -454,6 +454,19 @@ const COMMANDS = [
     .setName('skiptoggle')
     .setDescription('Allow /skipto in this server (mod)')
     .addBooleanOption((o) => o.setName('enabled').setDescription('Enable or disable /skipto').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('mashup')
+    .setDescription('Blend two songs into a beat/key-matched mix (attached) + 5 similar tracks')
+    .addStringOption((o) => o.setName('a').setDescription('First song (link or name)').setRequired(true))
+    .addStringOption((o) => o.setName('b').setDescription('Second song (link or name)').setRequired(true))
+    .addIntegerOption((o) =>
+      o
+        .setName('crossfade')
+        .setDescription('Crossfade seconds (4–20, default 12)')
+        .setRequired(false)
+        .setMinValue(4)
+        .setMaxValue(20),
+    ),
   new SlashCommandBuilder()
     .setName('mix')
     .setDescription('Crossfade two tracks into one DJ-style mix')
@@ -1875,6 +1888,28 @@ export class DiscordBot {
         break;
       }
 
+      case 'mashup': {
+        if (!this.requireLevel('mashup', interaction)) return this.deny(interaction);
+        await interaction.deferReply();
+        const a = interaction.options.getString('a', true);
+        const b = interaction.options.getString('b', true);
+        const sec = interaction.options.getInteger('crossfade') ?? 12;
+        const r = await this.mashupTracks(a, b, sec);
+        if (!r.file) {
+          await interaction.editReply(r.text);
+          break;
+        }
+        try {
+          await interaction.editReply({
+            embeds: [this.mashupEmbed(r.text, r.similar)],
+            files: [new AttachmentBuilder(r.file, { name: 'vaporzr-mashup.mp3' })],
+          });
+        } finally {
+          for (const f of r.cleanup) await fs.rm(f, { force: true }).catch(() => {});
+        }
+        break;
+      }
+
       case 'dedupe': {
         if (!this.requireLevel('dedupe', interaction)) return this.deny(interaction);
         const n = s.queue.dedupe();
@@ -2378,6 +2413,7 @@ export class DiscordBot {
       dna: 'dna', cover: 'cover',
       hype: 'hype',
       mix: 'mix',
+      mashup: 'mashup', msh: 'mashup',
       dedupe: 'dedupe', dd: 'dedupe',
       bulk: 'bulk',
       skipto: 'skipto',
@@ -2822,6 +2858,31 @@ export class DiscordBot {
           if (parts.length < 2) return void (await message.reply('Usage: `V@mix <a> | <b> [seconds]` (or `/mix`).'));
           const sec = parts[2] ? parseInt(parts[2], 10) : 6;
           await message.reply(await this.mixTracks(s, parts[0], parts[1], Number.isFinite(sec) ? sec : 6));
+          break;
+        }
+
+        case 'mashup': {
+          if (!canUse('mashup')) return void (await deny());
+          const parts = args.split(/\s*\|\s*|\s*->\s*/).map((x) => x.trim()).filter(Boolean);
+          if (parts.length < 2)
+            return void (
+              await message.reply(
+                'Usage: `V@mashup <song A> | <song B> [crossfade]` — renders a beat/key-matched blend (attached) + 5 similar songs.',
+              )
+            );
+          const sec = parts[2] ? parseInt(parts[2], 10) : 12;
+          await this.withAck(message, '🎛️ Rendering your mashup…', async () => {
+            const r = await this.mashupTracks(parts[0], parts[1], Number.isFinite(sec) ? sec : 12);
+            if (!r.file) throw new Error(r.text);
+            try {
+              await message.reply({
+                embeds: [this.mashupEmbed(r.text, r.similar)],
+                files: [new AttachmentBuilder(r.file, { name: 'vaporzr-mashup.mp3' })],
+              });
+            } finally {
+              for (const f of r.cleanup) await fs.rm(f, { force: true }).catch(() => {});
+            }
+          });
           break;
         }
 
@@ -5408,6 +5469,150 @@ export class DiscordBot {
   }
 
   /** Crossfade two tracks into one mix by resolving each to a stream URL. */
+  private static readonly KEY_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+
+  /** Run ffmpeg to completion, rejecting with its stderr on failure. */
+  private runFfmpeg(args: string[]): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const p = spawn(config.ffmpegPath, args, { windowsHide: true });
+      let err = '';
+      p.stderr?.on('data', (d: Buffer) => {
+        err += d.toString();
+      });
+      p.on('error', reject);
+      p.on('exit', (code) =>
+        code === 0 ? resolve() : reject(new Error(err.slice(0, 300) || `ffmpeg exited ${code}`)),
+      );
+    });
+  }
+
+  /**
+   * Phase-1 "mashup": render a tempo- and key-matched blend of two tracks into a
+   * downloadable MP3, plus a set of similar tracks to carry the vibe. (Stem-level
+   * (vocal/instrumental) mixing is a later phase — this is the DJ-transition
+   * foundation.)
+   */
+  private async mashupTracks(
+    a: string,
+    b: string,
+    sec: number,
+  ): Promise<{ text: string; file?: string; cleanup: string[]; similar: ResolvedTrack[] }> {
+    const cleanup: string[] = [];
+    const ra = (await resolvePlayInput(a).catch(() => []))[0];
+    const rb = (await resolvePlayInput(b).catch(() => []))[0];
+    if (!ra || !rb) return { text: 'Need two resolvable tracks (links or names).', cleanup, similar: [] };
+    const ta = await EW.resolveCandidate(ra).catch(() => null);
+    const tb = await EW.resolveCandidate(rb).catch(() => null);
+    const ua = ra.streamUrl ?? ta?.streamUrl;
+    const ub = rb.streamUrl ?? tb?.streamUrl;
+    if (!ua || !ub) return { text: 'Could not resolve a playable stream for one of those.', cleanup, similar: [] };
+    // ffmpeg's own HTTPS client 403s on googlevideo — pull via Node first.
+    const toInput = async (url: string): Promise<string | null> => {
+      if (!/^https?:\/\//i.test(url)) return url;
+      if (/\.m3u8(\?|$)/i.test(url)) return url;
+      const file = await downloadToTempFile(url);
+      if (file) cleanup.push(file);
+      return file;
+    };
+    const ia = await toInput(ua);
+    const ib = await toInput(ub);
+    if (!ia || !ib) return { text: 'Could not download one of those tracks.', cleanup, similar: [] };
+
+    // Tempo + key from Spotify audio features (only available for Spotify tracks).
+    type FeatArg = Parameters<typeof EW.fetchFeatures>[0];
+    const fa = await EW.fetchFeatures(ra as unknown as FeatArg).catch(() => null);
+    const fb = await EW.fetchFeatures(rb as unknown as FeatArg).catch(() => null);
+    let semis = 0;
+    if (fa && fb && fa.key != null && fb.key != null) {
+      semis = (((fa.key - fb.key) % 12) + 12) % 12;
+      if (semis > 6) semis -= 12;
+    }
+    const pitchRatio = Math.pow(2, semis / 12);
+    const tempoA = fa?.tempo ?? 0;
+    const tempoB = fb?.tempo ?? 0;
+    const tempoScale = tempoA > 0 && tempoB > 0 ? Math.max(0.7, Math.min(1.4, tempoA / tempoB)) : 1;
+
+    const xf = Math.max(4, Math.min(20, sec || 12));
+    const aDurSec = Math.max(20, Math.round((ta?.durationMs || ra.durationMs || 0) / 1000));
+    const AW = 30; // tail of A
+    const BW = 90; // head of B
+    const aStart = Math.max(0, aDurSec - AW);
+
+    const outDir = path.join(config.dataDir, 'uploads');
+    await fs.mkdir(outDir, { recursive: true });
+    const out = path.join(outDir, `mashup-${Date.now()}.mp3`);
+    const bChain = `rubberband=tempo=${tempoScale.toFixed(4)}:pitch=${pitchRatio.toFixed(4)},aresample=48000`;
+    const filter = `[0:a]aresample=48000[a0];[1:a]${bChain}[a1];[a0][a1]acrossfade=d=${xf}:c1=tri:c2=tri[out]`;
+    try {
+      await this.runFfmpeg([
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-ss',
+        String(aStart),
+        '-i',
+        ia,
+        '-t',
+        String(BW),
+        '-i',
+        ib,
+        '-filter_complex',
+        filter,
+        '-map',
+        '[out]',
+        '-c:a',
+        'libmp3lame',
+        '-b:a',
+        '192k',
+        '-y',
+        out,
+      ]);
+    } catch (err) {
+      return { text: `Render failed: ${err instanceof Error ? err.message : err}`, cleanup, similar: [] };
+    }
+    cleanup.push(out);
+
+    // 5 genuinely similar tracks to spread the vibe.
+    const seeds = [ra.uri, rb.uri]
+      .filter((u) => u.startsWith('spotify:track:'))
+      .map((u) => u.split(':')[2]);
+    const similar = seeds.length
+      ? await getRecommendations({ seedTracks: seeds, limit: 5 }).catch(() => [])
+      : [];
+
+    const keyNote =
+      fa && fb
+        ? ` · key ${DiscordBot.KEY_NAMES[fa.key] ?? '?'}→${DiscordBot.KEY_NAMES[fb.key] ?? '?'}${
+            semis ? ` (${semis > 0 ? '+' : ''}${semis}st)` : ''
+          }`
+        : '';
+    const tempoNote = tempoA && tempoB ? ` · ${Math.round(tempoA)}/${Math.round(tempoB)} BPM` : '';
+    return {
+      text: `🎛️ **${truncate(ra.name, 60)}** × **${truncate(rb.name, 60)}** — ${xf}s beat/key-matched blend${tempoNote}${keyNote}.`,
+      file: out,
+      cleanup,
+      similar,
+    };
+  }
+
+  /** Embed for a rendered mashup: the blend description + similar-track list. */
+  private mashupEmbed(text: string, similar: ResolvedTrack[]): EmbedBuilder {
+    const lines = [text];
+    if (similar.length) {
+      lines.push('', '**Similar vibes:**');
+      lines.push(
+        ...similar.map(
+          (t, i) =>
+            `${i + 1}. ${srcEmoji(t.source)} **${truncate(t.name, 60)}** — ${truncate(
+              (t.artists ?? []).join(', '),
+              50,
+            )}`,
+        ),
+      );
+    }
+    return new EmbedBuilder().setTitle('🎛️ Mashup').setDescription(lines.join('\n')).setColor(this.themeColor());
+  }
+
   private async mixTracks(s: Session, a: string, b: string, sec: number): Promise<string> {
     const d = Math.max(2, Math.min(20, sec || 6));
     const ra = (await resolvePlayInput(a).catch(() => []))[0];
@@ -6155,6 +6360,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/npchannel` · `V@npc` — post the live now-playing strip in this channel (mod; `off` disables)',
       '`/hype on|off` · `V@hype` — auto-hype: drop a hit on strong beats',
       '`/mix <a> <b>` · `V@mix <a> | <b>` — crossfade two tracks into one mix',
+      '`/mashup <a> <b>` · `V@mashup <a> | <b>` — render a tempo/key-matched blend (downloadable) + 5 similar tracks',
     ],
   },
   {
