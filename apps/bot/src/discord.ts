@@ -5016,11 +5016,7 @@ export class DiscordBot {
     const PAGE = DiscordBot.QUEUE_PAGE;
     // Default the view to the upcoming tracks (right after the current one),
     // not the very beginning of the queue, so users see what will play next.
-    // Show the whole queue when it fits on one page; otherwise start at the
-    // current track so the upcoming list is visible (an all-current tail used
-    // to render as "showing 4–4" — a single lonely line).
-    const defaultStart =
-      tracks.length <= PAGE ? 0 : Math.max(0, Math.min(snap.currentIndex, Math.max(0, tracks.length - 1)));
+    const defaultStart = Math.max(0, Math.min(snap.currentIndex, Math.max(0, tracks.length - 1)));
     const safeStart = start !== undefined && Number.isFinite(start) ? start : defaultStart;
     const startIdx = Math.max(0, Math.min(safeStart, Math.max(0, tracks.length - 1)));
     const end = Math.min(tracks.length, startIdx + PAGE);
