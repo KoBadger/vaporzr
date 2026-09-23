@@ -448,7 +448,7 @@ const COMMANDS = [
     .addStringOption((o) =>
       o
         .setName('tracks')
-        .setDescription('Songs separated by ; (capped at 10)')
+        .setDescription('Songs or links separated by ; (capped at 10)')
         .setRequired(true)
         .setMaxLength(1500),
     ),
@@ -1972,12 +1972,7 @@ export class DiscordBot {
       case 'bulk': {
         if (!this.requireLevel('bulk', interaction)) return this.deny(interaction);
         await interaction.deferReply();
-        const items = interaction.options
-          .getString('tracks', true)
-          .split(/[\n;|]+/)
-          .map((x) => x.trim())
-          .filter(Boolean)
-          .slice(0, 10);
+        const items = parseBulkItems(interaction.options.getString('tracks', true));
         const resolved: ResolvedTrack[] = [];
         for (const q of items) {
           try {
@@ -2982,17 +2977,32 @@ export class DiscordBot {
           // Use the raw text after the command so NEWLINE-separated lists survive:
           // `args` above joins on spaces, which flattens them into one query.
           const rawList = rest.slice(rawCmd.length).trim();
-          const items = rawList.split(/[\n;|]+/).map((x) => x.trim()).filter(Boolean).slice(0, 10);
-          if (items.length === 0)
-            return void (await message.reply('Usage: `V@bulk <song>; <song>; …` — one per line or `;`, max 10.'));
-          await this.withAck(message, `🔎 Resolving ${items.length} track(s)…`, async () => {
-            const resolved: ResolvedTrack[] = [];
+          // Attached audio/video files count toward the 10-item cap too, so a
+          // bulk can freely mix names, links and uploads in any combination.
+          const files = [...message.attachments.values()]
+            .map((a) => ({ name: a.name ?? 'file', url: a.url }))
+            .slice(0, 10);
+          const items = parseBulkItems(rawList, files.length);
+          if (items.length === 0 && files.length === 0)
+            return void (await message.reply(
+              'Usage: `V@bulk` — mix names, links and attached files, separated by `;` or new lines, max 10 total.\n' +
+                'e.g. `V@bulk Deltron 3030, Del; https://open.spotify.com/track/…; https://suno.com/song/…` (+ attach a file)',
+            ));
+          await this.withAck(message, `🔎 Adding ${items.length + files.length} item(s)…`, async () => {
+            const resolved: Omit<TrackInfo, 'addedBy' | 'addedAt'>[] = [];
             for (const q of items) {
               try {
                 const t = await resolvePlayInput(q);
                 if (t[0]) resolved.push(t[0]);
               } catch {
                 /* skip an unresolvable item */
+              }
+            }
+            for (const f of files) {
+              try {
+                resolved.push(await this.downloadUploadedTrack(f));
+              } catch (err) {
+                console.warn(`[bulk] attachment failed: ${err instanceof Error ? err.message : err}`);
               }
             }
             if (resolved.length === 0) throw new Error('None of those could be resolved.');
@@ -3538,6 +3548,30 @@ export class DiscordBot {
   }
 
   /** Download a Discord attachment and queue it as a locally-streamed track. */
+  /** Download one Discord attachment into the uploads dir as a local track. */
+  private async downloadUploadedTrack(
+    file: { name: string; url: string },
+  ): Promise<Omit<TrackInfo, 'addedBy' | 'addedAt'>> {
+    const dir = path.join(config.dataDir, 'uploads');
+    await fs.mkdir(dir, { recursive: true });
+    const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, '_');
+    const stamp = `${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+    const filePath = path.join(dir, `${stamp}-${safe}`);
+    const res = await fetch(file.url);
+    if (!res.ok) throw new Error(`Could not download "${file.name}" (HTTP ${res.status}).`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    await fs.writeFile(filePath, buf);
+    return {
+      uri: `local:${stamp}:${safe}`,
+      name: file.name.replace(/\.[^.]+$/, ''),
+      artists: ['Local file'],
+      album: 'Uploads',
+      durationMs: 0,
+      source: 'local',
+      filePath,
+    };
+  }
+
   private async playUploadedFiles(
     s: Session,
     files: { name: string; url: string }[],
@@ -3546,32 +3580,11 @@ export class DiscordBot {
     reply: (embed: EmbedBuilder) => Promise<unknown>,
   ): Promise<void> {
     if (files.length === 0) return;
-    const dir = path.join(config.dataDir, 'uploads');
-    await fs.mkdir(dir, { recursive: true });
     const added: string[] = [];
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, '_');
-      const stamp = Date.now() + i;
-      const filePath = path.join(dir, `${stamp}-${safe}`);
-      const res = await fetch(file.url);
-      if (!res.ok) throw new Error(`Could not download "${file.name}" (HTTP ${res.status}).`);
-      const buf = Buffer.from(await res.arrayBuffer());
-      await fs.writeFile(filePath, buf);
-      const name = file.name.replace(/\.[^.]+$/, '');
-      s.queue.enqueue(
-        {
-          uri: `local:${stamp}:${safe}`,
-          name,
-          artists: ['Local file'],
-          album: 'Uploads',
-          durationMs: 0,
-          source: 'local',
-          filePath,
-        },
-        requester,
-      );
-      added.push(name);
+    for (const file of files) {
+      const track = await this.downloadUploadedTrack(file);
+      s.queue.enqueue(track, requester);
+      added.push(track.name);
     }
     let playbackFailed: string | null = null;
     try {
@@ -6811,7 +6824,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/shuffle` · `V@sh` — shuffle the queue',
       '`/remove <#>` · `V@rem <#>` — remove a queued track',
       '`/dedupe` · `V@dd` — remove duplicate upcoming tracks',
-      '`/bulk <tracks>` · `V@bulk` — queue a list at once (one per line, max 10)',
+      '`/bulk <tracks>` · `V@bulk` — queue a list at once: names, links and/or attached files, one per line or `;` (max 10)',
       '`/skipto` · `V@skipto` — jump to a future track (drops the ones skipped; off by default)',
       '`/skiptoggle on|off` · `V@skiptoggle` — allow /skipto here (mod)',
     ],
@@ -7024,6 +7037,23 @@ async function saveMashupHistory(recs: MashupRecord[]): Promise<void> {
   } catch {
     /* ignore */
   }
+}
+
+/** Max items a single `/bulk` or `V@bulk` accepts. */
+export const BULK_MAX = 10;
+
+/**
+ * Split a bulk list into items. Newlines, `;` and `|` all separate items. The
+ * message parser flattens newlines into spaces before commands see `args`, so
+ * `V@bulk` reads the raw message text instead; this keeps that behaviour in one
+ * testable place. `reserved` counts attached files that share the same cap.
+ */
+export function parseBulkItems(raw: string, reserved = 0): string[] {
+  return raw
+    .split(/[\n;|]+/)
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .slice(0, Math.max(0, BULK_MAX - reserved));
 }
 
 async function resolvePlayInput(query: string): Promise<ResolvedTrack[]> {
