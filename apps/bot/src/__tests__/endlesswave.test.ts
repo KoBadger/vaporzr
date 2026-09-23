@@ -62,6 +62,7 @@ import {
   extractSeeds,
   normalizeTrackName,
   pickContext,
+  pickBasicTrack,
   pickNextTrack,
   resolveCandidate,
   fetchFeatures,
@@ -627,6 +628,36 @@ function recCandidate(overrides: Partial<ResolvedTrack> = {}): ResolvedTrack {
     ...overrides,
   };
 }
+
+describe('pickBasicTrack queue dedupe', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    mocks.getAudioFeatures.mockResolvedValue(new Map());
+    mocks.deezerRelatedTracks.mockResolvedValue([]);
+    mocks.searchAndResolveYoutube.mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('rejects a candidate already queued under a different upload/URI', async () => {
+    const s = createState();
+    activate(s);
+    // Waiting in the queue: the Spotify naming ("Mikado" by "Kredo").
+    const queued = fakeTrack({ uri: 'spotify:track:queued00000000000001', name: 'Mikado', artists: ['Kredo'] });
+    // Candidates: a YouTube-style title for the SAME song (different URI), then
+    // a genuinely new track. Only the new one may be picked.
+    mocks.searchTracks.mockResolvedValue([
+      recCandidate({ uri: 'youtube:video:dupe00000001', name: 'Mikado - Kredo', artists: [] }),
+      recCandidate({ uri: 'spotify:track:fresh00000000000001', name: 'Something Fresh', artists: ['New Artist'] }),
+    ]);
+    const recent = [fakeTrack({ uri: 'spotify:track:seed000000000000001', name: 'Seed', artists: ['Seed Artist'] })];
+    const pick = await pickBasicTrack(s, recent, undefined, [queued]);
+    expect(pick?.name).toBe('Something Fresh');
+  });
+});
 
 describe('pickNextTrack (smoke)', () => {
   beforeEach(() => {

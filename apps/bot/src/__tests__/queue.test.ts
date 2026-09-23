@@ -6,6 +6,34 @@ function track(uri: string, name = uri): { uri: string; name: string; artists: s
   return { uri, name, artists: ['Artist'], album: '', durationMs: 200_000 };
 }
 
+describe('QueueManager.filterNew', () => {
+  it('drops a track that is already waiting (same uri)', () => {
+    const q = new QueueManager();
+    q.enqueue(track('spotify:track:a', 'A'), 'user');
+    expect(q.filterNew([track('spotify:track:a', 'A')])).toHaveLength(0);
+  });
+
+  it('drops the same song from a different upload (title|artist)', () => {
+    const q = new QueueManager();
+    q.enqueue({ ...track('spotify:track:a', 'Mikado'), artists: ['Kredo'] }, 'user');
+    const other = { ...track('youtube:video:x', 'Mikado - Official Audio'), artists: ['Kredo - Topic'] };
+    expect(q.filterNew([other])).toHaveLength(0);
+  });
+
+  it('allows re-queueing a song that already played (cursor moved past it)', () => {
+    const q = new QueueManager();
+    q.enqueue(track('spotify:track:a', 'A'), 'user');
+    q.enqueue(track('spotify:track:b', 'B'), 'user');
+    q.next();
+    expect(q.filterNew([track('spotify:track:a', 'A')])).toHaveLength(1);
+  });
+
+  it('collapses duplicates inside the batch itself', () => {
+    const q = new QueueManager();
+    expect(q.filterNew([track('spotify:track:a', 'A'), track('spotify:track:a', 'A')])).toHaveLength(1);
+  });
+});
+
 describe('QueueManager.enqueue cursor behavior', () => {
   it('records addedBy on the stored item', () => {
     const q = new QueueManager();

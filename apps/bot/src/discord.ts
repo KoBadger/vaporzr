@@ -3006,10 +3006,20 @@ export class DiscordBot {
               }
             }
             if (resolved.length === 0) throw new Error('None of those could be resolved.');
+            // Never stack the same song twice — including the same track from a
+            // different upload (matched on title|artist, not just the URI).
+            const fresh = s.queue.filterNew(resolved);
+            const skipped = resolved.length - fresh.length;
+            if (fresh.length === 0)
+              throw new Error(
+                skipped === 1
+                  ? 'That track is already in the queue.'
+                  : 'All of those are already in the queue.',
+              );
             const who = message.author.username;
-            if (this.userQueueMode(s) === 'insert') s.queue.insertAfterCurrent(resolved, who);
-            else s.queue.enqueueMany(resolved, who);
-            this.stats.noteQueued(s.guildId ?? '', who, resolved.flatMap((t) => t.artists));
+            if (this.userQueueMode(s) === 'insert') s.queue.insertAfterCurrent(fresh, who);
+            else s.queue.enqueueMany(fresh, who);
+            this.stats.noteQueued(s.guildId ?? '', who, fresh.flatMap((t) => t.artists));
             try {
               await this.ensureJoinedForMessage(message, s);
               if (!s.queue.getState().playing) await s.playback.play();
@@ -3017,9 +3027,10 @@ export class DiscordBot {
               /* queued anyway */
             }
             const embed = new EmbedBuilder()
-              .setTitle(`Added ${resolved.length} track${resolved.length > 1 ? 's' : ''}`)
+              .setTitle(`Added ${fresh.length} track${fresh.length > 1 ? 's' : ''}`)
               .setDescription(
-                resolved.map((t, i) => `${i + 1}. ${srcEmoji(t.source)} **${truncate(t.name, 60)}**`).join('\n'),
+                fresh.map((t, i) => `${i + 1}. ${srcEmoji(t.source)} **${truncate(t.name, 60)}**`).join('\n') +
+                  (skipped > 0 ? `\n-# Skipped ${skipped} already in the queue` : ''),
               )
               .setColor(this.themeColor());
             await message.reply({ embeds: [embed] });
@@ -3512,15 +3523,32 @@ export class DiscordBot {
     this.commandsRun++;
   }
 
+  /** "Already in the queue" notice for a re-add of the same song. */
+  private duplicateEmbed(tracks: { name: string }[]): EmbedBuilder {
+    return new EmbedBuilder()
+      .setDescription(
+        tracks.length === 1
+          ? `🎵 **${truncate(tracks[0]?.name ?? 'That track', 60)}** is already in the queue.`
+          : '🎵 Those tracks are already in the queue.',
+      )
+      .setColor(this.themeColor());
+  }
+
   private async addToQueueMsg(message: Message, tracks: ResolvedTrack[]): Promise<void> {
     const s = this.sessionFor(message.guildId);
-    const first = tracks[0];
+    // Never stack a song that's already waiting — same upload or not.
+    const fresh = s.queue.filterNew(tracks);
+    if (fresh.length === 0) {
+      this.replyTemp(message, this.duplicateEmbed(tracks));
+      return;
+    }
+    const first = fresh[0];
     const requestedBy = message.author.username;
     const wasPlaying = s.queue.getState().playing;
     const suppressStrip = !wasPlaying && !!first;
     if (suppressStrip) this.suppressAutoMiniNp(message.guildId ?? undefined, first.uri);
-    s.queue.enqueueMany(tracks, requestedBy);
-    this.stats.noteQueued(s.guildId ?? '', requestedBy, tracks.flatMap((t) => t.artists));
+    s.queue.enqueueMany(fresh, requestedBy);
+    this.stats.noteQueued(s.guildId ?? '', requestedBy, fresh.flatMap((t) => t.artists));
     if (first) s.playback.prefetchStream(first);
     let playbackFailed: string | null = null;
     try {
@@ -3542,12 +3570,11 @@ export class DiscordBot {
           (playbackFailed ? `\n⚠️ Couldn't start playback yet: ${playbackFailed}` : ''),
       )
       .setThumbnail(first.image ?? '')
-      .setFooter({ text: `${tracks.length} track${tracks.length > 1 ? 's' : ''} · ${s.queue.getSnapshot().tracks.length} in queue` })
+      .setFooter({ text: `${fresh.length} track${fresh.length > 1 ? 's' : ''} · ${s.queue.getSnapshot().tracks.length} in queue` })
       .setColor(this.themeColor());
     this.replyTemp(message, embed);
   }
 
-  /** Download a Discord attachment and queue it as a locally-streamed track. */
   /** Download one Discord attachment into the uploads dir as a local track. */
   private async downloadUploadedTrack(
     file: { name: string; url: string },
@@ -3610,13 +3637,19 @@ export class DiscordBot {
 
   private async insertToQueueMsg(message: Message, tracks: ResolvedTrack[]): Promise<void> {
     const s = this.sessionFor(message.guildId);
-    const first = tracks[0];
+    // Never stack a song that's already waiting — same upload or not.
+    const fresh = s.queue.filterNew(tracks);
+    if (fresh.length === 0) {
+      this.replyTemp(message, this.duplicateEmbed(tracks));
+      return;
+    }
+    const first = fresh[0];
     const requestedBy = message.author.username;
     const wasPlaying = s.queue.getState().playing;
     const suppressStrip = !wasPlaying && !!first;
     if (suppressStrip) this.suppressAutoMiniNp(message.guildId ?? undefined, first.uri);
-    s.queue.insertAfterCurrent(tracks, requestedBy);
-    this.stats.noteQueued(s.guildId ?? '', requestedBy, tracks.flatMap((t) => t.artists));
+    s.queue.insertAfterCurrent(fresh, requestedBy);
+    this.stats.noteQueued(s.guildId ?? '', requestedBy, fresh.flatMap((t) => t.artists));
     if (first) s.playback.prefetchStream(first);
     let playbackFailed: string | null = null;
     try {
@@ -3638,7 +3671,7 @@ export class DiscordBot {
           (playbackFailed ? `\n⚠️ Couldn't start playback yet: ${playbackFailed}` : ''),
       )
       .setThumbnail(first.image ?? '')
-      .setFooter({ text: `${tracks.length} track${tracks.length > 1 ? 's' : ''} · ${s.queue.getSnapshot().tracks.length} in queue` })
+      .setFooter({ text: `${fresh.length} track${fresh.length > 1 ? 's' : ''} · ${s.queue.getSnapshot().tracks.length} in queue` })
       .setColor(this.themeColor());
     this.replyTemp(message, embed);
   }

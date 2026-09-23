@@ -5,6 +5,23 @@ export interface QueueListener {
   onStateChanged(state: PlaybackState): void;
 }
 
+/** Normalised "title|artist" key for duplicate detection. Strips the upload
+ *  boilerplate that differs between sources ("Official Audio", "(Lyrics)", …)
+ *  so the same song from a different upload collides on the same key. */
+export function trackKey(t: { name?: string; artists?: string[] }): string {
+  const norm = (x: string): string => x.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const name = norm(t.name ?? '')
+    .replace(/\b(official|audio|lyric|lyrics|video|visuali[sz]er|hd|hq|remaster|remastered|mv)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!name) return '';
+  const artist = norm((t.artists ?? [])[0] ?? '')
+    .replace(/\btopic\b/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return `${name}|${artist}`;
+}
+
 export class QueueManager {
   private tracks: TrackInfo[] = [];
   private currentIndex = -1;
@@ -164,25 +181,11 @@ export class QueueManager {
    *  different upload is caught too. Played tracks and the current track are left
    *  alone. Returns the count removed. */
   dedupe(): number {
-    const norm = (x: string): string => x.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-    const keyOf = (t: TrackInfo): string => {
-      const name = norm(t.name ?? '')
-        // Strip the boilerplate that differs between uploads of the same song.
-        .replace(/\b(official|audio|lyric|lyrics|video|visuali[sz]er|hd|hq|remaster|remastered|mv)\b/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-      if (!name) return '';
-      const artist = norm((t.artists ?? [])[0] ?? '')
-        .replace(/\btopic\b/g, '')
-        .replace(/\s+/g, ' ')
-        .trim();
-      return `${name}|${artist}`;
-    };
     const seen = new Set<string>();
     const keep: TrackInfo[] = [];
     let removed = 0;
     this.tracks.forEach((t, i) => {
-      const keys = [t.uri ? `u:${t.uri}` : '', keyOf(t) ? `k:${keyOf(t)}` : ''].filter(Boolean);
+      const keys = [t.uri ? `u:${t.uri}` : '', trackKey(t) ? `k:${trackKey(t)}` : ''].filter(Boolean);
       if (i <= this.currentIndex) {
         keep.push(t);
         for (const k of keys) seen.add(k);
@@ -200,6 +203,28 @@ export class QueueManager {
       this.emitQueue();
     }
     return removed;
+  }
+
+  /** The subset of `list` whose uri and title|artist are NOT already waiting in
+   *  the current + upcoming queue. Collapses duplicates inside `list` too, so a
+   *  paste of the same song twice only queues it once. Already-played tracks are
+   *  ignored, so re-queueing a song you liked still works. */
+  filterNew<T extends { uri?: string; name: string; artists?: string[] }>(list: T[]): T[] {
+    const seen = new Set<string>();
+    for (let i = Math.max(0, this.currentIndex); i < this.tracks.length; i++) {
+      const t = this.tracks[i];
+      if (t.uri) seen.add(`u:${t.uri}`);
+      const k = trackKey(t);
+      if (k) seen.add(`k:${k}`);
+    }
+    const out: T[] = [];
+    for (const t of list) {
+      const keys = [t.uri ? `u:${t.uri}` : '', trackKey(t) ? `k:${trackKey(t)}` : ''].filter(Boolean);
+      if (keys.some((k) => seen.has(k))) continue;
+      for (const k of keys) seen.add(k);
+      out.push(t);
+    }
+    return out;
   }
 
   /** Skip-forward: drop every upcoming track before `index` so the chosen one

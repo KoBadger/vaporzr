@@ -886,6 +886,14 @@ export async function pickBasicTrack(
 
   const upTracks = upcoming ?? recentTracks;
   const upcomingUris = new Set(upTracks.map((t) => t.uri));
+  // Name variants of everything already waiting, so the same song under a
+  // different upload/URI (a Spotify name vs a YouTube "Song - Artist" title)
+  // can't be queued a second time. The smart picker does this; basic needs it
+  // too, or its fallback path stacks duplicate takes in the queue.
+  const upcomingNames = new Set<string>();
+  for (const t of upTracks) {
+    for (const v of nameVariants(normalizeTrackName(t.name), t.artists, [])) upcomingNames.add(v);
+  }
   const cooldown = new Set(
     state.recentArtists.slice(-DEFAULT_CONFIG.artistCooldown).map((a) => a.toLowerCase().trim()),
   );
@@ -899,6 +907,7 @@ export async function pickBasicTrack(
     if (isLongFormMix(c)) return false;
     if (isDuplicate(state, c.uri)) return false;
     if (upcomingUris.has(c.uri)) return false;
+    if (nameVariants(normalizeTrackName(c.name), c.artists, []).some((v) => upcomingNames.has(v))) return false;
     if (excludeUris?.has(c.uri)) return false;
     if (isRemixOrCover(state, c.name, c.artists)) return false;
     const main = (c.artists[0] ?? '').toLowerCase().trim();
