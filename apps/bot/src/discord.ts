@@ -446,7 +446,11 @@ const COMMANDS = [
     .setName('bulk')
     .setDescription('Queue a list of songs at once (one per line, max 10)')
     .addStringOption((o) =>
-      o.setName('tracks').setDescription('One song per line (max 10)').setRequired(true).setMaxLength(1500),
+      o
+        .setName('tracks')
+        .setDescription('Songs separated by ; (capped at 10)')
+        .setRequired(true)
+        .setMaxLength(1500),
     ),
   new SlashCommandBuilder()
     .setName('skipto')
@@ -2975,7 +2979,10 @@ export class DiscordBot {
 
         case 'bulk': {
           if (!canUse('bulk')) return void (await deny());
-          const items = args.split(/[\n;|]+/).map((x) => x.trim()).filter(Boolean).slice(0, 10);
+          // Use the raw text after the command so NEWLINE-separated lists survive:
+          // `args` above joins on spaces, which flattens them into one query.
+          const rawList = rest.slice(rawCmd.length).trim();
+          const items = rawList.split(/[\n;|]+/).map((x) => x.trim()).filter(Boolean).slice(0, 10);
           if (items.length === 0)
             return void (await message.reply('Usage: `V@bulk <song>; <song>; …` — one per line or `;`, max 10.'));
           await this.withAck(message, `🔎 Resolving ${items.length} track(s)…`, async () => {
@@ -4963,7 +4970,11 @@ export class DiscordBot {
     const PAGE = DiscordBot.QUEUE_PAGE;
     // Default the view to the upcoming tracks (right after the current one),
     // not the very beginning of the queue, so users see what will play next.
-    const defaultStart = Math.max(0, Math.min(snap.currentIndex, Math.max(0, tracks.length - 1)));
+    // Show the whole queue when it fits on one page; otherwise start at the
+    // current track so the upcoming list is visible (an all-current tail used
+    // to render as "showing 4–4" — a single lonely line).
+    const defaultStart =
+      tracks.length <= PAGE ? 0 : Math.max(0, Math.min(snap.currentIndex, Math.max(0, tracks.length - 1)));
     const safeStart = start !== undefined && Number.isFinite(start) ? start : defaultStart;
     const startIdx = Math.max(0, Math.min(safeStart, Math.max(0, tracks.length - 1)));
     const end = Math.min(tracks.length, startIdx + PAGE);
