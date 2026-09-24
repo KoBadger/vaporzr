@@ -337,6 +337,16 @@ export class PlaybackController {
     }
   }
 
+  /** Trust the known track length when a YouTube/stream upload runs long. The
+   *  end timer used to follow the video, so a wrong or extra-long match played
+   *  right through (and could include non-music/sponsor segments). A small
+   *  slack keeps the natural outro. */
+  private cappedDuration(videoMs: number, trackMs: number): number {
+    if (!trackMs || trackMs <= 0) return videoMs || 0;
+    if (!videoMs || videoMs <= 0) return trackMs;
+    return Math.min(videoMs, trackMs + 5_000);
+  }
+
   private scheduleEnd(durationMs: number, positionMs: number): void {
     this.clearEndTimer();
     // Reaching here means the track actually started — clear the failure streak.
@@ -817,10 +827,11 @@ export class PlaybackController {
     this.currentVideo = video;
     this.lastYoutubeVideoId = video.videoId;
     this.spotifyFallback = true;
+    const durationMs = this.cappedDuration(video.durationMs, current.durationMs);
     this.queue.setState({
       playing: true,
       track: current,
-      durationMs: video.durationMs,
+      durationMs,
       positionMs: 0,
       source: 'youtube',
     });
@@ -830,8 +841,8 @@ export class PlaybackController {
       retries: 4,
       refreshUrl: () => resolveYoutubeVideo(video.videoId).then((v) => v.streamUrl),
     });
-    this.scheduleEnd(video.durationMs, 0);
-    this.schedulePreload(video.durationMs, 0);
+    this.scheduleEnd(durationMs, 0);
+    this.schedulePreload(durationMs, 0);
     this.startPositionTracker();
     this.sendVisualizer({ type: 'cmd', command: 'stop' });
   }
@@ -920,7 +931,7 @@ export class PlaybackController {
     this.stopSpotifyFeed();
     this.stopSpotifyProgress();
         this.pauseSpotifyAny();
-    const durationMs = video.durationMs || current.durationMs;
+    const durationMs = this.cappedDuration(video.durationMs, current.durationMs);
     this.currentUri = current.uri;
     this.currentVideo = video;
     this.queue.setState({
@@ -966,7 +977,7 @@ export class PlaybackController {
     this.stopSpotifyFeed();
     this.stopSpotifyProgress();
         this.pauseSpotifyAny();
-    const durationMs = video.durationMs || current.durationMs;
+    const durationMs = this.cappedDuration(video.durationMs, current.durationMs);
     this.currentUri = current.uri;
     this.currentVideo = video;
     this.queue.setState({
@@ -1002,7 +1013,7 @@ export class PlaybackController {
     this.stopSpotifyFeed();
     this.stopSpotifyProgress();
         this.pauseSpotifyAny();
-    const durationMs = video.durationMs || current.durationMs;
+    const durationMs = this.cappedDuration(video.durationMs, current.durationMs);
     this.currentUri = current.uri;
     this.currentVideo = video;
     this.queue.setState({

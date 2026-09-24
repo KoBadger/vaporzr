@@ -24,6 +24,16 @@ const YT_PLAYLIST_RE = /(?:youtube\.com|music\.youtube\.com)\/playlist\?(?:[^#]*
  */
 const AUDIO_FORMAT = 'bestaudio[acodec!=none]/best[acodec!=none]/best';
 
+/** Titles that are plainly not the song: esports/sports highlights, gameplay,
+ *  podcasts, reactions, vlogs, news. These match a song name by accident (e.g.
+ *  "liquid game" → a Team Liquid esports highlight reel) and their non-music
+ *  segments (sponsor reads, commentary) sound like an ad break mid-stream. */
+const NON_MUSIC_RE =
+  /\b(plays? of the week|highlights?|full game|gameplay|walkthrough|playthrough|let'?s play|esports|e-?sports|tournament|grand final|press conference|post[- ]?game|pre[- ]?game|match recap|reaction|reacts? to|podcast|interview|episode \d+|vlog|unboxing|trailer|teaser|behind the scenes|documentary|breaking news|news|weather|sportscenter|espn|top \d+ plays|tier list|countdown|ranked)\b/i;
+/** If one of these is present the video is (probably) music despite the above. */
+const MUSIC_HINT_RE =
+  /\b(official audio|official video|lyric video|lyrics?|audio|topic|visuali[sz]er|music video|remix|instrumental|acoustic|cover|live at|session)\b/i;
+
 export function isYoutubeUrl(input: string): boolean {
   return /(^|[./])youtube\.com\//.test(input) || /(^|[./])youtu\.be\//.test(input) || /(^|[./])music\.youtube\.com\//.test(input);
 }
@@ -461,7 +471,13 @@ function scoreHit(
     else if (d > 45000) score -= 6;
     else if (d > 15000) score -= 2;
   }
-return score;
+
+  // A video that is plainly something else (esports clip, podcast, vlog…) can
+  // win on a partial word match — "liquid game" scored a Team Liquid highlight
+  // reel over the actual song. Sink it below anything musical.
+  if (NON_MUSIC_RE.test(raw) && !MUSIC_HINT_RE.test(raw)) score -= 40;
+
+  return score;
 }
 
 /**
@@ -480,21 +496,45 @@ return score;
  * resolved fast.
  */
 export function isClearlyWrongMatch(video: ResolvedVideo, query: string, opts: YoutubeSearchOptions): boolean {
-  const t = normText(video.name);
+  return looksWrong(
+    video.name,
+    video.durationMs ?? 0,
+    video.channel ?? video.artists?.[0] ?? 'YouTube',
+    query,
+    opts,
+  );
+}
+
+/** Shared guard so the scored path can judge a candidate before extracting it. */
+export function looksWrong(
+  name: string,
+  durationMs: number,
+  channel: string,
+  query: string,
+  opts: YoutubeSearchOptions,
+): boolean {
+  const t = normText(name);
   // 1. Phrase check (canonical names only).
   const canonical = opts.name ? normText(opts.name) : '';
   if (canonical.length > 1 && !t.includes(canonical)) return true;
-  // 2. Egregious length mismatch.
+  // 2. Plainly not a song (esports/highlight/podcast/vlog…). An ad break in the
+  //    middle of a stream is usually one of these matching a song name.
+  const rawTitle = (name ?? '').toLowerCase();
+  if (NON_MUSIC_RE.test(rawTitle) && !MUSIC_HINT_RE.test(rawTitle)) return true;
+  // 3. Length mismatch: an album-length upload (or a 30s clip) is a different
+  //    thing from a single, even when the name lines up.
   const wantMs = opts.durationMs ?? 0;
-  if (wantMs > 0 && video.durationMs > 0 && video.durationMs > wantMs * 4 && video.durationMs - wantMs > 10 * 60_000) {
-    return true;
+  if (wantMs > 0 && durationMs > 0) {
+    if (durationMs > wantMs + 5 * 60_000 && durationMs > wantMs * 2.5) return true;
+    // A sub-minute upload is a snippet/preview, not the song.
+    if (wantMs > 180_000 && durationMs < 60_000) return true;
   }
-  // 3. Score floor.
+  // 4. Score floor.
   const hit: FlatHit = {
-    videoId: video.videoId,
-    title: video.name,
-    channel: video.channel ?? video.artists[0] ?? 'YouTube',
-    durationSec: Math.round((video.durationMs ?? 0) / 1000),
+    videoId: '',
+    title: name,
+    channel: channel || 'YouTube',
+    durationSec: Math.round(durationMs / 1000),
   };
   return scoreHit(hit, 0, query, opts) < FUSED_MIN_ACCEPT_SCORE;
 }
@@ -601,10 +641,10 @@ async function doSearchAndResolve(
       }
     });
 
-    // Parse the fused (playable) result up-front so it can double as the
-    // speed fallback when the accuracy path can't beat it within budget.
-    const fusedWinner = fusedRaw && (hits.length === 0 || best === hits[0]);
-    let video: ResolvedVideo | null = fusedWinner ? fusedVideo : null;
+    // The fused result only reaches here when it was missing OR already judged a
+    // poor match (the fast path above returns every good one), so it is not a
+    // usable fallback.
+    let video: ResolvedVideo | null = null;
 
     if (!video && hits.length > 0) {
       // Extract in score order and keep going when a candidate is unplayable
@@ -614,6 +654,14 @@ async function doSearchAndResolve(
       const ranked = hits
         .map((h, i) => ({ h, s: scoreHit(h, i, query, opts) }))
         .sort((a, b) => b.s - a.s)
+        // Drop obviously-wrong candidates up front (wrong song, non-music
+        // video, way-off length) so the accuracy path can't settle on a mine
+        // just because it out-scored the real song on partial word matches.
+        .filter((cand) => {
+          const wrong = looksWrong(cand.h.title, cand.h.durationSec * 1000, cand.h.channel, query, opts);
+          if (wrong) console.log(`[youtube] skipping poor match "${cand.h.title}" for "${query}"`);
+          return !wrong;
+        })
         .slice(0, 3);
       const deadline = Date.now() + RESOLVE_BUDGET_MS;
       for (const cand of ranked) {
@@ -646,7 +694,7 @@ async function doSearchAndResolve(
     }
     if (!video) return null;
 
-    console.log(`[youtube] resolved "${video.name}" in ${Date.now() - t0}ms (${fusedWinner ? 'fast path' : 'scored path'})`);
+    console.log(`[youtube] resolved "${video.name}" in ${Date.now() - t0}ms (scored path)`);
     resolveCache.set(key, { at: Date.now(), video });
     if (resolveCache.size > RESOLVE_CACHE_MAX) {
       const oldest = [...resolveCache.entries()].sort((a, b) => a[1].at - b[1].at)[0];

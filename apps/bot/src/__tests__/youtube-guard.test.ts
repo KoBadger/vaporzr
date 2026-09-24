@@ -44,6 +44,25 @@ describe('isClearlyWrongMatch (speed fallback guard)', () => {
     expect(isClearlyWrongMatch(v, 'End Of Summer', { name: 'End Of Summer', artists: ['Tame Impala'], durationMs: 432_000 })).toBe(true);
   });
 
+  it('rejects a non-music video that matches the song name (esports/podcast)', () => {
+    const v = video({
+      name: 'AN ABBEBACKDOOR! 100 Thieves REVERSE SWEEP Team Liquid | Plays of the Week',
+      durationMs: 960_000,
+      channel: 'Esports Highlights',
+    });
+    expect(isClearlyWrongMatch(v, 'liquid game', { name: 'liquid game', artists: ['Sweeps'], durationMs: 195_000 })).toBe(true);
+  });
+
+  it('rejects a 12-minute video for a 4-minute song', () => {
+    const v = video({ name: 'Liquid Game - Sweeps (Full Set)', durationMs: 720_000, channel: 'Sweeps - Topic' });
+    expect(isClearlyWrongMatch(v, 'liquid game', { name: 'liquid game', artists: ['Sweeps'], durationMs: 240_000 })).toBe(true);
+  });
+
+  it('still accepts a legitimately longer upload', () => {
+    const v = video({ name: 'End Of Summer - Tame Impala (Official Audio)', durationMs: 270_000, channel: 'Tame Impala - Topic' });
+    expect(isClearlyWrongMatch(v, 'End Of Summer', { name: 'End Of Summer', artists: ['Tame Impala'], durationMs: 240_000 })).toBe(false);
+  });
+
   it('accepts a plausible same-title remix (not an obvious mismatch)', () => {
     const v = video({ name: 'End Of Summer (Remix) - Tame Impala', channel: 'Tame Impala - Topic' });
     expect(isClearlyWrongMatch(v, 'End Of Summer', { name: 'End Of Summer', artists: ['Tame Impala'], durationMs: 432_000 })).toBe(false);
