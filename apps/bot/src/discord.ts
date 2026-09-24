@@ -4056,33 +4056,22 @@ export class DiscordBot {
       if (!channel || !('send' in channel)) return;
       const existing = this.miniNp.get(guildId);
       if (existing) {
-        // Smart re-anchor: if the strip is already the newest message (quiet
-        // channel) update it in place — no duplicate flash. Only when newer
-        // messages have pushed it up do we repost at the bottom (brief blip),
-        // which is when staying visible actually matters.
-        const lastId = (channel as { lastMessageId?: string | null }).lastMessageId;
-        const isLatest = lastId === existing.messageId;
-        try {
-          const old = await channel.messages.fetch(existing.messageId);
-          if (isLatest) {
-            await old.edit(this.miniNpMessage(this.sessionFor(guildId)));
-            this.miniTrackUri.set(guildId, uri);
-            this.scheduleSavePanels();
-            return;
-          }
+        // Every new song gets a fresh card: drop the old strip and post a new
+        // one at the bottom, so the quick now-playing visibly refreshes instead
+        // of mutating in place.
+        const old = await channel.messages.fetch(existing.messageId).catch(() => null);
+        if (old) {
           try {
             await old.delete();
           } catch {
-            // Can't delete (perms/rate limits) — update in place instead of
+            // Can't delete (perms/rate limits) — update in place rather than
             // leaving a second strip behind on every rapid track change.
-            const payload = this.miniNpMessage(this.sessionFor(guildId));
-            await old.edit(payload);
-            this.miniNp.set(guildId, existing);
+            await old.edit(this.miniNpMessage(this.sessionFor(guildId))).catch(() => {});
             this.miniTrackUri.set(guildId, uri);
             this.scheduleSavePanels();
             return;
           }
-        } catch { /* already gone */ }
+        }
       }
       const msg = await channel.send(this.miniNpMessage(this.sessionFor(guildId)));
       this.miniNp.set(guildId, { channelId, messageId: msg.id });
