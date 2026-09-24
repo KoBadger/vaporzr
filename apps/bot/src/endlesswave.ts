@@ -404,6 +404,20 @@ function nameVariants(norm: string, artists?: string[], recentArtists?: string[]
     const p = part.trim();
     if (p.length >= 3) out.add(p);
   }
+  // Version-agnostic base: drop parenthesised/bracketed qualifiers plus year /
+  // decade stamps, so "Blue Monday '88", "Blue Monday (2016 Remaster)" and
+  // "Blue Monday (2020 Digital Master)" all reduce to "blue monday" and the
+  // same song can't be queued twice under different editions.
+  const base = norm
+    .replace(/\s*[\(\[](?:[^\)\]]*)[\)\]]/g, ' ')
+    .replace(/\s*['’]\d{2}\b/g, ' ')
+    .replace(/\s*\b(?:19|20)\d{2}\b/g, ' ')
+    // A trailing bare 2-digit year ("Blue Monday 88") — the apostrophe is
+    // usually already stripped by normalizeTrackName.
+    .replace(/\s+\d{2}\s*$/, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (base.length >= 3) out.add(base);
   return [...out];
 }
 

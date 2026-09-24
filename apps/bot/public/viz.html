@@ -236,6 +236,31 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
   ];
   var theme=THEMES[0];
 
+  /* ---------- mood-reactive palette ----------
+     The bot sends the current track's mood (hue/sat/light from its audio
+     features, or a per-track fallback when features aren't available). We blend
+     it into the visuals and modulate it live from the analyser, so the colors
+     visibly follow the music for every source. */
+  var mood={on:false,hue:210,sat:65,light:52,energy:0.5,valence:0.5};
+  var moodLive=0;
+  function moodColor(shift,alpha){
+    var h=(((mood.hue+(shift||0))%360)+360)%360;
+    var s=Math.max(28,Math.min(100,Math.round(mood.sat*(0.78+0.42*moodLive))));
+    var l=Math.max(24,Math.min(80,Math.round(mood.light*(0.82+0.42*moodLive))));
+    return 'hsla('+h+','+s+'%,'+l+'%,'+(alpha==null?1:alpha)+')';
+  }
+  function applyMood(m){
+    if(m&&m.on===false){mood.on=false;if(document.body)document.body.style.boxShadow='';return}
+    if(!m)return;
+    mood.on=true;
+    if(typeof m.hue==='number')mood.hue=m.hue;
+    if(typeof m.sat==='number')mood.sat=m.sat;
+    if(typeof m.light==='number')mood.light=m.light;
+    if(typeof m.energy==='number')mood.energy=m.energy;
+    if(typeof m.valence==='number')mood.valence=m.valence;
+    try{document.documentElement.style.setProperty('--mood',moodColor(0,0.6))}catch(e){}
+  }
+
   function applyTheme(t){
     theme=t;
     var r=document.documentElement.style;
@@ -295,12 +320,9 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
         case 'visuals:sensitivity':
           setSensitivity(msg.multiplier,false);
           break;
-        case 'visuals:mood':{
-          var mc='#'+('000000'+((msg.color>>>0).toString(16))).slice(-6);
-          document.documentElement.style.setProperty('--mood',mc);
-          if(document.body)document.body.style.boxShadow='inset 0 0 140px '+mc+'66';
+        case 'visuals:mood':
+          applyMood(msg);
           break;
-        }
         case 'state:update':
           showState(msg.state);
           break;
@@ -628,6 +650,10 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
     var active=now-lastBarAt<2000;
     var baseY=H*0.86,maxH=H*0.62,slot=W/BARS,barW=Math.min(slot*0.55,26*dpr);
 
+    // Live energy (smoothed) sets how hot the mood palette burns.
+    var e=0;for(var q=0;q<BARS;q++)e+=disp[q];
+    moodLive+=((active?e/BARS:0)-moodLive)*0.1;
+
     for(var i=0;i<BARS;i++){
       disp[i]+=(target[i]-disp[i])*0.35;
       if(active&&target[i]>peaks[i])peaks[i]=target[i];
@@ -635,19 +661,30 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
       var v=active?disp[i]:(0.04+0.02*Math.sin(now/900+i*0.7));
       var h=Math.max(2*dpr,v*maxH),x=i*slot+(slot-barW)/2,y=baseY-h;
       var g=ctx.createLinearGradient(0,baseY,0,baseY-maxH);
-      g.addColorStop(0,theme.accent+'dd');
-      g.addColorStop(0.6,theme.accent+'f0');
-      g.addColorStop(1,theme.accent2+'f2');
+      if(mood.on){
+        g.addColorStop(0,moodColor(0,0.85));
+        g.addColorStop(0.6,moodColor(0,0.94));
+        g.addColorStop(1,moodColor(40,0.96));
+      }else{
+        g.addColorStop(0,theme.accent+'dd');
+        g.addColorStop(0.6,theme.accent+'f0');
+        g.addColorStop(1,theme.accent2+'f2');
+      }
       ctx.fillStyle=g;
-      ctx.shadowColor=theme.glow||theme.accent+'66';
+      ctx.shadowColor=mood.on?moodColor(0,0.6):(theme.glow||theme.accent+'66');
       ctx.shadowBlur=14*dpr*(active?v:0.3);
       roundRect(x,y,barW,h,barW/2);
       ctx.shadowBlur=0;
-      ctx.fillStyle='rgba(250,250,250,0.85)';
+      ctx.fillStyle=mood.on?moodColor(40,0.9):'rgba(250,250,250,0.85)';
       ctx.fillRect(x,baseY-peaks[i]*maxH-2*dpr,barW,2*dpr);
     }
-    ctx.fillStyle=theme.accent+'2e';
+    ctx.fillStyle=mood.on?moodColor(0,0.2):theme.accent+'2e';
     ctx.fillRect(0,baseY,W,1);
+    // Room glow that breathes with the music (throttled — it's a style write).
+    if(mood.on&&!prefersReduced&&(!drawBars._t||now-drawBars._t>220)){
+      drawBars._t=now;
+      document.body.style.boxShadow='inset 0 0 '+(80+140*moodLive).toFixed(0)+'px '+moodColor(0,0.3+0.35*moodLive);
+    }
   }
   function roundRect(x,y,w,h,r){
     r=Math.min(r,h/2,w/2);
@@ -680,6 +717,7 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
   /* Reactive overlay over the wallpaper video. */
   function drawSynthOverlay(now,W,H){
     var i,v;
+    if(typeof lastEnergy==='number')moodLive+=(lastEnergy-moodLive)*0.1;
     // beat glow breathing over the scene
     var glow=kickBoost*0.10+bassLevel*0.05;
     if(glow>0.004){
@@ -697,10 +735,15 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
       v=active?disp[i]:(0.04+0.02*Math.sin(now/900+i*0.7));
       var h=Math.max(2*dpr,v*maxH),x=i*slot+(slot-barW)/2,y=baseY-h;
       var g=sctx.createLinearGradient(0,baseY,0,baseY-maxH);
-      g.addColorStop(0,'rgba(255,80,180,0.85)');
-      g.addColorStop(1,'rgba(80,240,255,0.9)');
+      if(mood.on){
+        g.addColorStop(0,moodColor(0,0.85));
+        g.addColorStop(1,moodColor(45,0.9));
+      }else{
+        g.addColorStop(0,'rgba(255,80,180,0.85)');
+        g.addColorStop(1,'rgba(80,240,255,0.9)');
+      }
       sctx.fillStyle=g;
-      sctx.shadowColor='rgba(255,80,180,0.55)';
+      sctx.shadowColor=mood.on?moodColor(0,0.55):'rgba(255,80,180,0.55)';
       sctx.shadowBlur=12*dpr*(active?v:0.3);
       sctx.fillRect(x,y,barW,h);
     }
@@ -740,7 +783,7 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
     }
     sctx.shadowBlur=0;
     // aurora band: hue drifts, opacity follows treble
-    var hue=(now*0.03)%360;
+    var hue=mood.on?mood.hue:(now*0.03)%360;
     var aur=sctx.createLinearGradient(0,0,W,H*0.6);
     aur.addColorStop(0,'hsla('+hue+',90%,60%,0)');
     aur.addColorStop(0.5,'hsla('+((hue+60)%360)+',90%,62%,'+(0.05+trebleLevel*0.12).toFixed(3)+')');

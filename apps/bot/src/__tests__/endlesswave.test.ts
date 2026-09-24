@@ -629,6 +629,17 @@ function recCandidate(overrides: Partial<ResolvedTrack> = {}): ResolvedTrack {
   };
 }
 
+describe('edition variants count as the same song', () => {
+  it('matches year/edition stamps to the base title', () => {
+    const s = createState();
+    markPlayed(s, 'spotify:track:1', 'Blue Monday', ['New Order']);
+    expect(isRemixOrCover(s, "Blue Monday '88", ['New Order'])).toBe(true);
+    expect(isRemixOrCover(s, 'Blue Monday (2020 Digital Master)', ['New Order'])).toBe(true);
+    expect(isRemixOrCover(s, 'Blue Monday (2016 Remaster)', ['New Order'])).toBe(true);
+    expect(isRemixOrCover(s, 'Blue Monday (Hardfloor Mix)', ['New Order'])).toBe(true);
+  });
+});
+
 describe('pickBasicTrack queue dedupe', () => {
   beforeEach(() => {
     vi.clearAllMocks();

@@ -197,7 +197,18 @@ export type OutboundMessage =
   | { type: 'burst:start'; durationMs?: number }
   | { type: 'endlesswave'; active: boolean; generated: number; mode?: 'off' | 'basic' | 'smart' }
   /** Live "mood" derived from the current track's audio features (for reactive visuals). */
-  | { type: 'visuals:mood'; color: number; energy?: number; valence?: number }
+  | {
+      type: 'visuals:mood';
+      /** false = mood turned off; fall back to the static theme. */
+      on?: boolean;
+      color?: number;
+      /** Hue (0-360) / sat / light (0-100) for the reactive palette. */
+      hue?: number;
+      sat?: number;
+      light?: number;
+      energy?: number;
+      valence?: number;
+    }
   | { type: 'ready'; ok: boolean }
   | { type: 'error'; message: string }
   | CommandMessage;

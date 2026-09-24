@@ -1152,21 +1152,48 @@ export class DiscordBot {
     }
   }
 
-  /** Derive a color from a track's audio features (valence → hue, energy → sat/light). */
-  private moodColorFrom(f: EW.AudioFeatures): number {
-    const hue = Math.round((1 - clamp01(f.valence ?? 0.5)) * 280);
-    const sat = Math.round(45 + clamp01(f.energy ?? 0.5) * 45);
-    const light = Math.round(38 + clamp01(f.energy ?? 0.5) * 16);
-    return hslToInt(hue, sat, light);
+  /** Hue/sat/light from a track's audio features (valence → hue, energy → sat/light). */
+  private moodTone(f: EW.AudioFeatures): { hue: number; sat: number; light: number } {
+    return {
+      hue: Math.round((1 - clamp01(f.valence ?? 0.5)) * 280),
+      sat: Math.round(45 + clamp01(f.energy ?? 0.5) * 45),
+      light: Math.round(38 + clamp01(f.energy ?? 0.5) * 16),
+    };
   }
 
-  /** Fetch the current track's features and broadcast a mood color to panels. */
+  /** Stable per-track hue for sources with no Spotify features (YouTube-only
+   *  tracks), so mood visuals still shift every song instead of going dead. */
+  private moodFallbackTone(track: TrackInfo): { hue: number; sat: number; light: number } {
+    const s = `${track.name ?? ''}|${(track.artists ?? [])[0] ?? ''}`;
+    let h = 0;
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360;
+    return { hue: h, sat: 62, light: 52 };
+  }
+
+  /** Broadcast the current track's mood palette to the visuals (and panels). */
   private async updateMood(s: Session, track: TrackInfo): Promise<void> {
     const f = await EW.fetchFeatures(track).catch(() => null);
-    if (!f) return;
-    const color = this.moodColorFrom(f);
+    const tone = f ? this.moodTone(f) : this.moodFallbackTone(track);
+    const color = hslToInt(tone.hue, tone.sat, tone.light);
     this.moodColor.set(s.guildId, color);
-    this.bridge.broadcast({ type: 'visuals:mood', color, energy: f.energy, valence: f.valence });
+    this.bridge.broadcast({
+      type: 'visuals:mood',
+      on: true,
+      hue: tone.hue,
+      sat: tone.sat,
+      light: tone.light,
+      energy: f?.energy ?? 0.5,
+      valence: f?.valence ?? 0.5,
+      color,
+    });
+    this.schedulePanelRefresh();
+  }
+
+  /** Tell the visuals to fall back to the static theme. */
+  private clearMood(guildId: string): void {
+    this.moodOn.delete(guildId);
+    this.moodColor.delete(guildId);
+    this.bridge.broadcast({ type: 'visuals:mood', on: false });
     this.schedulePanelRefresh();
   }
 
@@ -1742,10 +1769,7 @@ export class DiscordBot {
         if (!gid) return void (await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral }));
         const enabled = interaction.options.getBoolean('enabled');
         if (enabled === true) this.moodOn.add(gid);
-        else if (enabled === false) {
-          this.moodOn.delete(gid);
-          this.moodColor.delete(gid);
-        }
+        else if (enabled === false) this.clearMood(gid);
         const on = this.moodOn.has(gid);
         if (on) {
           const cur = s.queue.getCurrentTrack();
@@ -2459,7 +2483,7 @@ export class DiscordBot {
       mashup: 'mashup', msh: 'mashup',
       mashupgame: 'mashupgame', mg: 'mashupgame',
       mashups: 'mashups', mh: 'mashups',
-      dedupe: 'dedupe', dd: 'dedupe',
+      dedupe: 'dedupe', dedup: 'dedupe', dd: 'dedupe',
       bulk: 'bulk',
       skipto: 'skipto',
       skiptoggle: 'skiptoggle',
@@ -2758,10 +2782,7 @@ export class DiscordBot {
           if (!message.guildId) return void (await message.reply('Must be used in a server.'));
           const a = args.trim().toLowerCase();
           if (/^(on|1|true)$/.test(a)) this.moodOn.add(message.guildId);
-          else if (/^(off|0|false)$/.test(a)) {
-            this.moodOn.delete(message.guildId);
-            this.moodColor.delete(message.guildId);
-          }
+          else if (/^(off|0|false)$/.test(a)) this.clearMood(message.guildId);
           const on = this.moodOn.has(message.guildId);
           if (on) {
             const cur = s.queue.getCurrentTrack();
@@ -6640,8 +6661,19 @@ export class DiscordBot {
           }
           lastPickUri = chosen.uri;
           failed.add(chosen.uri);
-          resolved = await EW.resolveCandidate(chosen);
-          if (!resolved) console.log(`[endlesswave] could not resolve "${chosen.name}" — trying another`);
+          const r = await EW.resolveCandidate(chosen);
+          if (!r) {
+            console.log(`[endlesswave] could not resolve "${chosen.name}" — trying another`);
+            continue;
+          }
+          // Dedupe again AFTER resolution: different picks (e.g. "Blue Monday
+          // '88" vs "Blue Monday (2016 Remaster)") can resolve to the same
+          // upload, which the pre-resolution filters can't see.
+          if (s.queue.filterNew([r]).length === 0) {
+            console.log(`[endlesswave] "${r.name}" already queued (resolved) — trying another`);
+            continue;
+          }
+          resolved = r;
         }
         if (!resolved) {
           // Dead-end: the current context can't produce a fresh candidate (the
