@@ -163,6 +163,29 @@ export class QueueManager {
     this.emitQueue();
   }
 
+  /** Insert a user batch as a priority block: after the current track (and any
+   *  already-queued user tracks) but ahead of the first Endless Wave filler
+   *  track, so an explicit list is never queued behind or interleaved with
+   *  auto-play picks. With no wave tracks ahead it behaves like play-next. */
+  insertUserBatch(tracks: Omit<TrackInfo, 'addedBy' | 'addedAt'>[], requestedBy: string): void {
+    if (tracks.length === 0) return;
+    const afterCurrent = this.currentIndex === -1 ? this.tracks.length : this.currentIndex + 1;
+    let at = afterCurrent;
+    for (let i = afterCurrent; i < this.tracks.length; i++) {
+      if ((this.tracks[i].addedBy ?? '') === 'endless-wave') {
+        at = i;
+        break;
+      }
+      at = i + 1;
+    }
+    const items = tracks.map((t) => ({ ...t, addedBy: requestedBy, addedAt: Date.now() }));
+    this.tracks.splice(at, 0, ...items);
+    if (this.currentIndex === -1) this.currentIndex = 0;
+    if (!this.state.playing && this.currentIndex >= 0) this.currentIndex = at;
+    this.totalEnqueued += items.length;
+    this.emitQueue();
+  }
+
   /** Shuffle the upcoming tracks (everything after the current one). */
   shuffleUpcoming(): void {
     if (this.currentIndex < 0) return;

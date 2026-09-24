@@ -34,6 +34,25 @@ describe('QueueManager.filterNew', () => {
   });
 });
 
+describe('QueueManager.insertUserBatch', () => {
+  it('places user tracks ahead of Endless Wave filler', () => {
+    const q = new QueueManager();
+    q.enqueue(track('spotify:track:a', 'A'), 'user');
+    q.enqueue(track('spotify:track:ew1', 'EW1'), 'endless-wave', { keepCursor: true });
+    q.enqueue(track('spotify:track:ew2', 'EW2'), 'endless-wave', { keepCursor: true });
+    q.insertUserBatch([track('spotify:track:b', 'B')], 'user');
+    expect(q.getSnapshot().tracks.map((t) => t.name)).toEqual(['A', 'B', 'EW1', 'EW2']);
+  });
+
+  it('appends after existing user tracks when no wave tracks are ahead', () => {
+    const q = new QueueManager();
+    q.enqueue(track('spotify:track:a', 'A'), 'user');
+    q.enqueue(track('spotify:track:b', 'B'), 'user');
+    q.insertUserBatch([track('spotify:track:c', 'C')], 'user');
+    expect(q.getSnapshot().tracks.map((t) => t.name)).toEqual(['A', 'B', 'C']);
+  });
+});
+
 describe('QueueManager.enqueue cursor behavior', () => {
   it('records addedBy on the stored item', () => {
     const q = new QueueManager();

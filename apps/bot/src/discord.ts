@@ -2417,7 +2417,7 @@ export class DiscordBot {
       return;
     }
     const [rawCmd, ...rawArgs] = rest.split(/\s+/);
-    const cmd = rawCmd.toLowerCase();
+    let cmd = rawCmd.toLowerCase();
     const args = rawArgs.join(' ');
     const s = this.sessionFor(message.guildId);
 
@@ -2497,6 +2497,20 @@ export class DiscordBot {
         return;
       }
     }
+    // Plain spelling aliases are dispatched on their canonical name, otherwise
+    // they only shared a cooldown bucket and fell through to "Unknown command"
+    // (that's why V@dd / V@dedup / V@mh / V@mg / V@msh / V@boost did nothing).
+    // Subcommand shortcuts (save / load / del / pl) keep their own case and
+    // read `args`, so they are deliberately not listed here.
+    const dispatchAlias: Record<string, string> = {
+      boost: 'bassboost',
+      msh: 'mashup',
+      mg: 'mashupgame',
+      mh: 'mashups',
+      dedup: 'dedupe',
+      dd: 'dedupe',
+    };
+    if (dispatchAlias[cmd]) cmd = dispatchAlias[cmd];
 
     try {
       switch (cmd) {
@@ -2665,21 +2679,48 @@ export class DiscordBot {
         case 'remove': {
           if (!canUse('remove')) return void (await deny());
           const query = args.trim();
-          if (!query) return void (await message.reply('Usage: `V@remove <queue number>` or `V@remove <song>`'));
-          // Accept a plain number even with trailing text ("3, crawling, ..."),
-          // and fall back to matching the song/artist name.
-          let n = parseInt(query, 10);
-          if (Number.isNaN(n)) {
-            const q = query.toLowerCase();
-            const tracks = s.queue.getSnapshot().tracks;
+          if (!query)
+            return void (await message.reply('Usage: `V@remove <n[, n…]>` or `V@remove <song>` — numbers match `V@q`'));
+          // Numbers may be given as a list ("4, 8, 9, 10"). Resolve EVERY token
+          // against the queue as it is right now, then delete from the highest
+          // index down — otherwise each removal renumbers the ones behind it
+          // (which is why "V@rem 4, 8, 9, 10" used to drop only index 4).
+          const listInput = /^[\d\s,]+$/.test(query);
+          const tokens = listInput ? query.split(/[,\s]+/).filter(Boolean) : [query];
+          const tracks = s.queue.getSnapshot().tracks;
+          const targets = new Set<number>();
+          const misses: string[] = [];
+          for (const tok of tokens) {
+            if (/^\d+$/.test(tok)) {
+              const idx = Number(tok) - 1; // V@q numbers are 1-based
+              if (idx >= 0 && idx < tracks.length) targets.add(idx);
+              else misses.push(tok);
+              continue;
+            }
+            const q = tok.toLowerCase();
             const found = tracks.findIndex(
               (t) => t.name.toLowerCase().includes(q) || (t.artists ?? []).some((a) => a.toLowerCase().includes(q)),
             );
-            if (found < 0) return void (await message.reply(`No queued track matches **${query}**.`));
-            n = found + 1;
+            if (found >= 0) targets.add(found);
+            else misses.push(tok);
           }
-          const removed = s.removeFromQueue(n - 1);
-          await message.reply(removed ? `Removed **${removed.name}**` : 'Index out of range.');
+          if (targets.size === 0) {
+            await message.reply(
+              misses.length ? `Nothing matched: **${misses.join(', ')}**.` : 'Nothing to remove.',
+            );
+            break;
+          }
+          const names: string[] = [];
+          for (const idx of [...targets].sort((a, b) => b - a)) {
+            const r = s.removeFromQueue(idx);
+            if (r) names.push(r.name);
+          }
+          const left = s.queue.getSnapshot().tracks.length;
+          await message.reply(
+            `🧹 Removed ${names.length} track${names.length > 1 ? 's' : ''} — ${left} left in the queue:\n` +
+              names.map((n) => `• ${truncate(n, 60)}`).join('\n') +
+              (misses.length ? `\n-# Out of range: ${misses.join(', ')}` : ''),
+          );
           break;
         }
 
@@ -3038,8 +3079,9 @@ export class DiscordBot {
                   : 'All of those are already in the queue.',
               );
             const who = message.author.username;
-            if (this.userQueueMode(s) === 'insert') s.queue.insertAfterCurrent(fresh, who);
-            else s.queue.enqueueMany(fresh, who);
+            // Bulk adds always land ahead of Endless Wave filler so an explicit
+            // list is never queued behind (or interleaved with) auto-play picks.
+            s.queue.insertUserBatch(fresh, who);
             this.stats.noteQueued(s.guildId ?? '', who, fresh.flatMap((t) => t.artists));
             try {
               await this.ensureJoinedForMessage(message, s);
@@ -4023,7 +4065,7 @@ export class DiscordBot {
         try {
           const old = await channel.messages.fetch(existing.messageId);
           if (isLatest) {
-            await old.edit({ embeds: [this.miniNpPayload(this.sessionFor(guildId))] });
+            await old.edit(this.miniNpMessage(this.sessionFor(guildId)));
             this.miniTrackUri.set(guildId, uri);
             this.scheduleSavePanels();
             return;
@@ -4033,8 +4075,8 @@ export class DiscordBot {
           } catch {
             // Can't delete (perms/rate limits) — update in place instead of
             // leaving a second strip behind on every rapid track change.
-            const payload = this.miniNpPayload(this.sessionFor(guildId));
-            await old.edit({ embeds: [payload] });
+            const payload = this.miniNpMessage(this.sessionFor(guildId));
+            await old.edit(payload);
             this.miniNp.set(guildId, existing);
             this.miniTrackUri.set(guildId, uri);
             this.scheduleSavePanels();
@@ -4042,7 +4084,7 @@ export class DiscordBot {
           }
         } catch { /* already gone */ }
       }
-      const msg = await channel.send({ embeds: [this.miniNpPayload(this.sessionFor(guildId))] });
+      const msg = await channel.send(this.miniNpMessage(this.sessionFor(guildId)));
       this.miniNp.set(guildId, { channelId, messageId: msg.id });
       this.miniTrackUri.set(guildId, uri);
       this.scheduleSavePanels();
@@ -4091,7 +4133,7 @@ export class DiscordBot {
       const channel = await this.client.channels.fetch(channelId);
       if (!channel?.isTextBased()) return false;
       const msg = await channel.messages.fetch(messageId);
-      await msg.edit({ embeds: [this.miniNpPayload(this.sessionFor(guildId))] });
+      await msg.edit(this.miniNpMessage(this.sessionFor(guildId)));
       return true;
     } catch (err) {
       return !isMessageGone(err);
@@ -4449,6 +4491,27 @@ export class DiscordBot {
       durationMs: video.durationMs,
       source: 'youtube',
     };
+  }
+
+  /** Compact transport row (⏮ ▶/⏸ ⏭) attached to the mini now-playing strip. */
+  private miniControlRow(s: Session): ActionRowBuilder<ButtonBuilder> {
+    const playing = s.queue.getState().playing;
+    return new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder().setCustomId('vz:prev').setEmoji(this.vzE('vz_prev', '⏮')).setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('vz:toggle')
+        .setEmoji(this.vzE(playing ? 'vz_pause' : 'vz_play', playing ? '⏸' : '▶'))
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('vz:next').setEmoji(this.vzE('vz_next', '⏭')).setStyle(ButtonStyle.Secondary),
+    );
+  }
+
+  /** Mini strip payload: the now-playing embed plus its transport controls. */
+  private miniNpMessage(s: Session): {
+    embeds: EmbedBuilder[];
+    components: ActionRowBuilder<ButtonBuilder>[];
+  } {
+    return { embeds: [this.miniNpPayload(s)], components: [this.miniControlRow(s)] };
   }
 
   /** Compact always-on now-playing strip — the panel's small sibling. */
@@ -5044,8 +5107,10 @@ export class DiscordBot {
     const lines: string[] = [];
     for (let i = startIdx; i < end; i++) {
       const t = tracks[i];
-      const cur = i === snap.currentIndex ? '▶ ' : `${i + 1}. `;
-      lines.push(`${cur}${srcEmoji(t.source)} **${t.name}** — ${truncate(t.artists.join(', '), 80)}`);
+      // Always show the absolute 1-based number (matching V@rem / V@skipto) so
+      // the row you point at is never ambiguous.
+      const cur = i === snap.currentIndex ? '▶ ' : '';
+      lines.push(`${cur}${i + 1}. ${srcEmoji(t.source)} **${t.name}** — ${truncate(t.artists.join(', '), 80)}`);
     }
     const embed = new EmbedBuilder()
       .setTitle(`Queue (${tracks.length}) — showing ${startIdx + 1}–${end}`)
