@@ -53,6 +53,26 @@ describe('QueueManager.insertUserBatch', () => {
   });
 });
 
+describe('QueueManager.swap', () => {
+  it('swaps two positions and keeps the cursor on the same track', () => {
+    const q = new QueueManager();
+    q.enqueue(track('spotify:track:a', 'A'), 'user');
+    q.enqueue(track('spotify:track:b', 'B'), 'user');
+    q.enqueue(track('spotify:track:c', 'C'), 'user');
+    const before = q.getCurrentTrack()?.name;
+    expect(q.swap(1, 2)).toBe(true);
+    expect(q.getSnapshot().tracks.map((t) => t.name)).toEqual(['A', 'C', 'B']);
+    expect(q.getCurrentTrack()?.name).toBe(before);
+  });
+
+  it('refuses out-of-range or no-op swaps', () => {
+    const q = new QueueManager();
+    q.enqueue(track('spotify:track:a', 'A'), 'user');
+    expect(q.swap(0, 5)).toBe(false);
+    expect(q.swap(0, 0)).toBe(false);
+  });
+});
+
 describe('QueueManager.enqueue cursor behavior', () => {
   it('records addedBy on the stored item', () => {
     const q = new QueueManager();

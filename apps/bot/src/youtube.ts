@@ -375,7 +375,11 @@ export async function resolveYoutubePlaylist(input: string): Promise<ResolvedVid
  * asks for one ("kids with guns remix" keeps remixes in contention).
  */
 const VARIANT_RE =
-  /\b(remix|bootleg|live|cover|karaoke|acoustic|instrumental|nightcore|mashup|sped\s*up|slowed|reverb|version|tribute|minor\s*key|fan\s*made|8d\s*audio|bass\s*boosted)\b/i;
+  /\b(remix|bootleg|live|cover|karaoke|acoustic|instrumental|nightcore|mashup|sped\s*up|slowed|reverb|version|tribute|minor\s*key|fan\s*made|8d\s*audio|bass\s*boosted|unplugged|concert|festival|tiny\s*desk|kexp|radio\s*1|on\s*the\s*radio|bbc)\b/i;
+
+/** Live-performance markers — the strongest signal that a hit is not the studio
+ *  release a plain "play <song>" is after. */
+const LIVE_RE = /\b(live|unplugged|concert|festival|tiny\s*desk|kexp|radio\s*1|on\s*the\s*radio|bbc)\b/i;
 
 function normText(s: string): string {
   return s
@@ -422,7 +426,7 @@ async function flatSearch(query: string): Promise<FlatHit[]> {
   return hits;
 }
 
-function scoreHit(
+export function scoreHit(
   hit: FlatHit,
   rank: number,
   query: string,
@@ -453,7 +457,13 @@ function scoreHit(
     else score -= 1;
   }
 
-  if (!VARIANT_RE.test(query) && !VARIANT_RE.test(opts.name ?? '') && VARIANT_RE.test(hit.title)) score -= 8;
+  // A live/remix/cover cut is almost never what "play <song>" means, so sink it.
+  // Live cuts are the worst offenders — a plain song search surfaces them above
+  // the studio release — so they take an extra hit.
+  if (!VARIANT_RE.test(query) && !VARIANT_RE.test(opts.name ?? '')) {
+    if (VARIANT_RE.test(hit.title)) score -= 8;
+    if (LIVE_RE.test(hit.title)) score -= 8;
+  }
 
   // Prefer the clean song over theatrical music videos, which carry long
   // intros/interludes/outros. "Artist - Topic" uploads are already boosted
@@ -618,7 +628,14 @@ async function doSearchAndResolve(
     // to the scored path below, so correctness is preserved.
     const fusedRaw = await fusedP;
     const fusedVideo = parseFused(fusedRaw, META_SEP);
-    if (fusedVideo && !isClearlyWrongMatch(fusedVideo, query, opts)) {
+    // If the top hit is a live/remix/cover we didn't ask for, skip the fast path
+    // and let the scored path look for the studio release instead.
+    const queryWantsVariant = VARIANT_RE.test(query) || VARIANT_RE.test(opts.name ?? '');
+    if (
+      fusedVideo &&
+      !isClearlyWrongMatch(fusedVideo, query, opts) &&
+      (queryWantsVariant || !VARIANT_RE.test(fusedVideo.name))
+    ) {
       console.log(`[youtube] resolved "${fusedVideo.name}" in ${Date.now() - t0}ms (fast path)`);
       resolveCache.set(key, { at: Date.now(), video: fusedVideo });
       if (resolveCache.size > RESOLVE_CACHE_MAX) {

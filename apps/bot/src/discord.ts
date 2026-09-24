@@ -31,6 +31,7 @@ import {
   type GuildTextBasedChannel,
   type Interaction,
   type Message,
+  type MessageActionRowComponentBuilder,
   type MessageComponentInteraction,
   type MessageReaction,
   type TextBasedChannel,
@@ -1001,13 +1002,17 @@ export class DiscordBot {
         const id = interaction.customId.slice('vzhelp:'.length);
         const embed = this.helpCategoryEmbed(id);
         if (embed) await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral }).catch(() => {});
+      } else if (interaction.customId.startsWith('qa:')) {
+        await this.handleQueueAdjust(interaction);
       } else {
         await this.handleButton(interaction);
       }
       return;
     }
     if (interaction.isStringSelectMenu()) {
-      if (interaction.customId === 'queue_page') {
+      if (interaction.customId === 'qa:pick') {
+        await this.handleQueueAdjust(interaction);
+      } else if (interaction.customId === 'queue_page') {
         const s = this.sessionFor(interaction.guildId);
         const start = parseInt(interaction.values[0] ?? '0', 10);
         const { embeds, components } = this.queuePage(s, Number.isFinite(start) ? start : 0);
@@ -2721,6 +2726,13 @@ export class DiscordBot {
               names.map((n) => `• ${truncate(n, 60)}`).join('\n') +
               (misses.length ? `\n-# Out of range: ${misses.join(', ')}` : ''),
           );
+          break;
+        }
+
+        case 'qa':
+        case 'qadjust': {
+          if (!canUse('remove')) return void (await deny());
+          await message.reply(this.qaView(s));
           break;
         }
 
@@ -5462,6 +5474,117 @@ export class DiscordBot {
   }
 
   /** Show a picker of upcoming tracks; choosing one jumps to it, dropping the rest. */
+  /** Interactive queue editor: pick a track, then move / remove / play it now —
+   *  no need to work out which queue number is which. */
+  private qaView(
+    s: Session,
+    opts: { selected?: number; note?: string } = {},
+  ): { embeds: EmbedBuilder[]; components: ActionRowBuilder<MessageActionRowComponentBuilder>[] } {
+    const snap = s.queue.getSnapshot();
+    const components: ActionRowBuilder<MessageActionRowComponentBuilder>[] = [];
+    const title = '🎛️ Queue adjust';
+    const total = Math.max(0, snap.tracks.length - snap.currentIndex - 1);
+    const upcoming = snap.tracks
+      .map((t, i) => ({ t, i }))
+      .filter(({ i }) => i > snap.currentIndex)
+      .slice(0, 25);
+    if (upcoming.length === 0) {
+      return {
+        embeds: [
+          new EmbedBuilder().setTitle(title).setDescription('Nothing queued ahead to adjust.').setColor(this.themeColor()),
+        ],
+        components,
+      };
+    }
+    const sel = opts.selected;
+    const selTrack = sel !== undefined ? snap.tracks[sel] : undefined;
+    if (sel !== undefined && selTrack) {
+      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder().setCustomId(`qa:up:${sel}`).setLabel('Up').setEmoji('⏫').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`qa:down:${sel}`).setLabel('Down').setEmoji('⏬').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`qa:play:${sel}`).setLabel('Play now').setEmoji('▶').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`qa:rm:${sel}`).setLabel('Remove').setEmoji('🗑').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId('qa:back').setLabel('Back').setEmoji('↩').setStyle(ButtonStyle.Secondary),
+      );
+      components.push(row);
+      return {
+        embeds: [
+          new EmbedBuilder()
+            .setTitle(title)
+            .setDescription(
+              (opts.note ? `${opts.note}\n\n` : '') +
+                `**${sel + 1}. ${truncate(selTrack.name || 'Untitled', 70)}**\n` +
+                `${truncate((selTrack.artists ?? []).join(', ') || 'Unknown artist', 90)}\n` +
+                `-# position ${sel + 1} · ${total} upcoming`,
+            )
+            .setColor(this.themeColor()),
+        ],
+        components,
+      };
+    }
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId('qa:pick')
+      .setPlaceholder('Pick a track to adjust…')
+      .addOptions(
+        upcoming.map(({ t, i }) => ({
+          label: truncate(`${i + 1}. ${t.name || 'Untitled'}`, 90),
+          description: truncate((t.artists ?? []).join(', ') || 'Unknown artist', 90),
+          value: String(i),
+        })),
+      );
+    components.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu));
+    return {
+      embeds: [
+        new EmbedBuilder()
+          .setTitle(title)
+          .setDescription(
+            (opts.note ? `${opts.note}\n\n` : '') +
+              'Pick a track below, then **move**, **remove** or **play it now** — no numbers to remember.\n' +
+              `-# ${total} upcoming${total > 25 ? ' · showing the first 25' : ''}`,
+          )
+          .setColor(this.themeColor()),
+      ],
+      components,
+    };
+  }
+
+  private async handleQueueAdjust(interaction: MessageComponentInteraction): Promise<void> {
+    if (!this.canUse('remove', interaction)) {
+      await interaction
+        .reply({ content: "⛔ You don't have permission to do that.", flags: MessageFlags.Ephemeral })
+        .catch(() => {});
+      return;
+    }
+    const s = this.sessionFor(interaction.guildId);
+    const parts = interaction.customId.split(':');
+    const action = parts[1] ?? '';
+    if (action === 'back' || action === 'pick') {
+      const val = action === 'pick' ? Number((interaction as StringSelectMenuInteraction).values[0]) : NaN;
+      await interaction.update(this.qaView(s, Number.isFinite(val) ? { selected: val } : {})).catch(() => {});
+      return;
+    }
+    const idx = Number(parts[2]);
+    const snap = s.queue.getSnapshot();
+    let note: string | undefined;
+    if (!Number.isFinite(idx) || !snap.tracks[idx]) {
+      note = '⚠️ That track is gone.';
+    } else if (action === 'rm') {
+      const r = s.removeFromQueue(idx);
+      note = r ? `🗑 Removed **${truncate(r.name, 50)}**` : '⚠️ That track is gone.';
+    } else if (action === 'up') {
+      note = idx - 1 > snap.currentIndex && s.queue.swap(idx, idx - 1) ? '⏫ Moved up' : 'Already at the top.';
+    } else if (action === 'down') {
+      note = s.queue.swap(idx, idx + 1) ? '⏬ Moved down' : 'Already at the bottom.';
+    } else if (action === 'play') {
+      const dropped = s.queue.removeUpTo(idx);
+      s.playback.next();
+      note = `▶ Playing next${dropped > 0 ? ` — dropped ${dropped} track${dropped > 1 ? 's' : ''}` : ''}`;
+    } else {
+      note = '⚠️ Unknown action.';
+    }
+    await interaction.update(this.qaView(s, { note })).catch(() => {});
+  }
+
   private async presentSkipTo(target: Message | ChatInputCommandInteraction): Promise<void> {
     const gid = target.guildId ?? '';
     const s = this.sessionFor(gid);
@@ -6938,6 +7061,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/queue` · `V@q` — view the queue (paged)',
       '`/shuffle` · `V@sh` — shuffle the queue',
       '`/remove <#>` · `V@rem <#>` — remove a queued track',
+      '`V@qa` · `V@qadjust` — interactive queue editor: pick a track, then move / remove / play it now',
       '`/dedupe` · `V@dd` — remove duplicate upcoming tracks',
       '`/bulk <tracks>` · `V@bulk` — queue a list at once: names, links and/or attached files, one per line or `;` (max 10)',
       '`/skipto` · `V@skipto` — jump to a future track (drops the ones skipped; off by default)',

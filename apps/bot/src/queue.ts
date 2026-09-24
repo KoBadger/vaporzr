@@ -338,6 +338,17 @@ export class QueueManager {
     return false;
   }
 
+  /** Swap two positions (used by the interactive queue editor). */
+  swap(a: number, b: number): boolean {
+    if (a === b) return false;
+    if (a < 0 || b < 0 || a >= this.tracks.length || b >= this.tracks.length) return false;
+    [this.tracks[a], this.tracks[b]] = [this.tracks[b], this.tracks[a]];
+    if (this.currentIndex === a) this.currentIndex = b;
+    else if (this.currentIndex === b) this.currentIndex = a;
+    this.emitQueue();
+    return true;
+  }
+
   setState(patch: Partial<PlaybackState>): PlaybackState {
     this.state = { ...this.state, ...patch, updatedAt: Date.now() };
     this.emitState();

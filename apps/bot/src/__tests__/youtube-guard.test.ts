@@ -1,6 +1,60 @@
 import { describe, it, expect } from 'vitest';
-import { isClearlyWrongMatch } from '../youtube.js';
+import { isClearlyWrongMatch, scoreHit } from '../youtube.js';
 import type { ResolvedVideo } from '../youtube.js';
+
+describe('scoreHit (live/edition ranking)', () => {
+  const opts = { name: 'Liquid Game', artists: ['Sweeps'], durationMs: 200_000 };
+  const query = 'Liquid Game Sweeps';
+
+  it('ranks the studio/audio upload above a live version', () => {
+    const studio = scoreHit(
+      { videoId: 'a', title: 'Liquid Game', channel: 'Sweeps - Topic', durationSec: 200 },
+      0,
+      query,
+      opts,
+    );
+    const live = scoreHit(
+      { videoId: 'b', title: 'Liquid Game (Live at Coachella)', channel: 'Sweeps', durationSec: 210 },
+      0,
+      query,
+      opts,
+    );
+    expect(studio).toBeGreaterThan(live);
+  });
+
+  it('ranks an official audio upload above a concert video', () => {
+    const audio = scoreHit(
+      { videoId: 'a', title: 'Liquid Game (Official Audio)', channel: 'Sweeps - Topic', durationSec: 200 },
+      1,
+      query,
+      opts,
+    );
+    const concert = scoreHit(
+      { videoId: 'b', title: 'Liquid Game - Live Concert', channel: 'Sweeps Live', durationSec: 205 },
+      0,
+      query,
+      opts,
+    );
+    expect(audio).toBeGreaterThan(concert);
+  });
+
+  it('still prefers a live version when the query asks for one', () => {
+    const liveOpts = { name: 'Liquid Game (Live)', artists: ['Sweeps'], durationMs: 210_000 };
+    const live = scoreHit(
+      { videoId: 'b', title: 'Liquid Game (Live at Coachella)', channel: 'Sweeps', durationSec: 210 },
+      0,
+      'Liquid Game Live',
+      liveOpts,
+    );
+    const studio = scoreHit(
+      { videoId: 'a', title: 'Liquid Game', channel: 'Sweeps - Topic', durationSec: 200 },
+      1,
+      'Liquid Game Live',
+      liveOpts,
+    );
+    expect(live).toBeGreaterThan(studio);
+  });
+});
 
 function video(overrides: Partial<ResolvedVideo>): ResolvedVideo {
   return {
