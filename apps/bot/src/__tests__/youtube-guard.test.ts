@@ -121,4 +121,23 @@ describe('isClearlyWrongMatch (speed fallback guard)', () => {
     const v = video({ name: 'End Of Summer (Remix) - Tame Impala', channel: 'Tame Impala - Topic' });
     expect(isClearlyWrongMatch(v, 'End Of Summer', { name: 'End Of Summer', artists: ['Tame Impala'], durationMs: 432_000 })).toBe(false);
   });
+
+  it('accepts the real song when the upload words the edition differently (regression)', () => {
+    const opts = { name: 'All Night Long (All Night) - Single Version', artists: ['Lionel Richie'], durationMs: 259_000 };
+    const query = 'All Night Long (All Night) - Single Version Lionel Richie';
+    for (const title of [
+      'Lionel Richie - All Night Long (All Night) [Single Version] [Audio HQ]',
+      'All Night Long (All Night) (Single Version)',
+      'Lionel Richie - All Night Long (All Night)',
+    ]) {
+      const v = video({ name: title, channel: 'Lionel Richie', durationMs: 259_000 });
+      expect(isClearlyWrongMatch(v, query, opts)).toBe(false);
+    }
+  });
+
+  it('accepts a remix the user explicitly asked for (regression)', () => {
+    const opts = { name: 'Is This Love - Montmartre Remix', artists: ['Bob Marley & The Wailers'], durationMs: 300_000 };
+    const v = video({ name: 'Bob Marley - Is This Love (Montmartre Remix)', channel: 'Bob Marley', durationMs: 300_000 });
+    expect(isClearlyWrongMatch(v, 'Is This Love - Montmartre Remix Bob Marley & The Wailers', opts)).toBe(false);
+  });
 });

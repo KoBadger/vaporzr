@@ -381,6 +381,18 @@ const VARIANT_RE =
  *  release a plain "play <song>" is after. */
 const LIVE_RE = /\b(live|unplugged|concert|festival|tiny\s*desk|kexp|radio\s*1|on\s*the\s*radio|bbc)\b/i;
 
+/** Edition/quality noise that must not affect whether a title is the song. */
+const TITLE_NOISE = new Set([
+  'version', 'single', 'audio', 'hq', 'hd', 'official', 'video', 'lyric', 'lyrics',
+  'the', 'a', 'an', 'feat', 'ft', 'featuring', 'remaster', 'remastered', 'edit', 'mix',
+  'original', 'album', 'radio', 'extended', 'mv', 'topic', 'visualizer', 'visualiser',
+]);
+
+/** The song-name words that actually matter, edition noise removed. */
+function significantTokens(s: string): string[] {
+  return normText(s).split(' ').filter((w) => w.length > 1 && !TITLE_NOISE.has(w));
+}
+
 function normText(s: string): string {
   return s
     .toLowerCase()
@@ -515,6 +527,20 @@ export function isClearlyWrongMatch(video: ResolvedVideo, query: string, opts: Y
   );
 }
 
+/** The hard, safe-to-enforce checks: a video that isn't music at all, or is a
+ *  wildly different length. These never reject the real song. */
+export function looksUnplayable(name: string, durationMs: number, opts: YoutubeSearchOptions): boolean {
+  const rawTitle = (name ?? '').toLowerCase();
+  if (NON_MUSIC_RE.test(rawTitle) && !MUSIC_HINT_RE.test(rawTitle)) return true;
+  const wantMs = opts.durationMs ?? 0;
+  if (wantMs > 0 && durationMs > 0) {
+    if (durationMs > wantMs + 5 * 60_000 && durationMs > wantMs * 2.5) return true;
+    // A sub-minute upload is a snippet/preview, not the song.
+    if (wantMs > 180_000 && durationMs < 60_000) return true;
+  }
+  return false;
+}
+
 /** Shared guard so the scored path can judge a candidate before extracting it. */
 export function looksWrong(
   name: string,
@@ -524,21 +550,19 @@ export function looksWrong(
   opts: YoutubeSearchOptions,
 ): boolean {
   const t = normText(name);
-  // 1. Phrase check (canonical names only).
-  const canonical = opts.name ? normText(opts.name) : '';
-  if (canonical.length > 1 && !t.includes(canonical)) return true;
-  // 2. Plainly not a song (esports/highlight/podcast/vlog…). An ad break in the
-  //    middle of a stream is usually one of these matching a song name.
-  const rawTitle = (name ?? '').toLowerCase();
-  if (NON_MUSIC_RE.test(rawTitle) && !MUSIC_HINT_RE.test(rawTitle)) return true;
-  // 3. Length mismatch: an album-length upload (or a 30s clip) is a different
-  //    thing from a single, even when the name lines up.
-  const wantMs = opts.durationMs ?? 0;
-  if (wantMs > 0 && durationMs > 0) {
-    if (durationMs > wantMs + 5 * 60_000 && durationMs > wantMs * 2.5) return true;
-    // A sub-minute upload is a snippet/preview, not the song.
-    if (wantMs > 180_000 && durationMs < 60_000) return true;
+  // 1. Phrase check: the song name's significant words must be present. Word
+  //    based (not a substring) and with edition noise removed — otherwise an
+  //    upload that words the version differently ("All Night Long (All Night)
+  //    [Single Version] [Audio HQ]" vs Spotify's "… - Single Version") gets
+  //    rejected even though it is exactly the right song.
+  const want = opts.name ? significantTokens(opts.name) : [];
+  if (want.length > 0) {
+    const have = new Set(t.split(' '));
+    const missing = want.filter((w) => !have.has(w));
+    if (missing.length > want.length / 2) return true;
   }
+  // 2 + 3. Not music at all, or a wildly different length.
+  if (looksUnplayable(name, durationMs, opts)) return true;
   // 4. Score floor.
   const hit: FlatHit = {
     videoId: '',
@@ -668,20 +692,26 @@ async function doSearchAndResolve(
       // ("This video is not available", age-gated, region-locked…) — a single
       // dead top pick must not fail the whole search. A hard budget keeps the
       // accuracy path from stalling playback for tens of seconds.
-      const ranked = hits
+      const byScore = hits
         .map((h, i) => ({ h, s: scoreHit(h, i, query, opts) }))
-        .sort((a, b) => b.s - a.s)
-        // Drop obviously-wrong candidates up front (wrong song, non-music
-        // video, way-off length) so the accuracy path can't settle on a mine
-        // just because it out-scored the real song on partial word matches.
-        .filter((cand) => {
-          const wrong = looksWrong(cand.h.title, cand.h.durationSec * 1000, cand.h.channel, query, opts);
-          if (wrong) console.log(`[youtube] skipping poor match "${cand.h.title}" for "${query}"`);
-          return !wrong;
-        })
-        .slice(0, 3);
+        .sort((a, b) => b.s - a.s);
+      // Prefer candidates that pass the full guard. If none do, fall back to the
+      // best one that is at least real music of roughly the right length —
+      // skipping a real song is worse than a slightly imperfect match.
+      let ranked = byScore.filter((cand) => {
+        const wrong = looksWrong(cand.h.title, cand.h.durationSec * 1000, cand.h.channel, query, opts);
+        if (wrong) console.log(`[youtube] skipping poor match "${cand.h.title}" for "${query}"`);
+        return !wrong;
+      });
+      if (ranked.length === 0) {
+        ranked = byScore.filter((cand) => !looksUnplayable(cand.h.title, cand.h.durationSec * 1000, opts));
+        if (ranked.length > 0) {
+          console.log(`[youtube] no clean match for "${query}" — using best playable candidate "${ranked[0].h.title}"`);
+        }
+      }
+      const shortlist = ranked.slice(0, 3);
       const deadline = Date.now() + RESOLVE_BUDGET_MS;
-      for (const cand of ranked) {
+      for (const cand of shortlist) {
         const remaining = deadline - Date.now();
         if (remaining <= 0) break;
         try {
