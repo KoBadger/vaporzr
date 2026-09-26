@@ -35,6 +35,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+# Cream of the Crop preset library for the web visualizer (~10k presets in two
+# chunks, lazily streamed by the browser). Fetched before the source COPYs so
+# this layer stays cached across code changes. Best-effort — the visualizer
+# falls back to its bundled packs if these can't be fetched.
+RUN mkdir -p apps/bot/public/vendor/presets \
+ && node -e "const fs=require('fs'),d='apps/bot/public/vendor/presets',b='https://raw.githubusercontent.com/geeks-accelerator/butterchurn/master/presets/full-collection/chunks/butterchurnPresetsAll.chunk-';[0,1].forEach(async i=>{try{const r=await fetch(b+i+'.min.js');if(!r.ok)throw new Error('HTTP '+r.status);fs.writeFileSync(d+'/chunk-'+i+'.min.js',Buffer.from(await r.arrayBuffer()));console.log('preset chunk',i,'ok')}catch(e){console.warn('preset chunk',i,'skipped:',e.message)}})"
+
 COPY package.json package-lock.json ./
 COPY packages/shared ./packages/shared
 COPY apps/bot ./apps/bot

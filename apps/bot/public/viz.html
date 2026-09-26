@@ -85,6 +85,11 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
 @keyframes pulse{50%{box-shadow:0 0 28px var(--glow,rgba(99,102,241,.55))}}
 #preset-name{position:absolute;bottom:96px;left:24px;z-index:11;font-size:11px;color:#64748b;
   max-width:40%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0;transition:opacity .5s}
+#preset-lib{display:flex;flex-direction:column;gap:5px;min-width:186px}
+#preset-count{font-size:10px;letter-spacing:.07em;color:#64748b;text-transform:uppercase;white-space:nowrap}
+#preset-bar{display:block;height:2px;border-radius:2px;background:rgba(148,163,184,.22);overflow:hidden}
+#preset-fill{display:block;height:100%;width:0;border-radius:2px;
+  background:linear-gradient(90deg,var(--acc,#6a5cff),var(--acc2,#00f0ff));transition:width .8s ease}
 
 /* Control dock */
 #dock{position:absolute;bottom:16px;left:50%;transform:translateX(-50%) translateY(80px);z-index:14;
@@ -179,6 +184,10 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
 <div id="dock">
   <button class="dock-btn" id="btn-prev" title="Previous preset">⏮</button>
   <button class="dock-btn" id="btn-next" title="Next preset">⏭</button>
+  <div id="preset-lib">
+    <span id="preset-count"></span>
+    <span id="preset-bar"><i id="preset-fill"></i></span>
+  </div>
   <button class="dock-btn" id="btn-calm" data-tip="Calm mode — gentler brightness, stricter flash guard" title="">🌙</button>
   <button class="dock-btn" id="btn-lock" data-tip="Lock current preset">🔓</button>
   <button class="dock-btn" id="btn-synth" data-tip="Synthwave road (Endless Wave)">🛣</button>
@@ -412,6 +421,59 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
     strobeBL.push(name);
     try{localStorage.setItem('vzStrobeBL',JSON.stringify(strobeBL.slice(-300)))}catch(e){}
   }
+
+  /* ---------- lazy preset library (Cream of the Crop, ~10k) ----------
+     The bundled packs above load synchronously, so first paint never waits.
+     The big library is name-first: a tiny index so the HUD/counters know the
+     whole library, then the chunks stream in while the browser is idle.
+     Rotation only ever picks from LOADED presets, so you never see a spinner,
+     a black frame or a hard cut — just the usual 2.5s blend. */
+  var libTotal=0,libChunks=[];
+  function updatePresetDock(){
+    var el=$('preset-count');if(!el)return;
+    var loaded=presetNames.length;
+    el.textContent=libTotal
+      ? libTotal.toLocaleString()+' presets · '+loaded.toLocaleString()+' loaded'
+      : loaded.toLocaleString()+' presets';
+    var fill=$('preset-fill');
+    if(fill&&libTotal)fill.style.width=Math.min(100,(loaded/libTotal)*100).toFixed(1)+'%';
+  }
+  /* Re-derive the playable list after a chunk lands, keeping the current pick. */
+  function refreshPresetNames(){
+    var cur=presetNames[presetIdx];
+    presetNames=Object.keys(allPresets()).sort().filter(function(n){return strobeBL.indexOf(n)<0});
+    if(cur){var i=presetNames.indexOf(cur);if(i>=0)presetIdx=i;}
+    updatePresetDock();
+  }
+  function idle(fn){
+    if(window.requestIdleCallback){window.requestIdleCallback(fn,{timeout:4000});}
+    else{setTimeout(fn,1800);}
+  }
+  function loadPresetChunks(){
+    fetch('/vendor/presets/index.json')
+      .then(function(r){return r.ok?r.json():null})
+      .then(function(idx){
+        if(!idx||!idx.chunks||!idx.chunks.length)return;
+        libTotal=idx.total||0;libChunks=idx.chunks;
+        updatePresetDock();
+        var step=function(i){
+          if(i>=libChunks.length)return;
+          var s=document.createElement('script');
+          s.src='/vendor/presets/'+libChunks[i];s.async=true;
+          var next=function(){idle(function(){step(i+1);});};
+          s.onload=function(){
+            var P=window['butterchurnPresetsChunk'+i];
+            if(P&&typeof P.getPresets==='function'){try{Object.assign(presetPool,P.getPresets());}catch(e){}}
+            refreshPresetNames();
+            next();
+          };
+          s.onerror=next;
+          document.head.appendChild(s);
+        };
+        idle(function(){step(0);});
+      })
+      .catch(function(){/* offline — bundled packs still work */});
+  }
   function pickIndex(start,dir){
     var n=presetNames.length;
     for(var k=0;k<n;k++){
@@ -507,11 +569,14 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
       });
       bcViz.connectAudio(analyser);
       presetNames=Object.keys(allPresets()).sort().filter(function(n){return strobeBL.indexOf(n)<0});
+      updatePresetDock();
       loadPreset(Math.floor(Math.random()*presetNames.length),0.1);
       cycleTimer=setInterval(function(){
         if(!presetLocked&&document.visibilityState==='visible')loadPreset(pickIndex(presetIdx+1,1),2.5);
       },15000);
       showPresetName();
+      /* Pull the big library in behind the scenes — never blocks the show. */
+      loadPresetChunks();
     }catch(e){
       console.error('[viz] butterchurn init failed:',e);
       bcViz=null;

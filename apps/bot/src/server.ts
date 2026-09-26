@@ -2,6 +2,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
 import { buildAuthorizeUrl, exchangeCode, getAccessToken, SpotifyError, spotifyCacheSize } from './spotify.js';
@@ -12,6 +13,9 @@ import { PermissionsManager } from './permissions.js';
 import { vizTunnel } from './tunnel.js';
 import { secretEquals } from './secretCompare.js';
 import { statsStore } from './stats.js';
+
+/** Pre-gzipped vendor assets — preset chunks are tens of MB of JS. */
+const vendorCache = new Map<string, { body: Buffer; gzip: boolean }>();
 import { playlistStore } from './playlists.js';
 import { probeYoutube, youtubeHealth } from './youtube.js';
 import { addPushSubscription, pushPublicKey, pushSubscriptionCount, removePushSubscription } from './push.js';
@@ -367,17 +371,35 @@ async function handleRoute(
         return;
       }
     }
-    // Static vendor bundles for the web visualizer (butterchurn etc.).
+    // Static vendor bundles for the web visualizer (butterchurn etc.) plus the
+    // lazily-loaded preset library under presets/.
     if (url.pathname.startsWith('/vendor/')) {
       const rel = url.pathname.slice('/vendor/'.length);
-      if (/^[\w.-]+\.js$/.test(rel)) {
+      if (/^[\w.-]+\.(js|json)$/.test(rel) || /^presets\/[\w.-]+\.(js|json)$/.test(rel)) {
         try {
-          const file = fs.readFileSync(path.join(__dirname, '..', 'public', 'vendor', rel));
-          res.writeHead(200, {
-            'Content-Type': 'application/javascript; charset=utf-8',
+          const target = path.join(__dirname, '..', 'public', 'vendor', rel);
+          const isJson = rel.endsWith('.json');
+          const type = isJson ? 'application/json' : 'application/javascript';
+          const headers: Record<string, string> = {
+            'Content-Type': `${type}; charset=utf-8`,
             'Cache-Control': 'public, max-age=86400',
-          });
-          res.end(file);
+            Vary: 'Accept-Encoding',
+          };
+          let entry = vendorCache.get(target);
+          if (!entry) {
+            const raw = fs.readFileSync(target);
+            // Preset chunks are tens of MB of JSON-ish JS and compress ~12:1.
+            // Gzip once, then serve the cached copy, so the visualizer pulls a
+            // couple of MB instead of tens — and never re-compresses per request.
+            const gz = raw.length > 4096 ? zlib.gzipSync(raw, { level: 6 }) : null;
+            entry = { body: gz ?? raw, gzip: !!gz };
+            if (vendorCache.size > 12) vendorCache.clear();
+            vendorCache.set(target, entry);
+          }
+          if (entry.gzip) headers['Content-Encoding'] = 'gzip';
+          headers['Content-Length'] = String(entry.body.length);
+          res.writeHead(200, headers);
+          res.end(entry.body);
           return;
         } catch {
           res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
