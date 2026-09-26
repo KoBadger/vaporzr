@@ -945,6 +945,9 @@ export class PlaybackController {
       durationMs,
       volume: this.queue.getState().volume,
       onEnd: this.serverStreamOnEnd(),
+      // Suno media URLs expire / change shape — re-resolve on a stream failure.
+      refreshUrl: () =>
+        resolveSuno(`https://suno.com/song/${current.uri.replace('suno:', '')}`).then((v) => v.streamUrl),
     });
     this.scheduleEnd(durationMs, 0);
     this.schedulePreload(durationMs, 0);

@@ -86,11 +86,47 @@ interface SunoClip {
   handle?: string;
   display_name?: string;
   audio_url?: string;
+  video_url?: string;
   media_urls?: Array<{ url?: string; content_type?: string; delivery?: string }>;
   metadata?: { duration?: number; tags?: string; display_name?: string };
 }
 
 const SUNO_CLIP_API = 'https://studio-api.prod.suno.com/api/clip';
+
+/**
+ * Does this URL actually decode? Suno ships several media URLs per clip and
+ * they are not equally playable: the CloudFront "m4a-opus" progressive file is
+ * not a valid MP4 for newer clips ("moov atom not found"), the legacy
+ * cdn1 mp3 now 403s, while the `.mp4` (video_url) still decodes. ffprobe is the
+ * only reliable way to tell, so verify before handing a URL to the player.
+ */
+function probePlayable(url: string): Promise<boolean> {
+  const ffprobe = config.ffmpegPath.replace(/ffmpeg(\.exe)?$/i, 'ffprobe$1');
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (ok: boolean): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(ok);
+    };
+    const p = spawn(
+      ffprobe,
+      ['-hide_banner', '-v', 'error', '-show_entries', 'format=format_name', '-of', 'default=nw=1', url],
+      { windowsHide: true },
+    );
+    const timer = setTimeout(() => {
+      try {
+        p.kill('SIGKILL');
+      } catch {
+        /* ignore */
+      }
+      done(false);
+    }, 12_000);
+    p.on('error', () => done(false));
+    p.on('exit', (code) => done(code === 0));
+  });
+}
 
 /**
  * Resolve a Suno song (suno.com/song/<uuid>, /s/<slug>, /embed/<uuid>, or a bare
@@ -135,10 +171,25 @@ export async function resolveSuno(input: string): Promise<ResolvedVideo> {
   }
 
   const media = clip?.media_urls ?? [];
-  const pick = media.find((m) => /progressive/i.test(m.delivery ?? '')) ?? media[0];
-  let streamUrl = pick?.url ?? '';
-  if (!streamUrl && clip?.audio_url && !/\/forbidden/.test(clip.audio_url)) streamUrl = clip.audio_url;
-  if (!streamUrl) streamUrl = `https://cdn1.suno.ai/${uuid}.mp3`; // legacy fallback
+  // Candidate media URLs, most-preferred first, then verified with ffprobe.
+  const candidates: string[] = [];
+  const push = (u?: string): void => {
+    if (u && !/\/forbidden/i.test(u) && !candidates.includes(u)) candidates.push(u);
+  };
+  const progressive = media.find((m) => /progressive/i.test(m.delivery ?? '')) ?? media[0];
+  push(progressive?.url);
+  for (const m of media) push(m.url);
+  push(clip?.video_url);
+  push(clip?.audio_url);
+  push(`https://cdn1.suno.ai/${uuid}.mp3`); // legacy fallback
+  let streamUrl = candidates[0] ?? '';
+  for (const c of candidates) {
+    if (await probePlayable(c)) {
+      streamUrl = c;
+      break;
+    }
+    console.warn(`[suno] media URL not playable — trying the next source: ${c}`);
+  }
 
   const name = clip?.title?.trim() || 'Suno track';
   const artist = clip?.handle || clip?.display_name || 'Suno';
