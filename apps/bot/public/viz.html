@@ -210,6 +210,7 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
 <script src="/vendor/butterchurnPresetsExtra.min.js"></script>
 <script src="/vendor/butterchurnPresetsExtra2.min.js"></script>
 <script src="/vendor/butterchurnPresetsMD1.min.js"></script>
+<script src="/vendor/butterchurnPresetsBaron.min.js"></script>
 <script>
 (function(){
   var $=function(id){return document.getElementById(id)},
@@ -392,10 +393,12 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
   var actx=null,analyser=null,gainNode=null,nextAt=0,
       bcViz=null,presetNames=[],presetIdx=-1,presetLocked=false,cycleTimer=null;
 
-  /* Merged preset pool: base + Extra + Extra2 + MD1 packs (~1700 presets). */
+  /* Merged preset pool: base + Extra + Extra2 + MD1 (the classic ~374) plus the
+     modern "Cream of the Crop" baron pack (+762), which is what current
+     projectM ships. Baron is merged last so its curated takes win. */
   var presetPool={};
   function allPresets(){
-    [window.butterchurnPresets,window.butterchurnPresetsExtra,window.butterchurnPresetsExtra2,window.butterchurnPresetsMD1]
+    [window.butterchurnPresets,window.butterchurnPresetsExtra,window.butterchurnPresetsExtra2,window.butterchurnPresetsMD1,window.butterchurnPresetsBaron]
       .forEach(function(P){
         if(P&&typeof P.getPresets==='function'){try{Object.assign(presetPool,P.getPresets())}catch(e){}}
       });

@@ -4068,11 +4068,19 @@ export class DiscordBot {
       if (!channel || !('send' in channel)) return;
       const existing = this.miniNp.get(guildId);
       if (existing) {
-        // Every new song gets a fresh card: drop the old strip and post a new
-        // one at the bottom, so the quick now-playing visibly refreshes instead
-        // of mutating in place.
+        // The now-playing panel sticks around: update it in place whenever it's
+        // still the newest message, so it never blinks out between songs. Only
+        // when newer chatter has pushed it up do we repost at the bottom.
+        const lastId = (channel as { lastMessageId?: string | null }).lastMessageId;
+        const isLatest = lastId === existing.messageId;
         const old = await channel.messages.fetch(existing.messageId).catch(() => null);
         if (old) {
+          if (isLatest) {
+            await old.edit(this.miniNpMessage(this.sessionFor(guildId))).catch(() => {});
+            this.miniTrackUri.set(guildId, uri);
+            this.scheduleSavePanels();
+            return;
+          }
           try {
             await old.delete();
           } catch {
