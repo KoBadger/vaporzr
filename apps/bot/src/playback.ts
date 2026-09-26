@@ -337,14 +337,14 @@ export class PlaybackController {
     }
   }
 
-  /** Trust the known track length when a YouTube/stream upload runs long. The
-   *  end timer used to follow the video, so a wrong or extra-long match played
-   *  right through (and could include non-music/sponsor segments). A small
-   *  slack keeps the natural outro. */
+  /** Trust the known track length only when a stream runs *egregiously* long
+   *  (a wrong/album-length match). A metadata duration that is merely a little
+   *  short must never cut a song's tail off. */
   private cappedDuration(videoMs: number, trackMs: number): number {
     if (!trackMs || trackMs <= 0) return videoMs || 0;
     if (!videoMs || videoMs <= 0) return trackMs;
-    return Math.min(videoMs, trackMs + 5_000);
+    if (videoMs > trackMs * 2 + 60_000) return trackMs + 30_000;
+    return videoMs;
   }
 
   private scheduleEnd(durationMs: number, positionMs: number): void {
@@ -365,6 +365,12 @@ export class PlaybackController {
     // AHEAD of what the listener actually hears by the buffer depth — so
     // advancing at durationMs clips the ending. +6s lets the buffered tail drain.
     const wait = Math.min(remaining + 6000, 6 * 60 * 60 * 1000);
+    const trackS = Math.round((this.queue.getCurrentTrack()?.durationMs ?? 0) / 1000);
+    const videoS = Math.round((this.currentVideo?.durationMs ?? 0) / 1000);
+    console.log(
+      `[playback] end scheduled in ${Math.round(wait / 1000)}s · metadata=${trackS}s video=${videoS}s` +
+        `${videoS <= 0 ? ' (video duration UNKNOWN)' : ''}`,
+    );
     this.endUri = this.queue.getCurrentTrack()?.uri ?? null;
     this.endTimer = setTimeout(() => {
       this.endTimer = null;
@@ -489,6 +495,14 @@ export class PlaybackController {
     if (this.endUri && current?.uri !== this.endUri) return;
     if (current && state.track?.uri === current.uri) {
       const ended = { ...current };
+      const elapsedS = Math.round(
+        (state.positionMs + (state.playing ? Math.max(0, Date.now() - (state.updatedAt || Date.now())) : 0)) / 1000,
+      );
+      const metaS = Math.round((current.durationMs || 0) / 1000);
+      console.log(
+        `[playback] ended "${current.name}" after ~${elapsedS}s of ${metaS}s` +
+          `${metaS > 0 && elapsedS < metaS - 45 ? ' ← CUT SHORT' : ''}`,
+      );
       if (state.repeat) {
         this.replayCurrent();
         return;

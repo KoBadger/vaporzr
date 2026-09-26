@@ -655,8 +655,14 @@ async function doSearchAndResolve(
     // If the top hit is a live/remix/cover we didn't ask for, skip the fast path
     // and let the scored path look for the studio release instead.
     const queryWantsVariant = VARIANT_RE.test(query) || VARIANT_RE.test(opts.name ?? '');
+    // The fused hit sometimes reports no duration (yt-dlp prints "NA"); when we
+    // know how long the song should be, prefer the scored path whose metadata
+    // can verify length. A duration-less hit is how a 44s upload of an 8-minute
+    // track slipped through as a "fast path" match.
+    const fusedUnknownLength = fusedVideo ? fusedVideo.durationMs <= 0 && (opts.durationMs ?? 0) > 0 : false;
     if (
       fusedVideo &&
+      !fusedUnknownLength &&
       !isClearlyWrongMatch(fusedVideo, query, opts) &&
       (queryWantsVariant || !VARIANT_RE.test(fusedVideo.name))
     ) {
