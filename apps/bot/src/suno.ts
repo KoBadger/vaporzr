@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { config } from './config.js';
 import type { ResolvedVideo } from './youtube.js';
 
@@ -92,6 +94,37 @@ interface SunoClip {
 }
 
 const SUNO_CLIP_API = 'https://studio-api.prod.suno.com/api/clip';
+
+/**
+ * Suno's CDN kills long-lived streams mid-track ("Invalid data found" while
+ * demuxing), but a clip is only a few MB — so download it once and play it from
+ * disk. Returns the path if a usable copy is already cached.
+ */
+export async function cachedSunoAudio(uuid: string): Promise<string | null> {
+  const dir = path.join(config.dataDir, 'suno');
+  for (const ext of ['mp4', 'm4a', 'mp3']) {
+    const file = path.join(dir, `${uuid}.${ext}`);
+    const st = await fs.stat(file).catch(() => null);
+    if (st && st.size > 100_000) return file;
+  }
+  return null;
+}
+
+/** Download a Suno clip into the local cache (see cachedSunoAudio). */
+export async function cacheSunoAudio(uuid: string, url: string): Promise<string> {
+  const dir = path.join(config.dataDir, 'suno');
+  await fs.mkdir(dir, { recursive: true });
+  const existing = await cachedSunoAudio(uuid);
+  if (existing) return existing;
+  const ext = /\.mp3(\?|$)/i.test(url) ? 'mp3' : 'mp4';
+  const file = path.join(dir, `${uuid}.${ext}`);
+  const res = await fetch(url, { headers: { 'user-agent': UA } });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (buf.length < 50_000) throw new Error(`suspiciously small (${buf.length} bytes)`);
+  await fs.writeFile(file, buf);
+  return file;
+}
 
 /**
  * Does this URL actually decode? Suno ships several media URLs per clip and

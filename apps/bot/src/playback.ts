@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { QueueManager } from './queue.js';
 import { resolveYoutubeVideo, searchAndResolveYoutube, type ResolvedVideo } from './youtube.js';
-import { resolveSuno, probeDuration } from './suno.js';
+import { resolveSuno, probeDuration, cachedSunoAudio, cacheSunoAudio } from './suno.js';
 import { resolveSoundcloudVideo, soundcloudUriToUrl } from './soundcloud.js';
 import { resolveApplePlayback } from './apple.js';
 import { dj, sfxById, type SfxSound } from './soundboard.js';
@@ -921,47 +921,53 @@ export class PlaybackController {
   }
 
   private async playSuno(current: TrackInfo): Promise<void> {
-    let video = this.streamCache.get(current.uri);
-    if (!video && current.streamUrl) {
-      video = {
-        videoId: current.uri.replace('suno:', ''),
-        uri: current.uri,
-        name: current.name,
-        artists: current.artists,
-        album: current.album,
-        durationMs: current.durationMs,
-        image: current.image,
-        source: 'suno',
-        streamUrl: current.streamUrl,
-        channel: current.artists[0] ?? 'Suno',
-        thumbnail: current.image,
-      };
-    }
-    if (!video) {
-      video = await resolveSuno(current.uri.replace('suno:', ''));
+    const uuid = current.uri.replace('suno:', '');
+    // Suno's CDN kills long-lived streams mid-track ("Invalid data found" while
+    // demuxing), so play a downloaded copy: reuse it when present, otherwise
+    // resolve (the resolver ffprobes candidates) and cache the audio locally.
+    let localPath = await cachedSunoAudio(uuid);
+    const video: ResolvedVideo | null = localPath
+      ? null
+      : await resolveSuno(uuid).catch((err) => {
+          console.warn(`[suno] resolve failed: ${err instanceof Error ? err.message : err}`);
+          return null;
+        });
+    if (!localPath) {
+      if (!video) throw new Error(`Could not resolve the Suno clip "${current.name}".`);
       this.cacheSet(current.uri, video);
+      localPath = await cacheSunoAudio(uuid, video.streamUrl!).catch((err) => {
+        console.warn(
+          `[suno] could not cache the clip (${err instanceof Error ? err.message : err}) — streaming instead`,
+        );
+        return null;
+      });
     }
     this.spotifyFallback = false;
     this.stopSpotifyFeed();
     this.stopSpotifyProgress();
         this.pauseSpotifyAny();
-    const durationMs = this.cappedDuration(video.durationMs, current.durationMs);
+    const durationMs = this.cappedDuration(video?.durationMs ?? current.durationMs, current.durationMs);
     this.currentUri = current.uri;
     this.currentVideo = video;
     this.queue.setState({
       playing: true,
-      track: { ...current, name: video.name, artists: video.artists, durationMs },
+      track: {
+        ...current,
+        name: video?.name ?? current.name,
+        artists: video?.artists ?? current.artists,
+        durationMs,
+      },
       durationMs,
       positionMs: 0,
       source: 'suno',
     });
-    this.voice.playFfmpegUrl(video.streamUrl!, {
+    const source = localPath ?? video!.streamUrl!;
+    this.voice.playFfmpegUrl(source, {
       durationMs,
       volume: this.queue.getState().volume,
       onEnd: this.serverStreamOnEnd(),
-      // Suno media URLs expire / change shape — re-resolve on a stream failure.
-      refreshUrl: () =>
-        resolveSuno(`https://suno.com/song/${current.uri.replace('suno:', '')}`).then((v) => v.streamUrl),
+      // Only needed while streaming — a downloaded copy can't expire.
+      ...(localPath ? {} : { refreshUrl: () => resolveSuno(uuid).then((v) => v.streamUrl) }),
     });
     this.scheduleEnd(durationMs, 0);
     this.schedulePreload(durationMs, 0);
