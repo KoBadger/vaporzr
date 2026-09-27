@@ -69,6 +69,8 @@ export class PlaybackController {
   private preloadTimer: NodeJS.Timeout | null = null;
   /** Fires shortly before a track ends to overlay the next track's head (crossfade). */
   private crossfadeTimer: NodeJS.Timeout | null = null;
+  /** Live crossfade/tail-fade length in ms (0 = off). Set per guild at runtime. */
+  private xfadeMs = config.crossfadeOverlap ? config.crossfadeMs : 0;
   /** Seek offset for the track we crossfaded into; consumed by play(). */
   private pendingXfadeSeekMs = 0;
   /** Offset the CURRENT stream started at (crossfade handoff); 0 for normal starts. */
@@ -388,8 +390,8 @@ export class PlaybackController {
    */
   private scheduleCrossfade(durationMs: number, positionMs: number): void {
     this.clearCrossfadeTimer();
-    if (!config.crossfadeOverlap) return;
-    const xfadeMs = config.crossfadeMs;
+    // Runtime, per-guild setting (0 = off). The env vars only seed the default.
+    const xfadeMs = this.xfadeMs;
     if (xfadeMs <= 0) return;
     if (this.currentSource() === 'spotify' && !this.spotifyFallback) return;
     const snapshot = this.queue.getSnapshot();
@@ -1058,6 +1060,11 @@ export class PlaybackController {
   }
 
   // ---- DJ soundboard ----
+
+  /** Live crossfade length (ms, 0 = off). Applies from the next track onward. */
+  setCrossfade(ms: number): void {
+    this.xfadeMs = Math.max(0, Math.min(15_000, Math.round(ms)));
+  }
 
   isDjEnabled(guildId: string): boolean {
     return dj.isEnabled(guildId);

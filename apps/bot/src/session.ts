@@ -5,6 +5,7 @@ import { PlaybackController, type SendFn } from './playback.js';
 import { VoiceManager } from './voice.js';
 import type { SpotifyBackend } from './librespot.js';
 import { config } from './config.js';
+import { getCrossfadeMs } from './crossfadeStore.js';
 import type { PlaybackState, TrackInfo } from '@vaporzr/shared';
 import * as EW from './endlesswave.js';
 
@@ -25,8 +26,11 @@ export class Session {
   ) {
     this.queue = new QueueManager();
     this.voice = new VoiceManager(() => {});
-    this.voice.setFadeOut(config.crossfadeMs / 1000);
+    // Crossfade + tail fade are a per-guild runtime setting (0 = off).
+    const xfadeMs = getCrossfadeMs(guildId);
+    this.voice.setFadeOut(xfadeMs / 1000);
     this.playback = new PlaybackController(this.queue, () => {}, this.voice, this.librespot);
+    this.playback.setCrossfade(xfadeMs);
   }
 
   /** Feed the spectrum analyzer (only the primary session should). */

@@ -83,6 +83,7 @@ const DEFAULT_COMMAND_LEVELS: Record<string, PermissionLevel> = {
   perms: 'admin',
   speed: 'user',
   bassboost: 'user',
+  crossfade: 'user',
   sleep: 'user',
   diag: 'user',
 };

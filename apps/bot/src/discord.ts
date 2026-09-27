@@ -39,6 +39,7 @@ import {
 } from 'discord.js';
 import { generateDependencyReport } from '@discordjs/voice';
 import { config } from './config.js';
+import { getCrossfadeMs, setCrossfadeMs } from './crossfadeStore.js';
 import { getRecommendations, resolveTracks, searchCandidates, SpotifyError, type ResolvedTrack } from './spotify.js';
 import { THEMES, themeById } from './themes.js';
 import {
@@ -2489,6 +2490,7 @@ export class DiscordBot {
       mashupgame: 'mashupgame', mg: 'mashupgame',
       mashups: 'mashups', mh: 'mashups',
       dedupe: 'dedupe', dedup: 'dedupe', dd: 'dedupe',
+      crossfade: 'crossfade', xfade: 'crossfade',
       bulk: 'bulk',
       skipto: 'skipto',
       skiptoggle: 'skiptoggle',
@@ -2514,6 +2516,7 @@ export class DiscordBot {
       mh: 'mashups',
       dedup: 'dedupe',
       dd: 'dedupe',
+      xfade: 'crossfade',
     };
     if (dispatchAlias[cmd]) cmd = dispatchAlias[cmd];
 
@@ -2843,6 +2846,44 @@ export class DiscordBot {
           }
           await message.reply(
             on ? '🌈 Mood-reactive visuals **on** — colors follow the music.' : 'Mood-reactive visuals **off**.',
+          );
+          break;
+        }
+
+        case 'crossfade':
+        case 'xfade': {
+          if (!canUse('crossfade')) return void (await deny());
+          if (!message.guildId) return void (await message.reply('Must be used in a server.'));
+          const arg = args.trim().toLowerCase();
+          const cur = getCrossfadeMs(message.guildId);
+          let ms: number;
+          if (!arg) {
+            await message.reply(
+              cur > 0
+                ? `🎚️ Crossfade is **on** — ${(cur / 1000).toFixed(1)}s (overlap + tail fade).\n` +
+                    '-# `V@crossfade off` to disable · `V@crossfade <seconds>` to change'
+                : '🎚️ Crossfade is **off** — tracks play right to the end.\n' +
+                    '-# `V@crossfade on` · `V@crossfade <seconds 2–15>` to enable',
+            );
+            break;
+          }
+          if (/^(on|true|yes)$/.test(arg)) ms = cur > 0 ? cur : config.crossfadeMs > 0 ? config.crossfadeMs : 6000;
+          else if (/^(off|false|no|none|0s?)$/.test(arg)) ms = 0;
+          else {
+            const sec = Number.parseFloat(arg.replace(/s$/, ''));
+            if (!Number.isFinite(sec) || sec < 0 || sec > 15) {
+              await message.reply('Usage: `V@crossfade on|off` or `V@crossfade <seconds 0–15>`');
+              break;
+            }
+            ms = Math.round(sec * 1000);
+          }
+          const applied = setCrossfadeMs(message.guildId, ms);
+          s.playback.setCrossfade(applied);
+          s.voice.setFadeOut(applied / 1000);
+          await message.reply(
+            applied > 0
+              ? `🎚️ Crossfade **on** — ${(applied / 1000).toFixed(1)}s (takes effect from the next track).`
+              : '🎚️ Crossfade **off** — tracks play right to the end.',
           );
           break;
         }
@@ -7162,6 +7203,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/screensaver` · `V@sc` — idle screensaver',
       '`/sensitivity <0.5-1.5>` · `V@sens` — beat reactivity',
       '`/mood on|off` · `V@mood` — now-playing colors tinted by the track\'s mood',
+      '`V@crossfade on|off|<seconds>` · `V@xfade` — crossfade + tail fade (0 = off, plays to the very end)',
       '`/dna` · `V@dna` — Song DNA radar card · `/cover` · `V@cover` — queue album-art mosaic',
     ],
   },
