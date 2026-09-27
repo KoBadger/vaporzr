@@ -197,6 +197,7 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
     <span id="preset-count"></span>
     <span id="preset-bar"><i id="preset-fill"></i></span>
   </div>
+  <button class="dock-btn" id="btn-curated" data-tip="Curated presets only">✨</button>
   <button class="dock-btn" id="btn-calm" data-tip="Calm mode — gentler brightness, stricter flash guard" title="">🌙</button>
   <button class="dock-btn" id="btn-lock" data-tip="Lock current preset">🔓</button>
   <button class="dock-btn" id="btn-synth" data-tip="Synthwave road (Endless Wave)">🛣</button>
@@ -224,6 +225,7 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
 </div>
 
 <script src="/vendor/butterchurn.min.js"></script>
+<script src="/vendor/butterchurnExtraImages.min.js"></script>
 <script src="/vendor/butterchurnPresets.min.js"></script>
 <script src="/vendor/butterchurnPresetsExtra.min.js"></script>
 <script src="/vendor/butterchurnPresetsExtra2.min.js"></script>
@@ -437,20 +439,31 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
      whole library, then the chunks stream in while the browser is idle.
      Rotation only ever picks from LOADED presets, so you never see a spinner,
      a black frame or a hard cut — just the usual 2.5s blend. */
-  var libTotal=0,libChunks=[];
+  var libTotal=0,libCurated=0,libRaw=0,libChunks=[];
+  /* Curation gate. The mega-library is uneven — roughly a third of it is
+     visually broken or jarring — so only presets that pass the curator's
+     quality/reliability catalog are rotated. `?all=1`, or the ✨ dock toggle,
+     lifts the filter (persisted). */
+  var curatedNames=null;
+  var showAll=false;
+  try{showAll=localStorage.getItem('vzShowAll')==='1'}catch(e){}
+  try{if(new URLSearchParams(location.search).get('all')==='1')showAll=true}catch(e){}
+  function allowed(name){return showAll||!curatedNames||curatedNames.has(name)}
   function updatePresetDock(){
     var el=$('preset-count');if(!el)return;
     var loaded=presetNames.length;
-    el.textContent=libTotal
-      ? libTotal.toLocaleString()+' presets · '+loaded.toLocaleString()+' loaded'
-      : loaded.toLocaleString()+' presets';
+    var total=showAll?(libRaw||libTotal):libTotal;
+    if(!total){el.textContent=loaded.toLocaleString()+' presets';return}
+    el.textContent=loaded.toLocaleString()+' of '+total.toLocaleString()+(showAll?' presets':' curated');
     var fill=$('preset-fill');
-    if(fill&&libTotal)fill.style.width=Math.min(100,(loaded/libTotal)*100).toFixed(1)+'%';
+    if(fill)fill.style.width=Math.min(100,(loaded/total)*100).toFixed(1)+'%';
   }
-  /* Re-derive the playable list after a chunk lands, keeping the current pick. */
+  /* Re-derive the playable list (curation + strobe filter) keeping the current pick. */
   function refreshPresetNames(){
     var cur=presetNames[presetIdx];
-    presetNames=Object.keys(allPresets()).sort().filter(function(n){return strobeBL.indexOf(n)<0});
+    presetNames=Object.keys(allPresets())
+      .filter(function(n){return allowed(n)&&strobeBL.indexOf(n)<0})
+      .sort();
     if(cur){var i=presetNames.indexOf(cur);if(i>=0)presetIdx=i;}
     updatePresetDock();
   }
@@ -459,11 +472,18 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
     else{setTimeout(fn,1800);}
   }
   function loadPresetChunks(){
-    fetch('/vendor/presets/index.json')
+    // Curation list first — it decides what the chunks are allowed to add.
+    fetch('/vendor/presets/curated.json')
+      .then(function(r){return r.ok?r.json():null})
+      .then(function(c){
+        if(c&&c.names&&c.names.length){curatedNames=new Set(c.names);refreshPresetNames();}
+      })
+      .catch(function(){/* no curation file — show everything */})
+      .then(function(){return fetch('/vendor/presets/index.json')})
       .then(function(r){return r.ok?r.json():null})
       .then(function(idx){
         if(!idx||!idx.chunks||!idx.chunks.length)return;
-        libTotal=idx.total||0;libChunks=idx.chunks;
+        libTotal=idx.total||0;libCurated=idx.curated||0;libRaw=idx.raw||0;libChunks=idx.chunks;
         updatePresetDock();
         var step=function(i){
           if(i>=libChunks.length)return;
@@ -637,6 +657,22 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
     showPresetName.t=setTimeout(function(){presetNameEl.style.opacity='0'},3000);
   };
   $('btn-next').onclick=function(){loadPreset(pickIndex(presetIdx+1,1),1.2)};
+  /* Curated ↔ everything. Curated hides the roughly two-thirds of the library
+     that renders broken or jarring; toggling reveals it and remembers. */
+  (function(){
+    var b=$('btn-curated');
+    if(!b)return;
+    var sync=function(){
+      b.classList.toggle('active',!showAll);
+      b.title=showAll?'Showing every preset — click for curated only':'Curated presets only — click to show everything';
+    };
+    b.onclick=function(){
+      showAll=!showAll;
+      try{localStorage.setItem('vzShowAll',showAll?'1':'0')}catch(e){}
+      sync();refreshPresetNames();showPresetName();
+    };
+    sync();
+  })();
   $('btn-prev').onclick=function(){loadPreset(pickIndex(presetIdx-1,-1),1.2)};
   $('btn-lock').onclick=function(){
     presetLocked=!presetLocked;
