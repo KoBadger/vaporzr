@@ -586,6 +586,20 @@ export class DiscordBot {
   /** Guilds currently re-anchoring their mini now-playing strip — a lock that
    *  prevents overlapping state-change calls from posting duplicate strips. */
   private miniNpBusy = new Set<string>();
+  /**
+   * Anti-spam gate for the mini now-playing strip. POSTING a new message is
+   * rate-limited hard; editing the existing one is always allowed. A burst
+   * (e.g. the panel refresh clearing the registry on a failed edit while state
+   * changes arrive every second) used to post a fresh panel every second and
+   * flood the channel — that must never be possible again.
+   */
+  private miniNpGate = new Map<string, { last: number; count: number; since: number; mutedUntil: number }>();
+  private static readonly MINI_NP_MIN_POST_GAP_MS = 20_000;
+  private static readonly MINI_NP_BURST_MAX = 4;
+  private static readonly MINI_NP_BURST_WINDOW_MS = 5 * 60_000;
+  private static readonly MINI_NP_MUTE_MS = 10 * 60_000;
+  /** Last "queue ended" notice per guild, so a flapping queue can't spam it. */
+  private queueEndedNotified = new Map<string, number>();
   /** guildId -> track uri whose auto mini-strip is suppressed because a command
    *  reply is already showing that track (prevents a duplicate now-playing). */
   private miniNpSuppress = new Map<string, string>();
@@ -4123,32 +4137,41 @@ export class DiscordBot {
       if (!channel || !('send' in channel)) return;
       const existing = this.miniNp.get(guildId);
       if (existing) {
-        // The now-playing panel sticks around: update it in place whenever it's
-        // still the newest message, so it never blinks out between songs. Only
-        // when newer chatter has pushed it up do we repost at the bottom.
-        const lastId = (channel as { lastMessageId?: string | null }).lastMessageId;
-        const isLatest = lastId === existing.messageId;
         const old = await channel.messages.fetch(existing.messageId).catch(() => null);
         if (old) {
-          if (isLatest) {
-            await old.edit(this.miniNpMessage(this.sessionFor(guildId))).catch(() => {});
-            this.miniTrackUri.set(guildId, uri);
-            this.scheduleSavePanels();
-            return;
-          }
-          try {
-            await old.delete();
-          } catch {
-            // Can't delete (perms/rate limits) — update in place rather than
-            // leaving a second strip behind on every rapid track change.
-            await old.edit(this.miniNpMessage(this.sessionFor(guildId))).catch(() => {});
-            this.miniTrackUri.set(guildId, uri);
-            this.scheduleSavePanels();
-            return;
-          }
+          // ALWAYS edit the strip we already have — never delete in order to
+          // re-post. The delete+repost dance was what let a failed refresh plus
+          // rapid state changes flood the channel with fresh panels.
+          await old.edit(this.miniNpMessage(this.sessionFor(guildId))).catch(() => {});
+          this.miniTrackUri.set(guildId, uri);
+          this.scheduleSavePanels();
+          return;
         }
+        // The message is genuinely gone (404) — forget it and repost below.
+        this.miniNp.delete(guildId);
+        this.miniTrackUri.delete(guildId);
+      }
+      // Hard rate limit on POSTING (a new message). Edits above are unlimited.
+      const now = Date.now();
+      const gate = this.miniNpGate.get(guildId) ?? { last: 0, count: 0, since: now, mutedUntil: 0 };
+      if (gate.mutedUntil > now) return;
+      if (now - gate.last < DiscordBot.MINI_NP_MIN_POST_GAP_MS) return;
+      if (now - gate.since > DiscordBot.MINI_NP_BURST_WINDOW_MS) {
+        gate.since = now;
+        gate.count = 0;
+      }
+      gate.count++;
+      if (gate.count > DiscordBot.MINI_NP_BURST_MAX) {
+        gate.mutedUntil = now + DiscordBot.MINI_NP_MUTE_MS;
+        this.miniNpGate.set(guildId, gate);
+        console.warn(
+          `[discord] mini now-playing posted ${gate.count} times in ${Math.round((now - gate.since) / 1000)}s for guild ${guildId} — muting it for 10 minutes`,
+        );
+        return;
       }
       const msg = await channel.send(this.miniNpMessage(this.sessionFor(guildId)));
+      gate.last = now;
+      this.miniNpGate.set(guildId, gate);
       this.miniNp.set(guildId, { channelId, messageId: msg.id });
       this.miniTrackUri.set(guildId, uri);
       this.scheduleSavePanels();
@@ -4179,6 +4202,9 @@ export class DiscordBot {
       for (const msg of found.values()) {
         if (msg.id === keepMessageId) continue;
         if (msg.author.id !== this.client.user.id) continue;
+        // Never sweep something that was just posted: deleting a live strip
+        // while the poster re-creates it is how the flood loop sustained itself.
+        if (Date.now() - msg.createdTimestamp < 90_000) continue;
         const isMini = msg.embeds.some(
           (e) =>
             !!e.description &&
@@ -4210,6 +4236,11 @@ export class DiscordBot {
     // arbitrary channel the bot merely saw a command in.
     const channelId = this.perms.getNpChannel(guildId);
     if (!channelId) return;
+    // Rate-limit: a flapping queue (track fails → ends → retried) must not post
+    // this repeatedly.
+    const now = Date.now();
+    if (now - (this.queueEndedNotified.get(guildId) ?? 0) < 5 * 60_000) return;
+    this.queueEndedNotified.set(guildId, now);
     try {
       const channel = await this.client.channels.fetch(channelId);
       if (!channel || !('send' in channel)) return;
