@@ -598,6 +598,8 @@ export class DiscordBot {
   private static readonly MINI_NP_BURST_MAX = 4;
   private static readonly MINI_NP_BURST_WINDOW_MS = 5 * 60_000;
   private static readonly MINI_NP_MUTE_MS = 10 * 60_000;
+  /** Last rendered strip payload per guild — identical renders skip the edit. */
+  private miniNpSig = new Map<string, string>();
   /** Last "queue ended" notice per guild, so a flapping queue can't spam it. */
   private queueEndedNotified = new Map<string, number>();
   /** guildId -> track uri whose auto mini-strip is suppressed because a command
@@ -2992,7 +2994,15 @@ export class DiscordBot {
           } else {
             this.perms.setNpChannel(message.guildId, message.channelId);
             this.miniTrackUri.delete(message.guildId);
-            await message.reply('📻 The live now-playing strip will post here.');
+            // Name the target and call out a voice channel's text chat — that's
+            // where an easy-to-miss strip quietly piles up.
+            const ch = message.channel as unknown as { isVoiceBased?: () => boolean };
+            const voice = typeof ch.isVoiceBased === 'function' && ch.isVoiceBased();
+            await message.reply(
+              `📻 The live now-playing strip will post in <#${message.channelId}>` +
+                (voice ? " — that's a voice channel, so it lands in its text chat." : '.') +
+                ' `V@npchannel off` to stop it.',
+            );
           }
           break;
         }
@@ -4142,7 +4152,8 @@ export class DiscordBot {
           // ALWAYS edit the strip we already have — never delete in order to
           // re-post. The delete+repost dance was what let a failed refresh plus
           // rapid state changes flood the channel with fresh panels.
-          await old.edit(this.miniNpMessage(this.sessionFor(guildId))).catch(() => {});
+          const rendered = this.miniNpRendered(this.sessionFor(guildId));
+          if (rendered) await old.edit(rendered).catch(() => {});
           this.miniTrackUri.set(guildId, uri);
           this.scheduleSavePanels();
           return;
@@ -4223,7 +4234,8 @@ export class DiscordBot {
       const channel = await this.client.channels.fetch(channelId);
       if (!channel?.isTextBased()) return false;
       const msg = await channel.messages.fetch(messageId);
-      await msg.edit(this.miniNpMessage(this.sessionFor(guildId)));
+      const rendered = this.miniNpRendered(this.sessionFor(guildId));
+      if (rendered) await msg.edit(rendered);
       return true;
     } catch (err) {
       return !isMessageGone(err);
@@ -4588,6 +4600,19 @@ export class DiscordBot {
     };
   }
 
+  /** Render the strip, or null when the payload is byte-identical to the last
+   *  one we sent — a paused/idle track used to re-edit the same embed forever. */
+  private miniNpRendered(s: Session): {
+    embeds: EmbedBuilder[];
+    components: ActionRowBuilder<ButtonBuilder>[];
+  } | null {
+    const payload = this.miniNpMessage(s);
+    const sig = JSON.stringify(payload.embeds[0]?.toJSON() ?? {});
+    if (this.miniNpSig.get(s.guildId) === sig) return null;
+    this.miniNpSig.set(s.guildId, sig);
+    return payload;
+  }
+
   /** Compact transport row (⏮ ▶/⏸ ⏭) attached to the mini now-playing strip. */
   private miniControlRow(s: Session): ActionRowBuilder<ButtonBuilder> {
     const playing = s.queue.getState().playing;
@@ -4640,7 +4665,7 @@ export class DiscordBot {
           `\`${bar}\` \`${fmtMs(pos)}\`/\`${fmtMs(dur)}\`` +
           (upNext ? `\n⏭ ${truncate(upNext.name, 42)}` : ''),
       )
-      .setFooter({ text: `${modeLabel} · ${queued} queued · react 🔥❤️⏭` });
+      .setFooter({ text: `${modeLabel} · ${queued} queued · ⏮ ⏯ ⏭ or react 🔥❤️⏭` });
     if (track.image) embed.setThumbnail(track.image);
     return embed;
   }
