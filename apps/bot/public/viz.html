@@ -201,6 +201,7 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
   <button class="dock-btn" id="btn-calm" data-tip="Calm mode — gentler brightness, stricter flash guard" title="">🌙</button>
   <button class="dock-btn" id="btn-lock" data-tip="Lock current preset">🔓</button>
   <button class="dock-btn" id="btn-synth" data-tip="Synthwave road (Endless Wave)">🛣</button>
+  <button class="dock-btn" id="btn-milk" data-tip="MilkDrop mode (butterchurn)">🌀</button>
   <div class="dock-sep"></div>
   <div id="swatches" title="Theme"></div>
   <div class="dock-sep"></div>
@@ -410,7 +411,7 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
   }
 
   /* ---------- MilkDrop (Butterchurn) + WebAudio pipeline ---------- */
-  var actx=null,analyser=null,gainNode=null,nextAt=0,
+  var actx=null,analyser=null,gainNode=null,nextAt=0,milkOn=false,
       bcViz=null,presetNames=[],presetIdx=-1,presetLocked=false,cycleTimer=null;
 
   /* Merged preset pool: base + Extra + Extra2 + MD1 (the classic ~374) plus the
@@ -533,9 +534,27 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
   function butterAvailable(){return !!bcLib()&&typeof butterchurnPresets!=='undefined'}
 
   function refreshUnlock(){
-    unlockPill.style.display=(connected&&!actx&&butterAvailable())?'flex':'none';
+    var has=butterAvailable();
+    unlockPill.style.display=(connected&&!actx&&has)?'flex':'none';
+    var mb=$('btn-milk');
+    if(mb)mb.style.display=has?'':'none';
   }
-  unlockPill.onclick=function(){unlockAudio()};
+  unlockPill.onclick=function(){setMilk(true)};
+
+  /** MilkDrop (butterchurn) is opt-in and explicit: never a side effect of a
+   *  stray tap. The 🔊 pill and the 🌀 dock button are the only ways in or out. */
+  function setMilk(on){
+    if(on&&!milkOn){
+      if(!unlockAudio())return false;
+      milkOn=true;
+    }else{
+      milkOn=!!on;
+    }
+    var b=$('btn-milk');
+    if(b)b.classList.toggle('active',milkOn);
+    refreshUnlock();
+    return true;
+  }
 
   function unlockAudio(){
     if(actx)return true;
@@ -552,12 +571,14 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
       nextAt=actx.currentTime+0.06;
       initButter();
       refreshUnlock();
+      var b=$('btn-milk');
+      if(b)b.classList.add('active');
       return true;
     }catch(e){return false}
   }
-  window.addEventListener('pointerdown',function(){
-    if(unlockAudio()&&actx.state==='suspended')actx.resume();
-  },{passive:true});
+  // NOTE: no global pointerdown handler here on purpose — tapping the page used
+  // to switch the visualizer into MilkDrop mode by accident. Enabling audio is
+  // now an explicit choice (🔊 pill or 🌀 dock button).
 
   /** Schedule an incoming stereo-s16/48k base64 chunk into the silent analyser graph. */
   function pushPcm(b64){
@@ -747,26 +768,56 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
   try{prefersReduced=window.matchMedia('(prefers-reduced-motion: reduce)').matches}catch(e){}
   try{window.matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change',function(e){prefersReduced=e.matches})}catch(e){}
 
+  /* Performance governor: a rolling FPS estimate sheds decorative work when the
+     machine struggles, so the road keeps moving instead of stuttering or
+     freezing. quality 1 = everything, 0.25 = bare bones. */
+  var fps=60,fpsAcc=0,fpsN=0,fpsT=0,quality=1,videoRetryAt=0,videoStall=-1;
+  function synthQuality(){return quality}
   function draw(){
     requestAnimationFrame(draw);
     var now=Date.now();
+    if(fpsT){fpsAcc+=1000/Math.max(1,now-fpsT);fpsN++}
+    fpsT=now;
+    if(fpsN>=40){
+      fps=fpsAcc/fpsN;fpsAcc=0;fpsN=0;
+      if(fps<42&&quality>0.25)quality=Math.max(0.25,quality-0.25);
+      else if(fps>54&&quality<1)quality=Math.min(1,quality+0.25);
+    }
     var frameMode=now-(lastFrameAt||0)<4000;
     var synthMode=synthActive&&!frameMode;
-    var milkMode=!frameMode&&!synthMode&&bcViz&&actx&&!bcBroken;
+    var milkMode=!frameMode&&!synthMode&&milkOn&&bcViz&&actx&&!bcBroken;
     viz.style.display=frameMode?'block':'none';
     bcCanvas.style.display=milkMode?'block':'none';
     synthCanvas.style.display=synthMode?'block':'none';
     synthCrt.style.display=synthMode?'block':'none';
     ewVideo.style.display=synthMode?'block':'none';
-    if(synthMode&&!prefersReduced&&!ewPlayBlocked&&ewVideo.paused){
-      try{var pr=ewVideo.play();if(pr&&pr.catch)pr.catch(function(){ewPlayBlocked=true})}catch(e){ewPlayBlocked=true}
+    if(synthMode&&!prefersReduced){
+      // Watchdog: a wallpaper video that stalled or ended used to leave the road
+      // frozen for the rest of the session.
+      if(!ewPlayBlocked&&ewVideo.paused&&now>videoRetryAt){
+        videoRetryAt=now+3000;
+        try{var pr=ewVideo.play();if(pr&&pr.catch)pr.catch(function(){ewPlayBlocked=true})}catch(e){ewPlayBlocked=true}
+      }
+      if(!ewVideo.paused){
+        if(ewVideo.currentTime===videoStall&&now>videoRetryAt){
+          videoRetryAt=now+3000;
+          try{ewVideo.currentTime+=0.01;ewVideo.play().catch(function(){})}catch(e){}
+        }
+        videoStall=ewVideo.currentTime;
+      }
     }
     if(!synthMode&&!ewVideo.paused)ewVideo.pause();
     barsCanvas.style.display=(frameMode||milkMode||synthMode)?'none':'block';
 
     if(frameMode)return;
     if(synthMode){
-      try{drawSynth(now)}catch(e){console.error('[viz] synth render failed:',e)}
+      // The canvas overlay is the expensive half — the wallpaper video keeps full
+      // motion, so half-rating only the overlay reads smoother, not choppier.
+      var minGap=quality>=1?0:26;
+      if(!drawSynth._t||now-drawSynth._t>=minGap){
+        drawSynth._t=now;
+        try{drawSynth(now)}catch(e){console.error('[viz] synth render failed:',e)}
+      }
       return;
     }
     if(milkMode){
@@ -780,42 +831,60 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
   }
 
   function drawBars(now){
-    ctx.clearRect(0,0,barsCanvas.width,barsCanvas.height);
     var W=barsCanvas.width,H=barsCanvas.height;
+    ctx.clearRect(0,0,W,H);
     var active=now-lastBarAt<2000;
-    var baseY=H*0.86,maxH=H*0.62,slot=W/BARS,barW=Math.min(slot*0.55,26*dpr);
+    var baseY=H*0.70,maxH=H*0.52,slot=W/BARS,barW=Math.min(slot*0.58,30*dpr);
+    var q=synthQuality();
 
-    // Live energy (smoothed) sets how hot the mood palette burns.
-    var e=0;for(var q=0;q<BARS;q++)e+=disp[q];
+    // Live energy (smoothed) sets how hot the palette burns.
+    var e=0;for(var k=0;k<BARS;k++)e+=disp[k];
     moodLive+=((active?e/BARS:0)-moodLive)*0.1;
 
+    // 1. Background wash that breathes with the music.
+    var top=mood.on?moodColor(0,0.10+0.12*moodLive):theme.accent+(moodLive>0.5?'1f':'14');
+    var bot=mood.on?moodColor(45,0.03):theme.accent2+'0a';
+    var bg=ctx.createLinearGradient(0,0,0,H);
+    bg.addColorStop(0,top);
+    bg.addColorStop(0.55,'rgba(0,0,0,0)');
+    bg.addColorStop(1,bot);
+    ctx.fillStyle=bg;ctx.fillRect(0,0,W,H);
+
+    // 2. Mirrored bars around the baseline, glowing cap, dim reflection.
     for(var i=0;i<BARS;i++){
       disp[i]+=(target[i]-disp[i])*0.35;
       if(active&&target[i]>peaks[i])peaks[i]=target[i];
       else peaks[i]=Math.max(disp[i],peaks[i]-0.006);
       var v=active?disp[i]:(0.04+0.02*Math.sin(now/900+i*0.7));
-      var h=Math.max(2*dpr,v*maxH),x=i*slot+(slot-barW)/2,y=baseY-h;
-      var g=ctx.createLinearGradient(0,baseY,0,baseY-maxH);
+      var h=Math.max(2*dpr,v*maxH),x=i*slot+(slot-barW)/2;
+      var g=ctx.createLinearGradient(0,baseY,0,baseY-h);
       if(mood.on){
-        g.addColorStop(0,moodColor(0,0.85));
-        g.addColorStop(0.6,moodColor(0,0.94));
-        g.addColorStop(1,moodColor(40,0.96));
+        g.addColorStop(0,moodColor(0,0.9));
+        g.addColorStop(0.6,moodColor(20,0.96));
+        g.addColorStop(1,moodColor(45,1));
       }else{
         g.addColorStop(0,theme.accent+'dd');
         g.addColorStop(0.6,theme.accent+'f0');
         g.addColorStop(1,theme.accent2+'f2');
       }
       ctx.fillStyle=g;
-      ctx.shadowColor=mood.on?moodColor(0,0.6):(theme.glow||theme.accent+'66');
-      ctx.shadowBlur=14*dpr*(active?v:0.3);
-      roundRect(x,y,barW,h,barW/2);
+      ctx.shadowColor=mood.on?moodColor(0,0.65):(theme.glow||theme.accent+'66');
+      ctx.shadowBlur=(12+18*v)*dpr*(active?1:0.25);
+      roundRect(x,baseY-h,barW,h,barW/2);
       ctx.shadowBlur=0;
-      ctx.fillStyle=mood.on?moodColor(40,0.9):'rgba(250,250,250,0.85)';
-      ctx.fillRect(x,baseY-peaks[i]*maxH-2*dpr,barW,2*dpr);
+      // Mirror below the baseline — dimmer and shorter, like a wet floor.
+      if(q>0.5){
+        ctx.globalAlpha=0.26;
+        roundRect(x,baseY+1.5*dpr,barW,Math.min(h*0.55,H-baseY-3*dpr),barW/2);
+        ctx.globalAlpha=1;
+      }
+      // Peak cap.
+      ctx.fillStyle=mood.on?moodColor(45,0.95):'rgba(246,250,255,0.92)';
+      ctx.fillRect(x,baseY-h-2*dpr,barW,2.5*dpr);
     }
-    ctx.fillStyle=mood.on?moodColor(0,0.2):theme.accent+'2e';
-    ctx.fillRect(0,baseY,W,1);
-    // Room glow that breathes with the music (throttled — it's a style write).
+    // 3. Baseline + room glow.
+    ctx.fillStyle=mood.on?moodColor(0,0.3):theme.accent+'40';
+    ctx.fillRect(0,baseY-1*dpr,W,1.5*dpr);
     if(mood.on&&!prefersReduced&&(!drawBars._t||now-drawBars._t>220)){
       drawBars._t=now;
       document.body.style.boxShadow='inset 0 0 '+(80+140*moodLive).toFixed(0)+'px '+moodColor(0,0.3+0.35*moodLive);
@@ -833,7 +902,7 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
   }
 
   /* ---------- synthwave road (Endless Wave) ---------- */
-  var synthCanvas=$('ew'),sctx=synthCanvas.getContext('2d'),synthActive=false,synthOffset=0;
+  var synthCanvas=$('ew'),sctx=synthCanvas.getContext('2d'),synthActive=false,synthOffset=0,synthUserOff=false;
   var synthCrt=$('ew-crt');
   /* Real VISUALDON wallpaper loop: the #ew canvas becomes a transparent
      reactive overlay (beat glow + spectrum + caption + grain) over it. When
@@ -852,37 +921,62 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
   /* Reactive overlay over the wallpaper video. */
   function drawSynthOverlay(now,W,H){
     var i,v;
+    var q=synthQuality();
     if(typeof lastEnergy==='number')moodLive+=(lastEnergy-moodLive)*0.1;
-    // beat glow breathing over the scene
-    var glow=kickBoost*0.10+bassLevel*0.05;
+    // Kick flash: a hard, short brighten on every beat.
+    if(!prefersReduced&&kickBoost>0.35){
+      sctx.fillStyle='rgba(255,235,255,'+(0.12*kickBoost*q).toFixed(3)+')';
+      sctx.fillRect(0,0,W,H);
+    }
+    // Breathing beat glow from the horizon.
+    var glow=kickBoost*0.16+bassLevel*0.09;
     if(glow>0.004){
-      var gg=sctx.createRadialGradient(W/2,H*0.62,0,W/2,H*0.62,Math.max(W,H)*0.7);
-      gg.addColorStop(0,'rgba(255,60,170,'+Math.min(0.20,glow)+')');
+      var gg=sctx.createRadialGradient(W/2,H*0.62,0,W/2,H*0.62,Math.max(W,H)*0.72);
+      gg.addColorStop(0,'rgba(255,60,170,'+Math.min(0.34,glow).toFixed(3)+')');
+      gg.addColorStop(0.55,'rgba(150,40,220,'+Math.min(0.18,glow*0.5).toFixed(3)+')');
       gg.addColorStop(1,'rgba(255,60,170,0)');
       sctx.fillStyle=gg;
       sctx.fillRect(0,0,W,H);
     }
-    // spectrum bars along the bottom (smoothed here — drawBars is idle in synth mode)
+    // Horizon line that pumps with the bass.
+    if(q>0.3){
+      var hy=H*0.62,bw=Math.max(1,2.5*dpr*(0.5+bassLevel));
+      var hg=sctx.createLinearGradient(0,hy-bw,0,hy+bw);
+      hg.addColorStop(0,'rgba(255,120,220,0)');
+      hg.addColorStop(0.5,'rgba(255,180,240,'+(0.10+0.5*bassLevel).toFixed(3)+')');
+      hg.addColorStop(1,'rgba(255,120,220,0)');
+      sctx.fillStyle=hg;sctx.fillRect(0,hy-bw,W,bw*2);
+    }
+    // Spectrum: tall mirrored bars, a reflection and a glowing cap.
     var active=now-lastBarAt<2000;
-    var slot=W/BARS,barW=Math.min(slot*0.5,22*dpr),baseY=H*0.965,maxH=H*0.30;
+    var slot=W/BARS,barW=Math.min(slot*0.56,26*dpr),baseY=H*0.94,maxH=H*0.42*(0.85+0.3*bassLevel);
     for(i=0;i<BARS;i++){
-      disp[i]+=(target[i]-disp[i])*0.35;
+      disp[i]+=(target[i]-disp[i])*0.38;
       v=active?disp[i]:(0.04+0.02*Math.sin(now/900+i*0.7));
       var h=Math.max(2*dpr,v*maxH),x=i*slot+(slot-barW)/2,y=baseY-h;
       var g=sctx.createLinearGradient(0,baseY,0,baseY-maxH);
       if(mood.on){
-        g.addColorStop(0,moodColor(0,0.85));
-        g.addColorStop(1,moodColor(45,0.9));
+        g.addColorStop(0,moodColor(0,0.9));
+        g.addColorStop(0.7,moodColor(20,0.95));
+        g.addColorStop(1,moodColor(45,1));
       }else{
-        g.addColorStop(0,'rgba(255,80,180,0.85)');
-        g.addColorStop(1,'rgba(80,240,255,0.9)');
+        g.addColorStop(0,'rgba(255,80,180,0.9)');
+        g.addColorStop(0.7,'rgba(200,120,255,0.95)');
+        g.addColorStop(1,'rgba(80,240,255,1)');
       }
       sctx.fillStyle=g;
-      sctx.shadowColor=mood.on?moodColor(0,0.55):'rgba(255,80,180,0.55)';
-      sctx.shadowBlur=12*dpr*(active?v:0.3);
+      sctx.shadowColor=mood.on?moodColor(0,0.7):'rgba(255,80,180,0.7)';
+      sctx.shadowBlur=(10+16*v)*dpr*(active?1:0.3);
       sctx.fillRect(x,y,barW,h);
+      sctx.shadowBlur=0;
+      if(q>0.5){
+        sctx.globalAlpha=0.22*(0.4+v);
+        sctx.fillRect(x,baseY+2*dpr,barW,Math.max(0,Math.min(h*0.45,H-baseY-2*dpr)));
+        sctx.globalAlpha=1;
+      }
+      sctx.fillStyle=mood.on?moodColor(45,0.95):'rgba(230,250,255,0.95)';
+      sctx.fillRect(x,y-2*dpr,barW,2.5*dpr);
     }
-    sctx.shadowBlur=0;
     // NOW PLAYING caption (from the state feed)
     if(synthTrack&&synthTrack.name){
       sctx.textAlign='left';
@@ -921,11 +1015,11 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
     var hue=mood.on?mood.hue:(now*0.03)%360;
     var aur=sctx.createLinearGradient(0,0,W,H*0.6);
     aur.addColorStop(0,'hsla('+hue+',90%,60%,0)');
-    aur.addColorStop(0.5,'hsla('+((hue+60)%360)+',90%,62%,'+(0.05+trebleLevel*0.12).toFixed(3)+')');
+    aur.addColorStop(0.5,'hsla('+((hue+60)%360)+',90%,62%,'+((0.05+trebleLevel*0.12)*q).toFixed(3)+')');
     aur.addColorStop(1,'hsla('+((hue+140)%360)+',90%,60%,0)');
     sctx.save();sctx.globalCompositeOperation='screen';sctx.fillStyle=aur;sctx.fillRect(0,0,W,H*0.6);sctx.restore();
     // speed streaks: count/opacity follow overall energy
-    var energy=prefersReduced?0:lastEnergy;
+    var energy=prefersReduced?0:lastEnergy*q;
     if(energy>0.02){
       sctx.save();sctx.globalCompositeOperation='screen';
       sctx.strokeStyle='rgba(255,255,255,'+Math.min(0.18,energy*0.5).toFixed(3)+')';sctx.lineWidth=1*dpr;
@@ -1527,11 +1621,14 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
     }
   }
 
-  /* toggle synth mode */
+  /* toggle synth mode. Turning it OFF by hand sticks: the EW status feed used to
+     re-enable the road on every track change, undoing the choice. */
   $('btn-synth').onclick=function(){
     synthActive=!synthActive;
+    synthUserOff=!synthActive;
     $('btn-synth').classList.toggle('active',synthActive);
   };
+  $('btn-milk').onclick=function(){setMilk(!milkOn)};
 
   /* handle EW status from bridge — the easter egg. The synthwave road takes
      over the screen the moment `V@ew on` runs, and the 🛣 toggle is revealed
@@ -1541,8 +1638,8 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
     var btn=$('btn-synth');
     if(msg.active){
       btn.classList.add('ew-revealed');
-      if(!synthActive){synthActive=true;btn.classList.add('active');}
-    }else{
+      if(!synthActive&&!synthUserOff){synthActive=true;btn.classList.add('active');}
+    }else if(!synthUserOff){
       if(synthActive){synthActive=false;btn.classList.remove('active');}
     }
   }
