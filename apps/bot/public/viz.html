@@ -86,6 +86,13 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
 #preset-name{position:absolute;bottom:96px;left:24px;z-index:11;font-size:11px;color:#64748b;
   max-width:40%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0;transition:opacity .5s}
 #preset-lib{display:flex;flex-direction:column;gap:5px;min-width:186px}
+#preset-picker{position:absolute;bottom:74px;left:50%;transform:translateX(-50%);width:min(520px,92vw);max-height:56vh;z-index:16;display:none;flex-direction:column;background:rgba(8,10,26,.97);border:1px solid #1e293b;border-radius:14px;overflow:hidden;box-shadow:0 24px 60px rgba(0,0,0,.6)}
+#preset-picker.show{display:flex}
+#preset-search{height:40px;border:0;border-bottom:1px solid #1e293b;background:transparent;color:#e2e8f0;padding:0 14px;font:inherit;font-size:14px;outline:none}
+#preset-list{overflow:auto;flex:1;padding:4px}
+#preset-list button{display:block;width:100%;text-align:left;padding:7px 12px;background:none;border:0;color:#cbd5e1;font:inherit;font-size:13px;border-radius:8px;cursor:pointer}
+#preset-list button:hover{background:rgba(148,163,184,.14)}
+#preset-list button.cur{color:#00f0ff}
 #preset-count{font-size:10px;letter-spacing:.07em;color:#64748b;text-transform:uppercase;white-space:nowrap}
 #preset-bar{display:block;height:2px;border-radius:2px;background:rgba(148,163,184,.22);overflow:hidden}
 #preset-fill{display:block;height:100%;width:0;border-radius:2px;
@@ -179,11 +186,13 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
 <div id="guild-bar"></div>
 <div id="fps"></div>
 <div id="preset-name"></div>
+<div id="preset-picker"><input id="preset-search" placeholder="Search presets…" autocomplete="off" /><div id="preset-list"></div></div>
 <div id="unlock">🔊 <span>Tap for MilkDrop mode</span></div>
 
 <div id="dock">
   <button class="dock-btn" id="btn-prev" title="Previous preset">⏮</button>
   <button class="dock-btn" id="btn-next" title="Next preset">⏭</button>
+  <button class="dock-btn" id="btn-presets" title="Browse presets">🔎</button>
   <div id="preset-lib">
     <span id="preset-count"></span>
     <span id="preset-bar"><i id="preset-fill"></i></span>
@@ -595,6 +604,28 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
     clearTimeout(showPresetName.t);
     showPresetName.t=setTimeout(function(){presetNameEl.style.opacity='0'},3500);
   }
+  function renderPresetList(q){
+    var list=$('preset-list');if(!list)return;
+    q=(q||'').toLowerCase();var out=[],cap=400;
+    for(var i=0;i<presetNames.length;i++){var n=presetNames[i];if(q&&n.toLowerCase().indexOf(q)<0)continue;out.push(n);if(out.length>=cap)break;}
+    list.innerHTML='';
+    out.forEach(function(n){
+      var b=document.createElement('button');b.textContent=n;
+      if(presetIdx>=0&&n===presetNames[presetIdx])b.className='cur';
+      b.onclick=function(){loadPreset(presetNames.indexOf(n),0.8);presetLocked=true;var l=$('btn-lock');if(l){l.classList.add('active');l.textContent='\uD83D\uDD12'}showPresetName();togglePresetPicker(false);};
+      list.appendChild(b);
+    });
+    if(!out.length){var d=document.createElement('div');d.style.cssText='padding:10px 12px;color:#64748b;font-size:12px';d.textContent='No matches in the loaded library (still loading the rest\u2026)';list.appendChild(d);}
+  }
+  function togglePresetPicker(force){
+    var p=$('preset-picker');if(!p)return;
+    var show=force!=null?force:!p.classList.contains('show');
+    p.classList.toggle('show',show);
+    if(show){$('preset-search').value='';renderPresetList('');setTimeout(function(){$('preset-search').focus()},30);}
+  }
+  $('btn-presets').onclick=function(e){e.stopPropagation();togglePresetPicker();};
+  $('preset-search').oninput=function(){renderPresetList(this.value)};
+  document.addEventListener('click',function(e){var p=$('preset-picker');if(p&&p.classList.contains('show')&&!e.target.closest('#preset-picker')&&e.target.id!=='btn-presets')togglePresetPicker(false)});
   $('btn-calm').onclick=function(){
     calm=!calm;
     try{localStorage.setItem('vzCalm',calm?'1':'0')}catch(e){}

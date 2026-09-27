@@ -123,6 +123,7 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border:none;border-ra
 #queue .qsrc{width:7px;height:7px;border-radius:50%;flex-shrink:0;box-shadow:0 0 6px currentColor}
 #queue .qacts{display:flex;gap:4px;opacity:0;transition:opacity .15s;flex-shrink:0}
 #queue li:hover .qacts,#queue li:focus-within .qacts{opacity:1}
+@media (hover:none){#queue .qacts{opacity:1}}
 #queue button { height:27px;min-width:27px;font-size:11px;padding:0 6px }
 #queue #empty{justify-content:center;color:var(--muted);font-size:12px;padding:24px 10px;border:1px dashed rgba(148,163,184,.25);background:transparent;transform:none}
 .qdur{font-size:10.5px;color:var(--muted);font-variant-numeric:tabular-nums;flex-shrink:0}
@@ -637,7 +638,7 @@ body.guest #guilds{display:none}
         bt.onclick=function(ev){ev.stopPropagation();fn()};return bt;
       }
       acts.appendChild(mk('▶','Play now',function(){cmd('playAt',{index:i})}));
-      if(skipForward)acts.appendChild(mk('⏭','Skip to here — drops the tracks in between',function(){cmd('skipto',{index:i})}));
+      acts.appendChild(mk('⏭','Play next — drops the tracks in between',function(){cmd('queuePlay',{index:i})}));
       acts.appendChild(mk('▲','Move up one',function(){if(i>0)cmd('move',{index:i,to:i-1})}));
       acts.appendChild(mk('▼','Move down one',function(){if(i<queue.length-1)cmd('move',{index:i,to:i+1})}));
       acts.appendChild(mk('✕','Remove from queue',function(){cmd('remove',{index:i})},'danger'));

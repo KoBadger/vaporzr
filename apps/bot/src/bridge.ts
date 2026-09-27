@@ -422,6 +422,18 @@ export class Bridge {
       case 'playAt':
         if (msg.index != null) this.playback.playAt(msg.index);
         break;
+      case 'queuePlay': {
+        // V@qa "play": jump to this track and drop everything queued before it.
+        if (msg.index != null) {
+          const s = this.sessions.primary ?? this.fallback;
+          const track = s.queue.getSnapshot().tracks[msg.index];
+          if (track) {
+            s.queue.removeUpTo(msg.index);
+            this.playback.next();
+          }
+        }
+        break;
+      }
       case 'sfx':
         if (msg.sfxId) void this.playback.playSoundEffect(msg.sfxId);
         break;
