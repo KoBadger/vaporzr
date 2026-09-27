@@ -186,6 +186,32 @@ export class QueueManager {
     this.emitQueue();
   }
 
+  /** Replace the upcoming slice with the same tracks in a new order (matched by
+   *  uri; anything unlisted keeps its old position). Returns how many moved. */
+  reorderUpcoming(orderedUris: string[]): number {
+    const from = this.currentIndex + 1;
+    if (from <= 0 || from >= this.tracks.length) return 0;
+    const upcoming = this.tracks.slice(from);
+    const next: TrackInfo[] = [];
+    const used = new Set<TrackInfo>();
+    for (const uri of orderedUris) {
+      const t = upcoming.find((x) => x.uri === uri && !used.has(x));
+      if (t) {
+        next.push(t);
+        used.add(t);
+      }
+    }
+    for (const t of upcoming) if (!used.has(t)) next.push(t);
+    if (next.length !== upcoming.length) return 0;
+    let moved = 0;
+    for (let i = 0; i < next.length; i++) if (next[i] !== upcoming[i]) moved++;
+    if (moved > 0) {
+      this.tracks.splice(from, upcoming.length, ...next);
+      this.emitQueue();
+    }
+    return moved;
+  }
+
   /** Shuffle the upcoming tracks (everything after the current one). */
   shuffleUpcoming(): void {
     if (this.currentIndex < 0) return;

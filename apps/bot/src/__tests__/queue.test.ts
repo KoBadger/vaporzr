@@ -73,6 +73,29 @@ describe('QueueManager.swap', () => {
   });
 });
 
+describe('QueueManager.reorderUpcoming', () => {
+  it('reorders only the upcoming slice and reports how many moved', () => {
+    const q = new QueueManager();
+    q.enqueue(track('spotify:track:a', 'A'), 'user');
+    q.enqueue(track('spotify:track:b', 'B'), 'user');
+    q.enqueue(track('spotify:track:c', 'C'), 'user');
+    q.previous();
+    q.previous(); // cursor → A (index 0)
+    const moved = q.reorderUpcoming(['spotify:track:c', 'spotify:track:b']);
+    expect(moved).toBe(2);
+    expect(q.getSnapshot().tracks.map((t) => t.name)).toEqual(['A', 'C', 'B']);
+  });
+
+  it('is a no-op when the order is unchanged', () => {
+    const q = new QueueManager();
+    q.enqueue(track('spotify:track:a', 'A'), 'user');
+    q.enqueue(track('spotify:track:b', 'B'), 'user');
+    q.previous();
+    expect(q.reorderUpcoming(['spotify:track:b'])).toBe(0);
+    expect(q.getSnapshot().tracks.map((t) => t.name)).toEqual(['A', 'B']);
+  });
+});
+
 describe('QueueManager.enqueue cursor behavior', () => {
   it('records addedBy on the stored item', () => {
     const q = new QueueManager();

@@ -40,7 +40,8 @@ import {
 import { generateDependencyReport } from '@discordjs/voice';
 import { config } from './config.js';
 import { getCrossfadeMs, setCrossfadeMs } from './crossfadeStore.js';
-import { getRecommendations, resolveTracks, searchCandidates, SpotifyError, type ResolvedTrack } from './spotify.js';
+import { getRecommendations, resolveTracks, searchCandidates, SpotifyError, getAudioFeatures, extractSpotifyId, type AudioFeatures, type ResolvedTrack } from './spotify.js';
+import { orderByVibe, SHUFFLE_MODE_LABEL, type ShuffleMode } from './smartShuffle.js';
 import { THEMES, themeById } from './themes.js';
 import {
   isGenericMediaUrl,
@@ -2742,6 +2743,19 @@ export class DiscordBot {
         case 'sh':
         case 'shuffle': {
           if (!canUse('shuffle')) return void (await deny());
+          const arg = args.trim().toLowerCase();
+          const smart: ShuffleMode | null =
+            arg === 'smart' || arg === 'flow'
+              ? 'flow'
+              : arg === 'arc'
+                ? 'arc'
+                : arg === 'key' || arg === 'keys' || arg === 'harmonic'
+                  ? 'key'
+                  : null;
+          if (smart) {
+            await this.smartShuffleMsg(message, s, smart);
+            break;
+          }
           const next = !s.queue.getState().shuffle;
           s.playback.shuffle(next);
           await message.reply(next ? '🔀 Shuffle on' : '🔂 Shuffle off');
@@ -5523,6 +5537,58 @@ export class DiscordBot {
   }
 
   /** Show a picker of upcoming tracks; choosing one jumps to it, dropping the rest. */
+  /** Reorder the upcoming queue by musical flow / set curve / harmonic key. */
+  private async smartShuffleMsg(message: Message, s: Session, mode: ShuffleMode): Promise<void> {
+    const snap = s.queue.getSnapshot();
+    const upcoming = snap.tracks.slice(snap.currentIndex + 1);
+    if (upcoming.length < 3) {
+      await message.reply('🔀 Not enough tracks ahead to shuffle smartly — queue at least 3.');
+      return;
+    }
+    await this.withAck(message, `🔀 Ordering ${upcoming.length} tracks by ${SHUFFLE_MODE_LABEL[mode]}…`, async () => {
+      // One batched features call for every Spotify id we can map.
+      const ids: string[] = [];
+      for (const t of upcoming) {
+        const id = extractSpotifyId(t.uri);
+        if (id) ids.push(id);
+      }
+      const cur = s.queue.getCurrentTrack();
+      const anchorId = cur ? extractSpotifyId(cur.uri) : null;
+      if (anchorId) ids.push(anchorId);
+      let features = new Map<string, AudioFeatures>();
+      try {
+        features = await getAudioFeatures(ids);
+      } catch {
+        /* fall back to whatever estimates the queue already carries */
+      }
+      const featOf = (t: TrackInfo): AudioFeatures | null => {
+        const id = extractSpotifyId(t.uri);
+        const fromApi = id ? features.get(id) : undefined;
+        if (fromApi) return fromApi;
+        return (t as { estimatedFeatures?: AudioFeatures }).estimatedFeatures ?? null;
+      };
+      const anchor = anchorId ? (features.get(anchorId) ?? null) : null;
+      const { ordered, withoutFeatures } = orderByVibe(upcoming, anchor, mode, featOf);
+      const moved = s.queue.reorderUpcoming(ordered.map((t) => t.uri));
+      await message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle(`🔀 Smart shuffle — ${SHUFFLE_MODE_LABEL[mode]}`)
+            .setDescription(
+              ordered
+                .slice(0, 12)
+                .map((t, i) => `${i + 1}. ${srcEmoji(t.source)} ${truncate(t.name, 52)}`)
+                .join('\n') +
+                (ordered.length > 12 ? `\n… +${ordered.length - 12} more` : '') +
+                (withoutFeatures ? `\n-# ${withoutFeatures} without audio features kept in place` : '') +
+                (moved === 0 ? '\n-# already in the best order' : ''),
+            )
+            .setColor(this.themeColor()),
+        ],
+      });
+    });
+  }
+
   /** Interactive queue editor: pick a track, then move / remove / play it now —
    *  no need to work out which queue number is which. */
   private qaView(
@@ -7109,6 +7175,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
     lines: [
       '`/queue` · `V@q` — view the queue (paged)',
       '`/shuffle` · `V@sh` — shuffle the queue',
+      '`V@shuffle smart` · `arc` · `key` — smart shuffle: order the upcoming tracks by vibe (flow), a set curve, or harmonic key',
       '`/remove <#>` · `V@rem <#>` — remove a queued track',
       '`V@qa` · `V@qadjust` — interactive queue editor: pick a track, then move / remove / play it now',
       '`/dedupe` · `V@dd` — remove duplicate upcoming tracks',
