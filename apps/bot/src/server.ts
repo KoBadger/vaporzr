@@ -332,7 +332,7 @@ async function handleRoute(
             'Content-Length': end - start + 1,
             'Content-Range': `bytes ${start}-${end}/${stat.size}`,
             'Accept-Ranges': 'bytes',
-            'Cache-Control': 'public, max-age=86400',
+            'Cache-Control': 'public, max-age=31536000, immutable',
           });
           const stream = fs.createReadStream(filePath, { start, end });
           stream.on('error', () => {
@@ -344,7 +344,7 @@ async function handleRoute(
             'Content-Type': 'video/mp4',
             'Content-Length': stat.size,
             'Accept-Ranges': 'bytes',
-            'Cache-Control': 'public, max-age=86400',
+            'Cache-Control': 'public, max-age=31536000, immutable',
           });
           const stream = fs.createReadStream(filePath);
           stream.on('error', () => {
@@ -362,7 +362,7 @@ async function handleRoute(
     if (url.pathname === '/ew-bg.jpg') {
       try {
         const file = fs.readFileSync(path.join(__dirname, '..', 'public', 'ew-bg.jpg'));
-        res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=86400' });
+        res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=31536000, immutable' });
         res.end(file);
         return;
       } catch {

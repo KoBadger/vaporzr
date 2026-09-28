@@ -164,7 +164,7 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
 
 <canvas id="bc"></canvas>
 <canvas id="ew"></canvas>
-<video id="ew-video" src="/ew-bg.mp4" poster="/ew-bg.jpg" loop muted playsinline preload="auto"></video>
+<video id="ew-video" src="/ew-bg.mp4?v=2" poster="/ew-bg.jpg" loop muted playsinline preload="metadata"></video>
 <div id="ew-crt"></div>
 <canvas id="canvas"></canvas>
 <img id="viz" alt="">
@@ -771,7 +771,7 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
   /* Performance governor: a rolling FPS estimate sheds decorative work when the
      machine struggles, so the road keeps moving instead of stuttering or
      freezing. quality 1 = everything, 0.25 = bare bones. */
-  var fps=60,fpsAcc=0,fpsN=0,fpsT=0,quality=1,videoRetryAt=0,videoStall=-1;
+  var fps=60,fpsAcc=0,fpsN=0,fpsT=0,quality=1,lastQuality=1,videoRetryAt=0,videoStall=-1;
   function synthQuality(){return quality}
   function draw(){
     requestAnimationFrame(draw);
@@ -782,6 +782,7 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
       fps=fpsAcc/fpsN;fpsAcc=0;fpsN=0;
       if(fps<42&&quality>0.25)quality=Math.max(0.25,quality-0.25);
       else if(fps>54&&quality<1)quality=Math.min(1,quality+0.25);
+      if(quality!==lastQuality){lastQuality=quality;resizeSynth();}
     }
     var frameMode=now-(lastFrameAt||0)<4000;
     var synthMode=synthActive&&!frameMode;
@@ -1066,7 +1067,14 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
     sctx.fillStyle=vig;
     sctx.fillRect(0,0,W,H);
   }
-  function resizeSynth(){synthCanvas.width=Math.max(2,Math.round(innerWidth*dpr));synthCanvas.height=Math.max(2,Math.round(innerHeight*dpr))}
+  function resizeSynth(){
+    var s=synthScale();
+    synthCanvas.width=Math.max(2,Math.round(innerWidth*s));
+    synthCanvas.height=Math.max(2,Math.round(innerHeight*s));
+  }
+  /** The overlay is glow and bars, so it never needs a full 2x backing store;
+   *  capping the resolution is the cheapest big win when a machine struggles. */
+  function synthScale(){return quality<=0.5?1:Math.min(dpr,1.5)}
   window.addEventListener('resize',resizeSynth);
 
   function drawSynth(now){
@@ -1634,6 +1642,8 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
   $('btn-synth').onclick=function(){
     synthActive=!synthActive;
     synthUserOff=!synthActive;
+    // Pull the wallpaper down the moment the road is switched on by hand.
+    if(synthActive&&ewVideo&&ewVideo.readyState<2){try{ewVideo.load()}catch(e){}}
     $('btn-synth').classList.toggle('active',synthActive);
   };
   $('btn-milk').onclick=function(){setMilk(!milkOn)};
@@ -1646,6 +1656,9 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
     var btn=$('btn-synth');
     if(msg.active){
       btn.classList.add('ew-revealed');
+      // Start pulling the wallpaper down as soon as EW is on, so the loop is
+      // already buffered (and permanently cached) by the time it is shown.
+      if(ewVideo&&ewVideo.readyState<2){try{ewVideo.load()}catch(e){}}
       if(!synthActive&&!synthUserOff){synthActive=true;btn.classList.add('active');}
     }else if(!synthUserOff){
       if(synthActive){synthActive=false;btn.classList.remove('active');}
