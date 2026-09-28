@@ -12,7 +12,7 @@ import type { VoiceManager } from './voice.js';
 import { librespotDeviceId, type SpotifyBackend } from './librespot.js';
 import { config } from './config.js';
 import { analyzer } from './analyzer.js';
-import { fadeInPcm, planCrossfade, tempoMatchRatio } from './crossfade.js';
+import { canCrossfade, fadeInPcm, planCrossfade, tempoMatchRatio } from './crossfade.js';
 import * as EW from './endlesswave.js';
 import {
   spotifyPause,
@@ -396,7 +396,6 @@ export class PlaybackController {
     // We can only blend into audio we are generating ourselves — the bot's own
     // ffmpeg stream. A raw Spotify (go-librespot -> PulseAudio) capture has no
     // mix point, so it keeps the fade-out half only.
-    if (!this.usingServerStream()) return;
     const snapshot = this.queue.getSnapshot();
     const next = snapshot.tracks[snapshot.currentIndex + 1];
     if (!next) return;
@@ -407,8 +406,10 @@ export class PlaybackController {
     // every song went quiet ~6s early: exactly "cutting off instead of fading".
     const nextUrl =
       this.streamCache.get(next.uri)?.streamUrl ?? (next.source === 'local' ? next.filePath : undefined);
-    if (!nextUrl) {
-      console.log(`[playback] crossfade skipped — no resolved stream yet for "${next.name}" (fade only)`);
+    if (!canCrossfade(this.usingServerStream(), xfadeMs, nextUrl)) {
+      if (this.usingServerStream() && !nextUrl) {
+        console.log(`[playback] crossfade skipped — no resolved stream yet for "${next.name}" (fade only)`);
+      }
       return;
     }
     const outgoingUri = this.queue.getCurrentTrack()?.uri ?? null;

@@ -1,5 +1,26 @@
 import { describe, expect, it } from 'vitest';
-import { crossfadePcm, equalPowerIn, equalPowerOut, fadeInPcm, linearIn, planCrossfade, tempoMatchRatio } from '../crossfade.js';
+import { canCrossfade, crossfadePcm, equalPowerIn, equalPowerOut, fadeInPcm, linearIn, planCrossfade, tempoMatchRatio } from '../crossfade.js';
+
+describe('canCrossfade (the overlap gate)', () => {
+  it('allows a blend when the incoming track has a decodable stream', () => {
+    expect(canCrossfade(true, 6000, 'https://rr1.googlevideo.com/videoplayback?...')).toBe(true);
+  });
+
+  it('does NOT care about the queue source — a YouTube-first Spotify entry still blends', () => {
+    // Regression: gating on `source === 'spotify'` disabled the blend for every
+    // track in YouTube-first mode, so only the baked fade-out ran and songs
+    // finished seconds early.
+    const spotifyEntryResolvedToYoutube = { source: 'spotify', streamUrl: 'https://x/y' };
+    expect(canCrossfade(true, 6000, spotifyEntryResolvedToYoutube.streamUrl)).toBe(true);
+  });
+
+  it('refuses when off, when we do not generate the audio, or with no resolved URL', () => {
+    expect(canCrossfade(true, 0, 'https://x/y')).toBe(false);
+    expect(canCrossfade(false, 6000, 'https://x/y')).toBe(false);
+    expect(canCrossfade(true, 6000, undefined)).toBe(false);
+    expect(canCrossfade(true, 6000, null)).toBe(false);
+  });
+});
 
 /** Build `frames` of 48 kHz stereo Int16 PCM with a constant sample value. */
 function pcm(frames: number, value = 1000): Buffer {

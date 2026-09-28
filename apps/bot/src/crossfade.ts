@@ -52,6 +52,27 @@ export function planCrossfade(
   return { waitMs };
 }
 
+/**
+ * Whether a true crossfade (overlap) is possible for an upcoming hand-off.
+ *
+ * Two conditions, and deliberately NOT the queue's `source` field: in
+ * YouTube-first mode a `spotify` queue entry resolves to a YouTube stream that
+ * IS decodable, so gating on `source` silently disabled the blend and left only
+ * the baked fade-out — every song went quiet seconds before its end, which reads
+ * as "cutting off instead of fading". All that matters is that we generate the
+ * audio ourselves (a raw Spotify/librespot capture has no mix point) and that we
+ * hold a decodable URL for the incoming track.
+ */
+export function canCrossfade(
+  usingServerStream: boolean,
+  xfadeMs: number,
+  nextUrl?: string | null,
+): boolean {
+  if (xfadeMs <= 0) return false;
+  if (!usingServerStream) return false;
+  return !!nextUrl;
+}
+
 /** Linear ramp in [0,1]. */
 export function linearIn(t: number): number {
   return Math.max(0, Math.min(1, t));
