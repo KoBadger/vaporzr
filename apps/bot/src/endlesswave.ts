@@ -29,6 +29,10 @@ export interface EndlessWaveState {
   recentFeatures: AudioFeatures[];
   /** Running average of recent features — drives the evolution targets. */
   avg: AudioFeatures;
+  /** The opening tracks' blended features — the session's "home" vibe. Targets
+   *  are pulled back toward this so a long wave drifts AROUND its origin
+   *  instead of wandering into unrelated genres. Null until features arrive. */
+  anchor: AudioFeatures | null;
   /** Current genre drift direction (updated every N tracks). */
   genreDrift: number;
   /** How many tracks have been auto-queued in this session. */
@@ -56,6 +60,10 @@ export interface EndlessWaveSnapshot {
 
 export interface EWConfig {
   historyWindow: number;
+  /** How many opening tracks define the anchor vibe. */
+  anchorTracks: number;
+  /** How strongly targets are pulled back toward the anchor (0..1). */
+  anchorPull: number;
   artistCooldown: number;
   evolveInterval: number;
   driftStep: number;
@@ -65,6 +73,8 @@ export interface EWConfig {
 
 export const DEFAULT_CONFIG: EWConfig = {
   historyWindow: 5,
+  anchorTracks: 3,
+  anchorPull: 0.4,
   artistCooldown: 3,
   evolveInterval: 3,
   driftStep: 0.02,
@@ -108,6 +118,7 @@ export function createState(overrides?: Partial<EWConfig>): EndlessWaveState {
     recentArtists: [],
     recentFeatures: [],
     avg: { ...DEFAULT_AVG },
+    anchor: null,
     genreDrift: 0,
     generated: 0,
     deadEnds: 0,
@@ -136,6 +147,7 @@ function resetSession(state: EndlessWaveState): void {
   state.recentArtists = [];
   state.recentFeatures = [];
   state.avg = { ...DEFAULT_AVG };
+  state.anchor = null;
   state.genreDrift = 0;
   state.generated = 0;
   state.deadEnds = 0;
@@ -208,6 +220,7 @@ export interface EndlessWavePersist {
   recentArtists: string[];
   recentFeatures: AudioFeatures[];
   avg: AudioFeatures;
+  anchor?: AudioFeatures | null;
   genreDrift: number;
   generated: number;
   deadEnds: number;
@@ -226,6 +239,7 @@ export function serializeState(state: EndlessWaveState): EndlessWavePersist {
     recentArtists: state.recentArtists,
     recentFeatures: state.recentFeatures,
     avg: state.avg,
+    anchor: state.anchor,
     genreDrift: state.genreDrift,
     generated: state.generated,
     deadEnds: state.deadEnds,
@@ -247,6 +261,7 @@ export function restoreState(data: Partial<EndlessWavePersist>): EndlessWaveStat
   s.recentArtists = Array.isArray(data.recentArtists) ? [...data.recentArtists] : [];
   s.recentFeatures = Array.isArray(data.recentFeatures) ? [...data.recentFeatures] : [];
   if (data.avg && typeof data.avg.energy === 'number') s.avg = { ...s.avg, ...data.avg };
+  if (data.anchor && typeof data.anchor.energy === 'number') s.anchor = { ...s.anchor, ...data.anchor };
   if (typeof data.genreDrift === 'number') s.genreDrift = data.genreDrift;
   if (typeof data.generated === 'number') s.generated = data.generated;
   if (typeof data.deadEnds === 'number') s.deadEnds = data.deadEnds;
@@ -269,6 +284,13 @@ export function recordFeatures(
     state.recentFeatures.shift();
   }
   state.avg = computeAverage(state.recentFeatures);
+
+  // Lock in the session's "home" vibe from the opening tracks, then freeze it.
+  // A pure rolling average can walk anywhere given enough songs — this is what
+  // stops the wave wandering off into unrelated genres after a few picks.
+  if (!state.anchor || state.recentFeatures.length <= DEFAULT_CONFIG.anchorTracks) {
+    state.anchor = computeAverage(state.recentFeatures);
+  }
 
   if (artist) {
     const norm = artist.toLowerCase().trim();
@@ -313,6 +335,19 @@ export function computeAverage(features: AudioFeatures[]): AudioFeatures {
 
 /* ---------- Evolution ---------- */
 
+/** Weighted mix of two feature sets (`w` = how much of `b` to take). Only the
+ *  continuous dimensions are blended; key/mode/duration stay from `a`. */
+export function mixFeatures(a: AudioFeatures, b: AudioFeatures, w: number): AudioFeatures {
+  const out: AudioFeatures = { ...a };
+  const keys: (keyof AudioFeatures)[] = [
+    'danceability', 'energy', 'valence', 'acousticness',
+    'instrumentalness', 'liveness', 'speechiness',
+  ];
+  for (const k of keys) out[k] = (a[k] as number) * (1 - w) + (b[k] as number) * w;
+  out.tempo = a.tempo * (1 - w) + b.tempo * w;
+  return out;
+}
+
 export function evolveDirection(state: EndlessWaveState): void {
   const nudge = (Math.random() - 0.5) * DEFAULT_CONFIG.driftStep * 2;
   state.genreDrift = Math.max(
@@ -322,7 +357,12 @@ export function evolveDirection(state: EndlessWaveState): void {
 }
 
 export function buildTargets(state: EndlessWaveState): Partial<RecommendationParams> {
-  const a = state.avg;
+  // Blend the rolling average with the session anchor so the wave keeps circling
+  // its opening vibe instead of drifting off into unrelated territory. Drift is
+  // applied on top, so it still evolves — just around home.
+  const a = state.anchor
+    ? mixFeatures(state.avg, state.anchor, DEFAULT_CONFIG.anchorPull)
+    : state.avg;
   const d = state.genreDrift;
   return {
     targetEnergy: clamp(a.energy + d * 0.6),

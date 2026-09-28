@@ -1074,9 +1074,17 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
     if(!W||!H||!isFinite(W)||!isFinite(H))return;
     sctx.clearRect(0,0,W,H);
     kickBoost=Math.max(0,kickBoost*0.9);
-    // Real VISUALDON wallpaper video underneath — canvas is just the overlay.
-    // Falls back to the painted scene when the video is missing/blocked.
-    if(ewVideoReady()){drawSynthOverlay(now,W,H);return;}
+    /* The wallpaper video is the ONLY backdrop now — the old painted canvas
+       scene was removed because it kept flashing in whenever the video was
+       still loading. `#ew-video` shows its own poster (/ew-bg.jpg) until the
+       first frames decode, so the screen is never black and never shows a
+       different-looking road. The canvas is purely the reactive overlay. */
+    drawSynthOverlay(now,W,H);
+    return;
+  }
+  /* eslint-disable no-unreachable */
+  function drawSynthLegacyScene(now){
+    var W=synthCanvas.width,H=synthCanvas.height;
     var vx=W/2,hy=H*0.55;
     var e=prefersReduced?0:lastEnergy;
     /* Road scroll tracks the beat: tempo factor from the rolling BPM estimate,
