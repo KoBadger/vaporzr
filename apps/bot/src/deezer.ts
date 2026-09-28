@@ -204,9 +204,16 @@ export async function deezerArtistProfile(artist: string): Promise<ArtistProfile
         getJson<{ data?: DeezerArtist[] }>(`/artist/${found.id}/related?limit=15`),
         getJson<{ data?: DeezerAlbum[] }>(`/artist/${found.id}/albums?limit=4`),
       ]);
+      // Deezer only reports genres on the ALBUM DETAIL endpoint — the artist's
+      // album list omits them — so look up the first couple of albums directly.
+      const albumIds = (albums?.data ?? [])
+        .slice(0, 2)
+        .map((al) => al?.id)
+        .filter((id): id is number => typeof id === 'number');
+      const details = await Promise.all(albumIds.map((id) => getJson<DeezerAlbum>(`/album/${id}`)));
       const genres = new Set<string>();
-      for (const al of albums?.data ?? []) {
-        for (const g of al.genres?.data ?? []) {
+      for (const al of details) {
+        for (const g of al?.genres?.data ?? []) {
           const n = (g?.name ?? '').toLowerCase().trim();
           if (n) genres.add(n);
         }
