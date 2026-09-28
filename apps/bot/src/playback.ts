@@ -393,26 +393,43 @@ export class PlaybackController {
     // Runtime, per-guild setting (0 = off). The env vars only seed the default.
     const xfadeMs = this.xfadeMs;
     if (xfadeMs <= 0) return;
-    if (this.currentSource() === 'spotify' && !this.spotifyFallback) return;
+    // We can only blend into audio we are generating ourselves — the bot's own
+    // ffmpeg stream. A raw Spotify (go-librespot -> PulseAudio) capture has no
+    // mix point, so it keeps the fade-out half only.
+    if (!this.usingServerStream()) return;
     const snapshot = this.queue.getSnapshot();
     const next = snapshot.tracks[snapshot.currentIndex + 1];
-    if (!next || next.source === 'spotify') return;
+    if (!next) return;
+    // The gate is "can we decode the next track's head?", NOT its nominal
+    // source. In YouTube-first mode a `spotify` queue entry resolves to a
+    // YouTube stream that prefetchStream has already cached — gating on the
+    // source meant the blend never ran, leaving only the baked fade-out, so
+    // every song went quiet ~6s early: exactly "cutting off instead of fading".
+    const nextUrl =
+      this.streamCache.get(next.uri)?.streamUrl ?? (next.source === 'local' ? next.filePath : undefined);
+    if (!nextUrl) {
+      console.log(`[playback] crossfade skipped — no resolved stream yet for "${next.name}" (fade only)`);
+      return;
+    }
     const outgoingUri = this.queue.getCurrentTrack()?.uri ?? null;
     const plan = planCrossfade(durationMs, positionMs, this.currentStartOffsetMs, xfadeMs);
     if (!plan) return;
     this.crossfadeTimer = setTimeout(() => {
       this.crossfadeTimer = null;
-      void this.startCrossfade(outgoingUri, next, xfadeMs);
+      void this.startCrossfade(outgoingUri, next, xfadeMs, nextUrl);
     }, Math.min(plan.waitMs, 6 * 60 * 60 * 1000));
     this.crossfadeTimer.unref?.();
   }
 
-  private async startCrossfade(outgoingUri: string | null, next: TrackInfo, xfadeMs: number): Promise<void> {
-    // Need the already-resolved stream URL; preload normally warmed it. If it is
-    // not cached yet, skip (step A still fades the tail) rather than resolve
-    // synchronously here.
+  private async startCrossfade(
+    outgoingUri: string | null,
+    next: TrackInfo,
+    xfadeMs: number,
+    resolvedUrl?: string,
+  ): Promise<void> {
+    // Prefer the URL resolved (and verified) when the blend was scheduled.
     const video = this.streamCache.get(next.uri);
-    const url = video?.streamUrl ?? (next.source === 'local' ? next.filePath : undefined);
+    const url = resolvedUrl ?? video?.streamUrl ?? (next.source === 'local' ? next.filePath : undefined);
     if (!url) return;
     // Tempo-match the incoming head to the outgoing track when we have Spotify
     // features for both (best-effort with a short timeout — never blocks the blend).
@@ -422,12 +439,19 @@ export class PlaybackController {
     ]);
     const ratio = tempoMatchRatio(outTempo, inTempo);
     const head = await this.voice.decodeHeadPcm(url, xfadeMs, ratio);
-    if (!head) return;
+    if (!head) {
+      console.log(`[playback] crossfade skipped — could not decode the head of "${next.name}"`);
+      return;
+    }
     // The track may have changed while decoding — don't mix over the wrong song.
     if (!outgoingUri || this.queue.getCurrentTrack()?.uri !== outgoingUri) return;
     this.voice.queueSfxPcm(fadeInPcm(head, xfadeMs));
     // Stretching consumed `xfadeMs * ratio` of the incoming track's native time.
     this.pendingXfadeSeekMs = Math.round(xfadeMs * ratio);
+    console.log(
+      `[playback] crossfade: blending "${next.name}" over the last ${(xfadeMs / 1000).toFixed(1)}s` +
+        `${ratio !== 1 ? ` (tempo x${ratio.toFixed(3)})` : ''} — next starts ${(this.pendingXfadeSeekMs / 1000).toFixed(1)}s in`,
+    );
   }
 
   /** Spotify tempo (BPM) for a track, best-effort (cached; short timeout). */
