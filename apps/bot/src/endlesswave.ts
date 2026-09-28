@@ -8,7 +8,7 @@ import {
   searchTracks,
 } from './spotify.js';
 import { searchAndResolveYoutube } from './youtube.js';
-import { deezerRelatedTracks } from './deezer.js';
+import { deezerArtistProfile, deezerRelatedTracks, peekArtistProfile } from './deezer.js';
 import type { TrackInfo } from '@vaporzr/shared';
 
 export type { AudioFeatures } from './spotify.js';
@@ -65,6 +65,10 @@ export interface EWConfig {
   /** How strongly targets are pulled back toward the anchor (0..1). */
   anchorPull: number;
   artistCooldown: number;
+  /** How hard a pick is pushed toward a harmonically compatible key (Camelot). */
+  harmonicWeight: number;
+  /** How hard a pick is pulled toward the genres already in play. */
+  genreWeight: number;
   evolveInterval: number;
   driftStep: number;
   maxDrift: number;
@@ -75,7 +79,9 @@ export const DEFAULT_CONFIG: EWConfig = {
   historyWindow: 5,
   anchorTracks: 3,
   anchorPull: 0.4,
-  artistCooldown: 3,
+  artistCooldown: 5,
+  harmonicWeight: 22,
+  genreWeight: 14,
   evolveInterval: 3,
   driftStep: 0.02,
   maxDrift: 0.08,
@@ -191,6 +197,29 @@ export function snapshot(state: EndlessWaveState): EndlessWaveSnapshot {
     longestRun: state.longestRun,
     artistCount: state.artistSet.size,
   };
+}
+
+/** Human-readable summary of what is steering the picks right now (for status). */
+export function describeCalibration(state: EndlessWaveState): string {
+  const parts: string[] = [];
+  const a = state.anchor;
+  if (a) {
+    const keyNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+    parts.push(
+      `anchor ${a.energy.toFixed(2)} energy · ${Math.round(a.tempo)} BPM · ` +
+        `${keyNames[((Math.round(a.key) % 12) + 12) % 12] ?? '?'} ${a.mode === 1 ? 'major' : 'minor'}`,
+    );
+  } else {
+    parts.push('anchor: waiting for audio features');
+  }
+  parts.push(`artist cooldown ${DEFAULT_CONFIG.artistCooldown}`);
+  const cached = state.recentArtists.filter((x) => peekArtistProfile(x)).length;
+  parts.push(
+    cached > 0
+      ? `${cached} genre/related profile${cached === 1 ? '' : 's'} warmed`
+      : 'genre signal warming up',
+  );
+  return parts.join(' · ');
 }
 
 /** Record a successful auto-queue — advances the run streak and tracks artists. */
@@ -371,6 +400,8 @@ export function buildTargets(state: EndlessWaveState): Partial<RecommendationPar
     targetDanceability: clamp(a.danceability + d * 0.3),
     targetAcousticness: clamp(a.acousticness - d * 0.2),
     targetInstrumentalness: clamp(a.instrumentalness + d * 0.1),
+    targetKey: a.key,
+    targetMode: a.mode,
     minTempo: Math.max(60, a.tempo - 12 + d * 10),
     maxTempo: Math.min(200, a.tempo + 12 + d * 10),
   };
@@ -512,6 +543,7 @@ export function markPlayed(
   name: string,
   artists: string[],
 ): void {
+  warmArtistProfiles(artists);
   state.playedUris.add(uri);
   const norm = normalizeTrackName(name);
   // Store every matchable variant of the title (normalized, artist-stripped
@@ -568,14 +600,78 @@ function featureDistance(f: AudioFeatures, t: Partial<RecommendationParams>): nu
   return n ? d / n : 0;
 }
 
-/** Lower = better fit. Feature-target distance + source + artist novelty + duration sanity.
- *  `features` is optional — when absent (e.g. a YouTube pick) it just scores on the
+/* ---------- Harmonic mixing (Camelot) ---------- */
+
+/** Camelot-wheel position for a pitch class + mode. Returns the wheel number
+ *  (1..12) and the ring (1 = major/B, 0 = minor/A). C major = 8B, C minor = 5A. */
+function camelot(key: number, mode: number): { n: number; ring: number } {
+  const k = ((Math.round(key) % 12) + 12) % 12;
+  const ring = mode === 1 ? 1 : 0;
+  const start = ring === 1 ? 8 : 5;
+  return { n: ((start + 7 * k - 1) % 12) + 1, ring };
+}
+
+/** Harmonic distance 0..1 between two keys. Same key = 0; the relative
+ *  major/minor or a neighbouring wheel number on the same ring = very close
+ *  (what a DJ would blend); the tritone = worst. */
+export function harmonicDistance(keyA: number, modeA: number, keyB: number, modeB: number): number {
+  const a = camelot(keyA, modeA);
+  const b = camelot(keyB, modeB);
+  const raw = Math.abs(a.n - b.n);
+  const dn = Math.min(raw, 12 - raw);
+  const sameRing = a.ring === b.ring;
+  if (dn === 0) return sameRing ? 0 : 0.2; // relative major/minor
+  if (sameRing) return dn === 1 ? 0.25 : dn === 2 ? 0.45 : Math.min(1, 0.5 + dn * 0.08);
+  return dn === 1 ? 0.6 : Math.min(1, 0.65 + dn * 0.06);
+}
+
+/* ---------- Session neighbourhood (genre / related artists) ---------- */
+
+/** What the session has been sounding like: the genres in play and the artists
+ *  Deezer considers related to the artists we've played. */
+export interface SessionNeighbourhood {
+  genres: Set<string>;
+  related: Set<string>;
+  artists: Set<string>;
+}
+
+/** Build the session neighbourhood from ALREADY-CACHED Deezer profiles — a pure
+ *  cache read, so scoring never waits on the network. Profiles are warmed in the
+ *  background (see warmArtistProfiles) as tracks start and after each pick. */
+export function buildNeighbourhood(state: EndlessWaveState): SessionNeighbourhood {
+  const genres = new Set<string>();
+  const related = new Set<string>();
+  const artists = new Set<string>();
+  for (const a of state.recentArtists.slice(-DEFAULT_CONFIG.artistCooldown)) {
+    if (!a) continue;
+    artists.add(a);
+    const p = peekArtistProfile(a);
+    if (!p) continue;
+    for (const g of p.genres) genres.add(g);
+    for (const r of p.related) related.add(r);
+  }
+  return { genres, related, artists };
+}
+
+/** Warm Deezer artist profiles in the background (never awaited): called when a
+ *  track starts and for each pick's runners-up, so the next scoring pass has
+ *  genre/relatedness data to work with instead of starting cold. */
+export function warmArtistProfiles(artists: Iterable<string>): void {
+  for (const raw of artists) {
+    const name = String(raw ?? '').trim();
+    if (name.length < 2) continue;
+    void deezerArtistProfile(name).catch(() => {});
+  }
+}
+
+/** Lower = better fit. Feature-target distance + source + artist novelty + duration sanity. *  `features` is optional — when absent (e.g. a YouTube pick) it just scores on the
  *  heuristics below, so callers keep working without an API round-trip. */
 export function scoreCandidate(
   track: ResolvedTrack,
   targets: Partial<RecommendationParams>,
   recentArtists: string[],
   features?: AudioFeatures,
+  env?: SessionNeighbourhood,
 ): number {
   let score = 0;
 
@@ -584,6 +680,15 @@ export function scoreCandidate(
   // lurching between wildly different songs. Mean distance scaled up so it
   // meaningfully competes with the durability/artist bonuses below.
   if (features) score += featureDistance(features, targets) * 70;
+
+  // Harmonic mixing: prefer keys that blend with the current track (Camelot).
+  // Key is the one dimension the energy/tempo targets can't express, so it gets
+  // its own term rather than being folded into the feature distance.
+  if (features && targets.targetKey !== undefined && targets.targetMode !== undefined) {
+    score +=
+      harmonicDistance(features.key ?? 0, features.mode ?? 1, targets.targetKey, targets.targetMode) *
+      DEFAULT_CONFIG.harmonicWeight;
+  }
 
   // Spotify URI bonus (prefer known sources).
   if (track.uri.startsWith('spotify:')) score -= 10;
@@ -599,6 +704,19 @@ export function scoreCandidate(
     score += 20; // strong penalty for on-cooldown artist
   } else if (trackArtist) {
     score -= 3; // small bonus for novel artist
+  }
+
+  // Genre + relatedness, from the background-warmed Deezer profiles. Only ever
+  // reads the cache, so a cold cache simply means no signal (not a stall).
+  if (env && trackArtist) {
+    if (env.related.has(trackArtist)) score -= 14; // a related artist: strong pull
+    else if (env.artists.has(trackArtist)) score -= 6; // already in the rotation
+    const prof = peekArtistProfile(trackArtist);
+    if (prof && prof.genres.length > 0 && env.genres.size > 0) {
+      const overlap = prof.genres.reduce((n, g) => n + (env.genres.has(g) ? 1 : 0), 0);
+      if (overlap > 0) score -= Math.min(DEFAULT_CONFIG.genreWeight, overlap * 5);
+      else score += 6; // a genre we haven't been playing: nudge back toward home
+    }
   }
 
   // Small random tiebreaker to avoid deterministic picks.
@@ -664,6 +782,8 @@ export async function pickNextTrack(
 
   const targets = buildTargets(state);
   const seedIds = extractSeeds(recentTracks);
+  // Genre + related-artist context for scoring (pure cache read).
+  const env = buildNeighbourhood(state);
 
   // Filter: no URI dupes, no remix/cover variants of played OR queued tracks,
   // no on-cooldown artists, and never re-pick something already waiting.
@@ -884,8 +1004,12 @@ export async function pickNextTrack(
         targets,
         state.recentArtists,
         features?.get(extractSpotifyId(c.uri) ?? '') ?? c.estimatedFeatures,
+        env,
       );
     survivors.sort((a, b) => score(a) - score(b));
+    // Warm the runners-up's profiles in the background so the NEXT pick has
+    // genre/relatedness data instead of scoring blind.
+    warmArtistProfiles(survivors.slice(0, 6).map((c) => c.artists[0] ?? ''));
     return survivors[0];
   }
 

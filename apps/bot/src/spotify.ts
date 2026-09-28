@@ -1037,6 +1037,10 @@ export interface RecommendationParams {
   targetDanceability?: number;
   targetAcousticness?: number;
   targetInstrumentalness?: number;
+  /** Pitch class 0..11 (C=0) — Spotify's harmonic target for the blend. */
+  targetKey?: number;
+  /** 0 = minor, 1 = major. */
+  targetMode?: number;
   minTempo?: number;
   maxTempo?: number;
   limit?: number;
@@ -1067,6 +1071,8 @@ export async function getRecommendations(params: RecommendationParams): Promise<
   if (params.targetDanceability !== undefined) q.set('target_danceability', String(params.targetDanceability));
   if (params.targetAcousticness !== undefined) q.set('target_acousticness', String(params.targetAcousticness));
   if (params.targetInstrumentalness !== undefined) q.set('target_instrumentalness', String(params.targetInstrumentalness));
+  if (params.targetKey !== undefined) q.set('target_key', String(params.targetKey));
+  if (params.targetMode !== undefined) q.set('target_mode', String(params.targetMode));
   if (params.minTempo !== undefined) q.set('min_tempo', String(params.minTempo));
   if (params.maxTempo !== undefined) q.set('max_tempo', String(params.maxTempo));
   q.set('limit', String(params.limit ?? 20));

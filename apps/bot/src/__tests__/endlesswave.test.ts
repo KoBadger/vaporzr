@@ -6,10 +6,14 @@ const mocks = vi.hoisted(() => ({
   getAudioFeatures: vi.fn(),
   searchAndResolveYoutube: vi.fn(),
   deezerRelatedTracks: vi.fn(),
+  deezerArtistProfile: vi.fn(async (..._args: unknown[]) => ({ name: '', genres: [] as string[], related: [] as string[] })),
+  peekArtistProfile: vi.fn((..._args: unknown[]): { name: string; genres: string[]; related: string[] } | null => null),
 }));
 
 vi.mock('../deezer.js', () => ({
   deezerRelatedTracks: (...args: unknown[]) => mocks.deezerRelatedTracks(...args),
+  deezerArtistProfile: (...args: unknown[]) => mocks.deezerArtistProfile(...args),
+  peekArtistProfile: (...args: unknown[]) => mocks.peekArtistProfile(...args),
 }));
 
 vi.mock('../spotify.js', async (importOriginal) => {
@@ -66,6 +70,8 @@ import {
   pickNextTrack,
   resolveCandidate,
   fetchFeatures,
+  harmonicDistance,
+  buildNeighbourhood,
   noteWaveQueued,
   noteWaveDeadEnd,
   serializeState,
@@ -528,6 +534,100 @@ describe('evolution', () => {
     const targets = buildTargets(s);
     expect(targets.targetEnergy).toBeGreaterThan(0.5);
     expect(targets.targetTempo).toBeGreaterThan(120);
+  });
+});
+
+describe('harmonic mixing (Camelot)', () => {
+  it('treats the same key as a perfect match', () => {
+    expect(harmonicDistance(0, 1, 0, 1)).toBe(0);
+  });
+  it('treats the relative major/minor as close', () => {
+    expect(harmonicDistance(0, 1, 9, 0)).toBe(0.2); // C major vs A minor
+  });
+  it('treats a neighbouring wheel position as close', () => {
+    expect(harmonicDistance(0, 1, 7, 1)).toBe(0.25); // C major (8B) vs G major (9B)
+  });
+  it('rates the tritone as furthest', () => {
+    expect(harmonicDistance(0, 1, 6, 1)).toBeGreaterThan(0.5); // C major vs F# major
+  });
+});
+
+describe('genre / relatedness scoring', () => {
+  const mk = (artist: string): ResolvedTrack => ({
+    uri: `spotify:track:${artist.replace(/\s+/g, '')}`,
+    name: 'Song',
+    artists: [artist],
+    album: '',
+    durationMs: 200_000,
+    source: 'spotify',
+  });
+  const empty = (): { genres: Set<string>; related: Set<string>; artists: Set<string> } => ({
+    genres: new Set<string>(),
+    related: new Set<string>(),
+    artists: new Set<string>(),
+  });
+
+  beforeEach(() => mocks.peekArtistProfile.mockReturnValue(null));
+  afterEach(() => mocks.peekArtistProfile.mockReturnValue(null));
+
+  it('pulls toward an artist Deezer relates to what is playing', () => {
+    const plain = scoreCandidate(mk('Some Artist'), {}, []);
+    const env = empty();
+    env.related.add('some artist');
+    expect(scoreCandidate(mk('Some Artist'), {}, [], undefined, env)).toBeLessThan(plain);
+  });
+
+  it('pulls toward a genre already in play', () => {
+    const env = empty();
+    env.genres.add('synthwave');
+    const cold = scoreCandidate(mk('Some Artist'), {}, [], undefined, env);
+    mocks.peekArtistProfile.mockReturnValue({ name: 'Some Artist', genres: ['synthwave'], related: [] });
+    const warm = scoreCandidate(mk('Some Artist'), {}, [], undefined, env);
+    expect(warm).toBeLessThan(cold);
+  });
+
+  it('nudges away from a genre nobody is playing', () => {
+    const env = empty();
+    env.genres.add('synthwave');
+    mocks.peekArtistProfile.mockReturnValue({ name: 'Some Artist', genres: ['polka'], related: [] });
+    const offVibe = scoreCandidate(mk('Some Artist'), {}, [], undefined, env);
+    mocks.peekArtistProfile.mockReturnValue({ name: 'Some Artist', genres: ['synthwave'], related: [] });
+    const onVibe = scoreCandidate(mk('Some Artist'), {}, [], undefined, env);
+    expect(onVibe).toBeLessThan(offVibe);
+  });
+});
+
+describe('buildNeighbourhood', () => {
+  it('is empty while the profile cache is cold (no network on the hot path)', () => {
+    const s = createState();
+    activate(s);
+    recordFeatures(s, fakeFeatures(), 'Nobody');
+    const env = buildNeighbourhood(s);
+    expect(env.genres.size).toBe(0);
+    expect(env.related.size).toBe(0);
+    expect(env.artists.has('nobody')).toBe(true);
+  });
+});
+
+describe('artist cooldown window', () => {
+  it('keeps the last 5 artists on cooldown', () => {
+    const s = createState();
+    activate(s);
+    for (let i = 0; i < 5; i++) recordFeatures(s, fakeFeatures(), `Artist${i}`);
+    expect(DEFAULT_CONFIG.artistCooldown).toBe(5);
+    expect(isArtistOnCooldown(s, 'Artist0')).toBe(true);
+    expect(isArtistOnCooldown(s, 'Artist4')).toBe(true);
+  });
+});
+
+describe('buildTargets harmonic target', () => {
+  it('carries the current key/mode into the targets', () => {
+    const s = createState();
+    activate(s);
+    recordFeatures(s, fakeFeatures({ key: 9, mode: 0 }), 'Artist');
+    const t = buildTargets(s);
+    expect(t.targetKey).toBe(9);
+    expect(t.targetMode).toBe(0);
   });
 });
 

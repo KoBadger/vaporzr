@@ -5421,6 +5421,7 @@ export class DiscordBot {
       lines.push(`• lookahead: ${ahead} track${ahead === 1 ? '' : 's'}`);
       if (snap.mode === 'smart') {
         lines.push(`• unique artists: ${snap.artistCount} · run streak ${snap.runStreak} (best ${snap.longestRun})`);
+        lines.push(`• steering: ${EW.describeCalibration(s.endlessWave)}`);
         if (snap.deadEnds) lines.push(`• dead-ends: ${snap.deadEnds}`);
       }
     }

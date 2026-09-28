@@ -141,3 +141,102 @@ export async function deezerRelatedTracks(artistName: string): Promise<ResolvedT
   cache.set(key, { at: Date.now(), value: out });
   return out;
 }
+
+/* ---------- Artist profiles (genres + related artists) ---------- */
+
+interface DeezerAlbum {
+  id: number;
+  title?: string;
+  genres?: { data?: Array<{ id?: number; name?: string }> };
+}
+
+export interface ArtistProfile {
+  /** Deezer's canonical artist name. */
+  name: string;
+  /** Lowercased genre names harvested from the artist's albums. */
+  genres: string[];
+  /** Lowercased names of related artists. */
+  related: string[];
+}
+
+const profileCache = new Map<string, { at: number; value: ArtistProfile }>();
+const PROFILE_TTL_MS = 12 * 60 * 60 * 1000;
+/** In-flight fetches, so a burst of warm-ups shares one round-trip each. */
+const profileInflight = new Map<string, Promise<ArtistProfile>>();
+
+/** Synchronous peek at what we already know about an artist (null if nothing).
+ *  Scoring runs on the hot path and must never block on the network, so readers
+ *  use this and the data is warmed in the background instead. */
+export function peekArtistProfile(artist: string): ArtistProfile | null {
+  const hit = profileCache.get(String(artist ?? '').toLowerCase().trim());
+  return hit ? hit.value : null;
+}
+
+/**
+ * Genre + related-artist profile for one artist from Deezer's keyless API:
+ * search -> related artists -> first albums' genres. Cached for 12h and
+ * de-duplicated across concurrent callers. Always background-warmed; never
+ * awaited on the scoring path.
+ */
+export async function deezerArtistProfile(artist: string): Promise<ArtistProfile | null> {
+  const key = String(artist ?? '').toLowerCase().trim();
+  if (key.length < 2) return null;
+  const hit = profileCache.get(key);
+  if (hit && Date.now() - hit.at < PROFILE_TTL_MS) return hit.value;
+  const inflight = profileInflight.get(key);
+  if (inflight) return inflight;
+
+  const run = (async (): Promise<ArtistProfile> => {
+    const empty: ArtistProfile = { name: artist, genres: [], related: [] };
+    try {
+      const search = await getJson<{ data?: DeezerArtist[] }>(
+        `/search/artist?q=${encodeURIComponent(artist)}&limit=1`,
+      );
+      // Network failure: don't cache — a transient Deezer hiccup must not
+      // blacklist the artist for the whole TTL.
+      if (search === null) return empty;
+      const found = search.data?.[0];
+      if (!found) {
+        profileCache.set(key, { at: Date.now(), value: empty });
+        return empty;
+      }
+      const [related, albums] = await Promise.all([
+        getJson<{ data?: DeezerArtist[] }>(`/artist/${found.id}/related?limit=15`),
+        getJson<{ data?: DeezerAlbum[] }>(`/artist/${found.id}/albums?limit=4`),
+      ]);
+      const genres = new Set<string>();
+      for (const al of albums?.data ?? []) {
+        for (const g of al.genres?.data ?? []) {
+          const n = (g?.name ?? '').toLowerCase().trim();
+          if (n) genres.add(n);
+        }
+      }
+      const value: ArtistProfile = {
+        name: found.name,
+        genres: [...genres],
+        related: [
+          ...new Set(
+            (related?.data ?? [])
+              .map((r) => (r?.name ?? '').toLowerCase().trim())
+              .filter(Boolean),
+          ),
+        ],
+      };
+      profileCache.set(key, { at: Date.now(), value });
+      if (profileCache.size > 400) {
+        const oldest = [...profileCache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+        if (oldest) profileCache.delete(oldest[0]);
+      }
+      return value;
+    } catch {
+      return empty;
+    }
+  })();
+
+  profileInflight.set(key, run);
+  try {
+    return await run;
+  } finally {
+    profileInflight.delete(key);
+  }
+}
