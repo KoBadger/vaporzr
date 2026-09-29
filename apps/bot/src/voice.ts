@@ -24,6 +24,12 @@ import { config } from './config.js';
 const STREAM_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
 
+/** Hard ceiling for one ranged media fetch — a stalled proxy socket aborts
+ *  instead of hanging a track start forever. */
+const MEDIA_REQUEST_TIMEOUT_MS = 15_000;
+/** ffmpeg's I/O timeout for URLs it fetches itself (microseconds, so 20s). */
+const MEDIA_IO_TIMEOUT_US = 20_000_000;
+
 /**
  * Joins a Discord voice channel and streams raw PCM (48 kHz, stereo, Int16)
  * forwarded from the local loopback capture. The bot shows up as a normal
@@ -654,6 +660,11 @@ export class VoiceManager {
       if (requestedSeekMs) args.push('-ss', String(requestedSeekMs / 1000));
     } else {
       if (requestedSeekMs) args.push('-ss', String(requestedSeekMs / 1000));
+      // A connection that opens but never delivers used to hang the track start
+      // indefinitely — which looks exactly like "the bot didn't respond".
+      // rw_timeout makes ffmpeg give up on stalled I/O so the refresh/resume
+      // path can take over instead.
+      if (isHttp) args.push('-rw_timeout', String(MEDIA_IO_TIMEOUT_US));
       args.push('-i', url);
     }
     args.push('-vn', '-ac', '2', '-ar', '48000');
@@ -784,11 +795,13 @@ export class VoiceManager {
     proc.on('exit', () => abort.abort());
     // EPIPE is expected when ffmpeg is killed mid-download (skip/stop).
     proc.stdin?.on('error', () => {});
+    // `this` is not bound inside the generator below.
+    const self = this;
 
     async function* chunks(): AsyncGenerator<Buffer> {
       let offset = 0;
       for (;;) {
-        const res = await fetch(url, {
+        const res = await self.mediaFetch(url, {
           headers: {
             'User-Agent': STREAM_USER_AGENT,
             Range: `bytes=${offset}-${offset + CHUNK_BYTES - 1}`,
@@ -894,14 +907,20 @@ export class VoiceManager {
 
   /**
    * fetch() for media hosts, routed through the residential proxy when the host
-   * needs it. googlevideo URLs are minted against the proxy's exit IP, so
-   * fetching them directly returns 403 with ZERO bytes — which is exactly what
-   * silently broke every crossfade head decode ("could not decode the head"),
-   * while normal playback worked because ffmpeg gets the proxy via http_proxy.
+   * needs it, and always bounded by a stall timeout. googlevideo URLs are minted
+   * against the proxy's exit IP, so fetching them directly returns 403 with ZERO
+   * bytes — and a proxy connection that opens but never delivers used to hang
+   * forever. Both made a track start look like "the bot didn't respond".
    */
   private async mediaFetch(url: string, init: RequestInit): Promise<Response> {
     const proxy = config.youtubeProxy && /googlevideo\.com\//.test(url) ? config.youtubeProxy : '';
-    if (!proxy) return fetch(url, init);
+    // Hard ceiling per request: a stalled socket aborts instead of hanging, and
+    // the caller's own signal (ffmpeg exited, track skipped) still wins.
+    const stall = AbortSignal.timeout(MEDIA_REQUEST_TIMEOUT_MS);
+    const outer = init.signal as AbortSignal | null | undefined;
+    const signal = outer ? AbortSignal.any([outer, stall]) : stall;
+    const opts = { ...init, signal } as RequestInit & { dispatcher?: unknown };
+    if (!proxy) return fetch(url, opts);
     try {
       let agent = this.proxyAgents.get(proxy);
       if (!agent) {
@@ -910,15 +929,12 @@ export class VoiceManager {
         this.proxyAgents.set(proxy, agent);
       }
       const { fetch: uFetch } = await import('undici');
-      return (await uFetch(url, {
-        ...(init as Record<string, unknown>),
-        dispatcher: agent,
-      } as never)) as unknown as Response;
+      return (await uFetch(url, { ...opts, dispatcher: agent } as never)) as unknown as Response;
     } catch (err) {
       console.warn(
         `[voice] proxied media fetch failed (${err instanceof Error ? err.message : err}) — retrying direct`,
       );
-      return fetch(url, init);
+      return fetch(url, opts);
     }
   }
 
