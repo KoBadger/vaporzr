@@ -392,46 +392,51 @@ export class PlaybackController {
     this.clearCrossfadeTimer();
     // Runtime, per-guild setting (0 = off). The env vars only seed the default.
     const xfadeMs = this.xfadeMs;
-    if (xfadeMs <= 0) return;
     // We can only blend into audio we are generating ourselves — the bot's own
     // ffmpeg stream. A raw Spotify (go-librespot -> PulseAudio) capture has no
     // mix point, so it keeps the fade-out half only.
+    if (!canCrossfade(this.usingServerStream(), xfadeMs)) return;
     const snapshot = this.queue.getSnapshot();
     const next = snapshot.tracks[snapshot.currentIndex + 1];
     if (!next) return;
-    // The gate is "can we decode the next track's head?", NOT its nominal
-    // source. In YouTube-first mode a `spotify` queue entry resolves to a
-    // YouTube stream that prefetchStream has already cached — gating on the
-    // source meant the blend never ran, leaving only the baked fade-out, so
-    // every song went quiet ~6s early: exactly "cutting off instead of fading".
-    const nextUrl =
-      this.streamCache.get(next.uri)?.streamUrl ?? (next.source === 'local' ? next.filePath : undefined);
-    if (!canCrossfade(this.usingServerStream(), xfadeMs, nextUrl)) {
-      if (this.usingServerStream() && !nextUrl) {
-        console.log(`[playback] crossfade skipped — no resolved stream yet for "${next.name}" (fade only)`);
-      }
-      return;
-    }
+    // Warm the next track's stream NOW — minutes ahead of the blend. The blend
+    // needs a decodable URL at the very end of this track, but the normal
+    // preload only resolves it shortly before it plays, so waiting until the
+    // blend to look it up meant it was never there. Resolving early is free:
+    // the resolver dedupes by query, so play() reuses this exact result.
+    if (!this.streamCache.has(next.uri) && next.source !== 'local') this.prefetchStream(next);
     const outgoingUri = this.queue.getCurrentTrack()?.uri ?? null;
     const plan = planCrossfade(durationMs, positionMs, this.currentStartOffsetMs, xfadeMs);
     if (!plan) return;
     this.crossfadeTimer = setTimeout(() => {
       this.crossfadeTimer = null;
-      void this.startCrossfade(outgoingUri, next, xfadeMs, nextUrl);
+      void this.startCrossfade(outgoingUri, next, xfadeMs);
     }, Math.min(plan.waitMs, 6 * 60 * 60 * 1000));
     this.crossfadeTimer.unref?.();
   }
 
-  private async startCrossfade(
-    outgoingUri: string | null,
-    next: TrackInfo,
-    xfadeMs: number,
-    resolvedUrl?: string,
-  ): Promise<void> {
-    // Prefer the URL resolved (and verified) when the blend was scheduled.
-    const video = this.streamCache.get(next.uri);
-    const url = resolvedUrl ?? video?.streamUrl ?? (next.source === 'local' ? next.filePath : undefined);
-    if (!url) return;
+  /** The URL to decode the incoming head from, waiting briefly if the early
+   *  prefetch is still in flight. Null when it never materialises. */
+  private async resolveBlendUrl(outgoingUri: string | null, next: TrackInfo): Promise<string | null> {
+    const pick = (): string | undefined =>
+      this.streamCache.get(next.uri)?.streamUrl ?? (next.source === 'local' ? next.filePath : undefined);
+    let url = pick();
+    for (let i = 0; i < 8 && !url; i++) {
+      await new Promise((r) => setTimeout(r, 250));
+      // The track may have changed while we waited — never blend over the wrong song.
+      if (!outgoingUri || this.queue.getCurrentTrack()?.uri !== outgoingUri) return null;
+      url = pick();
+    }
+    return url ?? null;
+  }
+
+  private async startCrossfade(outgoingUri: string | null, next: TrackInfo, xfadeMs: number): Promise<void> {
+    const url = await this.resolveBlendUrl(outgoingUri, next);
+    if (!url) {
+      console.log(`[playback] crossfade skipped — no stream for "${next.name}" (fade only)`);
+      return;
+    }
+    if (!outgoingUri) return;
     // Tempo-match the incoming head to the outgoing track when we have Spotify
     // features for both (best-effort with a short timeout — never blocks the blend).
     const [outTempo, inTempo] = await Promise.all([

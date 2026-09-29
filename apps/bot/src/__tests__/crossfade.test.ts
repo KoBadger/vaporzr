@@ -2,23 +2,25 @@ import { describe, expect, it } from 'vitest';
 import { canCrossfade, crossfadePcm, equalPowerIn, equalPowerOut, fadeInPcm, linearIn, planCrossfade, tempoMatchRatio } from '../crossfade.js';
 
 describe('canCrossfade (the overlap gate)', () => {
-  it('allows a blend when the incoming track has a decodable stream', () => {
-    expect(canCrossfade(true, 6000, 'https://rr1.googlevideo.com/videoplayback?...')).toBe(true);
+  it('schedules a blend whenever we generate the audio ourselves', () => {
+    expect(canCrossfade(true, 6000)).toBe(true);
+    expect(canCrossfade(true, 2500)).toBe(true);
   });
 
-  it('does NOT care about the queue source — a YouTube-first Spotify entry still blends', () => {
-    // Regression: gating on `source === 'spotify'` disabled the blend for every
-    // track in YouTube-first mode, so only the baked fade-out ran and songs
-    // finished seconds early.
-    const spotifyEntryResolvedToYoutube = { source: 'spotify', streamUrl: 'https://x/y' };
-    expect(canCrossfade(true, 6000, spotifyEntryResolvedToYoutube.streamUrl)).toBe(true);
+  it('refuses when the crossfade is off or the audio is not ours to mix into', () => {
+    // A raw Spotify (librespot -> PulseAudio) capture has no mix point.
+    expect(canCrossfade(false, 6000)).toBe(false);
+    expect(canCrossfade(true, 0)).toBe(false);
+    expect(canCrossfade(false, 0)).toBe(false);
   });
 
-  it('refuses when off, when we do not generate the audio, or with no resolved URL', () => {
-    expect(canCrossfade(true, 0, 'https://x/y')).toBe(false);
-    expect(canCrossfade(false, 6000, 'https://x/y')).toBe(false);
-    expect(canCrossfade(true, 6000, undefined)).toBe(false);
-    expect(canCrossfade(true, 6000, null)).toBe(false);
+  it('takes no source and no URL argument — the gate must not depend on either', () => {
+    // Regression (twice over): gating on `source === 'spotify'` disabled the
+    // blend for every track in YouTube-first mode, and gating on a pre-resolved
+    // URL made it skip every time because this runs at the START of the current
+    // track, when the next stream is not resolved yet. Both left only the baked
+    // fade-out, so songs went quiet seconds early.
+    expect(canCrossfade.length).toBe(2);
   });
 });
 
