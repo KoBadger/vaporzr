@@ -889,6 +889,39 @@ export class VoiceManager {
     });
   }
 
+  /** Cached undici ProxyAgents, keyed by proxy URL. */
+  private proxyAgents = new Map<string, unknown>();
+
+  /**
+   * fetch() for media hosts, routed through the residential proxy when the host
+   * needs it. googlevideo URLs are minted against the proxy's exit IP, so
+   * fetching them directly returns 403 with ZERO bytes — which is exactly what
+   * silently broke every crossfade head decode ("could not decode the head"),
+   * while normal playback worked because ffmpeg gets the proxy via http_proxy.
+   */
+  private async mediaFetch(url: string, init: RequestInit): Promise<Response> {
+    const proxy = config.youtubeProxy && /googlevideo\.com\//.test(url) ? config.youtubeProxy : '';
+    if (!proxy) return fetch(url, init);
+    try {
+      let agent = this.proxyAgents.get(proxy);
+      if (!agent) {
+        const { ProxyAgent } = await import('undici');
+        agent = new ProxyAgent(proxy);
+        this.proxyAgents.set(proxy, agent);
+      }
+      const { fetch: uFetch } = await import('undici');
+      return (await uFetch(url, {
+        ...(init as Record<string, unknown>),
+        dispatcher: agent,
+      } as never)) as unknown as Response;
+    } catch (err) {
+      console.warn(
+        `[voice] proxied media fetch failed (${err instanceof Error ? err.message : err}) — retrying direct`,
+      );
+      return fetch(url, init);
+    }
+  }
+
   private async fetchHeadIntoStdin(url: string, proc: ChildProcess, maxSourceBytes: number): Promise<void> {
     const abort = new AbortController();
     proc.on('exit', () => abort.abort());
@@ -897,12 +930,17 @@ export class VoiceManager {
     try {
       let offset = 0;
       while (offset < maxSourceBytes) {
-        const res = await fetch(url, {
+        const res = await this.mediaFetch(url, {
           headers: { 'User-Agent': STREAM_USER_AGENT, Range: `bytes=${offset}-${offset + CHUNK - 1}` },
           signal: abort.signal,
         });
         if (res.status === 416) break;
-        if (res.status !== 206 && res.status !== 200) break;
+        if (res.status !== 206 && res.status !== 200) {
+          console.warn(
+            `[voice] crossfade head fetch: HTTP ${res.status} for ${url.slice(0, 60)}… — blend skipped`,
+          );
+          break;
+        }
         const chunk = Buffer.from(await res.arrayBuffer());
         if (!chunk.length) break;
         offset += chunk.length;
