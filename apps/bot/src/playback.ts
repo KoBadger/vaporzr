@@ -100,6 +100,9 @@ export class PlaybackController {
    *  a Spotify→YouTube fallback from accidentally replaying the exact same
    *  video that just finished. */
   private lastYoutubeVideoId: string | null = null;
+  /** The queue track that `lastYoutubeVideoId` belonged to, so a RESTART of the
+   *  same track isn't mistaken for the next track resolving to the same upload. */
+  private lastYoutubeVideoUri = '';
   /** Source of the track being left behind (drives visualizer PIP cleanup). */
   private lastSource: MediaSource | null = null;
   /** True while a Spotify track is being played via YouTube (no Spotify device). */
@@ -865,13 +868,18 @@ export class PlaybackController {
     // played, treat it as a duplicate and skip. This prevents "the next song"
     // from being the same audio when Spotify recommendations/search return a
     // different track URI that happens to map to the same upload.
-    if (this.lastYoutubeVideoId && video.videoId === this.lastYoutubeVideoId) {
+    // The guard must NOT fire when this is a RESTART of the same queue track
+    // (stall recovery re-resolves it and always gets the same video) — that made
+    // every stall recovery fail and eventually stopped playback entirely.
+    const restartingSameTrack = this.lastYoutubeVideoUri === current.uri;
+    if (!restartingSameTrack && this.lastYoutubeVideoId && video.videoId === this.lastYoutubeVideoId) {
       console.warn(`[playback] fallback for "${current.name}" resolved to the same YouTube video (${video.videoId}) as the previous track — skipping`);
       throw new SpotifyError(`Skipping "${current.name}" — it resolves to the same audio as the previous track.`);
     }
     this.currentUri = current.uri;
     this.currentVideo = video;
     this.lastYoutubeVideoId = video.videoId;
+    this.lastYoutubeVideoUri = current.uri;
     this.spotifyFallback = true;
     const durationMs = this.cappedDuration(video.durationMs, current.durationMs);
     this.queue.setState({
