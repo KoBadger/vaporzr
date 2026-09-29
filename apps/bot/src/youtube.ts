@@ -180,7 +180,7 @@ export function describeBotWall(): string {
   const age = cookieAgeDays();
   const ageText = age === null ? '`missing`' : `${age} day${age === 1 ? '' : 's'} old`;
   return config.youtubeProxy
-    ? `YouTube refused the request (anti-bot wall). Cookies are ${ageText} and a residential proxy IS configured — so either the proxy's exit IP is flagged too, the cookies are stale, or the PO token is missing.`
+    ? `YouTube refused the request (anti-bot wall). Cookies are ${ageText} and a residential proxy IS configured — so either the proxy's exit IP is flagged too, the cookies are stale, or the PO token is missing. Retrying usually lands on a clean exit.`
     : `YouTube refused the request (anti-bot wall) and NO residential proxy is set. Cookies are ${ageText}. A flagged datacenter IP is the usual cause — refreshing cookies alone will not fix that; set YOUTUBE_PROXY in /opt/vaporzr/.env.`;
 }
 
@@ -205,27 +205,48 @@ const TRANSIENT_YTDLP_ERRORS = [
   'page needs to be reloaded',
 ];
 
+/**
+ * Whether a failed yt-dlp attempt is worth repeating.
+ *
+ * With a residential proxy configured, a wall usually means the rotating exit
+ * IP is flagged rather than the cookies being dead — another attempt lands on a
+ * different exit and normally succeeds. Retrying DIRECT cannot help when the
+ * datacenter IP is itself what YouTube objects to, which is why the direct
+ * fallback only applies when no proxy is configured.
+ */
+export function shouldRetryYtDlp(
+  msg: string,
+  opts: { attempt: number; maxAttempts: number; hasProxy: boolean },
+): boolean {
+  if (opts.attempt >= opts.maxAttempts) return false;
+  if (TRANSIENT_YTDLP_ERRORS.some((t) => msg.includes(t))) return true;
+  if (opts.hasProxy && (isBotWall(msg) || isProxyError(msg))) return true;
+  return false;
+}
+
 /** Run yt-dlp with retries. `route` pins the network path: `false` forces a
  *  direct connection with no proxy fallback, so the health canary can tell a
  *  proxy failure apart from a YouTube-side block. Undefined keeps the normal
- *  proxy-with-direct-fallback behaviour. */
+ *  proxy-first behaviour. */
 async function runYtDlp(args: string[], retries = 2, route?: boolean): Promise<string> {
+  const hasProxy = !!config.youtubeProxy && route !== false;
+  // A rotating residential pool needs a couple more goes to find a clean exit.
+  const maxAttempts = hasProxy ? Math.max(retries, 3) : retries;
   let lastErr: unknown;
-  for (let attempt = 0; attempt <= retries; attempt++) {
+  for (let attempt = 0; attempt <= maxAttempts; attempt++) {
     try {
       return await ytDlpOnce(args, route ?? true);
     } catch (err) {
       lastErr = err;
       const msg = err instanceof Error ? err.message : String(err);
-      const transient = TRANSIENT_YTDLP_ERRORS.some((t) => msg.includes(t));
-      if (!transient || attempt >= retries) break;
-      await new Promise((r) => setTimeout(r, 900 * (attempt + 1)));
+      if (!shouldRetryYtDlp(msg, { attempt, maxAttempts, hasProxy })) break;
+      await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
     }
   }
-  // The residential proxy can go down/blocked mid-session (seen as empty
-  // responses / "Failed to parse JSON"). Fall back to a direct attempt so a dead
-  // proxy doesn't take YouTube down entirely — unless the route was pinned.
-  if (route !== false && config.youtubeProxy) {
+  // Only fall back to a direct attempt when no proxy is in play: with one
+  // configured the direct route is the flagged one, so it is never the better
+  // option. (Kept for the proxy-less setup, where it covers a dropped proxy.)
+  if (route !== false && !config.youtubeProxy) {
     try {
       return await ytDlpOnce(args, false);
     } catch (err) {

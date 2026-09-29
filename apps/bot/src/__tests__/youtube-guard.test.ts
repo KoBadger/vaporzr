@@ -1,6 +1,33 @@
 import { describe, it, expect } from 'vitest';
-import { isBotWall, isClearlyWrongMatch, isProxyError, scoreHit } from '../youtube.js';
+import { isBotWall, isClearlyWrongMatch, isProxyError, scoreHit, shouldRetryYtDlp } from '../youtube.js';
 import type { ResolvedVideo } from '../youtube.js';
+
+describe('yt-dlp retry policy', () => {
+  const opts = (over: Partial<{ attempt: number; maxAttempts: number; hasProxy: boolean }> = {}) => ({
+    attempt: 0,
+    maxAttempts: 3,
+    hasProxy: true,
+    ...over,
+  });
+
+  it('retries a wall when a rotating proxy is configured (a fresh exit usually works)', () => {
+    expect(shouldRetryYtDlp("Sign in to confirm you're not a bot", opts())).toBe(true);
+  });
+
+  it('does NOT retry a wall without a proxy — the datacenter IP is the problem', () => {
+    expect(shouldRetryYtDlp("Sign in to confirm you're not a bot", opts({ hasProxy: false }))).toBe(false);
+  });
+
+  it('retries proxy-side failures and known transients', () => {
+    expect(shouldRetryYtDlp('ProxyError: tunnel connection failed', opts())).toBe(true);
+    expect(shouldRetryYtDlp('ERROR: Requested format is not available', opts())).toBe(true);
+  });
+
+  it('stops once the attempts are exhausted, and ignores unrelated errors', () => {
+    expect(shouldRetryYtDlp("Sign in to confirm you're not a bot", opts({ attempt: 3 }))).toBe(false);
+    expect(shouldRetryYtDlp('Could not parse that YouTube link.', opts())).toBe(false);
+  });
+});
 
 describe('YouTube failure classification', () => {
   // The anti-bot wall is not proof of expired cookies — it also appears for a
