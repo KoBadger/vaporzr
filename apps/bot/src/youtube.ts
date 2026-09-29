@@ -220,7 +220,14 @@ export function shouldRetryYtDlp(
 ): boolean {
   if (opts.attempt >= opts.maxAttempts) return false;
   if (TRANSIENT_YTDLP_ERRORS.some((t) => msg.includes(t))) return true;
-  if (opts.hasProxy && (isBotWall(msg) || isProxyError(msg))) return true;
+  if (!opts.hasProxy) return false;
+  // A wall is usually a dirty exit from the rotating pool — another go picks a
+  // different IP and normally succeeds.
+  if (isBotWall(msg)) return true;
+  // A proxy-side failure gets ONE retry (the next exit may be healthy) before
+  // falling back to a direct connection, so a genuinely dead proxy fails fast
+  // instead of burning the request timeout.
+  if (isProxyError(msg)) return opts.attempt === 0;
   return false;
 }
 
@@ -243,10 +250,11 @@ async function runYtDlp(args: string[], retries = 2, route?: boolean): Promise<s
       await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
     }
   }
-  // Only fall back to a direct attempt when no proxy is in play: with one
-  // configured the direct route is the flagged one, so it is never the better
-  // option. (Kept for the proxy-less setup, where it covers a dropped proxy.)
-  if (route !== false && !config.youtubeProxy) {
+  // With a residential proxy the exits rotate, so a wall is usually one dirty
+  // IP: retry on the proxy first. Then try direct ONCE regardless — YouTube's
+  // IP flagging is dynamic (we have seen direct work and then wall again), and
+  // a dead or exhausted proxy must not take YouTube down when direct does work.
+  if (route !== false && config.youtubeProxy) {
     try {
       return await ytDlpOnce(args, false);
     } catch (err) {
@@ -265,6 +273,8 @@ export type YoutubeHealth = 'ok' | 'auth' | 'blocked' | 'proxy' | 'down' | 'unkn
 const CANARY_URL = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ';
 let ytHealth: YoutubeHealth = 'unknown';
 let ytHealthAt = 0;
+/** Alert bookkeeping for the confirmation rule in decidePublish(). */
+let ytAlert: YoutubeAlertState = { published: 'unknown', pending: null };
 let ytHealthListener: ((status: YoutubeHealth) => void) | null = null;
 
 export function youtubeHealth(): { status: YoutubeHealth; checkedAt: number } {
@@ -274,6 +284,37 @@ export function youtubeHealth(): { status: YoutubeHealth; checkedAt: number } {
 /** Register a callback fired only when the status actually changes. */
 export function setYoutubeHealthListener(cb: ((status: YoutubeHealth) => void) | null): void {
   ytHealthListener = cb;
+}
+
+/** Alert bookkeeping: what was last announced, plus a failure awaiting confirmation. */
+export interface YoutubeAlertState {
+  published: YoutubeHealth;
+  pending: YoutubeHealth | null;
+}
+
+/**
+ * Decides whether a probe result should be announced to the alert listener.
+ *
+ * One bad probe is common — a rotating residential exit is occasionally flagged
+ * and walls are sometimes momentary — so announcing every blip paged someone
+ * about a "proxy failure" that had already cleared. A failure is therefore
+ * announced only once a second probe agrees; an ongoing failure is not repeated;
+ * and the recovery is announced only if a failure was announced first.
+ */
+export function decidePublish(
+  status: YoutubeHealth,
+  state: YoutubeAlertState,
+): { publish: YoutubeHealth | null; state: YoutubeAlertState } {
+  if (status === 'ok') {
+    const publish = state.published !== 'ok' && state.published !== 'unknown' ? 'ok' : null;
+    return { publish, state: { published: 'ok', pending: null } };
+  }
+  // This exact failure is already being announced — stay quiet.
+  if (state.published === status) return { publish: null, state: { ...state, pending: null } };
+  // First sighting: wait for the next probe to confirm it.
+  if (state.pending !== status) return { publish: null, state: { ...state, pending: status } };
+  // Seen twice in a row: announce it.
+  return { publish: status, state: { published: status, pending: null } };
 }
 
 export async function probeYoutube(): Promise<YoutubeHealth> {
@@ -308,12 +349,13 @@ export async function probeYoutube(): Promise<YoutubeHealth> {
     status = direct === 'ok' ? 'ok' : isBotWall(direct) ? 'blocked' : 'down';
   }
 
-  const prev = ytHealth;
   ytHealth = status;
   ytHealthAt = Date.now();
-  if (status !== prev && ytHealthListener) {
+  const decided = decidePublish(status, ytAlert);
+  ytAlert = decided.state;
+  if (decided.publish && ytHealthListener) {
     try {
-      ytHealthListener(status);
+      ytHealthListener(decided.publish);
     } catch {
       /* listener errors must not break the probe */
     }

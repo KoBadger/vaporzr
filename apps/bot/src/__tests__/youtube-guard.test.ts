@@ -1,6 +1,48 @@
 import { describe, it, expect } from 'vitest';
-import { isBotWall, isClearlyWrongMatch, isProxyError, scoreHit, shouldRetryYtDlp } from '../youtube.js';
+import {
+  decidePublish,
+  isBotWall,
+  isClearlyWrongMatch,
+  isProxyError,
+  scoreHit,
+  shouldRetryYtDlp,
+} from '../youtube.js';
 import type { ResolvedVideo } from '../youtube.js';
+
+describe('alert confirmation (decidePublish)', () => {
+  const fresh = () => ({ published: 'ok' as const, pending: null as null | string });
+
+  it('does not announce the first sighting of a failure', () => {
+    const r = decidePublish('proxy', fresh() as never);
+    expect(r.publish).toBeNull();
+    expect(r.state.pending).toBe('proxy');
+  });
+
+  it('announces the failure once a second probe agrees', () => {
+    const r = decidePublish('proxy', { published: 'ok', pending: 'proxy' });
+    expect(r.publish).toBe('proxy');
+    expect(r.state.published).toBe('proxy');
+  });
+
+  it('does not repeat a failure that is already being announced', () => {
+    expect(decidePublish('proxy', { published: 'proxy', pending: null }).publish).toBeNull();
+  });
+
+  it('never announces a blip that cleared before confirmation', () => {
+    const first = decidePublish('proxy', fresh() as never);
+    expect(first.publish).toBeNull();
+    // Back to ok next probe: no failure was announced, so no "recovered" notice.
+    expect(decidePublish('ok', first.state).publish).toBeNull();
+  });
+
+  it('announces recovery after a confirmed failure', () => {
+    expect(decidePublish('ok', { published: 'auth', pending: null }).publish).toBe('ok');
+  });
+
+  it('stays silent for the first ok after startup', () => {
+    expect(decidePublish('ok', { published: 'unknown', pending: null }).publish).toBeNull();
+  });
+});
 
 describe('yt-dlp retry policy', () => {
   const opts = (over: Partial<{ attempt: number; maxAttempts: number; hasProxy: boolean }> = {}) => ({
@@ -18,8 +60,9 @@ describe('yt-dlp retry policy', () => {
     expect(shouldRetryYtDlp("Sign in to confirm you're not a bot", opts({ hasProxy: false }))).toBe(false);
   });
 
-  it('retries proxy-side failures and known transients', () => {
-    expect(shouldRetryYtDlp('ProxyError: tunnel connection failed', opts())).toBe(true);
+  it('retries proxy-side failures once, then gives up so a dead proxy fails fast', () => {
+    expect(shouldRetryYtDlp('ProxyError: tunnel connection failed', opts({ attempt: 0 }))).toBe(true);
+    expect(shouldRetryYtDlp('ProxyError: tunnel connection failed', opts({ attempt: 1 }))).toBe(false);
     expect(shouldRetryYtDlp('ERROR: Requested format is not available', opts())).toBe(true);
   });
 

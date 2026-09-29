@@ -4281,7 +4281,7 @@ export class DiscordBot {
         : status === 'blocked'
           ? '⚠️ **Vaporzr: YouTube is blocking the bot\'s IP** — no residential proxy is configured (`YOUTUBE_PROXY` in `/opt/vaporzr/.env`), which is the usual cause for a datacenter address. Refreshing cookies alone will not fix this.'
           : status === 'proxy'
-            ? '⚠️ **Vaporzr: the YouTube proxy is failing** — the direct route works but `YOUTUBE_PROXY` does not (dead, rejected, or unreachable). Renew it or unset it.'
+            ? '⚠️ **Vaporzr: the YouTube proxy is failing** — the direct route works but `YOUTUBE_PROXY` does not (dead, exhausted, rejected or unreachable). Resolves still fall back to a direct connection, so playback should continue; renew the proxy or unset it.'
             : status === 'down'
               ? '⚠️ **Vaporzr: YouTube resolution is failing** — check `/health` (`youtube`) and the network.'
               : '';
