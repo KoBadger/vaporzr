@@ -32,7 +32,11 @@ const PRELOAD_LEAD_MS = 30_000;
 /** How long a resolved stream URL stays reusable before being re-resolved.
  *  Aligned with YouTube's signed-URL lifetime (~6h) so a stale URL never
  *  lands back in the queue. */
-const PLAYBACK_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+// googlevideo URLs are bound to the IP that minted them AND carry their own
+// `expire` stamp, so a long-lived cache is a liability: once the proxy session
+// rotates, every cached URL 403s. Kept short enough that a requeue/restart
+// still starts instantly, but stale URLs are re-resolved well before that.
+const PLAYBACK_CACHE_TTL_MS = 25 * 60 * 1000;
 /** Debounce before the stream cache is flushed to `stream-cache.json`. */
 export const STREAM_CACHE_SAVE_DEBOUNCE_MS = 4000;
 /** Resample librespot's 44.1 kHz PCM to Discord's 48 kHz, plus R128 loudness
@@ -110,6 +114,8 @@ export class PlaybackController {
   private resampler: ChildProcess | null = null;
   /** uri -> resolved video, so a preloaded next track starts instantly. */
   private streamCache = new Map<string, ResolvedVideo>();
+  /** When each cached stream URL was resolved (the file's savedAt is this too). */
+  private streamCacheAt = new Map<string, number>();
   private static readonly STREAM_CACHE_MAX = 500;
   /** Debounced save of streamCache to disk (restart / requeue instant start). */
   private cacheSaveTimer: NodeJS.Timeout | null = null;
@@ -190,7 +196,11 @@ export class PlaybackController {
       for (const entry of raw) {
         if (!entry || !entry.video || !entry.video.streamUrl) continue;
         if (entry.savedAt < cutoff) continue;
+        // A URL whose own `expire` stamp has passed can only 403 — drop it.
+        const expire = Number(/[?&]expire=(\d+)/.exec(entry.video.streamUrl)?.[1] ?? 0);
+        if (expire > 0 && expire * 1000 < Date.now()) continue;
         this.streamCache.set(entry.uri, entry.video);
+        this.streamCacheAt.set(entry.uri, entry.savedAt);
         restored++;
       }
       if (restored > 0) console.log(`[playback] restored ${restored} cached stream URL(s)`);
@@ -209,7 +219,10 @@ export class PlaybackController {
         const rows: Array<{ uri: string; savedAt: number; video: ResolvedVideo }> = [];
         for (const [uri, video] of this.streamCache) {
           if (!video.streamUrl) continue;
-          rows.push({ uri, savedAt: Date.now(), video });
+          // savedAt must be when the URL was RESOLVED, not when we saved the
+          // file. Using the save time refreshed the age of every entry on every
+          // save, so a stale (IP-bound) URL never expired and kept 403ing.
+          rows.push({ uri, savedAt: this.streamCacheAt.get(uri) ?? Date.now(), video });
         }
         // Keep the file small: only retain entries still inside the TTL.
         const fresh = rows.filter((r) => Date.now() - r.savedAt < PLAYBACK_CACHE_TTL_MS);
@@ -225,9 +238,13 @@ export class PlaybackController {
   /** Set a cache entry and schedule its persistence. */
   cacheSet(uri: string, video: ResolvedVideo): void {
     this.streamCache.set(uri, video);
+    this.streamCacheAt.set(uri, Date.now());
     if (this.streamCache.size > PlaybackController.STREAM_CACHE_MAX) {
       const firstKey = this.streamCache.keys().next().value;
-      if (firstKey !== undefined) this.streamCache.delete(firstKey);
+      if (firstKey !== undefined) {
+        this.streamCache.delete(firstKey);
+        this.streamCacheAt.delete(firstKey);
+      }
     }
     this.scheduleCacheSave();
   }
@@ -1709,6 +1726,7 @@ export class PlaybackController {
     this.pendingXfadeSeekMs = 0;
     this.currentStartOffsetMs = 0;
     this.streamCache.clear();
+    this.streamCacheAt.clear();
     this.spotifyFallback = false;
     this.lastSource = null;
     this.sendVisualizer({ type: 'cmd', command: 'stop' });
