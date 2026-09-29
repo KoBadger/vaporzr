@@ -134,14 +134,9 @@ function ytDlpOnce(args: string[], useProxy = true): Promise<string> {
         }
         if (err) {
           const detail = (stderr || err.message).toString();
-          // Expired cookies: YouTube's anti-bot wall. Retrying can't fix it, and
-          // the raw yt-dlp text is cryptic, so surface an actionable message.
-          if (/Sign in to confirm|not a bot/i.test(detail)) {
-            reject(
-              new YoutubeError(
-                'YouTube is asking the bot to sign in — its cookies have expired. An admin needs to refresh the YouTube cookies file.',
-              ),
-            );
+          // The anti-bot wall is NOT proof of expired cookies — see describeBotWall().
+          if (isBotWall(detail)) {
+            reject(new YoutubeError(describeBotWall()));
             return;
           }
           reject(new YoutubeError(`yt-dlp failed: ${detail.slice(0, 300)}`));
@@ -151,6 +146,42 @@ function ytDlpOnce(args: string[], useProxy = true): Promise<string> {
       },
     );
   });
+}
+
+/** YouTube's anti-bot / sign-in wall. It appears when the cookies are stale,
+ *  when YouTube has flagged the bot's IP, OR when the PO token is missing —
+ *  knowing which is what makes it actionable. */
+export function isBotWall(msg: string): boolean {
+  return /Sign in to confirm|not a bot/i.test(msg);
+}
+
+/** A proxy-side failure (dead credentials, unreachable tunnel, 407). */
+export function isProxyError(msg: string): boolean {
+  return !isBotWall(msg) && /proxy|tunnel|407|econnrefused/i.test(msg);
+}
+
+/** Age of the YouTube cookies file in days (null when unset or missing). */
+export function cookieAgeDays(): number | null {
+  try {
+    if (!config.youtubeCookiesPath) return null;
+    const st = fs.statSync(config.youtubeCookiesPath);
+    return Math.max(0, Math.round((Date.now() - st.mtimeMs) / 86_400_000));
+  } catch {
+    return null;
+  }
+}
+
+/** Actionable text for the anti-bot wall. It deliberately does NOT claim the
+ *  cookies have expired: the same wall appears when YouTube has flagged the
+ *  bot's datacenter IP (what the residential proxy exists for) or when the PO
+ *  token is missing. Blaming the cookies sent an admin to re-export a perfectly
+ *  good cookie file while the real cause was the IP. */
+export function describeBotWall(): string {
+  const age = cookieAgeDays();
+  const ageText = age === null ? '`missing`' : `${age} day${age === 1 ? '' : 's'} old`;
+  return config.youtubeProxy
+    ? `YouTube refused the request (anti-bot wall). Cookies are ${ageText} and a residential proxy IS configured — so either the proxy's exit IP is flagged too, the cookies are stale, or the PO token is missing.`
+    : `YouTube refused the request (anti-bot wall) and NO residential proxy is set. Cookies are ${ageText}. A flagged datacenter IP is the usual cause — refreshing cookies alone will not fix that; set YOUTUBE_PROXY in /opt/vaporzr/.env.`;
 }
 
 /**
@@ -174,11 +205,15 @@ const TRANSIENT_YTDLP_ERRORS = [
   'page needs to be reloaded',
 ];
 
-async function runYtDlp(args: string[], retries = 2): Promise<string> {
+/** Run yt-dlp with retries. `route` pins the network path: `false` forces a
+ *  direct connection with no proxy fallback, so the health canary can tell a
+ *  proxy failure apart from a YouTube-side block. Undefined keeps the normal
+ *  proxy-with-direct-fallback behaviour. */
+async function runYtDlp(args: string[], retries = 2, route?: boolean): Promise<string> {
   let lastErr: unknown;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      return await ytDlpOnce(args, true);
+      return await ytDlpOnce(args, route ?? true);
     } catch (err) {
       lastErr = err;
       const msg = err instanceof Error ? err.message : String(err);
@@ -189,8 +224,8 @@ async function runYtDlp(args: string[], retries = 2): Promise<string> {
   }
   // The residential proxy can go down/blocked mid-session (seen as empty
   // responses / "Failed to parse JSON"). Fall back to a direct attempt so a dead
-  // proxy doesn't take YouTube down entirely.
-  if (config.youtubeProxy) {
+  // proxy doesn't take YouTube down entirely — unless the route was pinned.
+  if (route !== false && config.youtubeProxy) {
     try {
       return await ytDlpOnce(args, false);
     } catch (err) {
@@ -205,7 +240,7 @@ async function runYtDlp(args: string[], retries = 2): Promise<string> {
  * JS runtime, PO-token provider) so failures — expired cookies, a dead solver, a
  * broken proxy — are caught by a probe instead of the next song.
  */
-export type YoutubeHealth = 'ok' | 'auth' | 'down' | 'unknown';
+export type YoutubeHealth = 'ok' | 'auth' | 'blocked' | 'proxy' | 'down' | 'unknown';
 const CANARY_URL = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ';
 let ytHealth: YoutubeHealth = 'unknown';
 let ytHealthAt = 0;
@@ -221,15 +256,37 @@ export function setYoutubeHealthListener(cb: ((status: YoutubeHealth) => void) |
 }
 
 export async function probeYoutube(): Promise<YoutubeHealth> {
+  const args = ['--no-playlist', '--get-url', '-f', AUDIO_FORMAT, CANARY_URL];
+  const attempt = async (useProxy: boolean): Promise<string> => {
+    try {
+      await runYtDlp(args, 0, useProxy);
+      return 'ok';
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+  };
+
   let status: YoutubeHealth;
-  try {
-    // -g prints the stream URL: full extraction (n-sig solve) without downloading.
-    await runYtDlp(['--no-playlist', '--get-url', '-f', AUDIO_FORMAT, CANARY_URL], 0);
-    status = 'ok';
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    status = /cookie|sign in|not a bot/i.test(msg) ? 'auth' : 'down';
+  if (config.youtubeProxy) {
+    const proxied = await attempt(true);
+    if (proxied === 'ok') {
+      status = 'ok';
+    } else {
+      // Two routes, four causes: a successful direct attempt means the proxy is
+      // the problem; a wall on either route means YouTube is refusing us.
+      const direct = await attempt(false);
+      if (direct === 'ok') status = 'proxy';
+      else if (isBotWall(proxied) || isBotWall(direct)) status = 'auth';
+      else if (isProxyError(proxied)) status = 'proxy';
+      else status = 'down';
+    }
+  } else {
+    // Without a proxy there is nothing to compare against — but the honest
+    // reading of a wall here is "the IP is blocked", not "the cookies expired".
+    const direct = await attempt(false);
+    status = direct === 'ok' ? 'ok' : isBotWall(direct) ? 'blocked' : 'down';
   }
+
   const prev = ytHealth;
   ytHealth = status;
   ytHealthAt = Date.now();

@@ -55,6 +55,7 @@ import {
   setYoutubeHealthListener,
   youtubeHealth,
   YoutubeError,
+  type YoutubeHealth,
 } from './youtube.js';
 import { isSunoUrl, resolveSuno } from './suno.js';
 import { isAppleMusicUrl, resolveAppleMusicUrl } from './apple.js';
@@ -564,6 +565,10 @@ export class DiscordBot {
   /** guildId -> last voice-status text posted (rate-limit aware). */
   private voiceStatusText = new Map<string, string>();
   private voiceStatusAt = new Map<string, number>();
+  /** Guilds where Discord refused the voice-status write (missing permission).
+   *  Retried at most hourly — otherwise a permanent permission error logs on
+   *  every attempt, every three minutes, forever. */
+  private voiceStatusDenied = new Map<string, number>();
   /** guildId -> fire a short SFX on strong beats (auto-hype). */
   private hypeGuilds = new Set<string>();
   private lastHypeAt = new Map<string, number>();
@@ -4269,13 +4274,17 @@ export class DiscordBot {
   }
 
   /** DM the owner when the YouTube canary flips to a broken state. */
-  private async alertYoutubeHealth(status: 'ok' | 'auth' | 'down' | 'unknown'): Promise<void> {
+  private async alertYoutubeHealth(status: YoutubeHealth): Promise<void> {
     const text =
       status === 'auth'
-        ? '⚠️ **Vaporzr: YouTube needs fresh cookies** — the bot is hitting YouTube\'s sign-in/bot check. Refresh `/opt/vaporzr/cookies.txt` and redeploy.'
-        : status === 'down'
-          ? '⚠️ **Vaporzr: YouTube resolution is failing** — check `/health` (`youtube`) and the proxy/network.'
-          : '';
+        ? '⚠️ **Vaporzr: YouTube is refusing the bot** — the anti-bot wall persisted even through the residential proxy, so the cookies are stale or the PO token is missing. Check `/health` (`youtube`) and refresh `/opt/vaporzr/cookies.txt` if the cookies are old.'
+        : status === 'blocked'
+          ? '⚠️ **Vaporzr: YouTube is blocking the bot\'s IP** — no residential proxy is configured (`YOUTUBE_PROXY` in `/opt/vaporzr/.env`), which is the usual cause for a datacenter address. Refreshing cookies alone will not fix this.'
+          : status === 'proxy'
+            ? '⚠️ **Vaporzr: the YouTube proxy is failing** — the direct route works but `YOUTUBE_PROXY` does not (dead, rejected, or unreachable). Renew it or unset it.'
+            : status === 'down'
+              ? '⚠️ **Vaporzr: YouTube resolution is failing** — check `/health` (`youtube`) and the network.'
+              : '';
     if (!text) return;
     void pushBroadcast({ title: 'Vaporzr', body: text.replace(/\*\*/g, ''), url: '/panel' }).catch(() => {});
     const owner = config.ownerId;
@@ -5388,7 +5397,9 @@ export class DiscordBot {
         },
         {
           name: 'YouTube',
-          value: `canary \`${yt}\` · cookies ${cookieAge === null ? '`missing`' : `\`${cookieAge}d\``}`,
+          value:
+            `canary \`${yt}\` · cookies ${cookieAge === null ? '`missing`' : `\`${cookieAge}d\``}` +
+            ` · proxy ${config.youtubeProxy ? '`set`' : '`NONE`'}`,
           inline: true,
         },
         {
@@ -5902,14 +5913,31 @@ export class DiscordBot {
     const track = s.queue.getState().track;
     const text = track ? `${track.name} — ${(track.artists ?? []).join(', ')}`.slice(0, 480) : '';
     if (this.voiceStatusText.get(guildId) === text) return;
+    // A missing permission won't fix itself, so after a refusal back off to one
+    // attempt an hour instead of hammering Discord and logging every time.
+    const deniedAt = this.voiceStatusDenied.get(guildId) ?? 0;
+    if (deniedAt && Date.now() - deniedAt < 60 * 60_000) return;
     // ~2 requests / 10 min per channel: refresh at most every 3 min.
     if (Date.now() - (this.voiceStatusAt.get(guildId) ?? 0) < 3 * 60_000) return;
     this.voiceStatusAt.set(guildId, Date.now());
     this.voiceStatusText.set(guildId, text);
     try {
       await this.rest.put(`/channels/${channelId}/voice-status`, { body: { status: text } });
+      this.voiceStatusDenied.delete(guildId);
     } catch (err) {
-      console.warn(`[voice] status update failed: ${err instanceof Error ? err.message : err}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/missing permissions|403|50013/i.test(msg)) {
+        const first = !this.voiceStatusDenied.has(guildId);
+        this.voiceStatusDenied.set(guildId, Date.now());
+        if (first) {
+          console.warn(
+            `[voice] the now-playing voice-channel status needs the "Set Voice Channel Status" permission in <#${channelId}> — pausing those updates for an hour (${msg})`,
+          );
+        }
+        return;
+      }
+      this.voiceStatusDenied.delete(guildId);
+      console.warn(`[voice] status update failed: ${msg}`);
     }
   }
 

@@ -1,6 +1,33 @@
 import { describe, it, expect } from 'vitest';
-import { isClearlyWrongMatch, scoreHit } from '../youtube.js';
+import { isBotWall, isClearlyWrongMatch, isProxyError, scoreHit } from '../youtube.js';
 import type { ResolvedVideo } from '../youtube.js';
+
+describe('YouTube failure classification', () => {
+  // The anti-bot wall is not proof of expired cookies — it also appears for a
+  // flagged IP or a missing PO token. Misreading it as "cookies expired" sent an
+  // admin to re-export a perfectly good cookie file while the cause was the IP.
+  it('recognises the anti-bot wall', () => {
+    expect(
+      isBotWall(
+        "ERROR: [youtube] abc: Sign in to confirm you're not a bot. Use --cookies-from-browser or --cookies for the authentication.",
+      ),
+    ).toBe(true);
+    expect(isBotWall('ERROR: [youtube] abc: not a bot check triggered')).toBe(true);
+  });
+
+  it('recognises proxy-side failures', () => {
+    expect(isProxyError('ERROR: Unable to connect to proxy tunnel')).toBe(true);
+    expect(isProxyError('HTTP Error 407: Proxy Authentication Required')).toBe(true);
+    expect(isProxyError('ProxyError: connection refused')).toBe(true);
+  });
+
+  it('never reports a wall as a proxy error, or the reverse', () => {
+    const wall = "Sign in to confirm you're not a bot";
+    expect(isProxyError(wall)).toBe(false);
+    expect(isBotWall('ERROR: Unable to connect to proxy tunnel')).toBe(false);
+    expect(isProxyError('ERROR: Requested format is not available')).toBe(false);
+  });
+});
 
 describe('scoreHit (live/edition ranking)', () => {
   const opts = { name: 'Liquid Game', artists: ['Sweeps'], durationMs: 200_000 };
