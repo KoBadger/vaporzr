@@ -110,6 +110,9 @@ function ytDlpOnce(args: string[], useProxy = true): Promise<string> {
       Object.entries(process.env).filter(([k]) => !k.toLowerCase().endsWith('_proxy')),
     );
     const flags = ['--no-check-certificates', '--socket-timeout', '10', '--retries', '1'];
+    // The proxy hands out dual-stack exits; resolving over IPv6 produced URLs
+    // whose ip= could never match the IPv4 stream fetch. Keep everything IPv4.
+    flags.push('--force-ipv4');
     // yt-dlp's signature/n-sig solver needs a JS runtime; Deno is its default and
     // is baked into the bot image (node is not accepted as the EJS runtime). It
     // also refuses to fetch the remote solver script unless explicitly allowed.

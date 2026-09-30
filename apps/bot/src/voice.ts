@@ -651,7 +651,13 @@ export class VoiceManager {
     // Suno's real media is a public CloudFront m4a: let ffmpeg fetch it directly
     // (piping MP4 through stdin can fail when the moov atom isn't at the front).
     const isSunoMedia = /(^|[./])cloudfront\.net\//.test(url) && /\/clip\//.test(url);
-    const fetchSelf = isHttp && !isHls && !useYtProxy && !useSunoProxy && !isSunoMedia;
+    // googlevideo stream URLs are IP-bound to the IP that resolved them. ffmpeg
+    // fetching them through http_proxy frequently lands on a DIFFERENT exit than
+    // the resolver did (the provider hands out dual-stack exits per client), so
+    // the stream 403s. Node's fetch through a pooled ProxyAgent has matched the
+    // resolver's exit consistently, so googlevideo now goes through it — same
+    // proxy, same timeouts, one code path.
+    const fetchSelf = isHttp && !isHls && !useSunoProxy && !isSunoMedia;
     const args = ['-hide_banner', '-loglevel', 'error'];
     if (fetchSelf) {
       // stdin is not seekable, so a resume seek runs on the output side
