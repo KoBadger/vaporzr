@@ -712,9 +712,13 @@ const FUSED_MIN_ACCEPT_SCORE = 6;
  * Successful results are LRU-cached for 10 minutes.
  */
 const resolveCache = new Map<string, { at: number; video: ResolvedVideo }>();
+// Stream URLs are bound to the proxy exit that minted them, and a residential
+// session rotates (typically well under an hour). A long cache therefore hands
+// playback a URL whose IP no longer matches — which is exactly a 403 mid-track.
+// Prefetch-to-play gaps are seconds, so a short TTL costs almost nothing.
+const RESOLVE_CACHE_TTL = 5 * 60 * 1000;
 /** Concurrent resolves for the same track share one subprocess instead of duplicating. */
 const inflightResolves = new Map<string, Promise<ResolvedVideo | null>>();
-const RESOLVE_CACHE_TTL = 45 * 60 * 1000;
 const RESOLVE_CACHE_MAX = 60;
 /** Hard cap on the accuracy (scored) resolve path — after this the already-
  *  playable fused fast-path result is used so playback never stalls for tens
