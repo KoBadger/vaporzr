@@ -29,7 +29,13 @@ export class GoLibrespotManager implements SpotifyBackend {
   /** Watchdog that restarts go-librespot when its Spotify "dealer" link dies. */
   private watchdog: ReturnType<typeof setInterval> | null = null;
   private lastHealthyAt = 0;
+  /** Last time the device API answered with a real device_id (registration). */
+  private lastApiOkAt = 0;
   private restarting = false;
+  /** Cumulative restarts, plus a window of recent ones for the crash-loop guard. */
+  private restarts = 0;
+  private restartTimes: number[] = [];
+  private backoffUntil = 0;
   /** Last time PCM actually flowed out of the sink (i.e. audio is audible). */
   private lastPcmAt = 0;
   /** Total PCM bytes captured (44.1 kHz stereo s16 => 176400 B/s) for position tracking. */
@@ -77,6 +83,10 @@ export class GoLibrespotManager implements SpotifyBackend {
     uptimeMs: number;
     bitrate: number;
     stderrLog: string;
+    /** True when the device API recently answered with a real device_id. */
+    registered?: boolean;
+    restarts?: number;
+    lastRestartAt?: number;
   } {
     return {
       name: config.librespotDeviceName,
@@ -86,6 +96,9 @@ export class GoLibrespotManager implements SpotifyBackend {
       uptimeMs: this.isRunning() && this.startedAt > 0 ? Date.now() - this.startedAt : 0,
       bitrate: config.librespotBitrate,
       stderrLog: path.join(config.goLibrespotConfigDir, 'stderr.log'),
+      registered: this.isRunning() && Date.now() - this.lastApiOkAt < 20_000,
+      restarts: this.restarts,
+      lastRestartAt: this.restartTimes.length > 0 ? this.restartTimes[this.restartTimes.length - 1] : 0,
     };
   }
 
@@ -175,6 +188,7 @@ export class GoLibrespotManager implements SpotifyBackend {
     }
     if (await this.pingApi()) {
       this.lastHealthyAt = Date.now();
+      this.lastApiOkAt = Date.now();
       return;
     }
     // Music is still flowing out of the sink — never bounce the process mid-song,
@@ -222,7 +236,22 @@ export class GoLibrespotManager implements SpotifyBackend {
 
   private async restart(): Promise<void> {
     if (this.restarting) return;
+    const now = Date.now();
+    if (now < this.backoffUntil) return;
+    // Crash-loop guard: repeated restarts in quick succession mean the binary,
+    // the credentials or the network is broken — another bounce will not help,
+    // and restarting every 3s forever just burns CPU and buries the logs.
+    this.restartTimes = this.restartTimes.filter((t) => now - t < 10 * 60_000);
+    if (this.restartTimes.length >= 5) {
+      this.backoffUntil = now + 60_000;
+      console.warn(
+        `[golibrespot] ${this.restartTimes.length} restarts in 10m — backing off 60s (check credentials/network)`,
+      );
+      return;
+    }
     this.restarting = true;
+    this.restarts++;
+    this.restartTimes.push(now);
     try {
       this.stop();
       this.stopped = false;

@@ -5389,9 +5389,10 @@ export class DiscordBot {
         {
           name: 'librespot',
           value: dev.enabled
-            ? `${dev.running ? '`running`' : '`stopped`'} · ${dev.name} · ${
-                dev.running ? `${Math.round(dev.uptimeMs / 60000)}m` : `${dev.bitrate}kbps`
-              }`
+            ? `${dev.running ? '`running`' : '`stopped`'}` +
+              `${dev.registered === undefined ? '' : dev.registered ? ' · `device ok`' : ' · `device LOST`'}` +
+              ` · ${dev.name} · ${dev.running ? `${Math.round(dev.uptimeMs / 60000)}m` : `${dev.bitrate}kbps`}` +
+              `${dev.restarts ? ` · ${dev.restarts} restart${dev.restarts === 1 ? '' : 's'}` : ''}`
             : '`disabled`',
           inline: true,
         },

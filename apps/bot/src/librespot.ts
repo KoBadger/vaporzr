@@ -59,6 +59,10 @@ export interface SpotifyBackend {
     uptimeMs: number;
     bitrate: number;
     stderrLog: string;
+    /** True when the device API recently answered with a real device_id. */
+    registered?: boolean;
+    restarts?: number;
+    lastRestartAt?: number;
   };
   setDeviceName(name: string): void;
   start(): Promise<void>;
