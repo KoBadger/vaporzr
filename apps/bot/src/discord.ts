@@ -40,7 +40,7 @@ import {
 import { generateDependencyReport } from '@discordjs/voice';
 import { config } from './config.js';
 import { getCrossfadeMs, setCrossfadeMs } from './crossfadeStore.js';
-import { getRecommendations, resolveTracks, searchCandidates, SpotifyError, getAudioFeatures, extractSpotifyId, type AudioFeatures, type ResolvedTrack } from './spotify.js';
+import { getRecommendations, resolveTracks, searchCandidates, searchTracks, SpotifyError, getAudioFeatures, extractSpotifyId, type AudioFeatures, type RecommendationParams, type ResolvedTrack } from './spotify.js';
 import { orderByVibe, SHUFFLE_MODE_LABEL, type ShuffleMode } from './smartShuffle.js';
 import { THEMES, themeById } from './themes.js';
 import {
@@ -81,6 +81,7 @@ import { ttsEngine } from './tts.js';
 import { pushBroadcast, pushSubscriptionCount } from './push.js';
 import { downloadToTempFile } from './mediaDownload.js';
 import { renderRadarGif, type RadarMetric } from './images.js';
+import { parseVibe, vibeIsSteerable, type ParsedVibe } from './vibe.js';
 
 /** First non-internal IPv4 address of this machine — reachable from the LAN. */
 function localIp(): string {
@@ -306,6 +307,37 @@ const COMMANDS = [
           { name: '8 dB (punchy)', value: 8 },
           { name: '10 dB (heavy)', value: 10 },
         ),
+    ),
+  new SlashCommandBuilder()
+    .setName('eq')
+    .setDescription('Session EQ preset (bass, vocal, night, warm, lo-fi)')
+    .addStringOption((o) =>
+      o
+        .setName('preset')
+        .setDescription('EQ preset (omit to check the current one)')
+        .setRequired(false)
+        .addChoices(
+          { name: '⬜ Flat (off)', value: 'flat' },
+          { name: '🔊 Bass', value: 'bass' },
+          { name: '🗣️ Vocal', value: 'vocal' },
+          { name: '🌙 Night', value: 'night' },
+          { name: '🔥 Warm', value: 'warm' },
+          { name: '📼 Lofi', value: 'lofi' },
+        ),
+    ),
+  new SlashCommandBuilder()
+    .setName('norm')
+    .setDescription('Loudness match — level every source to Spotify-standard volume')
+    .addBooleanOption((o) => o.setName('on').setDescription('On or off (omit to check)')),
+  new SlashCommandBuilder()
+    .setName('wrapped')
+    .setDescription("This server's listening Wrapped — hours, top tracks, artists, DJs")
+    .addStringOption((o) =>
+      o
+        .setName('month')
+        .setDescription('Which month (omit for the current one)')
+        .setRequired(false)
+        .addChoices({ name: 'This month', value: 'this' }, { name: 'Last month', value: 'last' }),
     ),
   new SlashCommandBuilder()
     .setName('sleep')
@@ -574,7 +606,10 @@ export class DiscordBot {
   private lastHypeAt = new Map<string, number>();
   /** guildId -> active lyric guess-the-song quiz. */
   private quizzes = new Map<string, { name: string; artists: string[]; timer: NodeJS.Timeout }>();
-  /** guildId -> tint now-playing colors from the track's audio features. */
+  /** guildId -> (track uri|name) whose lyrics were last broadcast, so a
+   *  pause/resume state re-emit doesn't refetch/rebroadcast the same lyrics. */
+  private lastLyricsKey = new Map<string, string>();
+  /** guildId -> mood visuals on; moodColor tints now-playing colors from features. */
   private moodOn = new Set<string>();
   private moodColor = new Map<string, number>();
   /** Guilds with the optional TTS DJ announcements enabled (opt-in, default off). */
@@ -1227,6 +1262,16 @@ export class DiscordBot {
 
   /** Auto-DJ: pick a set for the mood / time of day / weather, then let Endless Wave carry it. */
   private async vibeDj(s: Session, moodArg: string | undefined, ensureJoined: () => Promise<boolean>): Promise<string> {
+    // Natural language first: "chill like Bonobo", "hype workout 5", "sad acoustic"…
+    // Maps the words to Spotify audio-feature targets so they steer the sound,
+    // not just the search text. Falls back to the classic mood seed on failure.
+    if (moodArg?.trim()) {
+      const parsed = parseVibe(moodArg);
+      if (vibeIsSteerable(parsed)) {
+        const nl = await this.vibeFromTargets(s, parsed, ensureJoined);
+        if (nl) return nl;
+      }
+    }
     const weather = moodArg ? null : await this.fetchWeatherMood().catch(() => null);
     const seed = (moodArg?.trim() || weather || this.timeOfDayMood()).trim();
     let picks = await searchCandidates(seed, 5).catch(() => [] as ResolvedTrack[]);
@@ -1236,6 +1281,69 @@ export class DiscordBot {
     const failed = await this.playTracks(s, picks.slice(0, 5), 'vibe-dj', ensureJoined);
     const tag = weather ? ` (${weather})` : '';
     return `🎧 **Vibe DJ** — queued ${picks.length} track${picks.length === 1 ? '' : 's'} for “**${seed}**”${tag}. Endless Wave is on to keep the mood going.${failed ? `\n⚠️ ${failed}` : ''}`;
+  }
+
+  /** Queue tracks from parsed vibe targets (audio-feature steering via Spotify recs). */
+  private async vibeFromTargets(s: Session, parsed: ParsedVibe, ensureJoined: () => Promise<boolean>): Promise<string | null> {
+    try {
+      // Spotify /recommendations needs at least one seed: "like X" → that artist's
+      // top track; otherwise seed from whatever is currently playing.
+      let seedTracks: string[] = [];
+      let seedName = '';
+      if (parsed.likeArtist) {
+        const top = await searchTracks(parsed.likeArtist, 1).catch(() => null);
+        const id = top?.[0] ? extractSpotifyId(top[0].uri) : null;
+        if (id) {
+          seedTracks = [id];
+          seedName = top![0].name;
+        }
+      }
+      if (seedTracks.length === 0 && parsed.genres.length === 0) {
+        const cur = s.queue.getCurrentTrack();
+        const curId = cur ? extractSpotifyId(cur.uri) : null;
+        if (!cur || !curId) return null;
+        seedTracks = [curId];
+        seedName = cur.name;
+      }
+      // parseVibe speaks "energy/valence/…" but /recommendations wants
+      // "target_energy/target_valence/…" — map them explicitly (a blind spread
+      // would silently drop every target and steer nothing).
+      const recParams: RecommendationParams = {
+        ...(seedTracks.length ? { seedTracks } : {}),
+        ...(parsed.genres.length ? { seedGenres: parsed.genres } : {}),
+        limit: 30,
+      };
+      const t = parsed.targets;
+      if (t.energy !== undefined) recParams.targetEnergy = t.energy;
+      if (t.valence !== undefined) recParams.targetValence = t.valence;
+      if (t.danceability !== undefined) recParams.targetDanceability = t.danceability;
+      if (t.instrumentalness !== undefined) recParams.targetInstrumentalness = t.instrumentalness;
+      if (t.acousticness !== undefined) recParams.targetAcousticness = t.acousticness;
+      if (t.minTempo !== undefined) recParams.minTempo = t.minTempo;
+      if (t.maxTempo !== undefined) recParams.maxTempo = t.maxTempo;
+      const recs = await getRecommendations(recParams);
+      if (recs.length === 0) return null;
+      // Skip tracks already queued (same song, any upload) — like every add path.
+      const snap = s.queue.getSnapshot();
+      const queued = new Set(
+        snap.tracks.map((t) => `${t.name.toLowerCase()}|${(t.artists[0] ?? '').toLowerCase()}`),
+      );
+      const fresh = recs.filter(
+        (t) => !queued.has(`${t.name.toLowerCase()}|${(t.artists[0] ?? '').toLowerCase()}`),
+      );
+      const picks = (fresh.length ? fresh : recs).slice(0, parsed.count);
+      this.setAutoplayMode(s, 'smart');
+      const failed = await this.playTracks(s, picks, 'vibe-dj', ensureJoined);
+      const understood = [...parsed.matched, ...parsed.genres.map((g) => `+${g}`)].join(' · ');
+      return (
+        `🎧 **Vibe DJ** — heard: **${understood || 'the mood'}**${seedName ? `, seeded from **${seedName}**` : ''}.` +
+        `\nQueued ${picks.length} track${picks.length === 1 ? '' : 's'} matched on audio features (energy/valence/etc.), Endless Wave keeps the mood going.` +
+        `${failed ? `\n⚠️ ${failed}` : ''}`
+      );
+    } catch (err) {
+      console.warn('[vibe] target-based vibe failed:', err instanceof Error ? err.message : err);
+      return null;
+    }
   }
 
   /** A mood seed based on the local hour. */
@@ -2190,6 +2298,58 @@ export class DiscordBot {
         break;
       }
 
+      case 'eq': {
+        if (!this.requireLevel('eq', interaction)) return this.deny(interaction);
+        const preset = (interaction.options.getString('preset') ?? '').toLowerCase();
+        if (!preset) {
+          const cur = s.playback.getEq();
+          await interaction.reply(
+            `🎛️ Current EQ: **${cur}** — presets: flat, bass, vocal, night, warm, lofi.\nTakes effect from the next track (never restarts the current one).`,
+          );
+          break;
+        }
+        if (!s.playback.setEq(preset)) {
+          await interaction.reply({ content: `Unknown preset \`${preset}\`. Try flat, bass, vocal, night, warm, lofi.`, flags: MessageFlags.Ephemeral });
+          break;
+        }
+        await interaction.reply(`🎛️ EQ preset → **${preset}** — applies from the next track.`);
+        break;
+      }
+
+      case 'norm': {
+        if (!this.requireLevel('norm', interaction)) return this.deny(interaction);
+        const on = interaction.options.getBoolean('on');
+        if (on === null || on === undefined) {
+          await interaction.reply(
+            s.playback.getLoudnorm()
+              ? '🔊 Loudness match **on** — every source plays at Spotify-standard level (-14 LUFS).'
+              : 'Loudness match is **off** — sources play at their own level. Use `/norm on`.',
+          );
+          break;
+        }
+        s.playback.setLoudnorm(on);
+        await interaction.reply(
+          on
+            ? '🔊 Loudness match **on** — all sources are normalized to Spotify-standard loudness (-14 LUFS), so YouTube tracks stop jumping out louder or hiding quieter. Applies from the next track.'
+            : 'Loudness match **off** — sources play at their native level.',
+        );
+        break;
+      }
+
+      case 'wrapped': {
+        if (!this.requireLevel('wrapped', interaction)) return this.deny(interaction);
+        const gid = interaction.guildId;
+        if (!gid) return void (await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral }));
+        const which = interaction.options.getString('month') ?? 'this';
+        const now = new Date();
+        const month =
+          which === 'last'
+            ? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1)).toISOString().slice(0, 7)
+            : now.toISOString().slice(0, 7);
+        await interaction.reply({ embeds: [this.wrappedEmbed(gid, month)] });
+        break;
+      }
+
       case 'sleep': {
         if (!this.requireLevel('sleep', interaction)) return this.deny(interaction);
         if (!interaction.inGuild()) {
@@ -2490,6 +2650,9 @@ export class DiscordBot {
       autoplay: 'autoplay', ap: 'autoplay', auto: 'autoplay',
       speed: 'speed',
       bass: 'bassboost', boost: 'bassboost', bassboost: 'bassboost',
+      eq: 'eq', preset: 'eq',
+      norm: 'norm', normalize: 'norm', loud: 'norm', loudness: 'norm',
+      wrapped: 'wrapped', wrap: 'wrapped',
       sleep: 'sleep', timer: 'sleep',
       help: 'help',
       diag: 'diag',
@@ -3548,6 +3711,61 @@ export class DiscordBot {
                 ? `🎚️ Bass +${clamped} dB — punchy.`
                 : `💥 Bass +${clamped} dB — the neighbors will feel it.`,
           );
+          break;
+        }
+
+        case 'eq': {
+          if (!canUse('eq')) return void (await deny());
+          const preset = (args || '').toLowerCase().trim();
+          if (!preset) {
+            await message.reply(
+              `🎛️ Current EQ: **${s.playback.getEq()}**\nUsage: \`V@eq <flat|bass|vocal|night|warm|lofi>\` — takes effect from the next track.`,
+            );
+            break;
+          }
+          if (!s.playback.setEq(preset)) {
+            await message.reply(`Unknown preset \`${preset}\`. Try \`flat\`, \`bass\`, \`vocal\`, \`night\`, \`warm\`, \`lofi\`.`);
+            break;
+          }
+          await message.reply(`🎛️ EQ preset → **${preset}** — applies from the next track.`);
+          break;
+        }
+
+        case 'norm': {
+          if (!canUse('norm')) return void (await deny());
+          const raw = (args || '').toLowerCase().trim();
+          if (!raw) {
+            await message.reply(
+              s.playback.getLoudnorm()
+                ? '🔊 Loudness match **on** — all sources play at Spotify-standard level (-14 LUFS). Use `V@norm off` to disable.'
+                : 'Loudness match is **off** — use `V@norm on` to level every source to Spotify-standard volume.',
+            );
+            break;
+          }
+          const on = ['on', 'true', 'yes', '1'].includes(raw);
+          if (!on && !['off', 'false', 'no', '0'].includes(raw)) {
+            await message.reply('Usage: `V@norm <on|off>` — level every source to Spotify-standard loudness.');
+            break;
+          }
+          s.playback.setLoudnorm(on);
+          await message.reply(
+            on
+              ? '🔊 Loudness match **on** — everything plays at Spotify-standard loudness (-14 LUFS). Applies from the next track.'
+              : 'Loudness match **off** — sources play at their native level.',
+          );
+          break;
+        }
+
+        case 'wrapped': {
+          if (!canUse('wrapped')) return void (await deny());
+          const gid = message.guildId;
+          if (!gid) return void (await message.reply('Wrapped only works inside a server.'));
+          const now = new Date();
+          const wantLast = (args || '').toLowerCase().includes('last');
+          const month = wantLast
+            ? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1)).toISOString().slice(0, 7)
+            : now.toISOString().slice(0, 7);
+          await message.reply({ embeds: [this.wrappedEmbed(gid, month)] });
           break;
         }
 
@@ -5942,6 +6160,26 @@ export class DiscordBot {
     }
   }
 
+  /** Fetch lyrics for a track and broadcast them to panels/visualizers (best-effort,
+   *  cached by lyrics.ts, deduped per guild so state re-emits don't refetch). */
+  private maybeBroadcastLyrics(s: Session, track: TrackInfo): void {
+    const gid = s.guildId ?? '';
+    const key = `${track.uri}|${track.name}`;
+    if (this.lastLyricsKey.get(gid) === key) return;
+    this.lastLyricsKey.set(gid, key);
+    void (async () => {
+      const lyr = await fetchLyrics(track).catch(() => null);
+      this.bridge.broadcast({
+        type: 'lyrics',
+        guildId: gid || undefined,
+        title: track.name,
+        artist: (track.artists ?? []).join(', '),
+        lines: (lyr?.syncedLines ?? []).map((l) => ({ timeMs: l.timeMs, text: l.text })),
+        plain: lyr ? lyr.lyrics : undefined,
+      });
+    })();
+  }
+
   /** Start a lyric-guess quiz on a random queued track (title hidden). */
   private async startQuiz(s: Session): Promise<string> {
     const snap = s.queue.getSnapshot();
@@ -6695,6 +6933,38 @@ export class DiscordBot {
       .setFooter({ text: `You: ${mine.queued} queued · ${mine.played} played` });
   }
 
+  /** Spotify-Wrapped-style monthly recap for a guild ('YYYY-MM'). */
+  private wrappedEmbed(guildId: string, month: string): EmbedBuilder {
+    const w = this.stats.wrapped(guildId, month);
+    const hours = (ms: number) => {
+      const h = Math.floor(ms / 3_600_000);
+      const m = Math.round((ms % 3_600_000) / 60_000);
+      return h > 0 ? `${h}h ${m}m` : `${m}m`;
+    };
+    const [y, mo] = month.split('-');
+    const monthName = new Date(Date.UTC(Number(y), Number(mo) - 1, 1)).toLocaleString('en-US', {
+      month: 'long',
+      year: 'numeric',
+    });
+    const ranked = (rows: Array<[string, number]>) =>
+      rows.length ? rows.map(([t, n], i) => `${i + 1}. ${truncate(t, 44)} — **${n}x**`).join('\n') : '_nothing yet_';
+    return new EmbedBuilder()
+      .setTitle(`🎧 Server Wrapped — ${monthName}`)
+      .setColor(this.moodColor.get(guildId) ?? this.themeColor())
+      .setDescription(
+        `**${hours(w.playedMs)}** of music · **${w.plays}** track${w.plays === 1 ? '' : 's'} played · **${w.queued}** queued` +
+          (w.biggestDay ? `\nBiggest listening day: **${w.biggestDay[0]}** (${hours(w.biggestDay[1])})` : ''),
+      )
+      .addFields(
+        { name: '🎵 Top tracks', value: ranked(w.topTracks), inline: true },
+        { name: '🎤 Top artists', value: ranked(w.topArtists), inline: true },
+        { name: '🎧 Top DJs', value: ranked(w.topDjs), inline: true },
+      )
+      .setFooter({
+        text: `All-time: ${hours(w.allTimeMs)} of music · ${w.allTimeQueued} tracks queued · V@wrapped last → previous month`,
+      });
+  }
+
   /** Shared reference for both `/help` and `V@help`. */
   private helpEmbed(): EmbedBuilder {
     const link = vizTunnel.vizLink();
@@ -7284,7 +7554,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/autoplay count:<1-10>` — how many tracks to buffer ahead',
       '`/endwav on|off|status` · `V@ew` — Endless Wave shortcut',
       '`/ambient on|off` · `V@ambient` — quiet lo-fi intermission when the queue empties',
-      '`/vibe [mood]` · `V@vibe` — auto-DJ set for your mood / time of day / weather',
+      '`/vibe [mood]` · `V@vibe` — auto-DJ for your mood / time of day / weather — or describe it: `V@vibe chill like Bonobo`, `V@vibe hype workout 5`',
     ],
   },
   {
@@ -7317,6 +7587,8 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
     blurb: 'sound effects, speed, bass and DJ controls',
     lines: [
       '`/speed <mode>` · `V@speed` — nightcore / slowed / normal',
+      '`/eq <preset>` · `V@eq` — EQ presets: bass / vocal / night / warm / lofi (flat = off)',
+      '`/norm <on|off>` · `V@norm` — loudness match: level every source to Spotify-standard volume',
       '`/bassboost <5|8|10>` · `V@bass` — bass boost',
       '`/sfx <id>` · `V@sfx` — play a sound effect',
       '`/dj` · `V@dj` — toggle the soundboard (mod)',
@@ -7368,6 +7640,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
     lines: [
       '`/diag` · `V@diag` — diagnostics (gateway, voice, librespot)',
       '`/leaderboard` · `V@lb` — server listening stats (top DJs & artists)',
+      '`/wrapped [month]` · `V@wrapped` — this server\'s monthly Wrapped: hours, top tracks, artists, DJs',
       '`/stats` — bot statistics',
       '`/sleep <30m|1h>` · `V@sleep` — sleep timer',
       '`/help` · `V@help` — this menu',

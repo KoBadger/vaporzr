@@ -12,6 +12,7 @@ import type { VoiceManager } from './voice.js';
 import { librespotDeviceId, type SpotifyBackend } from './librespot.js';
 import { config } from './config.js';
 import { analyzer } from './analyzer.js';
+import { buildAudioFxChain, isEqPreset } from './audiofx.js';
 import { canCrossfade, fadeInPcm, planCrossfade, tempoMatchRatio } from './crossfade.js';
 import * as EW from './endlesswave.js';
 import {
@@ -123,6 +124,10 @@ export class PlaybackController {
   private speedFactor = 1;
   /** Bass boost gain in dB (0 = off). */
   private bassBoostDb = 0;
+  /** Session EQ preset ('flat' adds nothing). */
+  private eqPreset = 'flat';
+  /** True when loudness normalization (loudnorm, -14 LUFS) is active. */
+  private loudnormOn = false;
   /** Ambient intermission (queue-end): a quiet curated lo-fi track, looping. */
   private ambientActive = false;
   private ambientQueryIdx = 0;
@@ -1317,20 +1322,12 @@ export class PlaybackController {
 
   /** Build the `-af` stage for session audio FX from the current state. */
   private audioFxFilter(): string {
-    const stages: string[] = [];
-    if (this.bassBoostDb > 0) {
-      // Corner at 150 Hz (not 100) so the shelf is actually audible on normal
-      // speakers instead of only sub-bass. q=0.8 is a moderate, non-boomy slope.
-      stages.push(`bass=g=${this.bassBoostDb.toFixed(1)}:f=150:width_type=q:width=0.8`);
-    }
-    if (this.speedFactor !== 1) {
-      // asetrate shifts the sample-rate *field* only (pitch + tempo move
-      // together); pre-resample to a known 48k so the factor is exact
-      // regardless of the source's native rate, then aresample back out.
-      const shifted = Math.round(48000 * this.speedFactor);
-      stages.push(`aresample=48000,asetrate=${shifted},aresample=48000`);
-    }
-    return stages.join(',');
+    return buildAudioFxChain({
+      eq: this.eqPreset,
+      loudnorm: this.loudnormOn,
+      bassBoostDb: this.bassBoostDb,
+      speedFactor: this.speedFactor,
+    });
   }
 
   /** Push the current FX state into the voice layer (used on each stream start). */
@@ -1354,6 +1351,24 @@ export class PlaybackController {
   setBassBoost(db: number): void {
     this.bassBoostDb = db;
     this.queue.setState({ bassBoost: db > 0 ? db : undefined });
+    this.applyAudioFx();
+    this.restartCurrent();
+  }
+
+  /** Set the session EQ preset ('flat' clears it). Applied from the next stream. */
+  setEq(preset: string): boolean {
+    if (!isEqPreset(preset)) return false;
+    this.eqPreset = preset;
+    this.queue.setState({ eq: preset === 'flat' ? undefined : preset });
+    this.applyAudioFx();
+    this.restartCurrent();
+    return true;
+  }
+
+  /** Toggle loudness normalization (-14 LUFS to match Spotify's level). */
+  setLoudnorm(on: boolean): void {
+    this.loudnormOn = on;
+    this.queue.setState({ loudnorm: on ? true : undefined });
     this.applyAudioFx();
     this.restartCurrent();
   }
@@ -1715,6 +1730,29 @@ export class PlaybackController {
   /** Current bass-boost gain in dB (0 = off). */
   getBassBoost(): number {
     return this.bassBoostDb;
+  }
+
+  /** Current EQ preset id. */
+  getEq(): string {
+    return this.eqPreset;
+  }
+
+  /** True when loudness normalization is active. */
+  getLoudnorm(): boolean {
+    return this.loudnormOn;
+  }
+
+  /**
+   * Adopt audio settings from a restored persisted state (speed, bass, EQ,
+   * loudnorm). Applies to the next stream only — never restarts the current
+   * track — so restoring can never stall playback.
+   */
+  adoptAudioState(state: { speed?: number; bassBoost?: number; eq?: string; loudnorm?: boolean }): void {
+    if (typeof state.speed === 'number' && state.speed > 0) this.speedFactor = state.speed;
+    if (typeof state.bassBoost === 'number' && state.bassBoost > 0) this.bassBoostDb = state.bassBoost;
+    if (state.eq && isEqPreset(state.eq)) this.eqPreset = state.eq;
+    this.loudnormOn = state.loudnorm === true;
+    this.applyAudioFx();
   }
 
   /** Stop everything (queue cleared). */

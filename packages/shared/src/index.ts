@@ -46,6 +46,10 @@ export interface PlaybackState {
   speed?: number;
   /** Bass-boost gain in dB (0 = off). */
   bassBoost?: number;
+  /** Session EQ preset id — 'flat' | 'bass' | 'vocal' | 'night' | 'warm' | 'lofi'. */
+  eq?: string;
+  /** True when loudness normalization (loudnorm → -14 LUFS, Spotify-level) is on. */
+  loudnorm?: boolean;
   source?: MediaSource;
   updatedAt: number;
 }
@@ -197,6 +201,18 @@ export type OutboundMessage =
   /** Asks a visualizer window to capture a short clip and return burst:data. */
   | { type: 'burst:start'; durationMs?: number }
   | { type: 'endlesswave'; active: boolean; generated: number; mode?: 'off' | 'basic' | 'smart' }
+  /** Synced (or plain) lyrics for a track — panels highlight by state.positionMs. */
+  | {
+      type: 'lyrics';
+      /** Guild the track is playing in; panels may ignore foreign lyrics. */
+      guildId?: string;
+      title: string;
+      artist: string;
+      /** LRC-style lines with absolute ms offsets. Empty when only plain lyrics exist. */
+      lines: Array<{ timeMs: number; text: string }>;
+      /** Full plain text (used when no synced LRC was found). */
+      plain?: string;
+    }
   /** Live "mood" derived from the current track's audio features (for reactive visuals). */
   | {
       type: 'visuals:mood';

@@ -158,6 +158,9 @@ export class SessionManager {
         endlessWave?: unknown;
       };
       s.queue.restore(data);
+      // Re-adopt persisted audio settings so a redeploy keeps the session's
+      // speed/bass/EQ/loudnorm instead of silently resetting the sound.
+      s.playback.adoptAudioState(data.state ?? {});
       const restored = s.queue.getSnapshot().tracks.length;
       const wasPlaying = Boolean((data.state as { playing?: boolean } | undefined)?.playing);
       // A queue persisted while PAUSED is almost always stale (e.g. a redeploy
