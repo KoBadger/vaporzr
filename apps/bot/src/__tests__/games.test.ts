@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { GamesStore, describeFit, fitPercent, keyToQuery, pickRoulette } from '../games.js';
+import { GamesStore, describeFit, explainFit, fitPercent, keyToQuery, pickRoulette, pickRouletteWeighted } from '../games.js';
 import { config } from '../config.js';
 
 describe('game scoring helpers', () => {
@@ -111,5 +111,63 @@ describe('GamesStore', () => {
     g.star('g1', 'a');
     g.star('g1', 'b');
     expect(g.topOf(g.get('g1').starred)).toEqual([['a', 2], ['b', 1]]);
+  });
+
+  it('tracks duel model accuracy', () => {
+    const g = new GamesStore();
+    expect(g.noteDuelOutcome('g1', true)).toEqual({ correct: 1, total: 1 });
+    expect(g.noteDuelOutcome('g1', false)).toEqual({ correct: 1, total: 2 });
+    expect(g.get('g1').duelAccuracy.correct).toBe(1);
+  });
+});
+
+describe('explainFit', () => {
+  it('reports the biggest influences first and skips noise', () => {
+    const reasons = explainFit([
+      { id: 'features', label: 'matches the energy', points: -19 },
+      { id: 'artist', label: 'that artist just played', points: 20 },
+      { id: 'duration', label: 'normal length', points: -5 },
+      { id: 'source', label: 'spotify', points: -2 },
+      { id: 'jitter', label: 'tiebreaker', points: 1 },
+    ]);
+    expect(reasons[0]).toContain('that artist just played');
+    expect(reasons[1]).toContain('matches the energy');
+    expect(reasons.join(' ')).not.toContain('tiebreaker');
+    expect(reasons.join(' ')).not.toContain('spotify');
+    expect(reasons).toHaveLength(3);
+  });
+
+  it('marks helpful terms with a tick and harmful ones with a warning', () => {
+    const good = explainFit([{ id: 'features', label: 'matches the feel', points: -30 }]);
+    const bad = explainFit([{ id: 'features', label: 'miles off the feel', points: 30 }]);
+    expect(good[0].startsWith('✅')).toBe(true);
+    expect(bad[0].startsWith('⚠️')).toBe(true);
+  });
+
+  it('returns nothing when every influence is small', () => {
+    expect(explainFit([{ id: 'source', label: 'spotify', points: -2 }])).toEqual([]);
+  });
+});
+
+describe('pickRouletteWeighted (deep cuts)', () => {
+  it('favours rarely-played tracks over heavily-played ones', () => {
+    const entries: Array<[string, number]> = [['hit', 100], ['deep', 1]];
+    // Weights are 0.01 vs 1.0, so anything above ~1% of the roll range lands on
+    // the deep cut.
+    expect(pickRouletteWeighted(entries, [], [], () => 0.5)).toBe('deep');
+    expect(pickRouletteWeighted(entries, [], [], () => 0.001)).toBe('hit');
+  });
+
+  it('still excludes banned and queued tracks', () => {
+    const entries: Array<[string, number]> = [['a', 1], ['b', 1], ['c', 1]];
+    for (let i = 0; i < 10; i++) {
+      const pick = pickRouletteWeighted(entries, ['a'], ['b'], () => i / 10);
+      expect(pick).toBe('c');
+    }
+  });
+
+  it('returns null when the pool is empty', () => {
+    expect(pickRouletteWeighted([], [], [])).toBeNull();
+    expect(pickRouletteWeighted([['a', 1]], ['a'], [])).toBeNull();
   });
 });

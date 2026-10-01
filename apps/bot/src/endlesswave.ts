@@ -666,6 +666,20 @@ export function warmArtistProfiles(artists: Iterable<string>): void {
 
 /** Lower = better fit. Feature-target distance + source + artist novelty + duration sanity. *  `features` is optional — when absent (e.g. a YouTube pick) it just scores on the
  *  heuristics below, so callers keep working without an API round-trip. */
+/** One component of a candidate's score, so a verdict can be explained. */
+export interface ScoreTerm {
+  id: 'features' | 'key' | 'source' | 'duration' | 'artist' | 'genre' | 'jitter';
+  /** Short human phrase (positive = good for the fit). */
+  label: string;
+  /** Points added to the RAW score, where lower is better. */
+  points: number;
+}
+
+export interface ScoreBreakdown {
+  total: number;
+  terms: ScoreTerm[];
+}
+
 export function scoreCandidate(
   track: ResolvedTrack,
   targets: Partial<RecommendationParams>,
@@ -673,56 +687,92 @@ export function scoreCandidate(
   features?: AudioFeatures,
   env?: SessionNeighbourhood,
 ): number {
-  let score = 0;
+  return scoreBreakdown(track, targets, recentArtists, features, env).total;
+}
+
+/**
+ * The candidate score, itemised. Same math as before — but each component is
+ * reported so the mini-games can tell a player *why* a track was rated the way
+ * it was, and they can switch the random tiebreaker off so a judged number is
+ * reproducible (two equal picks must not flip on re-run).
+ *
+ * Remember: LOWER total = better fit for the room.
+ */
+export function scoreBreakdown(
+  track: ResolvedTrack,
+  targets: Partial<RecommendationParams>,
+  recentArtists: string[],
+  features?: AudioFeatures,
+  env?: SessionNeighbourhood,
+  opts: { jitter?: boolean; rng?: () => number } = {},
+): ScoreBreakdown {
+  const terms: ScoreTerm[] = [];
 
   // Beat-feature coherence: pull the pick toward the evolving energy/tempo/valence
   // target. This is what keeps an Endless Wave flowing along a vibe instead of
-  // lurching between wildly different songs. Mean distance scaled up so it
-  // meaningfully competes with the durability/artist bonuses below.
-  if (features) score += featureDistance(features, targets) * 70;
-
-  // Harmonic mixing: prefer keys that blend with the current track (Camelot).
-  // Key is the one dimension the energy/tempo targets can't express, so it gets
-  // its own term rather than being folded into the feature distance.
-  if (features && targets.targetKey !== undefined && targets.targetMode !== undefined) {
-    score +=
-      harmonicDistance(features.key ?? 0, features.mode ?? 1, targets.targetKey, targets.targetMode) *
-      DEFAULT_CONFIG.harmonicWeight;
+  // lurching between wildly different songs.
+  if (features) {
+    terms.push({
+      id: 'features',
+      label: 'matches the room\u2019s energy and feel',
+      points: featureDistance(features, targets) * 70,
+    });
   }
 
-  // Spotify URI bonus (prefer known sources).
-  if (track.uri.startsWith('spotify:')) score -= 10;
+  // Harmonic mixing: prefer keys that blend with the current track (Camelot).
+  if (features && targets.targetKey !== undefined && targets.targetMode !== undefined) {
+    terms.push({
+      id: 'key',
+      label: 'blends with the key that\u2019s playing',
+      points: harmonicDistance(features.key ?? 0, features.mode ?? 1, targets.targetKey, targets.targetMode) *
+        DEFAULT_CONFIG.harmonicWeight,
+    });
+  }
 
-  // Duration sanity (prefer 2-7 min tracks).
-  if (track.durationMs >= 120_000 && track.durationMs <= 420_000) score -= 5;
-  else score += 10;
+  if (track.uri.startsWith('spotify:')) {
+    terms.push({ id: 'source', label: 'known Spotify source', points: -10 });
+  }
 
-  // Artist novelty bonus — penalize if artist appeared recently.
+  if (track.durationMs >= 120_000 && track.durationMs <= 420_000) {
+    terms.push({ id: 'duration', label: 'normal track length', points: -5 });
+  } else {
+    terms.push({ id: 'duration', label: 'unusual track length', points: 10 });
+  }
+
   const trackArtist = (track.artists[0] ?? '').toLowerCase().trim();
   const recentNorm = recentArtists.slice(-DEFAULT_CONFIG.artistCooldown).map((a) => a.toLowerCase().trim());
   if (trackArtist && recentNorm.includes(trackArtist)) {
-    score += 20; // strong penalty for on-cooldown artist
+    terms.push({ id: 'artist', label: 'that artist just played', points: 20 });
   } else if (trackArtist) {
-    score -= 3; // small bonus for novel artist
+    terms.push({ id: 'artist', label: 'an artist the room hasn\u2019t heard today', points: -3 });
   }
 
-  // Genre + relatedness, from the background-warmed Deezer profiles. Only ever
-  // reads the cache, so a cold cache simply means no signal (not a stall).
+  // Genre + relatedness, from the background-warmed Deezer profiles (cache only).
+  // Two independent signals, exactly as the picker has always scored them: the
+  // artist's relation to the room, and the genre-profile overlap.
   if (env && trackArtist) {
-    if (env.related.has(trackArtist)) score -= 14; // a related artist: strong pull
-    else if (env.artists.has(trackArtist)) score -= 6; // already in the rotation
+    if (env.related.has(trackArtist)) {
+      terms.push({ id: 'genre', label: 'a related artist to what\u2019s playing', points: -14 });
+    } else if (env.artists.has(trackArtist)) {
+      terms.push({ id: 'genre', label: 'already in the rotation', points: -6 });
+    }
     const prof = peekArtistProfile(trackArtist);
     if (prof && prof.genres.length > 0 && env.genres.size > 0) {
       const overlap = prof.genres.reduce((n, g) => n + (env.genres.has(g) ? 1 : 0), 0);
-      if (overlap > 0) score -= Math.min(DEFAULT_CONFIG.genreWeight, overlap * 5);
-      else score += 6; // a genre we haven't been playing: nudge back toward home
+      if (overlap > 0) {
+        terms.push({ id: 'genre', label: 'the right kind of genre', points: -Math.min(DEFAULT_CONFIG.genreWeight, overlap * 5) });
+      } else {
+        terms.push({ id: 'genre', label: 'a genre the room hasn\u2019t been playing', points: 6 });
+      }
     }
   }
 
-  // Small random tiebreaker to avoid deterministic picks.
-  score += Math.random() * 2;
+  // Small random tiebreaker — on for picking (variety), off for judging (fairness).
+  if (opts.jitter !== false) {
+    terms.push({ id: 'jitter', label: 'tiebreaker', points: (opts.rng ?? Math.random)() * 2 });
+  }
 
-  return score;
+  return { total: terms.reduce((n, t) => n + t.points, 0), terms };
 }
 
 /* ---------- Recommendation engine ---------- */

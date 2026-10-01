@@ -17,6 +17,8 @@ export interface GuildGames {
   botWins: number;
   /** DJ Duel: player display-name → duel wins. */
   duelWins: Record<string, number>;
+  /** DJ Duel: how often the bot's pre-play prediction matched the room's verdict. */
+  duelAccuracy: { correct: number; total: number };
   /** Roulette: track keys banned by a down-vote (never rouletted again). */
   banned: string[];
   /** Roulette: tracks each player starred into the Hall of Fame. */
@@ -26,7 +28,14 @@ export interface GuildGames {
 const MAX_BANNED = 500;
 
 function empty(): GuildGames {
-  return { stumpWins: {}, botWins: 0, duelWins: {}, banned: [], starred: {} };
+  return {
+    stumpWins: {},
+    botWins: 0,
+    duelWins: {},
+    duelAccuracy: { correct: 0, total: 0 },
+    banned: [],
+    starred: {},
+  };
 }
 
 function normalize(data: Partial<GuildGames> | undefined): GuildGames {
@@ -36,6 +45,10 @@ function normalize(data: Partial<GuildGames> | undefined): GuildGames {
     stumpWins: data.stumpWins ?? {},
     botWins: typeof data.botWins === 'number' ? data.botWins : 0,
     duelWins: data.duelWins ?? {},
+    duelAccuracy: {
+      correct: Number(data.duelAccuracy?.correct) || 0,
+      total: Number(data.duelAccuracy?.total) || 0,
+    },
     banned: Array.isArray(data.banned) ? data.banned.filter((b): b is string => typeof b === 'string') : [],
     starred: data.starred ?? {},
   };
@@ -126,6 +139,15 @@ export class GamesStore {
       .sort((a, b) => b[1] - a[1])
       .slice(0, n);
   }
+
+  /** Record whether the bot's duel prediction matched the room's verdict. */
+  noteDuelOutcome(guildId: string, modelWasRight: boolean): { correct: number; total: number } {
+    const g = this.get(guildId);
+    g.duelAccuracy.total++;
+    if (modelWasRight) g.duelAccuracy.correct++;
+    this.save(guildId);
+    return g.duelAccuracy;
+  }
 }
 
 /** Process-wide mini-game store. */
@@ -152,6 +174,26 @@ export function describeFit(fit: number): string {
   return 'a real curveball for this room';
 }
 
+/** The bits of a score breakdown worth telling a player about. */
+export interface FitTerm {
+  id: string;
+  label: string;
+  points: number;
+}
+
+/**
+ * Turn score terms into short, plain-English reasons, biggest influence first.
+ * Negative points helped the fit (remember: a lower raw score is better), so
+ * they read as ✅ and positive ones as ⚠️.
+ */
+export function explainFit(terms: FitTerm[], max = 3): string[] {
+  return terms
+    .filter((t) => t.id !== 'jitter' && Math.abs(t.points) >= 4)
+    .sort((a, b) => Math.abs(b.points) - Math.abs(a.points))
+    .slice(0, max)
+    .map((t) => `${t.points <= 0 ? '✅' : '⚠️'} ${t.label}`);
+}
+
 /**
  * Pick a random track key for roulette, excluding banned keys and anything
  * already queued. Returns null when nothing qualifies.
@@ -167,6 +209,31 @@ export function pickRoulette(
   if (pool.length === 0) return null;
   const i = Math.min(pool.length - 1, Math.max(0, Math.floor(rng() * pool.length)));
   return pool[i];
+}
+
+/**
+ * Roulette pick weighted toward DEEP CUTS: weight ∝ 1/plays, so a track played
+ * once is as likely as every five-times-played track combined. Uniform picking
+ * just resurfaced the songs the server already plays constantly, which is the
+ * opposite of a surprise. Returns null when nothing qualifies.
+ */
+export function pickRouletteWeighted(
+  entries: Iterable<[string, number]>,
+  banned: Iterable<string>,
+  queued: Iterable<string>,
+  rng: () => number = Math.random,
+): string | null {
+  const skip = new Set<string>([...banned, ...queued]);
+  const pool = [...entries].filter(([k]) => k && !skip.has(k));
+  if (pool.length === 0) return null;
+  const weights = pool.map(([, plays]) => 1 / Math.max(1, plays));
+  const total = weights.reduce((a, b) => a + b, 0);
+  let roll = rng() * total;
+  for (let i = 0; i < pool.length; i++) {
+    roll -= weights[i];
+    if (roll <= 0) return pool[i][0];
+  }
+  return pool[pool.length - 1][0];
 }
 
 /** 'title | artist' → a search query the resolver understands. */

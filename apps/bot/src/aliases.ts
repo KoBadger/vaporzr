@@ -72,6 +72,7 @@ export const V_ALIASES: Record<string, string> = {
   skipto: 'skipto',
   skiptoggle: 'skiptoggle',
   quiz: 'quiz', guess: 'guess',
+  games: 'games',
 };
 
 /** Extra dispatch-only spellings (not shown as shortcuts in help). */

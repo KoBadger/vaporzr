@@ -78,7 +78,7 @@ import * as EW from './endlesswave.js';
 import { playlistStore } from './playlists.js';
 import { statsStore } from './stats.js';
 import { trackKey } from './stats.js';
-import { gamesStore, fitPercent, describeFit, pickRoulette, keyToQuery } from './games.js';
+import { gamesStore, fitPercent, describeFit, pickRouletteWeighted, keyToQuery, explainFit } from './games.js';
 import { packCategoryFields, chunkFieldsIntoEmbeds, aliasIndexFields } from './help.js';
 import { V_ALIASES, V_DISPATCH_ALIASES } from './aliases.js';
 import { ttsEngine } from './tts.js';
@@ -374,9 +374,15 @@ const COMMANDS = [
     .setDescription('Stump the Bot — bet a track will fit the room: survive to the end and you win')
     .addStringOption((o) => o.setName('track').setDescription('Track to bet on (omit to bet your last pick)').setRequired(false)),
   new SlashCommandBuilder()
+    .setName('games')
+    .setDescription('How the games work — Stump the Bot, DJ Duel and Track Roulette'),
+  new SlashCommandBuilder()
     .setName('duel')
-    .setDescription('DJ Duel — Endless Wave judges whose pick fits the room better')
-    .addUserOption((o) => o.setName('opponent').setDescription('Who you are challenging').setRequired(false)),
+    .setDescription('DJ Duel — the bot scores both picks, then the room decides whose wins')
+    .addUserOption((o) => o.setName('opponent').setDescription('Who you are challenging').setRequired(false))
+    .addBooleanOption((o) =>
+      o.setName('now').setDescription('Instant verdict from the bot instead of letting the room decide'),
+    ),
   new SlashCommandBuilder()
     .setName('roulette')
     .setDescription('Track Roulette — a random track from this server\'s history, star it or ban it'),
@@ -652,6 +658,17 @@ export class DiscordBot {
   private lastLyricsKey = new Map<string, string>();
   /** guildId -> pending Stump-the-Bot wager (resolved on the track's end/skip). */
   private stumps = new Map<string, { uri: string; user: string; fit: number; name: string; channelId: string }>();
+  /** guildId -> a DJ Duel awaiting both tracks' fates in the room. */
+  private duels = new Map<
+    string,
+    {
+      channelId: string;
+      at: number;
+      predicted: string;
+      a: { user: string; uri: string; name: string; fit: number; outcome?: 'played' | 'skipped' };
+      b: { user: string; uri: string; name: string; fit: number; outcome?: 'played' | 'skipped' };
+    }
+  >();
   /** nonce -> a roulette offer waiting on a star/ban button press. */
   private rouletteOffers = new Map<
     string,
@@ -818,7 +835,11 @@ export class DiscordBot {
       // or state change — skips, manual adds and natural ends all trigger a
       // refill, so EW behaves like a normal extension of the queue.
       s.queue.subscribe({
-        onQueueChanged: () => this.scheduleWaveTopUp(s),
+        onQueueChanged: () => {
+          // Void any bet whose track left the queue before it played.
+          this.expireBets(s);
+          this.scheduleWaveTopUp(s);
+        },
         onStateChanged: (st) => {
           if (st.playing && st.track) {
             this.markWaveStarted(s, st.track);
@@ -831,8 +852,10 @@ export class DiscordBot {
         },
       });
       s.playback.onTrackEnd = (ended) => {
-        // Mini-games: a track that reached its natural end beats the bot's bet.
+        // Mini-games: a track that reached its natural end beats the bot's bet
+        // and counts as "played through" for any duel it was part of.
         this.resolveStump(s, ended, false);
+        this.noteDuelOutcome(s, ended, false);
         if (!EW.isAutoActive(s.endlessWave)) return;
         void this.waveTrackEnded(s, ended).catch((err) => {
           console.warn(`[endlesswave] on-end failed: ${err instanceof Error ? err.message : err}`);
@@ -841,6 +864,7 @@ export class DiscordBot {
       // Fired only for early abandonment (skip / voteskip / jump).
       s.playback.onTrackSkipped = (skipped) => {
         this.resolveStump(s, skipped, true);
+        this.noteDuelOutcome(s, skipped, true);
       };
       // When the queue runs dry, post a friendly notice so listeners aren't left
       // wondering why the music stopped. An active wave ignores the backoff here
@@ -2420,10 +2444,17 @@ export class DiscordBot {
         break;
       }
 
+      case 'games': {
+        await interaction.reply({ embeds: [this.gamesEmbed()] });
+        break;
+      }
+
       case 'duel': {
         if (!this.requireLevel('duel', interaction)) return this.deny(interaction);
         const opp = interaction.options.getUser('opponent');
-        const duel = await this.gameDuel(s, interaction.user.username, opp?.username);
+        const duel = await this.gameDuel(s, interaction.user.username, opp?.username, {
+          now: interaction.options.getBoolean('now') ?? false,
+        });
         if (typeof duel === 'string') await interaction.reply(duel);
         else await interaction.reply({ embeds: [duel] });
         break;
@@ -3814,9 +3845,20 @@ export class DiscordBot {
           break;
         }
 
+        case 'games': {
+          await message.reply({ embeds: [this.gamesEmbed()] });
+          break;
+        }
+
         case 'duel': {
           if (!canUse('duel')) return void (await deny());
-          const raw = (args || '').trim();
+          let raw = (args || '').trim();
+          // Trailing "now" → instant model verdict instead of the room vote.
+          let now = false;
+          if (/\s+now$/i.test(raw)) {
+            now = true;
+            raw = raw.replace(/\s+now$/i, '').trim();
+          }
           let opponent: string | undefined;
           const mention = /^<@!?(\d+)>$/.exec(raw);
           if (mention) {
@@ -3826,7 +3868,7 @@ export class DiscordBot {
             const found = await message.guild?.members.fetch({ query: raw, limit: 1 }).catch(() => null);
             opponent = found?.first()?.user.username ?? raw;
           }
-          const duel = await this.gameDuel(s, message.author.username, opponent);
+          const duel = await this.gameDuel(s, message.author.username, opponent, { now });
           if (typeof duel === 'string') await message.reply(duel);
           else await message.reply({ embeds: [duel] });
           break;
@@ -7016,19 +7058,36 @@ export class DiscordBot {
   /* ---------- mini-games (DJ Duel · Stump the Bot · Track Roulette) ---------- */
 
   /**
-   * Endless Wave's fit score for a track against this guild's current vibe.
-   * EW scores "lower = better", so this converts it to a human 0–100 number.
-   * With no listening history yet the score would be meaningless — callers get
-   * `insufficient: true` and tell the player to build up a few tracks first.
+   * Spotify audio features for a track. A non-Spotify pick (YouTube, SoundCloud)
+   * has no features of its own — look the same song up on Spotify first, because
+   * a feature-less pick silently skips the two biggest scoring terms and would
+   * otherwise score artificially high in every comparison.
    */
-  private async trackFit(s: Session, track: TrackInfo): Promise<{ fit: number; insufficient: boolean }> {
+  private async featuresFor(track: TrackInfo): Promise<AudioFeatures | undefined> {
+    const own = track.uri.startsWith('spotify:') ? extractSpotifyId(track.uri) : null;
+    if (own) return (await getAudioFeatures([own]).catch(() => undefined))?.get(own);
+    const query = [track.name, track.artists[0]].filter(Boolean).join(' ').trim();
+    if (!query) return undefined;
+    const hits = await searchTracks(query, 1).catch(() => [] as ResolvedTrack[]);
+    const id = hits[0] ? extractSpotifyId(hits[0].uri) : null;
+    if (!id) return undefined;
+    return (await getAudioFeatures([id]).catch(() => undefined))?.get(id);
+  }
+
+  /**
+   * Endless Wave's fit score for a track against this guild's current vibe.
+   * Scored deterministically (no random tiebreaker) so a judged number is
+   * reproducible, and with plain-English reasons attached.
+   */
+  private async trackFit(
+    s: Session,
+    track: TrackInfo,
+  ): Promise<{ fit: number; insufficient: boolean; reasons: string[]; features: boolean }> {
     const st = s.endlessWave;
     const insufficient = st.recentFeatures.length === 0 && !st.anchor;
     const targets = EW.buildTargets(st);
     const env = EW.buildNeighbourhood(st);
-    let features: AudioFeatures | undefined;
-    const id = track.uri.startsWith('spotify:') ? extractSpotifyId(track.uri) : null;
-    if (id) features = (await getAudioFeatures([id]).catch(() => undefined))?.get(id);
+    const features = await this.featuresFor(track);
     const candidate = {
       uri: track.uri,
       name: track.name,
@@ -7037,8 +7096,8 @@ export class DiscordBot {
       durationMs: track.durationMs,
       source: track.source ?? 'spotify',
     };
-    const score = EW.scoreCandidate(candidate, targets, st.recentArtists ?? [], features, env);
-    return { fit: fitPercent(score), insufficient };
+    const { total, terms } = EW.scoreBreakdown(candidate, targets, st.recentArtists ?? [], features, env, { jitter: false });
+    return { fit: fitPercent(total), insufficient, reasons: explainFit(terms), features: !!features };
   }
 
   /** A player's most recently queued track (their "pick" for duels/stump). */
@@ -7071,11 +7130,15 @@ export class DiscordBot {
     } else {
       track = this.lastPickBy(s, userName);
     }
-    if (!track) return 'Queue something first (`V@p <track>`), then bet on it with `V@stump`.';
-    const { fit, insufficient } = await this.trackFit(s, track);
+    if (!track) return 'Queue something first (`V@p <track>`), then bet on it with `V@stump`.\n_New here? `V@games` explains how these work._';
+    const { fit, insufficient, reasons, features } = await this.trackFit(s, track);
     if (insufficient) {
-      return '🤖 Not enough listening history for me to judge a fit yet — play a few tracks, then try again. (No bet placed.)';
+      return '🤖 Not enough listening history for me to judge a fit yet — play a few tracks, then try again. (No bet placed.)\n_New here? `V@games` explains how these work._';
     }
+    const prev = this.stumps.get(gid);
+    const snap = s.queue.getSnapshot();
+    const idx = snap.tracks.findIndex((t) => t.uri === track.uri);
+    const place = idx >= 0 ? `#${idx + 1} in the queue` : 'somewhere in the queue';
     this.stumps.set(gid, {
       uri: track.uri,
       user: userName,
@@ -7084,11 +7147,16 @@ export class DiscordBot {
       channelId: this.lastTextChannel.get(gid) ?? this.perms.getNpChannel(gid) ?? '',
     });
     const playing = s.voice.isJoined();
-    return (
-      `🤖 **Stump the Bot** — I rate *${track.name}* a **${fit}/100** fit for this room (${describeFit(fit)}).\n` +
-      `Play it through and you win; if the room skips it, I win.` +
-      (playing ? '' : '\n_(Run `/follow` or `/join` so it can actually play.)_')
-    );
+    return [
+      `🤖 **Stump the Bot** — I rate *${track.name}* a **${fit}/100** room fit (${describeFit(fit)}).`,
+      reasons.length > 0 ? `Why: ${reasons.join(' · ')}` : '',
+      features ? '' : '_No audio features for this one, so I judged it on artist/genre only._',
+      prev ? `_(Replacing your earlier bet on *${prev.name}*.)_` : '',
+      `It settles when it plays — currently **${place}**. Play it through → you win. Skipped → I win.`,
+      playing ? '' : '_Run `/follow` or `/join` so it can actually play._',
+    ]
+      .filter(Boolean)
+      .join('\n');
   }
 
   /** Resolve a pending Stump bet when its track ends naturally or is skipped. */
@@ -7119,21 +7187,105 @@ export class DiscordBot {
     })();
   }
 
-  /** DJ Duel: score both players' picks and crown the better fit (or the board). */
-  private async gameDuel(s: Session, me: string, opponent?: string): Promise<string | EmbedBuilder> {
+  /**
+   * Resolve a pending DJ Duel when one of its tracks reaches its fate. Both
+   * sides must resolve before the verdict: a track that played through is worth
+   * a point, a skipped one is worth nothing — and we also record whether the
+   * bot's pre-play prediction matched what the room actually did.
+   */
+  private noteDuelOutcome(s: Session, track: TrackInfo, skipped: boolean): void {
+    const gid = s.guildId ?? '';
+    const duel = this.duels.get(gid);
+    if (!duel) return;
+    const side = duel.a.uri === track.uri ? duel.a : duel.b.uri === track.uri ? duel.b : null;
+    if (!side) return;
+    side.outcome = skipped ? 'skipped' : 'played';
+    if (!duel.a.outcome || !duel.b.outcome) return;
+    this.duels.delete(gid);
+    const { a, b, predicted } = duel;
+    const line = (x: typeof a) =>
+      `**${x.user}** — *${x.name}* · ${x.outcome === 'played' ? 'played through ✅' : 'skipped ❌'} (fit ${x.fit})`;
+    const winner = a.outcome === b.outcome ? null : a.outcome === 'played' ? a.user : b.user;
+    const bits: string[] = ['🎚️ **DJ Duel — result**', line(a), line(b)];
+    if (!winner) {
+      bits.push(
+        `🤝 The room couldn't split them — both ${a.outcome === 'played' ? 'played through' : 'got skipped'}. No point awarded.`,
+      );
+      if (!predicted) bits.push('🤖 The bot called it a dead heat — correct.');
+    } else {
+      const wins = gamesStore.addDuelWin(gid, winner);
+      bits.push(`🏆 **${winner}** takes the point (${wins} win${wins === 1 ? '' : 's'}) — the room let their pick play.`);
+      if (predicted) {
+        const right = predicted === winner;
+        const acc = gamesStore.noteDuelOutcome(gid, right);
+        bits.push(
+          right
+            ? `🤖 The bot predicted **${predicted}** — correct. _(model accuracy ${acc.correct}/${acc.total})_`
+            : `🤖 The bot predicted **${predicted}** — wrong. _(model accuracy ${acc.correct}/${acc.total})_`,
+        );
+      }
+    }
+    const channelId = duel.channelId || this.perms.getNpChannel(gid);
+    if (!channelId) return;
+    void (async () => {
+      const ch = await this.client.channels.fetch(channelId).catch(() => null);
+      if (ch && 'send' in ch) await ch.send(bits.join('\n')).catch(() => {});
+    })();
+  }
+
+  /**
+   * Void bets whose track left the queue before it could play, and drop stale
+   * duels. Runs on every queue change (cheap — it exits immediately when a guild
+   * has no pending bet).
+   */
+  private expireBets(s: Session): void {
+    const gid = s.guildId ?? '';
+    const live = (uri: string): boolean => {
+      const snap = s.queue.getSnapshot();
+      return snap.tracks.some((t) => t.uri === uri) || s.queue.getCurrentTrack()?.uri === uri;
+    };
+    const bet = this.stumps.get(gid);
+    if (bet && !live(bet.uri)) {
+      this.stumps.delete(gid);
+      if (bet.channelId) {
+        void (async () => {
+          const ch = await this.client.channels.fetch(bet.channelId).catch(() => null);
+          if (ch && 'send' in ch) {
+            await ch.send(`🤖 Your bet on *${bet.name}* is void — it left the queue before it played.`).catch(() => {});
+          }
+        })();
+      }
+    }
+    const duel = this.duels.get(gid);
+    if (duel && (Date.now() - duel.at > 60 * 60_000 || (!live(duel.a.uri) && !live(duel.b.uri)))) {
+      this.duels.delete(gid);
+    }
+  }
+
+  /** DJ Duel: score both players' picks, then let the room decide (or `now` for an instant verdict). */
+  private async gameDuel(
+    s: Session,
+    me: string,
+    opponent?: string,
+    opts: { now?: boolean } = {},
+  ): Promise<string | EmbedBuilder> {
     const gid = s.guildId ?? '';
     const g = gamesStore.get(gid);
     if (!opponent) {
       const rows = gamesStore.topOf(g.duelWins, 10);
+      const acc = g.duelAccuracy;
       return new EmbedBuilder()
         .setTitle('🎚️ DJ Duel — leaderboard')
         .setColor(this.moodColor.get(gid) ?? this.themeColor())
         .setDescription(
-          rows.length
+          (rows.length
             ? rows.map(([u, n], i) => `${i + 1}. **${u}** — ${n} win${n === 1 ? '' : 's'}`).join('\n')
-            : 'No duels yet. Each player queues a track, then `V@duel @them`.',
+            : 'No duels yet. Each player queues a track, then `V@duel @them`.') +
+            (acc.total > 0
+              ? `\n\n🤖 The bot has predicted the room's verdict **${acc.correct}/${acc.total}** times.`
+              : ''),
         )
-        .setFooter({ text: 'Endless Wave scores both picks against the room\'s current vibe' });
+        .setFooter({ text: 'Room fit is 0-100 (higher is better) · V@games for the rules' });
     }
     if (opponent.toLowerCase() === me.toLowerCase()) return 'You can\'t duel yourself — pick someone else.';
     const a = this.lastPickBy(s, me);
@@ -7145,19 +7297,40 @@ export class DiscordBot {
     if (a.uri === b.uri) return 'Both picks are the same track — queue different songs for a proper duel.';
     const [fa, fb] = await Promise.all([this.trackFit(s, a), this.trackFit(s, b)]);
     if (fa.insufficient || fb.insufficient) {
-      return '🤖 Not enough listening history for a fair duel yet — play a few tracks first.';
+      return '🤖 Not enough listening history for a fair duel yet — play a few tracks first.\n_New here? `V@games`._';
     }
-    const line = (who: string, t: TrackInfo, f: number) => `**${who}** — *${t.name}* · fit **${f}/100** (${describeFit(f)})`;
-    if (fa.fit === fb.fit) {
-      return `🎚️ **Dead heat!**\n${line(me, a, fa.fit)}\n${line(opponent, b, fb.fit)}\nBoth fit equally — no point awarded.`;
+    const line = (who: string, t: TrackInfo, f: number) => `**${who}** — *${t.name}* · **${f}/100**`;
+    const predicted = fa.fit === fb.fit ? '' : fa.fit > fb.fit ? me : opponent;
+
+    if (opts.now) {
+      // Instant verdict — the model alone, no room vote.
+      if (!predicted) {
+        return `🎚️ **Dead heat!**\n${line(me, a, fa.fit)}\n${line(opponent, b, fb.fit)}\nBoth fit equally — no point awarded.`;
+      }
+      const wins = gamesStore.addDuelWin(gid, predicted);
+      return (
+        `🎚️ **DJ Duel** — the bot judges **${predicted}**'s pick the better fit.\n` +
+        `${line(me, a, fa.fit)}\n${line(opponent, b, fb.fit)}\n\n` +
+        `🏆 **${predicted}** takes the point (${wins} win${wins === 1 ? '' : 's'}).`
+      );
     }
-    const winner = fa.fit > fb.fit ? me : opponent;
-    const wins = gamesStore.addDuelWin(gid, winner);
-    return (
-      `🎚️ **DJ Duel** — the bot judges **${winner}**'s pick the better fit for the room.\n` +
-      `${line(me, a, fa.fit)}\n${line(opponent, b, fb.fit)}\n\n` +
-      `🏆 **${winner}** takes the point (${wins} win${wins === 1 ? '' : 's'}).`
-    );
+
+    this.duels.set(gid, {
+      channelId: this.lastTextChannel.get(gid) ?? this.perms.getNpChannel(gid) ?? '',
+      at: Date.now(),
+      predicted,
+      a: { user: me, uri: a.uri, name: a.name, fit: fa.fit },
+      b: { user: opponent, uri: b.uri, name: b.name, fit: fb.fit },
+    });
+    return [
+      `🎚️ **DJ Duel** — ${me} vs ${opponent}. Room fit, scored right now:`,
+      `${line(me, a, fa.fit)}${fa.reasons.length ? `\n> ${fa.reasons.join(' · ')}` : ''}`,
+      `${line(opponent, b, fb.fit)}${fb.reasons.length ? `\n> ${fb.reasons.join(' · ')}` : ''}`,
+      predicted
+        ? `🤖 The bot predicts **${predicted}** — but the room has the final say: a track that plays through earns a point, a skipped one earns nothing.`
+        : '🤖 The bot calls it a dead heat — the room decides.',
+      '_I\'ll post the verdict once both songs have played. `V@games` for the rules._',
+    ].join('\n');
   }
 
   /** Track Roulette: pull a random track from this server's own history. */
@@ -7167,10 +7340,14 @@ export class DiscordBot {
   ): Promise<string | { content: string; components: ActionRowBuilder<ButtonBuilder>[] }> {
     const gid = s.guildId ?? '';
     const history = this.stats.historyTracks(gid, 300);
-    if (history.length < 5) return '🎲 Not enough history yet — play a handful of tracks and spin again.';
+    if (history.length < 5) {
+      return '🎲 Not enough history yet — play a handful of tracks and spin again.\n_New here? `V@games`._';
+    }
     const counts = new Map(history);
     const queued = s.queue.getSnapshot().tracks.map((t) => trackKey(t.name, t.artists));
-    const key = pickRoulette(counts.keys(), gamesStore.get(gid).banned, queued);
+    // Weighted toward DEEP CUTS — uniform picking just resurfaced the songs the
+    // server already plays constantly, which is the opposite of a surprise.
+    const key = pickRouletteWeighted(history, gamesStore.get(gid).banned, queued);
     if (!key) return '🎲 Everything worth spinning is already queued or banned.';
     const found = await this.findTrackTrack(keyToQuery(key));
     if (!found) return `🎲 Pulled *${keyToQuery(key)}* from your history but couldn't find a playable match.`;
@@ -7178,6 +7355,12 @@ export class DiscordBot {
       { uri: found.uri, name: found.name, artists: found.artists, album: found.album ?? '', durationMs: found.durationMs, source: found.source, image: found.image },
       userName,
     );
+    // Play it NEXT, so the decision and the song actually meet instead of the
+    // track landing an hour later when everyone forgot the offer.
+    const after = s.queue.getSnapshot();
+    const from = after.tracks.findIndex((t) => t.uri === found.uri);
+    const to = after.currentIndex + 1;
+    if (from >= 0 && to >= 0 && to < after.tracks.length && from !== to) s.queue.move(from, to);
     // Keep the offer map bounded — old offers just expire.
     if (this.rouletteOffers.size > 50) {
       const oldest = this.rouletteOffers.keys().next().value;
@@ -7199,16 +7382,17 @@ export class DiscordBot {
       },
     });
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder().setCustomId(`roulette:star:${nonce}`).setLabel('Hall of Fame').setEmoji('⭐').setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId(`roulette:ban:${nonce}`).setLabel('Ban').setEmoji('🚫').setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId(`roulette:star:${nonce}`).setLabel('Save to Hall of Fame').setEmoji('⭐').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`roulette:ban:${nonce}`).setLabel('Ban for everyone').setEmoji('🚫').setStyle(ButtonStyle.Danger),
     );
     const plays = counts.get(key) ?? 1;
     return {
       content:
-        `🎲 **Track Roulette** — pulled **${found.name}** — ${found.artists.join(', ') || 'unknown artist'} ` +
-        `out of this server's own history (played ${plays}×). Queued it.\n` +
-        `⭐ keep it in the Hall of Fame · 🚫 never roulette it again.` +
-        (s.voice.isJoined() ? '' : '\n_(Run `/join` so it can play.)_'),
+        `🎲 **Track Roulette** — spun **${found.name}** — ${found.artists.join(', ') || 'unknown artist'} ` +
+        `out of this server's own history (played just ${plays}×). It's queued **next**.\n` +
+        `⭐ **Save to Hall of Fame** — keeps it in a \`Hall of Fame\` playlist (anyone can add).\n` +
+        `🚫 **Ban for everyone** — never spins that song here again (and skips it if it's on now).` +
+        (s.voice.isJoined() ? '' : '\n_Run `/join` so it can play._'),
       components: [row],
     };
   }
@@ -7272,6 +7456,44 @@ export class DiscordBot {
       `📌 **Pinned** — the live now-playing strip will stay in <#${channelId}> and update with every new song.\n` +
       'Unpin with `V@follow off` (or `/npchannel off`).'
     );
+  }
+
+  /** "How the games work" — the plain-English rules, for anyone new. */
+  private gamesEmbed(): EmbedBuilder {
+    return new EmbedBuilder()
+      .setTitle('🎮 Vaporzr Games — how to play')
+      .setColor(this.themeColor())
+      .setDescription(
+        'One shared idea: the bot is always watching what the room is playing, and it can rate how well any song ' +
+          '**fits the vibe right now**. That rating is the **room fit — a score out of 100, higher is better.**',
+      )
+      .addFields(
+        {
+          name: '🤖 Stump the Bot — `V@stump [track]`',
+          value:
+            '1. Queue a song you believe in (`V@p …`), or name one: `V@stump daft punk one more time`.\n' +
+            '2. The bot gives it a **room fit score out of 100**, out loud.\n' +
+            '3. It plays: **plays through → you win.** **Somebody skips it → the bot wins.**\n' +
+            '4. `V@stump board` — humans vs the bot.',
+        },
+        {
+          name: '🎚️ DJ Duel — `V@duel @friend`',
+          value:
+            '1. You each queue one song (`V@p …`).\n' +
+            '2. Type `V@duel @yourfriend` — the bot scores both picks and says which fits the room better, and **why**.\n' +
+            '3. Then the room decides: whichever song **plays through** earns the point, and the bot reports whether its own prediction matched.\n' +
+            '4. `V@duel` — leaderboard + how often the bot called it right. Add `now` for an instant verdict.',
+        },
+        {
+          name: '🎲 Track Roulette — `V@roulette`',
+          value:
+            '1. The bot pulls a song out of **your own server\'s history**, leaning toward ones you rarely play, and queues it **next**.\n' +
+            '2. ⭐ **Save to Hall of Fame** — keeps it forever (a `Hall of Fame` playlist you can `V@load`).\n' +
+            '3. 🚫 **Ban for everyone** — never spins that song here again.\n' +
+            '4. Spin as often as you like — bans are remembered.',
+        },
+      )
+      .setFooter({ text: 'Room fit is 0-100, higher is better · V@help games for the one-liners' });
   }
 
   /** Spotify-Wrapped-style monthly recap for a guild ('YYYY-MM'). */
@@ -7980,11 +8202,12 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
     name: 'Games',
     blurb: 'bet against the bot, duel your friends, spin the roulette',
     lines: [
-      '`/stump [track]` · `V@stump` — bet a track fits the room: survive to the end → you beat the bot',
+      '`/games` · `V@games` — **how the games work (start here)**',
+      '`/stump [track]` · `V@stump` — bet a track fits the room: play through → you beat the bot; skipped → the bot wins',
       '`V@stump board` — human-vs-bot scoreboard',
-      '`/duel [@user]` · `V@duel` — DJ Duel: Endless Wave scores both picks and crowns the better fit',
-      '`V@duel board` — duel leaderboard',
-      '`/roulette` · `V@roulette` — a random track from this server\'s own history: ⭐ star it (Hall of Fame) or 🚫 ban it',
+      '`/duel [@user] [now]` · `V@duel` — DJ Duel: the bot scores both picks and predicts a winner, then the room decides (add `now` for an instant verdict)',
+      '`V@duel board` — duel leaderboard + how often the bot called the room right',
+      '`/roulette` · `V@roulette` — a rarely-played track from this server\'s own history, queued next: ⭐ Hall of Fame or 🚫 Ban',
       '`/quiz` · `V@quiz` — guess-the-song lyric game · `/guess <answer>` · `V@guess`',
     ],
   },
