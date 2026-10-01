@@ -261,6 +261,12 @@ export class PlaybackController {
 
   /** Callback fired when a track finishes (or is skipped). Useful for Endless Wave auto-queue. */
   onTrackEnd: ((endedTrack: TrackInfo) => void) | null = null;
+  /** Fired only when the current track is abandoned early (manual skip / jump /
+   *  voteskip) — never on a natural end. Lets the mini-games tell "played
+   *  through" from "the room skipped it". */
+  onTrackSkipped: ((skippedTrack: TrackInfo) => void) | null = null;
+  /** Set while advancing due to a natural end, so next() can tell the two apart. */
+  private naturalAdvance = false;
   /** Callback fired when the queue runs dry (last track ended, nothing to advance). */
   onQueueEnd: (() => void) | null = null;
   /** Callback fired when playback stops because several tracks in a row failed to start. */
@@ -564,7 +570,9 @@ export class PlaybackController {
         this.replayCurrent();
         return;
       }
+      this.naturalAdvance = true;
       this.next();
+      this.naturalAdvance = false;
       if (this.onTrackEnd) this.onTrackEnd(ended);
     }
   }
@@ -608,7 +616,9 @@ export class PlaybackController {
         this.replayCurrent();
         return;
       }
+      this.naturalAdvance = true;
       this.next(true);
+      this.naturalAdvance = false;
       if (this.onTrackEnd && endedTrack) this.onTrackEnd(endedTrack);
     };
   }
@@ -1435,12 +1445,15 @@ export class PlaybackController {
       // genuinely ended) — the position catches the real end, not 2s early.
       if (dur > 0 && pos >= dur - 2000 && bytes === this.lastSpotifyBytes) {
         this.clearEndTimer();
+        this.naturalAdvance = true;
         if (this.onTrackEnd) {
           const ended = this.queue.getCurrentTrack();
           this.next();
+          this.naturalAdvance = false;
           if (ended) this.onTrackEnd(ended);
         } else {
           this.next();
+          this.naturalAdvance = false;
         }
         return;
       }
@@ -1546,6 +1559,10 @@ export class PlaybackController {
     // A manual skip invalidates a pending crossfade seek; a natural end keeps it.
     if (!keepXfade) this.pendingXfadeSeekMs = 0;
     this.lastSource = this.currentSource();
+    // Remember what was playing: if this advance wasn't a natural end, the track
+    // was abandoned early (skip / jump / voteskip) — the mini-games need to know.
+    const outgoing = this.queue.getCurrentTrack();
+    const wasNatural = this.naturalAdvance;
     if (!this.queue.next()) {
       const snap = this.queue.getSnapshot();
       console.log(`[playback] advance failed — queue ended (index ${snap.currentIndex} of ${snap.tracks.length})`);
@@ -1571,6 +1588,10 @@ export class PlaybackController {
     if (nextTrack) {
       // Publish the moved cursor before async Spotify/yt-dlp resolution finishes.
       this.queue.setState({ playing: false, track: nextTrack, durationMs: nextTrack.durationMs, positionMs: 0, source: nextTrack.source });
+    }
+    // The room abandoned the outgoing track before it finished.
+    if (!wasNatural && outgoing && outgoing.uri !== nextTrack?.uri && this.onTrackSkipped) {
+      this.onTrackSkipped(outgoing);
     }
     this.warmCacheAround(this.queue.getSnapshot().currentIndex);
     this.safePlay();

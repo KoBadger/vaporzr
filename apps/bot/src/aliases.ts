@@ -1,0 +1,86 @@
+/**
+ * Every `V@` shortcut → the canonical command it dispatches to.
+ *
+ * Single source of truth: the prefix dispatcher uses it for rate-limit buckets
+ * and routing, and `V@help aliases` renders the full index from it, so a new
+ * shortcut can never be missing from the help.
+ *
+ * Subcommand shortcuts (save / load / del / pl) are handled separately in the
+ * dispatcher because they read `args` themselves.
+ */
+export const V_ALIASES: Record<string, string> = {
+  p: 'play', play: 'play',
+  i: 'insert', insert: 'insert',
+  s: 'skip', skip: 'skip',
+  pau: 'pause', pause: 'pause',
+  r: 'resume', resume: 'resume',
+  t: 'toggle', toggle: 'toggle',
+  v: 'volume', vol: 'volume', volume: 'volume',
+  q: 'queue', queue: 'queue',
+  np: 'nowplaying', nowplaying: 'nowplaying',
+  c: 'clear', clear: 'clear', stop: 'clear',
+  rem: 'remove', remove: 'remove',
+  sh: 'shuffle', shuffle: 'shuffle',
+  j: 'join', join: 'join',
+  l: 'leave', leave: 'leave',
+  pan: 'panel', panel: 'panel', key: 'key',
+  sc: 'screensaver', screensaver: 'screensaver',
+  th: 'theme', theme: 'theme',
+  wave: 'wave',
+  burst: 'burst',
+  lyrics: 'lyrics', lyr: 'lyrics',
+  k: 'karaoke', karaoke: 'karaoke',
+  player: 'player', open: 'player',
+  dj: 'dj',
+  sfx: 'sfx',
+  sens: 'sensitivity', sensitivity: 'sensitivity',
+  ew: 'endwav', endwav: 'endwav',
+  autoplay: 'autoplay', ap: 'autoplay', auto: 'autoplay',
+  speed: 'speed',
+  bass: 'bassboost', boost: 'bassboost', bassboost: 'bassboost',
+  eq: 'eq', preset: 'eq',
+  norm: 'norm', normalize: 'norm', loud: 'norm', loudness: 'norm',
+  wrapped: 'wrapped', wrap: 'wrapped',
+  follow: 'follow', fol: 'follow',
+  stump: 'stump', st: 'stump',
+  duel: 'duel', dl: 'duel',
+  roulette: 'roulette', roll: 'roulette', rl: 'roulette',
+  sleep: 'sleep', timer: 'sleep',
+  help: 'help',
+  diag: 'diag',
+  save: 'playlist', load: 'playlist', playlists: 'playlist', pl: 'playlist', del: 'playlist',
+  djrole: 'djrole',
+  jump: 'jump',
+  ambient: 'ambient',
+  mood: 'mood',
+  tts: 'tts',
+  voteskip: 'voteskip', vs: 'voteskip',
+  duck: 'duck',
+  duckmode: 'duckmode', dmode: 'duckmode',
+  npchannel: 'npchannel', npc: 'npchannel',
+  vibe: 'vibe',
+  lb: 'leaderboard', leaderboard: 'leaderboard',
+  dna: 'dna', cover: 'cover',
+  hype: 'hype',
+  mix: 'mix',
+  mashup: 'mashup', msh: 'mashup',
+  mashupgame: 'mashupgame', mg: 'mashupgame',
+  mashups: 'mashups', mh: 'mashups',
+  dedupe: 'dedupe', dedup: 'dedupe', dd: 'dedupe',
+  crossfade: 'crossfade', xfade: 'crossfade',
+  bulk: 'bulk',
+  skipto: 'skipto',
+  skiptoggle: 'skiptoggle',
+  quiz: 'quiz', guess: 'guess',
+};
+
+/** Extra dispatch-only spellings (not shown as shortcuts in help). */
+export const V_DISPATCH_ALIASES: Record<string, string> = {
+  boost: 'bassboost',
+  msh: 'mashup',
+  mg: 'mashupgame',
+  mh: 'mashups',
+  dedup: 'dedupe',
+  dd: 'dedupe',
+  xfade: 'crossfade',
+};

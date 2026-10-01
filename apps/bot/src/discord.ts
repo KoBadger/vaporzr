@@ -77,6 +77,10 @@ import type { PermissionLevel, TrackInfo, PlaybackState } from '@vaporzr/shared'
 import * as EW from './endlesswave.js';
 import { playlistStore } from './playlists.js';
 import { statsStore } from './stats.js';
+import { trackKey } from './stats.js';
+import { gamesStore, fitPercent, describeFit, pickRoulette, keyToQuery } from './games.js';
+import { packCategoryFields, chunkFieldsIntoEmbeds, aliasIndexFields } from './help.js';
+import { V_ALIASES, V_DISPATCH_ALIASES } from './aliases.js';
 import { ttsEngine } from './tts.js';
 import { pushBroadcast, pushSubscriptionCount } from './push.js';
 import { downloadToTempFile } from './mediaDownload.js';
@@ -261,7 +265,29 @@ const COMMANDS = [
     .setName('sfx')
     .setDescription('Play a DJ sound effect over the music')
     .addStringOption((o) => o.setName('sound').setDescription('The effect to play (omit to list)').setAutocomplete(true)),
-  new SlashCommandBuilder().setName('help').setDescription('Show how to use Vaporzr'),
+  new SlashCommandBuilder()
+    .setName('help')
+    .setDescription('Show how to use Vaporzr')
+    .addStringOption((o) =>
+      o
+        .setName('topic')
+        .setDescription('Show everything at once, the V@ shortcut index, or one category')
+        .setRequired(false)
+        .addChoices(
+          { name: '📖 Everything (all commands)', value: 'all' },
+          { name: '⌨️ V@ shortcut index', value: 'aliases' },
+          { name: '🎵 Playback', value: 'playback' },
+          { name: '📜 Queue', value: 'queue' },
+          { name: '🌊 Autoplay', value: 'autoplay' },
+          { name: '🎛️ FX & DJ', value: 'fx' },
+          { name: '🎮 Games', value: 'games' },
+          { name: '🎤 Lyrics', value: 'lyrics' },
+          { name: '🎨 Visuals', value: 'visuals' },
+          { name: '💾 Library', value: 'library' },
+          { name: '🔊 Voice', value: 'voice' },
+          { name: '🛠️ System', value: 'system' },
+        ),
+    ),
   new SlashCommandBuilder().setName('invite').setDescription('Get a link to add Vaporzr to your server'),
   new SlashCommandBuilder().setName('stats').setDescription('Show bot statistics'),
   new SlashCommandBuilder()
@@ -339,6 +365,21 @@ const COMMANDS = [
         .setRequired(false)
         .addChoices({ name: 'This month', value: 'this' }, { name: 'Last month', value: 'last' }),
     ),
+  new SlashCommandBuilder()
+    .setName('follow')
+    .setDescription('Pin the live now-playing strip here — it updates with every new song')
+    .addBooleanOption((o) => o.setName('off').setDescription('Stop following (remove the strip)')),
+  new SlashCommandBuilder()
+    .setName('stump')
+    .setDescription('Stump the Bot — bet a track will fit the room: survive to the end and you win')
+    .addStringOption((o) => o.setName('track').setDescription('Track to bet on (omit to bet your last pick)').setRequired(false)),
+  new SlashCommandBuilder()
+    .setName('duel')
+    .setDescription('DJ Duel — Endless Wave judges whose pick fits the room better')
+    .addUserOption((o) => o.setName('opponent').setDescription('Who you are challenging').setRequired(false)),
+  new SlashCommandBuilder()
+    .setName('roulette')
+    .setDescription('Track Roulette — a random track from this server\'s history, star it or ban it'),
   new SlashCommandBuilder()
     .setName('sleep')
     .setDescription('Stop playback and leave the voice channel after a timer')
@@ -609,6 +650,13 @@ export class DiscordBot {
   /** guildId -> (track uri|name) whose lyrics were last broadcast, so a
    *  pause/resume state re-emit doesn't refetch/rebroadcast the same lyrics. */
   private lastLyricsKey = new Map<string, string>();
+  /** guildId -> pending Stump-the-Bot wager (resolved on the track's end/skip). */
+  private stumps = new Map<string, { uri: string; user: string; fit: number; name: string; channelId: string }>();
+  /** nonce -> a roulette offer waiting on a star/ban button press. */
+  private rouletteOffers = new Map<
+    string,
+    { guildId: string; key: string; userId: string; track: { uri: string; name: string; artists: string[]; album: string; durationMs: number; source: string; image?: string } }
+  >();
   /** guildId -> mood visuals on; moodColor tints now-playing colors from features. */
   private moodOn = new Set<string>();
   private moodColor = new Map<string, number>();
@@ -783,10 +831,16 @@ export class DiscordBot {
         },
       });
       s.playback.onTrackEnd = (ended) => {
+        // Mini-games: a track that reached its natural end beats the bot's bet.
+        this.resolveStump(s, ended, false);
         if (!EW.isAutoActive(s.endlessWave)) return;
         void this.waveTrackEnded(s, ended).catch((err) => {
           console.warn(`[endlesswave] on-end failed: ${err instanceof Error ? err.message : err}`);
         });
+      };
+      // Fired only for early abandonment (skip / voteskip / jump).
+      s.playback.onTrackSkipped = (skipped) => {
+        this.resolveStump(s, skipped, true);
       };
       // When the queue runs dry, post a friendly notice so listeners aren't left
       // wondering why the music stopped. An active wave ignores the backoff here
@@ -1062,6 +1116,8 @@ export class DiscordBot {
         if (embed) await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral }).catch(() => {});
       } else if (interaction.customId.startsWith('qa:')) {
         await this.handleQueueAdjust(interaction);
+      } else if (interaction.customId.startsWith('roulette:')) {
+        await this.handleRouletteButton(interaction);
       } else {
         await this.handleButton(interaction);
       }
@@ -2350,6 +2406,37 @@ export class DiscordBot {
         break;
       }
 
+      case 'follow': {
+        if (!this.requireLevel('follow', interaction)) return this.deny(interaction);
+        const gid = interaction.guildId;
+        if (!gid) return void (await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral }));
+        await interaction.reply(await this.followNowPlaying(gid, interaction.channelId, interaction.options.getBoolean('off') ?? false));
+        break;
+      }
+
+      case 'stump': {
+        if (!this.requireLevel('stump', interaction)) return this.deny(interaction);
+        await interaction.reply(await this.gameStump(s, interaction.user.username, interaction.options.getString('track') ?? undefined));
+        break;
+      }
+
+      case 'duel': {
+        if (!this.requireLevel('duel', interaction)) return this.deny(interaction);
+        const opp = interaction.options.getUser('opponent');
+        const duel = await this.gameDuel(s, interaction.user.username, opp?.username);
+        if (typeof duel === 'string') await interaction.reply(duel);
+        else await interaction.reply({ embeds: [duel] });
+        break;
+      }
+
+      case 'roulette': {
+        if (!this.requireLevel('roulette', interaction)) return this.deny(interaction);
+        const spin = await this.gameRoulette(s, interaction.user.username);
+        if (typeof spin === 'string') await interaction.reply(spin);
+        else await interaction.reply({ content: spin.content, components: spin.components });
+        break;
+      }
+
       case 'sleep': {
         if (!this.requireLevel('sleep', interaction)) return this.deny(interaction);
         if (!interaction.inGuild()) {
@@ -2482,7 +2569,18 @@ export class DiscordBot {
       }
 
       case 'help': {
-        await interaction.reply({ embeds: [this.helpEmbed()], components: this.helpButtons() });
+        const topic = (interaction.options.getString('topic') ?? '').toLowerCase();
+        if (topic === 'all') {
+          await interaction.reply({ embeds: this.helpAllEmbeds() });
+          break;
+        }
+        if (topic === 'aliases') {
+          await interaction.reply({ embeds: [this.helpAliasesEmbed()] });
+          break;
+        }
+        const cat = topic ? this.helpCategoryEmbed(topic) : null;
+        if (cat) await interaction.reply({ embeds: [cat], components: this.helpButtons() });
+        else await interaction.reply({ embeds: [this.helpEmbed()], components: this.helpButtons() });
         break;
       }
 
@@ -2620,67 +2718,7 @@ export class DiscordBot {
     };
 
     // Rate limit prefix commands against the same bucket as their / command.
-    const alias: Record<string, string> = {
-      p: 'play', play: 'play',
-      i: 'insert', insert: 'insert',
-      s: 'skip', skip: 'skip',
-      pau: 'pause', pause: 'pause',
-      r: 'resume', resume: 'resume',
-      t: 'toggle', toggle: 'toggle',
-      v: 'volume', vol: 'volume', volume: 'volume',
-      q: 'queue', queue: 'queue',
-      np: 'nowplaying', nowplaying: 'nowplaying',
-      c: 'clear', clear: 'clear', stop: 'clear',
-      rem: 'remove', remove: 'remove',
-      sh: 'shuffle', shuffle: 'shuffle',
-      j: 'join', join: 'join',
-      l: 'leave', leave: 'leave',
-      pan: 'panel', panel: 'panel', key: 'key',
-      sc: 'screensaver', screensaver: 'screensaver',
-      th: 'theme', theme: 'theme',
-      wave: 'wave',
-      burst: 'burst',
-      lyrics: 'lyrics', lyr: 'lyrics',
-      k: 'karaoke', karaoke: 'karaoke',
-      player: 'player', open: 'player',
-      dj: 'dj',
-      sfx: 'sfx',
-      sens: 'sensitivity', sensitivity: 'sensitivity',
-      ew: 'endwav', endwav: 'endwav',
-      autoplay: 'autoplay', ap: 'autoplay', auto: 'autoplay',
-      speed: 'speed',
-      bass: 'bassboost', boost: 'bassboost', bassboost: 'bassboost',
-      eq: 'eq', preset: 'eq',
-      norm: 'norm', normalize: 'norm', loud: 'norm', loudness: 'norm',
-      wrapped: 'wrapped', wrap: 'wrapped',
-      sleep: 'sleep', timer: 'sleep',
-      help: 'help',
-      diag: 'diag',
-      save: 'playlist', load: 'playlist', playlists: 'playlist', pl: 'playlist', del: 'playlist',
-      djrole: 'djrole',
-      jump: 'jump',
-      ambient: 'ambient',
-      mood: 'mood',
-      tts: 'tts',
-      voteskip: 'voteskip', vs: 'voteskip',
-      duck: 'duck',
-      duckmode: 'duckmode', dmode: 'duckmode',
-      npchannel: 'npchannel', npc: 'npchannel',
-      vibe: 'vibe',
-      lb: 'leaderboard', leaderboard: 'leaderboard',
-      dna: 'dna', cover: 'cover',
-      hype: 'hype',
-      mix: 'mix',
-      mashup: 'mashup', msh: 'mashup',
-      mashupgame: 'mashupgame', mg: 'mashupgame',
-      mashups: 'mashups', mh: 'mashups',
-      dedupe: 'dedupe', dedup: 'dedupe', dd: 'dedupe',
-      crossfade: 'crossfade', xfade: 'crossfade',
-      bulk: 'bulk',
-      skipto: 'skipto',
-      skiptoggle: 'skiptoggle',
-      quiz: 'quiz', guess: 'guess',
-    };
+    const alias: Record<string, string> = V_ALIASES;
     const canonical = alias[cmd];
     if (canonical) {
       const wait = this.cooldownRemaining(message.author.id, canonical);
@@ -2694,15 +2732,7 @@ export class DiscordBot {
     // (that's why V@dd / V@dedup / V@mh / V@mg / V@msh / V@boost did nothing).
     // Subcommand shortcuts (save / load / del / pl) keep their own case and
     // read `args`, so they are deliberately not listed here.
-    const dispatchAlias: Record<string, string> = {
-      boost: 'bassboost',
-      msh: 'mashup',
-      mg: 'mashupgame',
-      mh: 'mashups',
-      dedup: 'dedupe',
-      dd: 'dedupe',
-      xfade: 'crossfade',
-    };
+    const dispatchAlias: Record<string, string> = V_DISPATCH_ALIASES;
     if (dispatchAlias[cmd]) cmd = dispatchAlias[cmd];
 
     try {
@@ -3769,6 +3799,47 @@ export class DiscordBot {
           break;
         }
 
+        case 'follow': {
+          if (!canUse('follow')) return void (await deny());
+          const fid = message.guildId;
+          if (!fid) return void (await message.reply('Follow only works inside a server.'));
+          const off = /^(off|stop|clear|disable)$/i.test((args || '').trim());
+          await message.reply(await this.followNowPlaying(fid, message.channelId, off));
+          break;
+        }
+
+        case 'stump': {
+          if (!canUse('stump')) return void (await deny());
+          await message.reply(await this.gameStump(s, message.author.username, args || undefined));
+          break;
+        }
+
+        case 'duel': {
+          if (!canUse('duel')) return void (await deny());
+          const raw = (args || '').trim();
+          let opponent: string | undefined;
+          const mention = /^<@!?(\d+)>$/.exec(raw);
+          if (mention) {
+            const member = await message.guild?.members.fetch(mention[1]).catch(() => null);
+            opponent = member?.user.username ?? raw.replace(/[<@!>]/g, '');
+          } else if (raw && !/^(board|top|leaderboard|rank)$/i.test(raw)) {
+            const found = await message.guild?.members.fetch({ query: raw, limit: 1 }).catch(() => null);
+            opponent = found?.first()?.user.username ?? raw;
+          }
+          const duel = await this.gameDuel(s, message.author.username, opponent);
+          if (typeof duel === 'string') await message.reply(duel);
+          else await message.reply({ embeds: [duel] });
+          break;
+        }
+
+        case 'roulette': {
+          if (!canUse('roulette')) return void (await deny());
+          const spin = await this.gameRoulette(s, message.author.username);
+          if (typeof spin === 'string') await message.reply(spin);
+          else await message.reply({ content: spin.content, components: spin.components });
+          break;
+        }
+
         case 'sleep':
         case 'timer': {
           if (!canUse('sleep')) return void (await deny());
@@ -3855,10 +3926,19 @@ export class DiscordBot {
         }
 
         case 'help': {
+          const topic = (args || '').toLowerCase().trim();
+          if (topic === 'all' || topic === 'everything') {
+            await message.reply({ embeds: this.helpAllEmbeds() });
+            break;
+          }
+          if (topic === 'aliases' || topic === 'shortcuts') {
+            await message.reply({ embeds: [this.helpAliasesEmbed()] });
+            break;
+          }
           const cat = args ? this.helpCategoryEmbed(args) : null;
           if (args && !cat) {
             await message.reply(
-              `Unknown category \`${args}\`. Try: ${HELP_CATEGORIES.map((c) => `\`${c.id}\``).join(', ')}.`,
+              `Unknown category \`${args}\`. Try: ${HELP_CATEGORIES.map((c) => `\`${c.id}\``).join(', ')}, \`all\`, or \`aliases\`.`,
             );
           } else if (cat) {
             await message.reply({ embeds: [cat], components: this.helpButtons() });
@@ -6933,6 +7013,267 @@ export class DiscordBot {
       .setFooter({ text: `You: ${mine.queued} queued · ${mine.played} played` });
   }
 
+  /* ---------- mini-games (DJ Duel · Stump the Bot · Track Roulette) ---------- */
+
+  /**
+   * Endless Wave's fit score for a track against this guild's current vibe.
+   * EW scores "lower = better", so this converts it to a human 0–100 number.
+   * With no listening history yet the score would be meaningless — callers get
+   * `insufficient: true` and tell the player to build up a few tracks first.
+   */
+  private async trackFit(s: Session, track: TrackInfo): Promise<{ fit: number; insufficient: boolean }> {
+    const st = s.endlessWave;
+    const insufficient = st.recentFeatures.length === 0 && !st.anchor;
+    const targets = EW.buildTargets(st);
+    const env = EW.buildNeighbourhood(st);
+    let features: AudioFeatures | undefined;
+    const id = track.uri.startsWith('spotify:') ? extractSpotifyId(track.uri) : null;
+    if (id) features = (await getAudioFeatures([id]).catch(() => undefined))?.get(id);
+    const candidate = {
+      uri: track.uri,
+      name: track.name,
+      artists: track.artists,
+      album: track.album ?? '',
+      durationMs: track.durationMs,
+      source: track.source ?? 'spotify',
+    };
+    const score = EW.scoreCandidate(candidate, targets, st.recentArtists ?? [], features, env);
+    return { fit: fitPercent(score), insufficient };
+  }
+
+  /** A player's most recently queued track (their "pick" for duels/stump). */
+  private lastPickBy(s: Session, username: string): TrackInfo | null {
+    const mine = s.queue.getSnapshot().tracks.filter((t) => t.addedBy === username);
+    if (mine.length === 0) return null;
+    return mine.reduce((a, b) => (b.addedAt >= a.addedAt ? b : a));
+  }
+
+  /** Resolve a track by name/query for a game (Spotify first, then YouTube). */
+  private async findTrackTrack(query: string): Promise<ResolvedTrack | null> {
+    let cand = await searchCandidates(query, 1).catch(() => [] as ResolvedTrack[]);
+    if (cand.length === 0) cand = await searchYoutube(query, 1).catch(() => [] as ResolvedTrack[]);
+    return cand[0] ?? null;
+  }
+
+  /** Open a Stump-the-Bot wager on the player's pick (or a named track). */
+  private async gameStump(s: Session, userName: string, query: string | undefined): Promise<string> {
+    const gid = s.guildId ?? '';
+    let track: TrackInfo | null;
+    if (query) {
+      const found = await this.findTrackTrack(query);
+      if (!found) return `🔎 Couldn't find “${query}”.`;
+      s.queue.enqueue(
+        { uri: found.uri, name: found.name, artists: found.artists, album: found.album ?? '', durationMs: found.durationMs, source: found.source, image: found.image },
+        userName,
+      );
+      track = s.queue.getSnapshot().tracks.find((t) => t.uri === found.uri) ?? null;
+      if (!track) return `Queued *${found.name}* but couldn't track it for the bet — try again.`;
+    } else {
+      track = this.lastPickBy(s, userName);
+    }
+    if (!track) return 'Queue something first (`V@p <track>`), then bet on it with `V@stump`.';
+    const { fit, insufficient } = await this.trackFit(s, track);
+    if (insufficient) {
+      return '🤖 Not enough listening history for me to judge a fit yet — play a few tracks, then try again. (No bet placed.)';
+    }
+    this.stumps.set(gid, {
+      uri: track.uri,
+      user: userName,
+      fit,
+      name: track.name,
+      channelId: this.lastTextChannel.get(gid) ?? this.perms.getNpChannel(gid) ?? '',
+    });
+    const playing = s.voice.isJoined();
+    return (
+      `🤖 **Stump the Bot** — I rate *${track.name}* a **${fit}/100** fit for this room (${describeFit(fit)}).\n` +
+      `Play it through and you win; if the room skips it, I win.` +
+      (playing ? '' : '\n_(Run `/follow` or `/join` so it can actually play.)_')
+    );
+  }
+
+  /** Resolve a pending Stump bet when its track ends naturally or is skipped. */
+  private resolveStump(s: Session, track: TrackInfo, skipped: boolean): void {
+    const gid = s.guildId ?? '';
+    const bet = this.stumps.get(gid);
+    if (!bet || bet.uri !== track.uri) return;
+    this.stumps.delete(gid);
+    const g = gamesStore.get(gid);
+    const humans = Object.values(g.stumpWins).reduce((a, b) => a + b, 0);
+    let msg: string;
+    if (skipped) {
+      const botWins = gamesStore.addBotWin(gid);
+      msg =
+        `🤖 **Skipped** — the bot called it. *${track.name}* was rated **${bet.fit}/100** and the room disagreed.\n` +
+        `_Score — bot ${botWins} · humans ${humans}_`;
+    } else {
+      const wins = gamesStore.addStumpWin(gid, bet.user);
+      msg =
+        `🏆 **${bet.user} stumps the bot!** *${track.name}* played all the way through — I rated it ${bet.fit}/100.\n` +
+        `_Score — bot ${g.botWins} · humans ${humans + 1} · ${bet.user} has ${wins} win${wins === 1 ? '' : 's'}_`;
+    }
+    const channelId = bet.channelId || this.perms.getNpChannel(gid);
+    if (!channelId) return;
+    void (async () => {
+      const ch = await this.client.channels.fetch(channelId).catch(() => null);
+      if (ch && 'send' in ch) await ch.send(msg).catch(() => {});
+    })();
+  }
+
+  /** DJ Duel: score both players' picks and crown the better fit (or the board). */
+  private async gameDuel(s: Session, me: string, opponent?: string): Promise<string | EmbedBuilder> {
+    const gid = s.guildId ?? '';
+    const g = gamesStore.get(gid);
+    if (!opponent) {
+      const rows = gamesStore.topOf(g.duelWins, 10);
+      return new EmbedBuilder()
+        .setTitle('🎚️ DJ Duel — leaderboard')
+        .setColor(this.moodColor.get(gid) ?? this.themeColor())
+        .setDescription(
+          rows.length
+            ? rows.map(([u, n], i) => `${i + 1}. **${u}** — ${n} win${n === 1 ? '' : 's'}`).join('\n')
+            : 'No duels yet. Each player queues a track, then `V@duel @them`.',
+        )
+        .setFooter({ text: 'Endless Wave scores both picks against the room\'s current vibe' });
+    }
+    if (opponent.toLowerCase() === me.toLowerCase()) return 'You can\'t duel yourself — pick someone else.';
+    const a = this.lastPickBy(s, me);
+    const b = this.lastPickBy(s, opponent);
+    if (!a || !b) {
+      const missing = [!a ? me : null, !b ? opponent : null].filter(Boolean).join(' and ');
+      return `🎚️ I need a queued pick from **${missing}** first — each of you queue a track (\`V@p <track>\`), then re-run \`V@duel\`.`;
+    }
+    if (a.uri === b.uri) return 'Both picks are the same track — queue different songs for a proper duel.';
+    const [fa, fb] = await Promise.all([this.trackFit(s, a), this.trackFit(s, b)]);
+    if (fa.insufficient || fb.insufficient) {
+      return '🤖 Not enough listening history for a fair duel yet — play a few tracks first.';
+    }
+    const line = (who: string, t: TrackInfo, f: number) => `**${who}** — *${t.name}* · fit **${f}/100** (${describeFit(f)})`;
+    if (fa.fit === fb.fit) {
+      return `🎚️ **Dead heat!**\n${line(me, a, fa.fit)}\n${line(opponent, b, fb.fit)}\nBoth fit equally — no point awarded.`;
+    }
+    const winner = fa.fit > fb.fit ? me : opponent;
+    const wins = gamesStore.addDuelWin(gid, winner);
+    return (
+      `🎚️ **DJ Duel** — the bot judges **${winner}**'s pick the better fit for the room.\n` +
+      `${line(me, a, fa.fit)}\n${line(opponent, b, fb.fit)}\n\n` +
+      `🏆 **${winner}** takes the point (${wins} win${wins === 1 ? '' : 's'}).`
+    );
+  }
+
+  /** Track Roulette: pull a random track from this server's own history. */
+  private async gameRoulette(
+    s: Session,
+    userName: string,
+  ): Promise<string | { content: string; components: ActionRowBuilder<ButtonBuilder>[] }> {
+    const gid = s.guildId ?? '';
+    const history = this.stats.historyTracks(gid, 300);
+    if (history.length < 5) return '🎲 Not enough history yet — play a handful of tracks and spin again.';
+    const counts = new Map(history);
+    const queued = s.queue.getSnapshot().tracks.map((t) => trackKey(t.name, t.artists));
+    const key = pickRoulette(counts.keys(), gamesStore.get(gid).banned, queued);
+    if (!key) return '🎲 Everything worth spinning is already queued or banned.';
+    const found = await this.findTrackTrack(keyToQuery(key));
+    if (!found) return `🎲 Pulled *${keyToQuery(key)}* from your history but couldn't find a playable match.`;
+    s.queue.enqueue(
+      { uri: found.uri, name: found.name, artists: found.artists, album: found.album ?? '', durationMs: found.durationMs, source: found.source, image: found.image },
+      userName,
+    );
+    // Keep the offer map bounded — old offers just expire.
+    if (this.rouletteOffers.size > 50) {
+      const oldest = this.rouletteOffers.keys().next().value;
+      if (oldest) this.rouletteOffers.delete(oldest);
+    }
+    const nonce = Math.random().toString(36).slice(2, 10);
+    this.rouletteOffers.set(nonce, {
+      guildId: gid,
+      key,
+      userId: userName,
+      track: {
+        uri: found.uri,
+        name: found.name,
+        artists: found.artists,
+        album: found.album ?? '',
+        durationMs: found.durationMs,
+        source: found.source,
+        image: found.image,
+      },
+    });
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder().setCustomId(`roulette:star:${nonce}`).setLabel('Hall of Fame').setEmoji('⭐').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`roulette:ban:${nonce}`).setLabel('Ban').setEmoji('🚫').setStyle(ButtonStyle.Danger),
+    );
+    const plays = counts.get(key) ?? 1;
+    return {
+      content:
+        `🎲 **Track Roulette** — pulled **${found.name}** — ${found.artists.join(', ') || 'unknown artist'} ` +
+        `out of this server's own history (played ${plays}×). Queued it.\n` +
+        `⭐ keep it in the Hall of Fame · 🚫 never roulette it again.` +
+        (s.voice.isJoined() ? '' : '\n_(Run `/join` so it can play.)_'),
+      components: [row],
+    };
+  }
+
+  /** Handle the roulette ⭐/🚫 buttons. */
+  private async handleRouletteButton(interaction: ButtonInteraction): Promise<void> {
+    const [, action, nonce] = interaction.customId.split(':');
+    const offer = nonce ? this.rouletteOffers.get(nonce) : undefined;
+    if (!offer) {
+      await interaction.reply({ content: 'That roulette offer has expired — spin again with `V@roulette`.', flags: MessageFlags.Ephemeral }).catch(() => {});
+      return;
+    }
+    this.rouletteOffers.delete(nonce);
+    const gid = offer.guildId;
+    const s = this.sessionFor(gid);
+    if (action === 'star') {
+      const n = gamesStore.star(gid, interaction.user.username);
+      playlistStore.appendTrack(gid, 'Hall of Fame', offer.track);
+      await interaction
+        .reply({
+          content: `⭐ **${offer.track.name}** is in the Hall of Fame — saved to the \`Hall of Fame\` playlist (your ${n} star${n === 1 ? '' : 's'}).`,
+          flags: MessageFlags.Ephemeral,
+        })
+        .catch(() => {});
+      return;
+    }
+    gamesStore.ban(gid, offer.key);
+    const cur = s.queue.getCurrentTrack();
+    let note: string;
+    if (cur?.uri === offer.track.uri) {
+      if (!this.perms.getVoteSkip(gid)) {
+        s.playback.next();
+        note = ' — skipping it now.';
+      } else {
+        note = ' (vote-skip is on here, so use `/skip` to drop it).';
+      }
+    } else {
+      const idx = s.queue.getSnapshot().tracks.findIndex((t) => t.uri === offer.track.uri);
+      if (idx >= 0) {
+        s.queue.remove(idx);
+        note = ' — removed from the queue.';
+      } else {
+        note = '.';
+      }
+    }
+    await interaction.reply({ content: `🚫 Banned **${offer.track.name}** from roulette${note}`, flags: MessageFlags.Ephemeral }).catch(() => {});
+  }
+
+  /** /follow — pin the live now-playing strip in a channel (same setting as /npchannel). */
+  private async followNowPlaying(gid: string, channelId: string, off: boolean): Promise<string> {
+    if (off) {
+      this.perms.setNpChannel(gid, null);
+      await this.clearMiniNp(gid);
+      return '🌙 Now-playing strip unpinned — it will stop updating.';
+    }
+    this.perms.setNpChannel(gid, channelId);
+    this.miniTrackUri.delete(gid);
+    // Post it immediately instead of waiting for the next track change.
+    void this.maybeAutoMiniNp(gid, this.sessionFor(gid).queue.getState());
+    return (
+      `📌 **Pinned** — the live now-playing strip will stay in <#${channelId}> and update with every new song.\n` +
+      'Unpin with `V@follow off` (or `/npchannel off`).'
+    );
+  }
+
   /** Spotify-Wrapped-style monthly recap for a guild ('YYYY-MM'). */
   private wrappedEmbed(guildId: string, month: string): EmbedBuilder {
     const w = this.stats.wrapped(guildId, month);
@@ -6977,10 +7318,38 @@ export class DiscordBot {
       .setTitle('🎧 Vaporzr — Command Center')
       .setDescription(
         `Music, autoplay & visuals for your server.\n\n${vizLine}\n\n${catLines}\n\n` +
-          'Tap a category below, or type `V@help <category>`.',
+          'Tap a category below, `V@help <category>` to jump, **`V@help all`** for every command, ' +
+          'or **`V@help aliases`** for the shortcut index.',
       )
       .setColor(this.themeColor())
       .setFooter({ text: 'Every / command has a V@ prefix shortcut (e.g. /play → V@p).' });
+  }
+
+  /** "See everything": every help line, packed into as few messages as Discord allows. */
+  private helpAllEmbeds(): EmbedBuilder[] {
+    const fields = packCategoryFields(
+      HELP_CATEGORIES.map((c) => ({ name: `${c.emoji} ${c.name}`, lines: c.lines })),
+    );
+    const pages = chunkFieldsIntoEmbeds(fields);
+    return pages.map((page, i) =>
+      new EmbedBuilder()
+        .setTitle(`📖 Every command — page ${i + 1}/${pages.length}`)
+        .setColor(this.themeColor())
+        .addFields(...page)
+        .setFooter({
+          text: 'V@help aliases — shortcut index · V@help <category> — just one section',
+        }),
+    );
+  }
+
+  /** The complete V@ shortcut index, generated from the dispatcher's own table. */
+  private helpAliasesEmbed(): EmbedBuilder {
+    return new EmbedBuilder()
+      .setTitle('⌨️ V@ shortcut index')
+      .setDescription('Type `V@<shortcut>` in any channel the bot can read. `/` slash commands run the same defaults.')
+      .setColor(this.themeColor())
+      .addFields(...aliasIndexFields(V_ALIASES))
+      .setFooter({ text: 'V@help for the menu · V@help all for full descriptions' });
   }
 
   /** Category buttons for the help overview (max 5 per row). */
@@ -7518,6 +7887,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/toggle` · `V@t` — pause/resume',
       '`/skip` · `V@s` — skip (non-DJs start a vote)',
       '`/nowplaying` · `V@np` — what\'s playing',
+      '`/follow` · `V@follow` — pin the live now-playing strip in this channel (it updates with every song; `off` removes it)',
       '`/volume <0-100>` · `V@v` — set the volume',
       '`/clear` · `V@c` — stop and clear the queue',
       '`/jump <lyric>` · `V@jump` — jump to a lyric line (e.g. "to the chorus")',
@@ -7605,14 +7975,28 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
     ],
   },
   {
+    id: 'games',
+    emoji: '🎮',
+    name: 'Games',
+    blurb: 'bet against the bot, duel your friends, spin the roulette',
+    lines: [
+      '`/stump [track]` · `V@stump` — bet a track fits the room: survive to the end → you beat the bot',
+      '`V@stump board` — human-vs-bot scoreboard',
+      '`/duel [@user]` · `V@duel` — DJ Duel: Endless Wave scores both picks and crowns the better fit',
+      '`V@duel board` — duel leaderboard',
+      '`/roulette` · `V@roulette` — a random track from this server\'s own history: ⭐ star it (Hall of Fame) or 🚫 ban it',
+      '`/quiz` · `V@quiz` — guess-the-song lyric game · `/guess <answer>` · `V@guess`',
+    ],
+  },
+  {
     id: 'lyrics',
     emoji: '🎤',
     name: 'Lyrics',
     blurb: 'read along with the music',
     lines: [
       '`/lyrics [query]` · `V@lyr` — lyrics for the current or searched song',
-      '`/karaoke` · `V@k` — live karaoke highlight mode',
-      '`/quiz` · `V@quiz` — guess-the-song lyric game · `/guess <answer>` · `V@guess`',
+      '`/karaoke` · `V@k` — live karaoke highlight mode (the panel also shows synced lyrics)',
+      '`/jump <lyric>` · `V@jump` — jump to a lyric line (e.g. "to the chorus")',
     ],
   },
   {

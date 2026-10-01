@@ -234,6 +234,13 @@ export class StatsStore {
     return this.load(guildId).totalQueued;
   }
 
+  /** All-time tracks with play counts, most-played first (used by /roulette). */
+  historyTracks(guildId: string, limit = 300): Array<[string, number]> {
+    return Object.entries(this.load(guildId).tracks)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, limit);
+  }
+
   /** Daily play/queue counts for the last `n` days (UTC), oldest → newest. */
   history(guildId: string, n = 30): Array<{ date: string; played: number; queued: number }> {
     const d = this.load(guildId);
