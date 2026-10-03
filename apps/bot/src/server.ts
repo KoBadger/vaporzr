@@ -280,13 +280,53 @@ function activityHtml(origin: string): string | null {
   try {
     const build = (process.env.VAPORZR_BUILD ?? 'dev').slice(0, 7);
     const appId = Buffer.from(config.discordToken.split('.')[0] ?? '', 'base64').toString('ascii');
+    // Discord replaces the Activity's CSP with its own. On mobile its script-src
+    // is `'self'` rather than a literal origin, and under a sandboxed opaque
+    // origin `'self'` matches nothing — which refuses a cross-origin <script
+    // type="module"> load while every fetch/XHR keeps working. That failure mode
+    // is iOS-only and looks like anything but CSP, so the SDK load is retried
+    // with a cache-busting query and the result is reported onto window for the
+    // page (and remote debugging) to see, rather than failing silently.
     const handshake =
-      `<script>window.__VZ_ACTIVITY__=1;</script>` +
+      `<script>window.__VZ_ACTIVITY__=1;window.__VZ_SDK_STATE__='pending';</script>` +
       `<script type="module">` +
-      `import{DiscordSDK}from'/vendor/embedded-app-sdk.mjs';` +
-      `try{const sdk=new DiscordSDK('${appId}');` +
-      `await Promise.race([sdk.ready(),new Promise(r=>setTimeout(r,4000))]);}` +
-      `catch(e){}` +
+      `window.__VZ_SDK_STATE__='loading';` +
+      `let DiscordSDK;` +
+      `try{` +
+      `({DiscordSDK}=await import('/vendor/embedded-app-sdk.mjs'));` +
+      `}catch(e1){` +
+      // Retry once: a transient CSP/proxy race is recoverable, a hard block is not.
+      `try{({DiscordSDK}=await import('/vendor/embedded-app-sdk.mjs?r=1'));}` +
+      `catch(e2){window.__VZ_SDK_STATE__='failed';}` +
+      `}` +
+      `if(DiscordSDK){` +
+      `window.__VZ_SDK_STATE__='ready';` +
+      `try{` +
+      `const sdk=new DiscordSDK('${appId}');` +
+      `window.__VZ_SDK__=sdk;` +
+      `await Promise.race([sdk.ready(),new Promise(r=>setTimeout(r,4000))]);` +
+      // Landscape suits a 16:9 visualizer; PIP/grid tiles follow it so the scene
+      // is not letterboxed into a portrait sliver on a phone.
+      `try{` +
+      `const C=(await import('/vendor/embedded-app-sdk.mjs')).Common||{};` +
+      `const LS=(C.OrientationLockStateTypeObject||{});` +
+      `if(sdk.commands&&sdk.commands.setOrientationLockState&&LS.LANDSCAPE!==undefined){` +
+      `await sdk.commands.setOrientationLockState({` +
+      `lock_state:LS.LANDSCAPE,` +
+      `picture_in_picture_lock_state:LS.LANDSCAPE,` +
+      `grid_lock_state:LS.LANDSCAPE` +
+      `});}` +
+      `}catch(e){}` +
+      // Thermal throttling: a MilkDrop visualizer will cook a phone. Publish the
+      // state so the renderer can shed work before the OS throttles it for us.
+      `try{` +
+      `if(sdk.subscribe){` +
+      `sdk.subscribe('THERMAL_STATE_UPDATE',(u)=>{window.__VZ_THERMAL__=u&&u.thermal_state;});` +
+      `sdk.subscribe('ORIENTATION_UPDATE',()=>{window.dispatchEvent(new Event('resize'));});` +
+      `}` +
+      `}catch(e){}` +
+      `}catch(e){window.__VZ_SDK_STATE__='ready-nosdk';}` +
+      `}` +
       `</script>`;
     return fs
       .readFileSync(path.join(__dirname, '..', 'public', 'viz.html'), 'utf8')

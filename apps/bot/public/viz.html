@@ -15,9 +15,24 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Orbitron:wght@500;700;900&display=swap');
 :root{--acc:#6a5cff;--acc2:#22d3ee;--acc3:#ff8a3d;--acc4:#ff3cac;--bg:#05060f;
   --sunset:linear-gradient(100deg,#ff8a3d,#ff3cac 42%,#6a5cff 72%,#22d3ee);
-  --font-display:'Orbitron','Inter',system-ui,sans-serif;--font-body:'Inter',system-ui,sans-serif}
+  --font-display:'Orbitron','Inter',system-ui,sans-serif;--font-body:'Inter',system-ui,sans-serif;
+  /* Mobile safe areas. Discord injects --discord-safe-area-inset-* inside an
+     Activity (notch, home indicator, rounded corners); env() covers iOS Safari
+     and local dev. Without these the top bar and dock sit under the notch and
+     the home bar, which is what "cut off" looks like on a phone. */
+  --sait:var(--discord-safe-area-inset-top,env(safe-area-inset-top,0px));
+  --saib:var(--discord-safe-area-inset-bottom,env(safe-area-inset-bottom,0px));
+  --sail:var(--discord-safe-area-inset-left,env(safe-area-inset-left,0px));
+  --sair:var(--discord-safe-area-inset-right,env(safe-area-inset-right,0px));
+  /* Actual usable box, used by the mobile overrides at the end of this sheet. */
+  --vz-top:calc(12px + var(--sait));
+  --vz-bottom:calc(20px + var(--saib));}
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);font-family:var(--font-body);color:#c7d2fe}
+/* Touch devices: never let a stray drag or double-tap zoom the visualizer. */
+body.touch,body.touch *{touch-action:manipulation;-webkit-user-select:none;user-select:none;
+  -webkit-tap-highlight-color:transparent;-webkit-touch-callout:none}
+html.touch,html.touch body{overscroll-behavior:none}
 
 body::before{content:'';position:absolute;inset:0;
   background:linear-gradient(rgba(99,102,241,.03) 1px,transparent 1px),
@@ -42,7 +57,8 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
 #viz{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#05060f;z-index:3;display:none}
 
 #topbar{position:absolute;top:0;left:0;right:0;z-index:10;display:flex;align-items:center;justify-content:space-between;
-  padding:12px 20px;background:linear-gradient(180deg,rgba(5,6,15,.95) 0%,rgba(5,6,15,0) 100%)}
+  padding:var(--vz-top) calc(20px + var(--sair)) 12px calc(20px + var(--sail));
+  background:linear-gradient(180deg,rgba(5,6,15,.95) 0%,rgba(5,6,15,0) 100%)}
 #logo{display:flex;align-items:center;gap:10px}
 #logo-icon{width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,var(--acc),var(--acc2));
   display:flex;align-items:center;justify-content:center;overflow:hidden;box-shadow:0 0 20px var(--glow,rgba(99,102,241,.4))}
@@ -99,10 +115,11 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
   background:linear-gradient(90deg,var(--acc,#6a5cff),var(--acc2,#00f0ff));transition:width .8s ease}
 
 /* Control dock */
-#dock{position:absolute;bottom:16px;left:50%;transform:translateX(-50%) translateY(80px);z-index:14;
+#dock{position:absolute;bottom:var(--vz-bottom);left:50%;transform:translateX(-50%) translateY(80px);z-index:14;
   display:flex;align-items:center;gap:14px;padding:10px 18px;border-radius:18px;
   background:rgba(10,12,26,.82);border:1px solid #1e293b;backdrop-filter:blur(14px);
-  transition:transform .35s cubic-bezier(.2,.9,.3,1.2),opacity .35s;opacity:0}
+  transition:transform .35s cubic-bezier(.2,.9,.3,1.2),opacity .35s;opacity:0;
+  max-width:calc(100vw - var(--sail) - var(--sair) - 16px)}
 #dock.show{transform:translateX(-50%) translateY(0);opacity:1}
 .dock-btn{width:34px;height:34px;border-radius:10px;border:1px solid #262f45;background:rgba(30,41,59,.6);
   color:#c7d2fe;font-size:15px;cursor:pointer;display:flex;align-items:center;justify-content:center;
@@ -138,8 +155,47 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
   background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.25);font-size:10px;color:#4ade80;font-weight:600}
 
 #no-frames{position:absolute;inset:0;z-index:15;display:none;flex-direction:column;
-  align-items:center;justify-content:center;gap:14px;background:rgba(5,6,15,.72)}
+  align-items:center;justify-content:center;gap:14px;background:rgba(5,6,15,.72);
+  padding:0 calc(16px + var(--sail)) 0 calc(16px + var(--sair))}
 #no-frames.hidden{display:none!important}
+
+/* ---------- Mobile (Discord Activity on iOS/Android, and anyone on a phone) ----------
+   Two things break the desktop layout on a handset: the dock is wider than the
+   screen, and Discord shows the app in a short picture-in-picture / grid tile in
+   which a centred 16:9 scene gets cropped. Both are handled here. */
+body.mobile #topbar{padding-bottom:6px}
+body.mobile #logo-icon{width:26px;height:26px}
+body.mobile #logo-text{font-size:13px}
+body.mobile #logo-sub{font-size:8px;letter-spacing:2px}
+
+/* A phone cannot fit the desktop dock. Wrap it and shrink the controls so the
+   essentials (preset, mode, theme) stay reachable with a thumb. */
+body.mobile #dock{flex-wrap:wrap;justify-content:center;gap:8px;padding:8px 12px;border-radius:14px;bottom:calc(10px + var(--saib))}
+body.mobile .dock-btn{width:38px;height:38px;font-size:16px;border-radius:11px}
+body.mobile #preset-lib{min-width:0;flex:1 1 100%;order:9}
+body.mobile #preset-lib #preset-count{font-size:9px}
+body.mobile .sens-wrap{order:10;flex:1 1 auto;justify-content:center}
+body.mobile #sens{width:min(48vw,160px);height:6px}
+body.mobile #sens::-webkit-slider-thumb{width:20px;height:20px}
+body.mobile #sens::-moz-range-thumb{width:20px;height:20px}
+body.mobile #swatches{flex-wrap:wrap;justify-content:center}
+body.mobile .swatch{width:22px;height:22px}
+body.mobile .dock-sep{display:none}
+body.mobile #guild-bar{top:calc(52px + var(--sait))}
+body.mobile #preset-picker{bottom:calc(112px + var(--saib));width:min(520px,94vw);max-height:44vh}
+body.mobile #unlock{bottom:calc(112px + var(--saib));right:calc(12px + var(--sair))}
+body.mobile #fps{top:calc(52px + var(--sait))}
+/* Narrow portrait: the bar visualizer reads better with the baseline lower. */
+@media (max-width:520px){
+  #canvas{object-fit:cover}
+  #viz{object-fit:cover}
+}
+/* Landscape phone: keep the dock on one row since height is the scarce axis. */
+@media (max-height:460px){
+  body.mobile #preset-lib{flex:0 1 auto;order:0;min-width:0}
+  body.mobile #dock{gap:6px;padding:6px 10px}
+  body.mobile .dock-btn{width:34px;height:34px}
+}
 </style>
 </head>
 <body>
@@ -245,6 +301,24 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
       ws=null,retryTimer=null,connected=false,
       frameCount=0,fpsTimer=null,gotVisualsAt=0,noFramesTimer=null,
       guilds=[],primaryGuildId=null;
+
+  /* ---------- platform detection ----------
+     Inside a Discord Activity the SDK is created by the injected handshake
+     script, so it is only present there. Touch is detected separately because
+     the same layout fixes are wanted by anyone on a phone browser too. */
+  var ACTIVITY=!!window.__VZ_ACTIVITY__;
+  var TOUCH=(function(){
+    try{
+      return (navigator.maxTouchPoints||0)>0 &&
+        (window.matchMedia('(pointer:coarse)').matches || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent));
+    }catch(e){return false}
+  })();
+  var MOBILE=TOUCH||ACTIVITY&&(function(){
+    // An Activity on a small viewport is a handset or a small tablet tile.
+    try{return Math.min(screen.width,screen.height)<=820}catch(e){return false}
+  })();
+  if(TOUCH){document.documentElement.classList.add('touch');document.body.classList.add('touch')}
+  if(MOBILE)document.body.classList.add('mobile');
 
   var THEMES=[
     {id:'vaporzr',name:'Vaporzr',accent:'#6a5cff',accent2:'#00f0ff'},
@@ -763,9 +837,25 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
 
   /* ---------- fullscreen ---------- */
   $('btn-fs').onclick=function(){
-    if(document.fullscreenElement)document.exitFullscreen();
-    else document.documentElement.requestFullscreen().catch(function(){});
+    if(document.fullscreenElement){document.exitFullscreen();return}
+    // iPhone Safari has no element-fullscreen API at all. Offering a button that
+    // silently does nothing is worse than not offering it, so it is hidden when
+    // the API is missing (see below) rather than left as a dead control.
+    var el=document.documentElement;
+    var req=el.requestFullscreen||el.webkitRequestFullscreen;
+    if(!req)return;
+    var pr=req.call(el);
+    if(pr&&pr.catch)pr.catch(function(){});
   };
+  // Hide fullscreen where it cannot work (iPhone/iPad in an Activity, where
+  // Discord owns the chrome anyway).
+  try{
+    var fsEl=document.documentElement;
+    if(!fsEl.requestFullscreen&&!fsEl.webkitRequestFullscreen){
+      var fsBtn=$('btn-fs');
+      if(fsBtn)fsBtn.style.display='none';
+    }
+  }catch(e){}
 
   /* ---------- rendering loop ---------- */
   var dpr=window.devicePixelRatio||1,bcBroken=false;
@@ -1845,16 +1935,30 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
     retryTimer=setTimeout(function(){retryTimer=null;connect()},3000);
   }
 
-  /* ---------- dock auto-hide ---------- */
-  var dockTimer=null;
+  /* ---------- dock auto-hide ----------
+     On a phone the desktop behaviour is unusable: the bar hides itself 3.8s
+     after you touch it, so reaching for a control means chasing it. A tap there
+     instead TOGGLES the bar, and it stays until tapped again. */
+  var dockTimer=null,dockPinned=false;
   function pokeDock(){
     dock.classList.add('show');
+    if(MOBILE)return;
     clearTimeout(dockTimer);
     dockTimer=setTimeout(function(){dock.classList.remove('show')},3800);
   }
   window.addEventListener('mousemove',pokeDock,{passive:true});
-  window.addEventListener('touchstart',pokeDock,{passive:true});
-  window.addEventListener('pointerdown',pokeDock,{passive:true});
+  window.addEventListener('touchstart',function(e){
+    // Ignore taps that land on the dock itself — those are meant to press a
+    // button, not to dismiss the bar.
+    if(dock.contains(e.target))return;
+    dockPinned=!dockPinned;
+    if(dockPinned)dock.classList.add('show');
+    else dock.classList.remove('show');
+  },{passive:true});
+  window.addEventListener('pointerdown',function(e){
+    if(MOBILE||dock.contains(e.target))return;
+    pokeDock();
+  },{passive:true});
 
   trustText.textContent=location.protocol==='https:'?'SECURE HTTPS CONNECTION':'LOCAL NETWORK';
 
@@ -1862,6 +1966,24 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
     fpsEl.textContent=frameCount>0?Math.round(frameCount*2)+' fps':'';
     frameCount=0;
   },500);
+
+  /* Thermal state (Activity on a phone): shedding work early reads far better
+     than being throttled mid-render, which looks like the app freezing. The SDK
+     publishes it on subscribe; 0 nominal, 1 fair, 2 serious, 3 critical. */
+  window.__VZ_THERMAL__=undefined;
+  var lastThermal=-1;
+  setInterval(function(){
+    var t=window.__VZ_THERMAL__;
+    if(typeof t!=='number'||t===lastThermal)return;
+    lastThermal=t;
+    var b=$('btn-calm');
+    if(t>=2){
+      // Serious or worse: dim, calm, and stop the preset carousel burning CPU.
+      if(!calm){calm=true;applyCalm()}
+      if(cycleTimer){clearInterval(cycleTimer);cycleTimer=null}
+      if(b)b.title='Device is hot — visuals reduced to help it cool';
+    }
+  },4000);
 
   applyTheme(THEMES[0]);
   applyCalm();
@@ -1875,10 +1997,21 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
      audio at all (muted wallpaper video + canvas overlay), so boot it there
      instead — a visitor always sees something moving, and can still switch to
      MilkDrop or the bars by hand. */
-  if(window.__VZ_ACTIVITY__&&ewVideo){
+  if(ACTIVITY&&ewVideo){
     try{ewVideo.load()}catch(e){}
     synthActive=true;$('btn-synth').classList.add('active','ew-revealed');
   }
+  /* Mobile: the wallpaper loop is the heaviest thing on screen and a phone GPU
+     cannot decode a 720p loop alongside the canvas without cooking itself, so
+     it stays off until asked for. Start on the cheap bar renderer instead. */
+  if(MOBILE&&!ACTIVITY){
+    if(ewVideo){try{ewVideo.pause()}catch(e){}}
+    synthActive=false;
+  }
+  /* An Activity's PIP/grid tile resizes without a window resize, and mobile
+     clients rotate. Discord's ORIENTATION_UPDATE is dispatched as a resize by
+     the handshake, and orientationchange covers the browser case. */
+  window.addEventListener('orientationchange',function(){setTimeout(function(){resize();resizeSynth()},120)},{passive:true});
   connect();
 })();
 </script>
