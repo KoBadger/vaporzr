@@ -280,7 +280,9 @@ function activityHtml(origin: string): string | null {
   try {
     const build = (process.env.VAPORZR_BUILD ?? 'dev').slice(0, 7);
     const appId = Buffer.from(config.discordToken.split('.')[0] ?? '', 'base64').toString('ascii');
-    const handshake = `<script>window.__VZ_ACTIVITY__=1;</script>` +
+    const ws = `(location.protocol==='https:'?'wss://':'ws://')+location.host+'/activity/ws'`;
+    const handshake =
+      `<script>window.__VZ_ACTIVITY__=1;window.__VZ_WS__=${ws};</script>` +
       `<script type="module">` +
       `import{DiscordSDK}from'/activity/sdk.mjs';` +
       `try{const sdk=new DiscordSDK('${appId}');` +
@@ -291,6 +293,10 @@ function activityHtml(origin: string): string | null {
       .readFileSync(path.join(__dirname, '..', 'public', 'viz.html'), 'utf8')
       .replace(/\{\{ORIGIN\}\}/g, origin)
       .replace(/\{\{BUILD\}\}/g, build)
+      // Scope the visualizer's root-absolute assets under /activity so the page
+      // works even when Discord's URL mapping only covers the 'activity' prefix
+      // (with a '/' mapping the same paths resolve fine too).
+      .replace(/(["'(])\/(vendor\/|favicon\.png|logo\.(?:png|gif)|ew-bg\.(?:mp4|jpg))/g, '$1/activity/$2')
       .replace(/<head([^>]*)>/i, (m) => `${m}${handshake}`);
   } catch {
     return null;
@@ -442,6 +448,57 @@ async function handleRoute(
       return;
     }
 
+    // Activity-scoped copies of the visualizer's assets: the /activity page
+    // requests them under its own prefix so it works with an 'activity'-only
+    // URL mapping, and equally with a root mapping.
+    if (url.pathname.startsWith('/activity/')) {
+      const rel = url.pathname.slice('/activity/'.length);
+      if (!rel.includes('..') && /^[\w./-]+\.(m?js|json|png|jpe?g|gif|mp4|webp|css|woff2?)$/i.test(rel)) {
+        try {
+          const raw = fs.readFileSync(path.join(__dirname, '..', 'public', rel));
+          const ext = (path.extname(rel).slice(1) || '').toLowerCase();
+          const types: Record<string, string> = {
+            js: 'text/javascript',
+            mjs: 'text/javascript',
+            json: 'application/json',
+            png: 'image/png',
+            jpg: 'image/jpeg',
+            jpeg: 'image/jpeg',
+            gif: 'image/gif',
+            mp4: 'video/mp4',
+            webp: 'image/webp',
+            css: 'text/css',
+            woff2: 'font/woff2',
+          };
+          const headers: Record<string, string> = {
+            'Content-Type': `${types[ext] ?? 'application/octet-stream'}; charset=utf-8`,
+            'Cache-Control': 'public, max-age=86400',
+            Vary: 'Accept-Encoding',
+          };
+          // Preset chunks are tens of MB; compress once and cache like /vendor.
+          let entry = vendorCache.get(`activity:${rel}`);
+          if (!entry) {
+            const gz = raw.length > 4096 && /json|javascript/.test(types[ext] ?? '')
+              ? zlib.gzipSync(raw, { level: 6 })
+              : null;
+            entry = { body: gz ?? raw, gzip: !!gz };
+            if (vendorCache.size > 24) vendorCache.clear();
+            vendorCache.set(`activity:${rel}`, entry);
+          }
+          if (entry.gzip) headers['Content-Encoding'] = 'gzip';
+          headers['Content-Length'] = String(entry.body.length);
+          res.writeHead(200, headers);
+          res.end(entry.body);
+          return;
+        } catch {
+          /* fall through to 404 */
+        }
+      }
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Not found.');
+      return;
+    }
+
     switch (url.pathname) {
       case '/':
       case '/index.html': {
@@ -532,21 +589,6 @@ async function handleRoute(
         }
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
         res.end(page);
-        break;
-      }
-
-      case '/activity/sdk.mjs': {
-        try {
-          const file = fs.readFileSync(path.join(__dirname, '..', 'public', 'activity', 'sdk.mjs'));
-          res.writeHead(200, {
-            'Content-Type': 'text/javascript; charset=utf-8',
-            'Cache-Control': 'public, max-age=86400',
-          });
-          res.end(file);
-        } catch {
-          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-          res.end('Not found.');
-        }
         break;
       }
 

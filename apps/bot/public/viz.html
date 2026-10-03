@@ -313,7 +313,7 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
 
   function connect(){
     if(ws){ws.onclose=null;ws.close()}
-    var wsUrl=(location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws';
+    var wsUrl=window.__VZ_WS__||((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');
     try{ws=new WebSocket(wsUrl)}catch(e){scheduleReconnect();return}
     ws.onopen=function(){
       ws.send(JSON.stringify({type:'hello',role:'panel',name:'web-viz-'+Math.random().toString(36).slice(2,6)}));
