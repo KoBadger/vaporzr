@@ -284,7 +284,7 @@ function activityHtml(origin: string): string | null {
     const handshake =
       `<script>window.__VZ_ACTIVITY__=1;window.__VZ_WS__=${ws};</script>` +
       `<script type="module">` +
-      `import{DiscordSDK}from'/activity/sdk.mjs';` +
+      `import{DiscordSDK}from'/activity/vendor/embedded-app-sdk.mjs';` +
       `try{const sdk=new DiscordSDK('${appId}');` +
       `await Promise.race([sdk.ready(),new Promise(r=>setTimeout(r,4000))]);}` +
       `catch(e){}` +
