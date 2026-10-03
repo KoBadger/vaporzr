@@ -267,6 +267,36 @@ button{padding:.6rem 1.4rem;border-radius:9px;border:none;background:linear-grad
 <input name="key" placeholder="share key" autofocus><button>Enter</button></form></body></html>`);
 }
 
+/**
+ * The Discord Activity page: the visualizer with the Embedded App SDK handshake
+ * prepended. Discord launches it with ?instance_id=…, and the SDK `ready()` call
+ * is what tells the client the app loaded (wrapped in a timeout so a plain
+ * browser visit renders the visualizer anyway).
+ *
+ * Asset paths stay root-absolute: the portal URL mapping uses the "/" prefix, so
+ * the whole origin is proxied and /vendor/*, /ws, /ew-bg.mp4 all resolve as-is.
+ */
+function activityHtml(origin: string): string | null {
+  try {
+    const build = (process.env.VAPORZR_BUILD ?? 'dev').slice(0, 7);
+    const appId = Buffer.from(config.discordToken.split('.')[0] ?? '', 'base64').toString('ascii');
+    const handshake = `<script>window.__VZ_ACTIVITY__=1;</script>` +
+      `<script type="module">` +
+      `import{DiscordSDK}from'/activity/sdk.mjs';` +
+      `try{const sdk=new DiscordSDK('${appId}');` +
+      `await Promise.race([sdk.ready(),new Promise(r=>setTimeout(r,4000))]);}` +
+      `catch(e){}` +
+      `</script>`;
+    return fs
+      .readFileSync(path.join(__dirname, '..', 'public', 'viz.html'), 'utf8')
+      .replace(/\{\{ORIGIN\}\}/g, origin)
+      .replace(/\{\{BUILD\}\}/g, build)
+      .replace(/<head([^>]*)>/i, (m) => `${m}${handshake}`);
+  } catch {
+    return null;
+  }
+}
+
 async function handleRoute(
   req: http.IncomingMessage,
   url: URL,
@@ -415,6 +445,16 @@ async function handleRoute(
     switch (url.pathname) {
       case '/':
       case '/index.html': {
+        // A Discord Activity launch arrives at the mapped root with ?instance_id=…
+        // Serve the visualizer for that; the status page for everyone else.
+        if (url.searchParams.has('instance_id')) {
+          const page = activityHtml(origin);
+          if (page) {
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+            res.end(page);
+            return;
+          }
+        }
         // Bot tokens are base64(appId).signature — decode for the invite link.
         const appId = Buffer.from(config.discordToken.split('.')[0], 'base64').toString('ascii');
         const perms = (1n << 11n) | (1n << 14n) | (1n << 15n) | (1n << 20n) | (1n << 31n) | (1n << 52n);
@@ -479,6 +519,34 @@ async function handleRoute(
         const token = await getAccessToken();
         res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
         res.end(JSON.stringify({ token }));
+        break;
+      }
+
+      case '/activity': {
+        // Direct visit / alias for the Activity page (also what the portal maps).
+        const page = activityHtml(origin);
+        if (!page) {
+          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('Activity page not found.');
+          break;
+        }
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end(page);
+        break;
+      }
+
+      case '/activity/sdk.mjs': {
+        try {
+          const file = fs.readFileSync(path.join(__dirname, '..', 'public', 'activity', 'sdk.mjs'));
+          res.writeHead(200, {
+            'Content-Type': 'text/javascript; charset=utf-8',
+            'Cache-Control': 'public, max-age=86400',
+          });
+          res.end(file);
+        } catch {
+          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('Not found.');
+        }
         break;
       }
 
