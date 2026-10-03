@@ -883,7 +883,10 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
       disp[i]+=(target[i]-disp[i])*0.35;
       if(active&&target[i]>peaks[i])peaks[i]=target[i];
       else peaks[i]=Math.max(disp[i],peaks[i]-0.006);
-      var v=active?disp[i]:(0.04+0.02*Math.sin(now/900+i*0.7));
+      // Nothing playing: a slow travelling wave keeps the idle canvas clearly
+      // alive instead of a near-black flatline. An Activity viewer never gets a
+      // PCM feed, so this idle state is the norm there, not the exception.
+      var v=active?disp[i]:(0.10+0.07*Math.sin(now/620+i*0.55)+0.03*Math.sin(now/1430-i*0.31));
       var h=Math.max(2*dpr,v*maxH),x=i*slot+(slot-barW)/2;
       var g=ctx.createLinearGradient(0,baseY,0,baseY-h);
       if(mood.on){
@@ -1678,7 +1681,12 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
   /* handle EW status from bridge — the easter egg. The synthwave road takes
      over the screen the moment `V@ew on` runs, and the 🛣 toggle is revealed
      for the rest of the session so the road can be switched off manually.
-     Before the first EW activation the button is invisible (hidden in CSS). */
+     Before the first EW activation the button is invisible (hidden in CSS).
+
+     `synthUserOff` is the USER'S INTENT, not the current state. The old
+     `!synthUserOff` guard made switching off impossible, because turning the
+     road off manually also raised the intent flag - so every later message saw
+     "user wants it off" and returned early without ever hiding it. */
   function handleEndlessWave(msg){
     var btn=$('btn-synth');
     if(msg.active){
@@ -1687,7 +1695,13 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
       // already buffered (and permanently cached) by the time it is shown.
       if(ewVideo&&ewVideo.readyState<2){try{ewVideo.load()}catch(e){}}
       if(!synthActive&&!synthUserOff){synthActive=true;btn.classList.add('active');}
-    }else if(!synthUserOff&&!msg.snapshot){
+    }else{
+      // A snapshot reporting "off" is not authoritative: the server also sends
+      // false for a guild that never enabled EW, and the Activity opens on such
+      // a snapshot. Only a live endlesswave broadcast may turn the road off, and
+      // it may do so even after the user switched it off by hand.
+      if(msg.snapshot)return;
+      synthUserOff=false;
       if(synthActive){synthActive=false;btn.classList.remove('active');}
     }
   }
@@ -1855,6 +1869,16 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
   resizeSynth();
   draw();
   pokeDock();
+  /* A Discord Activity cannot auto-start MilkDrop: unlockAudio() needs a user
+     gesture and Discord launches the iframe without one, so an Activity that
+     waited for one sat on an empty black canvas. The synthwave scene needs no
+     audio at all (muted wallpaper video + canvas overlay), so boot it there
+     instead — a visitor always sees something moving, and can still switch to
+     MilkDrop or the bars by hand. */
+  if(window.__VZ_ACTIVITY__&&ewVideo){
+    try{ewVideo.load()}catch(e){}
+    synthActive=true;$('btn-synth').classList.add('active','ew-revealed');
+  }
   connect();
 })();
 </script>
