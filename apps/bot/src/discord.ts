@@ -4202,7 +4202,10 @@ export class DiscordBot {
       throw err;
     }
     const state = s.queue.getState();
-    if (state.playing) s.voice.startStream();
+    // A leave+rejoin tore down the audio stream, so re-arm the feed (Spotify)
+    // or re-issue the stream (ffmpeg sources) instead of just starting an empty
+    // stream — otherwise the track plays on silently and trips the stall watchdog.
+    if (state.playing) void s.playback.reattachAfterRejoin();
     console.log('[discord] auto-joined voice channel');
     return true;
   }
@@ -4327,7 +4330,7 @@ export class DiscordBot {
     if (!channel) return false;
     await s.voice.join(interaction.guild!.id, channel.id, interaction.guild!.voiceAdapterCreator);
     const state = s.queue.getState();
-    if (state.playing) s.voice.startStream();
+    if (state.playing) void s.playback.reattachAfterRejoin();
     console.log('[discord] auto-joined voice channel');
     return true;
   }

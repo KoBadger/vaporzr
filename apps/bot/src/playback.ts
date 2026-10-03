@@ -87,6 +87,10 @@ export class PlaybackController {
   private spotifyProgress: NodeJS.Timeout | null = null;
   /** PCM bytes seen on the previous progress tick (genuine-end detection). */
   private lastSpotifyBytes = 0;
+  /** When the current Spotify track started — used to sanity-check the PCM-derived
+   *  position against real time (a stale counter can report "past the end" while
+   *  the listener is still hearing the song, which used to cut tracks short). */
+  private spotifyTrackStartedAt = 0;
   private spotifyRetry: NodeJS.Timeout | null = null;
   /** Consecutive 429 retries, drives the backoff so we can't re-drain the daily quota. */
   private spotifyRetryAttempts = 0;
@@ -780,6 +784,7 @@ export class PlaybackController {
       if (device.viaLibrespot) {
         this.librespot?.resetPosition();
         this.lastSpotifyBytes = 0;
+        this.spotifyTrackStartedAt = Date.now();
         this.startSpotifyProgress();
       }
       return;
@@ -1437,23 +1442,38 @@ export class PlaybackController {
     this.spotifyProgress = setInterval(() => {
       if (this.currentSource() !== 'spotify' || this.spotifyFallback) return;
       if (!this.queue.getState().playing) return;
-      const pos = this.librespot?.getPositionMs() ?? 0;
+      let pos = this.librespot?.getPositionMs() ?? 0;
       const dur = this.queue.getCurrentTrack()?.durationMs ?? 0;
       const bytes = this.librespot?.getPcmBytes() ?? 0;
+      // The position is derived from captured PCM bytes. After a reconnect (or a
+      // rebuilt resampler) that counter can be stale and report a spot far past
+      // the real playback point — which used to fire the "track ended" branch
+      // while the listener was still hearing the song, cutting it off early.
+      // Sanity-check it against wall-clock and resync instead of advancing.
+      const elapsed = this.spotifyTrackStartedAt > 0 ? Date.now() - this.spotifyTrackStartedAt : 0;
+      if (elapsed > 0 && pos > elapsed + 5000) {
+        console.warn(
+          `[playback] Spotify position ${Math.round(pos / 1000)}s is ahead of real time ${Math.round(elapsed / 1000)}s — resyncing`,
+        );
+        this.librespot?.setPositionMs(elapsed);
+        pos = elapsed;
+      }
       this.queue.setState({ positionMs: pos });
       // Only advance once librespot has actually stopped producing (track
       // genuinely ended) — the position catches the real end, not 2s early.
       if (dur > 0 && pos >= dur - 2000 && bytes === this.lastSpotifyBytes) {
         this.clearEndTimer();
-        this.naturalAdvance = true;
+        console.log(
+          `[playback] Spotify track ended — position ${Math.round(pos / 1000)}s of ${Math.round(dur / 1000)}s (natural end)`,
+        );
         if (this.onTrackEnd) {
           const ended = this.queue.getCurrentTrack();
+          this.naturalAdvance = true;
           this.next();
           this.naturalAdvance = false;
           if (ended) this.onTrackEnd(ended);
         } else {
           this.next();
-          this.naturalAdvance = false;
         }
         return;
       }
@@ -1465,6 +1485,40 @@ export class PlaybackController {
     if (this.spotifyProgress) {
       clearInterval(this.spotifyProgress);
       this.spotifyProgress = null;
+    }
+    // No Spotify track is being tracked any more, so the wall-clock guard is off.
+    this.spotifyTrackStartedAt = 0;
+  }
+
+  /**
+   * Re-arm the audio feed after the voice connection has been re-established.
+   * A leave+rejoin tears down the Discord audio stream; for the Spotify path
+   * that means the PCM feed must be restarted and its position baseline reset,
+   * otherwise the track plays on from a wedged counter — audible as silence,
+   * which the stall watchdog then reacts to. For the ffmpeg paths the stream is
+   * re-issued from the current position.
+   */
+  async reattachAfterRejoin(): Promise<void> {
+    const cur = this.queue.getCurrentTrack();
+    if (!cur || !this.queue.getState().playing) return;
+    if (this.currentSource() === 'spotify' && !this.spotifyFallback) {
+      this.startSpotifyFeed();
+      this.librespot?.resetPosition();
+      this.lastSpotifyBytes = 0;
+      this.spotifyTrackStartedAt = Date.now();
+      this.startSpotifyProgress();
+      console.log('[playback] re-armed the Spotify feed after rejoining voice');
+      return;
+    }
+    // Server-stream sources: the ffmpeg stream died with the connection, so
+    // re-issue it and seek back to where the listener was.
+    const pos = this.queue.getState().positionMs ?? 0;
+    console.log(`[playback] re-issuing the stream after rejoining voice (seek ${Math.round(pos / 1000)}s)`);
+    try {
+      await this.play();
+      if (pos > 0) this.seek(pos);
+    } catch (err) {
+      console.warn(`[playback] re-issue after rejoin failed: ${err instanceof Error ? err.message : err}`);
     }
   }
 
@@ -1519,6 +1573,7 @@ export class PlaybackController {
       this.startSpotifyFeed();
       this.librespot?.resetPosition();
       this.lastSpotifyBytes = 0;
+      this.spotifyTrackStartedAt = Date.now();
       this.scheduleEnd(current.durationMs, 0);
       this.schedulePreload(current.durationMs, 0);
       this.startSpotifyProgress();
