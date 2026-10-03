@@ -195,10 +195,10 @@
 
   /* ---- Overlay mode (transparent, click-through) ---- */
   body.overlay { background: transparent; }
-  /* Broadcast capture mode (OBS): the pointer and every control stay off screen. */
-  body.broadcast { cursor: none; }
-  body.broadcast #chrome-bar, body.broadcast #controls, body.broadcast #controls-toggle,
-  body.broadcast #pip, body.broadcast #status { display: none !important; }
+  /* Broadcast capture mode (OBS): the pointer hides with the controls, so a
+     captured window stays clean — but moving the mouse brings both back so the
+     window is never a trap. */
+  body.broadcast.chrome-hidden { cursor: none; }
   body.overlay #chrome-bar, body.overlay #controls-toggle, body.overlay #controls,
   body.overlay #pip, body.overlay #status { display: none; }
   body.overlay #theme-tint { opacity: 1; }

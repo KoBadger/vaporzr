@@ -1082,12 +1082,16 @@ function init(): void {
     winPass.addEventListener('click', () => vaporzrWindow.vaporzr?.setOverlayPassthrough?.(true));
   }
 
-  // Broadcast mode (OBS capture): hide every control and the pointer, and never
-  // let the chrome reappear — a capture shouldn't show buttons mid-stream.
+  // Broadcast mode (OBS capture): start with the controls and pointer hidden so
+  // a capture is clean, but keep the normal auto-hide behaviour — moving the
+  // mouse reveals the bar (and the pointer) so the window is never a dead end.
+  // Esc closes it.
   if (BROADCAST) {
     document.body.classList.add('broadcast');
-    chromeAutoHide = false;
     setChromeVisible(false);
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') window.close();
+    });
   }
 
   try {
