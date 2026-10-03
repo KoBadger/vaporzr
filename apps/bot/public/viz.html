@@ -293,12 +293,23 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
   }
 
   /* ---------- connection ---------- */
+  /* The connecting sheet used to be dismissed only by markVisual() (a PCM/frame
+     message). Inside a Discord Activity neither ever arrives - the bot has no
+     reason to forward audio to a viewer - so the sheet sat at .95 alpha over a
+     fully working visualizer and the whole Activity looked black. Any proof of
+     life now dismisses it, and a hard deadline guarantees it cannot stick. */
+  function hideConnecting(){
+    connecting.className='hidden';
+    if(connectingTimer){clearTimeout(connectingTimer);connectingTimer=null}
+  }
+  var connectingTimer=null;
   function setConnected(c){
     connected=c;
     if(c){
+      hideConnecting();
+      if(!connectingTimer)connectingTimer=setTimeout(hideConnecting,3500);
       statusDot.className='on';
       statusText.textContent=(location.protocol==='https:'?'Secure · Connected':'Connected');
-      connecting.className='hidden';
       noFramesTimer=setTimeout(function(){
         if(!gotVisualsAt){noFrames.className='';noFrames.classList.remove('hidden');noFrames.style.display='flex'}
       },5000);
@@ -306,6 +317,7 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
       statusDot.className='';
       statusText.textContent='Disconnected';
       connecting.className='';
+      if(connectingTimer){clearTimeout(connectingTimer);connectingTimer=null}
       noFrames.style.display='none';noFrames.className='hidden';
       gotVisualsAt=0;
     }
@@ -334,6 +346,11 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
           // turn OFF a manually selected synth view — only a live 'endlesswave'
           // broadcast (an actual state change) may do that.
           if(msg.endlesswave===true)handleEndlessWave({active:true,generated:0});
+          // A snapshot reporting autoplay off must NOT tear the road down: the
+          // server sends null for a guild that has never activated EW, which is
+          // indistinguishable here from "turned off". Only a live 'endlesswave'
+          // broadcast is trusted to switch it off.
+          else if(msg.endlesswave===false)handleEndlessWave({active:false,generated:0,snapshot:true});
           break;
         case 'theme':{
           var t=msg.theme;if(t)for(var j=0;j<THEMES.length;j++)if(THEMES[j].id===t.id)applyTheme(THEMES[j]);
@@ -383,6 +400,7 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
           frameCount++;
           break;
         case 'endlesswave':
+          markVisual();
           handleEndlessWave(msg);
           break;
         case 'visuals:frame':
@@ -762,6 +780,15 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
   }
   window.addEventListener('resize',resize);
   window.addEventListener('fullscreenchange',function(){setTimeout(resize,60)});
+  /* A Discord Activity runs in an iframe that is resized from the outside when
+     the message panel opens or the window is dragged. That does not fire a
+     window resize event, so the canvases stayed at their old size and the image
+     was cropped. Observe the document box itself. */
+  try{
+    if(typeof ResizeObserver!=='undefined'){
+      new ResizeObserver(function(){resize();resizeSynth();}).observe(document.documentElement);
+    }
+  }catch(e){}
 
   // prefers-reduced-motion: freeze synth animation if user prefers less motion
   var prefersReduced=false;
@@ -1660,7 +1687,7 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
       // already buffered (and permanently cached) by the time it is shown.
       if(ewVideo&&ewVideo.readyState<2){try{ewVideo.load()}catch(e){}}
       if(!synthActive&&!synthUserOff){synthActive=true;btn.classList.add('active');}
-    }else if(!synthUserOff){
+    }else if(!synthUserOff&&!msg.snapshot){
       if(synthActive){synthActive=false;btn.classList.remove('active');}
     }
   }
