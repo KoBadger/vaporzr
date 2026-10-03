@@ -165,8 +165,18 @@ const COMMANDS = [
   new SlashCommandBuilder().setName('leave').setDescription('Leave the voice channel'),
   new SlashCommandBuilder()
     .setName('shuffle')
-    .setDescription('Toggle shuffle')
-    .addBooleanOption((o) => o.setName('enabled').setDescription('On or off').setRequired(true)),
+    .setDescription('Toggle shuffle, or reorder the queue by vibe')
+    .addStringOption((o) =>
+      o
+        .setName('mode')
+        .setDescription('Reorder instead of toggling: smart, arc, or key')
+        .addChoices(
+          { name: 'smart — flows from the current track', value: 'smart' },
+          { name: 'arc — warm-up, peak, wind-down', value: 'arc' },
+          { name: 'key — harmonic key mixing', value: 'key' },
+        ),
+    )
+    .addBooleanOption((o) => o.setName('enabled').setDescription('On or off (used when no mode is given)')),
     new SlashCommandBuilder().setName('panel').setDescription('Post (or refresh) the live control panel with buttons'),
     new SlashCommandBuilder()
       .setName('key')
@@ -1718,7 +1728,19 @@ export class DiscordBot {
 
       case 'shuffle': {
         if (!this.requireLevel('shuffle', interaction)) return this.deny(interaction);
-        const on = interaction.options.getBoolean('enabled', true);
+        const modeArg = interaction.options.getString('mode');
+        if (modeArg) {
+          const mode = (modeArg === 'arc' ? 'arc' : modeArg === 'key' ? 'key' : 'flow') as ShuffleMode;
+          // A smart reorder replaces the upcoming order with a deliberate one,
+          // so random shuffle must go off or it re-randomises at the next track.
+          const wasShuffle = s.queue.getState().shuffle;
+          if (wasShuffle) s.playback.shuffle(false);
+          await interaction.deferReply();
+          const { embed, skipReason } = await this.smartShuffleCore(s, mode, wasShuffle);
+          await interaction.editReply(skipReason ? skipReason : { embeds: [embed!] });
+          break;
+        }
+        const on = interaction.options.getBoolean('enabled') ?? !s.queue.getState().shuffle;
         s.playback.shuffle(on);
         await interaction.reply(on ? '🔀 Shuffle on' : '🔂 Shuffle off');
         break;
@@ -2989,16 +3011,24 @@ export class DiscordBot {
         case 'shuffle': {
           if (!canUse('shuffle')) return void (await deny());
           const arg = args.trim().toLowerCase();
+          // "smart" is the headline mode, so it maps to the flow ordering rather
+          // than a separate algorithm. `vibe`/`vibes` are accepted as synonyms.
           const smart: ShuffleMode | null =
-            arg === 'smart' || arg === 'flow'
+            arg === 'smart' || arg === 'flow' || arg === 'vibe' || arg === 'vibes'
               ? 'flow'
-              : arg === 'arc'
+              : arg === 'arc' || arg === 'set'
                 ? 'arc'
                 : arg === 'key' || arg === 'keys' || arg === 'harmonic'
                   ? 'key'
                   : null;
           if (smart) {
-            await this.smartShuffleMsg(message, s, smart);
+            // A smart shuffle REPLACES the upcoming order with a deliberate one,
+            // so it must not fight the random shuffle toggle: leaving that on
+            // would re-randomise the queue at the next track end and throw the
+            // careful ordering away. Turn it off and say so.
+            const wasShuffle = s.queue.getState().shuffle;
+            if (wasShuffle) s.playback.shuffle(false);
+            await this.smartShuffleMsg(message, s, smart, wasShuffle);
             break;
           }
           const next = !s.queue.getState().shuffle;
@@ -5974,55 +6004,86 @@ export class DiscordBot {
   }
 
   /** Show a picker of upcoming tracks; choosing one jumps to it, dropping the rest. */
-  /** Reorder the upcoming queue by musical flow / set curve / harmonic key. */
-  private async smartShuffleMsg(message: Message, s: Session, mode: ShuffleMode): Promise<void> {
+  /**
+   * Core of a smart reorder, shared by the text command and the slash command.
+   * Returns the reply embed, or a `skipReason` when there is nothing to reorder.
+   */
+  private async smartShuffleCore(
+    s: Session,
+    mode: ShuffleMode,
+    wasShuffle: boolean,
+  ): Promise<{ embed?: EmbedBuilder; skipReason?: string }> {
     const snap = s.queue.getSnapshot();
     const upcoming = snap.tracks.slice(snap.currentIndex + 1);
     if (upcoming.length < 3) {
-      await message.reply('🔀 Not enough tracks ahead to shuffle smartly — queue at least 3.');
+      // Tell the truth about WHY rather than a generic "not enough": a finished
+      // queue (index parked on the last track) is the common cause, and saying
+      // "3 ahead" to someone with a 42-track queue loaded reads like a bug.
+      const total = snap.tracks.length;
+      const at = snap.currentIndex;
+      const why =
+        total > 3
+          ? `the queue is nearly finished — ${total - at - 1} of ${total} still ahead (the cursor is at the end)`
+          : `only ${total} track${total === 1 ? '' : 's'} in the queue`;
+      return { skipReason: `🔀 Nothing to reorder — ${why}. Queue a few more, or \`V@qa\` to check.` };
+    }
+    // One batched features call for every Spotify id we can map.
+    const ids: string[] = [];
+    for (const t of upcoming) {
+      const id = extractSpotifyId(t.uri);
+      if (id) ids.push(id);
+    }
+    const cur = s.queue.getCurrentTrack();
+    const anchorId = cur ? extractSpotifyId(cur.uri) : null;
+    if (anchorId) ids.push(anchorId);
+    let features = new Map<string, AudioFeatures>();
+    try {
+      features = await getAudioFeatures(ids);
+    } catch {
+      /* fall back to whatever estimates the queue already carries */
+    }
+    const featOf = (t: TrackInfo): AudioFeatures | null => {
+      const id = extractSpotifyId(t.uri);
+      const fromApi = id ? features.get(id) : undefined;
+      if (fromApi) return fromApi;
+      return (t as { estimatedFeatures?: AudioFeatures }).estimatedFeatures ?? null;
+    };
+    const anchor = anchorId ? (features.get(anchorId) ?? null) : null;
+    const { ordered, withoutFeatures } = orderByVibe(upcoming, anchor, mode, featOf);
+    const moved = s.queue.reorderUpcoming(ordered.map((t) => t.uri));
+    const embed = new EmbedBuilder()
+      .setTitle(`🔀 Smart shuffle — ${SHUFFLE_MODE_LABEL[mode]}`)
+      .setDescription(
+        ordered
+          .slice(0, 12)
+          .map((t, i) => `${i + 1}. ${srcEmoji(t.source)} ${truncate(t.name, 52)}`)
+          .join('\n') +
+          (ordered.length > 12 ? `\n… +${ordered.length - 12} more` : '') +
+          (withoutFeatures ? `\n-# ${withoutFeatures} without audio features kept in place` : '') +
+          (moved === 0 ? '\n-# already in the best order' : '') +
+          (wasShuffle ? '\n-# random shuffle was on — turned off so this order holds' : ''),
+      )
+      .setColor(this.themeColor());
+    return { embed };
+  }
+
+  /** Reorder the upcoming queue by musical flow / set curve / harmonic key. */
+  private async smartShuffleMsg(
+    message: Message,
+    s: Session,
+    mode: ShuffleMode,
+    wasShuffle = false,
+  ): Promise<void> {
+    const snap = s.queue.getSnapshot();
+    const upcoming = snap.tracks.slice(snap.currentIndex + 1);
+    if (upcoming.length < 3) {
+      const { skipReason } = await this.smartShuffleCore(s, mode, wasShuffle);
+      await message.reply(skipReason!);
       return;
     }
     await this.withAck(message, `🔀 Ordering ${upcoming.length} tracks by ${SHUFFLE_MODE_LABEL[mode]}…`, async () => {
-      // One batched features call for every Spotify id we can map.
-      const ids: string[] = [];
-      for (const t of upcoming) {
-        const id = extractSpotifyId(t.uri);
-        if (id) ids.push(id);
-      }
-      const cur = s.queue.getCurrentTrack();
-      const anchorId = cur ? extractSpotifyId(cur.uri) : null;
-      if (anchorId) ids.push(anchorId);
-      let features = new Map<string, AudioFeatures>();
-      try {
-        features = await getAudioFeatures(ids);
-      } catch {
-        /* fall back to whatever estimates the queue already carries */
-      }
-      const featOf = (t: TrackInfo): AudioFeatures | null => {
-        const id = extractSpotifyId(t.uri);
-        const fromApi = id ? features.get(id) : undefined;
-        if (fromApi) return fromApi;
-        return (t as { estimatedFeatures?: AudioFeatures }).estimatedFeatures ?? null;
-      };
-      const anchor = anchorId ? (features.get(anchorId) ?? null) : null;
-      const { ordered, withoutFeatures } = orderByVibe(upcoming, anchor, mode, featOf);
-      const moved = s.queue.reorderUpcoming(ordered.map((t) => t.uri));
-      await message.reply({
-        embeds: [
-          new EmbedBuilder()
-            .setTitle(`🔀 Smart shuffle — ${SHUFFLE_MODE_LABEL[mode]}`)
-            .setDescription(
-              ordered
-                .slice(0, 12)
-                .map((t, i) => `${i + 1}. ${srcEmoji(t.source)} ${truncate(t.name, 52)}`)
-                .join('\n') +
-                (ordered.length > 12 ? `\n… +${ordered.length - 12} more` : '') +
-                (withoutFeatures ? `\n-# ${withoutFeatures} without audio features kept in place` : '') +
-                (moved === 0 ? '\n-# already in the best order' : ''),
-            )
-            .setColor(this.themeColor()),
-        ],
-      });
+      const { embed, skipReason } = await this.smartShuffleCore(s, mode, wasShuffle);
+      await message.reply(skipReason ? skipReason : { embeds: [embed!] });
     });
   }
 

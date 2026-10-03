@@ -48,9 +48,13 @@ export function keyDistance(a: AudioFeatures, b: AudioFeatures): number {
 }
 
 const WEIGHTS: Record<ShuffleMode, { energy: number; valence: number; tempo: number; acoustic: number; key: number }> = {
-  flow: { energy: 0.35, valence: 0.25, tempo: 0.25, acoustic: 0.05, key: 0.1 },
-  arc: { energy: 0.4, valence: 0.2, tempo: 0.25, acoustic: 0.05, key: 0.1 },
-  key: { energy: 0.25, valence: 0.15, tempo: 0.2, acoustic: 0.1, key: 0.3 },
+  // Energy and valence dominate deliberately: they are what a listener actually
+  // perceives as "the vibe", and they are the only two features Spotify
+  // guarantees. Tempo is scaled by /60 in vibeDistance, so its weight is already
+  // an order of magnitude larger than the raw number suggests — keep it modest.
+  flow: { energy: 0.5, valence: 0.35, tempo: 0.1, acoustic: 0.05, key: 0.1 },
+  arc: { energy: 0.55, valence: 0.25, tempo: 0.1, acoustic: 0.05, key: 0.1 },
+  key: { energy: 0.25, valence: 0.15, tempo: 0.1, acoustic: 0.1, key: 0.5 },
 };
 
 /** Weighted musical distance in 0..1 (0 = same vibe). */
@@ -66,6 +70,14 @@ export function vibeDistance(a: AudioFeatures, b: AudioFeatures, mode: ShuffleMo
   );
 }
 
+/**
+ * Tie-break noise. This exists only so two identical runs are not byte-identical;
+ * it must stay well under the real score differences or the ordering becomes
+ * random. The weights above produce best-vs-second-best gaps of ~0.02 on a
+ * typical playlist, so anything near that swallows the signal entirely.
+ */
+const JITTER = 0.002;
+
 interface Item<T> {
   item: T;
   f: AudioFeatures;
@@ -80,7 +92,7 @@ function greedyOrder<T>(pool: Item<T>[], anchor: AudioFeatures | null, mode: Shu
     let bestScore = Infinity;
     for (let i = 0; i < left.length; i++) {
       // A whisper of jitter so two runs of the same queue aren't identical.
-      const s = (cur ? vibeDistance(cur, left[i].f, mode) : 0) + Math.random() * 0.02;
+      const s = (cur ? vibeDistance(cur, left[i].f, mode) : 0) + Math.random() * JITTER;
       if (s < bestScore) {
         bestScore = s;
         best = i;
@@ -113,7 +125,7 @@ function arcOrder<T>(pool: Item<T>[], anchor: AudioFeatures | null): Item<T>[] {
       const s =
         Math.abs(f.energy - want) + // sit on the curve
         (cur ? vibeDistance(cur, f, 'arc') * 0.6 : 0) + // and still flow
-        Math.random() * 0.02;
+        Math.random() * JITTER;
       if (s < bestScore) {
         bestScore = s;
         best = j;
