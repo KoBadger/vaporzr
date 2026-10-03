@@ -12,6 +12,22 @@ const OVERLAY = process.env.VAPORZR_OVERLAY === '1';
 const SCREENSAVER = process.env.VAPORZR_SCREENSAVER === '1';
 const DEBUG = process.env.VAPORZR_DEBUG === '1';
 
+/** Broadcast capture mode (OBS): chromeless, fixed size, no cursor, no throttling. */
+const argValue = (flag: string): string | undefined => {
+  const hit = process.argv.find((a) => a.startsWith(`${flag}=`));
+  return hit ? hit.slice(flag.length + 1) : undefined;
+};
+const BROADCAST = process.env.VAPORZR_BROADCAST === '1' || process.argv.includes('--broadcast');
+const ALWAYS_ON_TOP = process.env.VAPORZR_ALWAYS_ON_TOP === '1' || process.argv.includes('--top');
+/** Bot socket for a bot running on another machine, e.g. wss://host/ws. */
+const WS_URL = process.env.VAPORZR_WS ?? argValue('--ws');
+/** Broadcast window size (WxH) — keep it fixed so an OBS capture never shifts. */
+const BROADCAST_SIZE = process.env.VAPORZR_SIZE ?? argValue('--size') ?? '1280x720';
+
+// An occluded window stops painting on Windows, which freezes an OBS capture.
+// Electron's backgroundThrottling:false is not enough on its own.
+if (BROADCAST) app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
 let activeWindow: BrowserWindow | null = null;
@@ -35,10 +51,22 @@ ipcMain.on('overlay:hide', () => {
 });
 
 function createVisualizerWindow(): void {
+  // Broadcast mode pins an exact size so an OBS Window Capture never shifts,
+  // and keeps the frame off (nothing but the visual on screen).
+  const [bw, bh] = BROADCAST_SIZE.split('x').map((n) => Number(n));
+  const width = BROADCAST && Number.isFinite(bw) ? bw : 1280;
+  const height = BROADCAST && Number.isFinite(bh) ? bh : 720;
   const win = new BrowserWindow({
-    width: 1280,
-    height: 720,
+    width,
+    height,
+    minWidth: BROADCAST ? 320 : undefined,
     frame: false,
+    resizable: !BROADCAST,
+    movable: !BROADCAST,
+    maximizable: !BROADCAST,
+    fullscreenable: !BROADCAST,
+    alwaysOnTop: BROADCAST && ALWAYS_ON_TOP,
+    autoHideMenuBar: true,
     backgroundColor: '#05060f',
     icon: LOGO,
     webPreferences: {
@@ -50,6 +78,12 @@ function createVisualizerWindow(): void {
     },
   });
   activeWindow = win;
+  if (BROADCAST) {
+    win.setMenuBarVisibility(false);
+    console.log(
+      `[player] broadcast mode ${width}x${height} → ${WS_URL ?? `ws://127.0.0.1:${BOT_PORT}/ws`}`,
+    );
+  }
   if (DEBUG) {
     win.webContents.on('before-input-event', (_event, input) => {
       if (input.type === 'keyDown' && input.key === 'F12') {
@@ -61,7 +95,13 @@ function createVisualizerWindow(): void {
     if (!DEBUG) return;
     console.log('[renderer-visualizer]', JSON.stringify(args).slice(0, 3000));
   });
-  win.loadFile(path.join(www, 'visualizer.html'), { query: { port: String(BOT_PORT) } });
+  win.loadFile(path.join(www, 'visualizer.html'), {
+    query: {
+      port: String(BOT_PORT),
+      ...(BROADCAST ? { broadcast: '1' } : {}),
+      ...(WS_URL ? { ws: WS_URL } : {}),
+    },
+  });
   win.on('closed', () => {
     if (activeWindow === win) activeWindow = null;
   });

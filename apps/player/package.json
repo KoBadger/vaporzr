@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "npm run build && electron .",
     "start": "electron .",
+    "broadcast": "npm run build && electron . --broadcast",
+    "overlay": "npm run build && electron .",
     "build": "node build.mjs",
     "typecheck": "tsc --noEmit"
   },

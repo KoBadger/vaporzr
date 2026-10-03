@@ -8,6 +8,10 @@ import { SynthOverlay, type SynthLevels } from './synthwave';
 const port = Number(new URLSearchParams(window.location.search).get('port') ?? '4876');
 const OVERLAY = new URLSearchParams(window.location.search).get('overlay') === '1';
 const SCREENSAVER = new URLSearchParams(window.location.search).get('screensaver') === '1';
+/** Chromeless capture mode for OBS: no cursor, no controls, fixed window. */
+const BROADCAST = new URLSearchParams(window.location.search).get('broadcast') === '1';
+/** Explicit socket URL (wss://host/ws) for a bot on another machine. */
+const WS_URL = new URLSearchParams(window.location.search).get('ws') ?? undefined;
 
 const canvas = document.getElementById('viz') as HTMLCanvasElement;
 const ewCanvas = document.getElementById('ew') as HTMLCanvasElement;
@@ -94,6 +98,7 @@ const PCM_SILENCE_MS = 2000;
 
 const client = new WsClient({
   port,
+  url: WS_URL,
   role: 'visualizer',
   name: 'vaporzr-visualizer',
   onMessage: (msg) => {
@@ -1075,6 +1080,14 @@ function init(): void {
       document.body.classList.toggle('interactive', !pass);
     });
     winPass.addEventListener('click', () => vaporzrWindow.vaporzr?.setOverlayPassthrough?.(true));
+  }
+
+  // Broadcast mode (OBS capture): hide every control and the pointer, and never
+  // let the chrome reappear — a capture shouldn't show buttons mid-stream.
+  if (BROADCAST) {
+    document.body.classList.add('broadcast');
+    chromeAutoHide = false;
+    setChromeVisible(false);
   }
 
   try {

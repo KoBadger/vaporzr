@@ -3957,7 +3957,30 @@ export class DiscordBot {
         case 'player':
         case 'open': {
           const vl = vizTunnel.vizLink();
-          await message.reply(`🚀 The player lives in your browser now:\n${vl.url}\n\nTap ⛶ there for fullscreen.`);
+          // Same host, websocket scheme — the player can drive a bot that runs
+          // on another machine (the VPS) through the public tunnel.
+          const wsUrl = vl.url.replace(/^http/i, 'ws').replace(/\/+$/, '') + '/ws';
+          await message.reply(
+            [
+              '🎥 **Visualizer on screen — no URL pasting, no streaming**',
+              '',
+              '**Broadcast mode (best for OBS)** — on the PC you stream from:',
+              '```',
+              'npm --prefix apps/player run broadcast -- --ws=' + wsUrl,
+              '```',
+              '_Chromeless, fixed 1280×720, no cursor, no throttling — built to be captured._',
+              '',
+              '**Then get it into Discord (two clicks):**',
+              '`1.` OBS → **+ → Window Capture** → pick **Vaporzr Visualizer**',
+              '`2.` OBS → **Start Virtual Camera** → in Discord, turn your camera on in the VC',
+              '_(Or instead of the camera: OBS → **Start Streaming** and use **Go Live** on that window.)_',
+              '',
+              `**Browser version** (any device): ${vl.url}`,
+              vl.secure ? '🔒' : '',
+            ]
+              .filter(Boolean)
+              .join('\n'),
+          );
           break;
         }
 

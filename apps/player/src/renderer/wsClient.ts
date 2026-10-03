@@ -2,6 +2,9 @@ import type { ClientRole, InboundMessage, OutboundMessage } from '@vaporzr/share
 
 export interface WsClientOptions {
   port: number;
+  /** Explicit socket URL (e.g. wss://your-host/ws) — used when the bot runs on
+   *  another machine. Defaults to the local bot on `port`. */
+  url?: string;
   role: ClientRole;
   name?: string;
   onMessage: (msg: OutboundMessage) => void;
@@ -21,7 +24,7 @@ export class WsClient {
 
   connect(): void {
     try {
-      this.ws = new WebSocket(`ws://127.0.0.1:${this.opts.port}/ws`);
+      this.ws = new WebSocket(this.opts.url ?? `ws://127.0.0.1:${this.opts.port}/ws`);
     } catch {
       this.scheduleReconnect();
       return;
