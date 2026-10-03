@@ -280,11 +280,10 @@ function activityHtml(origin: string): string | null {
   try {
     const build = (process.env.VAPORZR_BUILD ?? 'dev').slice(0, 7);
     const appId = Buffer.from(config.discordToken.split('.')[0] ?? '', 'base64').toString('ascii');
-    const ws = `(location.protocol==='https:'?'wss://':'ws://')+location.host+'/activity/ws'`;
     const handshake =
-      `<script>window.__VZ_ACTIVITY__=1;window.__VZ_WS__=${ws};</script>` +
+      `<script>window.__VZ_ACTIVITY__=1;</script>` +
       `<script type="module">` +
-      `import{DiscordSDK}from'/activity/vendor/embedded-app-sdk.mjs';` +
+      `import{DiscordSDK}from'/vendor/embedded-app-sdk.mjs';` +
       `try{const sdk=new DiscordSDK('${appId}');` +
       `await Promise.race([sdk.ready(),new Promise(r=>setTimeout(r,4000))]);}` +
       `catch(e){}` +
@@ -293,10 +292,9 @@ function activityHtml(origin: string): string | null {
       .readFileSync(path.join(__dirname, '..', 'public', 'viz.html'), 'utf8')
       .replace(/\{\{ORIGIN\}\}/g, origin)
       .replace(/\{\{BUILD\}\}/g, build)
-      // Scope the visualizer's root-absolute assets under /activity so the page
-      // works even when Discord's URL mapping only covers the 'activity' prefix
-      // (with a '/' mapping the same paths resolve fine too).
-      .replace(/(["'(])\/(vendor\/|favicon\.png|logo\.(?:png|gif)|ew-bg\.(?:mp4|jpg))/g, '$1/activity/$2')
+      // Assets and the socket keep their normal root-absolute paths. That is the
+      // whole point of mapping the Activity's root at the bare origin: there is
+      // no path rewriting to reason about, and the same URLs work in a browser.
       .replace(/<head([^>]*)>/i, (m) => `${m}${handshake}`);
   } catch {
     return null;
@@ -411,7 +409,7 @@ async function handleRoute(
     // lazily-loaded preset library under presets/.
     if (url.pathname.startsWith('/vendor/')) {
       const rel = url.pathname.slice('/vendor/'.length);
-      if (/^[\w.-]+\.(js|json)$/.test(rel) || /^presets\/[\w.-]+\.(js|json)$/.test(rel)) {
+      if (/^[\w.-]+\.(m?js|json)$/.test(rel) || /^presets\/[\w.-]+\.(m?js|json)$/.test(rel)) {
         try {
           const target = path.join(__dirname, '..', 'public', 'vendor', rel);
           const isJson = rel.endsWith('.json');
