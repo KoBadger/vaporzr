@@ -15,13 +15,16 @@ describe('playedThrough distinguishes a finished queue from an idle one', () => 
     expect(q.isPlayedThrough()).toBe(false);
   });
 
-  it('markPlayedThrough flags the queue and parks the cursor', () => {
+  it('markPlayedThrough flags the queue but keeps the cursor on the last track', () => {
     const q = mk();
     q.enqueue(track('u:a', 'A'), 'user');
     q.enqueue(track('u:b', 'B'), 'user');
+    expect(q.next()).toBe(true); // walk to the last track (0 → 1)
     q.markPlayedThrough();
     expect(q.isPlayedThrough()).toBe(true);
-    expect(q.getSnapshot().currentIndex).toBe(-1);
+    // The cursor stays put so `play()` can replay it and the many
+    // `upcoming = slice(currentIndex + 1)` consumers read an empty list.
+    expect(q.getSnapshot().currentIndex).toBe(1);
   });
 
   it('a genuinely finished queue takes a new track at the TAIL and plays it', () => {

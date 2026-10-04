@@ -109,9 +109,12 @@ export class QueueManager {
    *  unambiguous signal that the queue genuinely finished. */
   markPlayedThrough(): void {
     if (this.tracks.length === 0) return;
+    // Only record the finish. The cursor deliberately stays on the last track:
+    // the panel highlights via state.track, `play()` replays from the cursor,
+    // and the many `upcoming = slice(currentIndex + 1)` consumers must keep
+    // seeing an empty upcoming list. Placement of the NEXT add is decided by
+    // resetCursorIfFinished() at enqueue time, not by where the cursor sits now.
     this.playedThrough = true;
-    // Park the cursor past the end so a subsequent add appends and takes over.
-    this.currentIndex = -1;
   }
 
   /** True when playback has run the queue to its end and nothing has been added
@@ -444,14 +447,6 @@ export class QueueManager {
   }
 
   previous(): boolean {
-    // From a finished queue the cursor is parked at -1; stepping back is the
-    // natural "replay the last track" gesture, so land on the final track.
-    if (this.playedThrough && this.tracks.length > 0) {
-      this.currentIndex = this.tracks.length - 1;
-      this.clearPlayedThrough();
-      this.emitQueue();
-      return true;
-    }
     if (this.currentIndex > 0) {
       this.currentIndex -= 1;
       // Stepping back to a playable track un-finishes the queue.

@@ -1629,6 +1629,10 @@ export class PlaybackController {
     const outgoing = this.queue.getCurrentTrack();
     const wasNatural = this.naturalAdvance;
     if (!this.queue.next()) {
+      // Genuine end of queue (natural end, or a skip past the last track).
+      // Record it so a later add appends and takes over instead of being
+      // mistaken for an idle add and inserted at the front.
+      this.queue.markPlayedThrough();
       const snap = this.queue.getSnapshot();
       console.log(`[playback] advance failed — queue ended (index ${snap.currentIndex} of ${snap.tracks.length})`);
       this.clearEndTimer();
