@@ -180,8 +180,9 @@ const COMMANDS = [
     new SlashCommandBuilder().setName('panel').setDescription('Post (or refresh) the live control panel with buttons'),
     new SlashCommandBuilder()
       .setName('key')
-      .setDescription('Web panel/visualizer access links (trusted users)')
+      .setDescription('Web panel/visualizer access links and key (trusted users)')
       .addSubcommand((sc) => sc.setName('give').setDescription('Get your pre-authorized panel + visualizer links'))
+      .addSubcommand((sc) => sc.setName('show').setDescription('Owner: reveal the current key itself (not just the links)'))
       .addSubcommand((sc) => sc.setName('rotate').setDescription('Owner: issue a new key — all old links stop working')),
     new SlashCommandBuilder()
       .setName('endwav')
@@ -1808,6 +1809,32 @@ export class DiscordBot {
           const linkLine = pl.secure ? `${pl.url}?key=${newKey}` : `(links appear once PUBLIC_BASE_URL or a tunnel is up)`;
           await interaction.reply({
             content: `🔑 New key issued — all previous links and remembered devices are dead.\n${linkLine}`,
+            flags: MessageFlags.Ephemeral,
+          });
+          break;
+        }
+        // show — owner-only: reveals the key itself, so it can be typed or
+        // transferred by hand instead of only via a link.
+        if (sub === 'show') {
+          if (!this.perms.isOwner(interaction.user.id)) return this.deny(interaction);
+          if (!config.shareKey) {
+            await interaction.reply({ content: 'No share key is configured — the web panel is open access.', flags: MessageFlags.Ephemeral });
+            break;
+          }
+          const sPl = vizTunnel.panelLink();
+          const sVl = vizTunnel.vizLink();
+          await interaction.reply({
+            embeds: [
+              new EmbedBuilder()
+                .setTitle('🔑 Current access key')
+                .setDescription(
+                  `**Key:** \`${config.shareKey}\`\n\n` +
+                    `🔗 Panel: <${sPl.url}?key=${config.shareKey}>\n` +
+                    `🔗 Visualizer: <${sVl.url}?key=${config.shareKey}>`,
+                )
+                .setColor(this.themeColor())
+                .setFooter({ text: 'Tap the key to copy · /key rotate to revoke all devices' }),
+            ],
             flags: MessageFlags.Ephemeral,
           });
           break;
@@ -3545,10 +3572,22 @@ export class DiscordBot {
             await message.reply(`🔑 New key issued — all previous links and remembered devices are dead.\n${linkLine}`);
             break;
           }
+          const keyArg = (message.content.trim().split(/\s+/)[2] ?? '').toLowerCase();
           // owner-only (matches the slash command): the links grant full panel control.
           if (!this.perms.isOwner(message.author.id)) return void (await deny());
           if (!config.shareKey) {
             await message.reply('No share key is configured — the web panel is open access.');
+            break;
+          }
+          if (keyArg === 'show' || keyArg === 'key') {
+            const sPl = vizTunnel.panelLink();
+            const sVl = vizTunnel.vizLink();
+            await message.reply(
+              `🔑 **Current key:** \`${config.shareKey}\`\n` +
+                `🎛️ Panel: <${sPl.url}?key=${config.shareKey}>\n` +
+                `🌈 Visualizer: <${sVl.url}?key=${config.shareKey}>\n` +
+                `*Tap the key to copy · V@key rotate to revoke all*`,
+            );
             break;
           }
           const kpl = vizTunnel.panelLink();
@@ -8341,7 +8380,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/sleep <30m|1h>` · `V@sleep` — sleep timer',
       '`/help` · `V@help` — this menu',
       '`/invite` · `V@invite` — add Vaporzr to a server',
-      '`/key rotate` · `V@key` — web access links (admin)',
+      '`/key show|rotate` · `V@key show` — reveal the access key, or rotate it (admin)',
       '`/perms` — command levels & roles (admin)',
       '`/cookie-refresh` — re-export YouTube cookies (admin)',
       '`/player` · `V@player` — desktop player window (admin)',

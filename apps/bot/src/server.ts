@@ -823,6 +823,31 @@ async function handleRoute(
         break;
       }
 
+      case '/api/access': {
+        // Reveals the shared key itself. Gated on the key (cookie OR ?key=), so
+        // only someone who already has access can read it back — but that is
+        // exactly the point: a control device can recover the key to add a new
+        // device, without an owner having to resend a link. Read-only; never
+        // rotates. Use /key rotate to revoke.
+        if (!config.shareKey || !hasShareAccess(req, url)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'unauthorized' }));
+          return;
+        }
+        const pl = vizTunnel.panelLink();
+        const vl = vizTunnel.vizLink();
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(
+          JSON.stringify({
+            key: config.shareKey,
+            panelUrl: `${pl.url}?key=${encodeURIComponent(config.shareKey)}`,
+            vizUrl: `${vl.url}?key=${encodeURIComponent(config.shareKey)}`,
+            secure: Boolean(pl.secure && vl.secure),
+          }),
+        );
+        break;
+      }
+
       case '/api/push/key': {
         if (config.shareKey && !hasShareAccess(req, url)) {
           res.writeHead(401, { 'Content-Type': 'application/json' });

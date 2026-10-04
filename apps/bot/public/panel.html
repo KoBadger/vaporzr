@@ -162,9 +162,22 @@ kbd{display:inline-block;padding:2px 7px;border-radius:6px;border:1px solid var(
 .shortcuts{display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:var(--muted);align-items:center}
 .shortcuts span{display:inline-flex;gap:6px;align-items:center}
 
+/* access-key modal */
+#key-modal{position:fixed;inset:0;z-index:120;background:rgba(4,6,16,.72);
+  -webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:18px}
+#key-card{width:min(560px,94vw);background:rgba(13,17,38,.98);border:1px solid var(--line);
+  border-radius:16px;padding:18px;box-shadow:0 24px 70px rgba(0,0,0,.6)}
+.key-h{font-size:15px;font-weight:700;margin-bottom:4px}
+.key-h2{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted,#94a3b8);margin:16px 0 6px}
+.key-sub{font-size:12.5px;line-height:1.5;color:var(--muted,#94a3b8);margin:0 0 12px}
+.key-row{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+.key-row input{flex:1;min-width:0;background:rgba(255,255,255,.05);border:1px solid var(--line);
+  border-radius:9px;padding:9px 11px;color:var(--text,#e2e8f0);font:12.5px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace}
+.key-row button{flex:0 0 auto;white-space:nowrap}
+.key-foot{display:flex;justify-content:flex-end;margin-top:14px}
+
 /* toasts */
-#toasts{position:fixed;right:18px;bottom:18px;z-index:99;display:grid;gap:8px;max-width:min(360px,86vw)}
-.toast{padding:11px 15px;border-radius:12px;background:rgba(13,17,38,.95);border:1px solid var(--line);
+#toasts{position:fixed;right:18px;bottom:18px;z-index:99;display:grid;gap:8px;max-width:min(360px,86vw)}.toast{padding:11px 15px;border-radius:12px;background:rgba(13,17,38,.95);border:1px solid var(--line);
   border-left:3px solid var(--accent);font-size:12.5px;box-shadow:0 10px 34px rgba(0,0,0,.5);
   animation:toastIn .28s cubic-bezier(.2,.9,.3,1.2)}
 .toast.success{border-left-color:#22c55e}.toast.error{border-left-color:#ef4444}.toast.info{border-left-color:var(--accent2)}
@@ -295,6 +308,7 @@ body.guest #guilds{display:none}
         </div>
       </div>
       <button id="dj-toggle" data-tip="Toggle the DJ soundboard on/off">🎛</button>
+      <button id="btn-key" data-tip="Show / copy the access key and links (owner only)">🔑</button>
       <button id="btn-push" data-tip="Enable browser notifications (YouTube / cookie alerts)">🔔</button>
     </div>
     <div id="guilds"></div>
@@ -455,13 +469,38 @@ body.guest #guilds{display:none}
 </div>
 <div id="toasts"></div>
 
+<div id="key-modal" style="display:none">
+  <div id="key-card">
+    <div class="key-h">🔑 Access key</div>
+    <p class="key-sub">Anyone with this key controls the panel. Share it only with people you trust.</p>
+    <div class="key-row">
+      <input id="key-value" type="text" readonly spellcheck="false" />
+      <button id="key-reveal" data-tip="Reveal / hide">👁</button>
+      <button id="key-copy" data-tip="Copy key">⧉</button>
+    </div>
+    <div class="key-h2">Ready-made links</div>
+    <div class="key-row">
+      <input id="key-panel" type="text" readonly spellcheck="false" />
+      <button id="key-copy-panel" data-tip="Copy panel link">⧉ panel</button>
+    </div>
+    <div class="key-row">
+      <input id="key-viz" type="text" readonly spellcheck="false" />
+      <button id="key-copy-viz" data-tip="Copy visualizer link">⧉ viz</button>
+    </div>
+    <div class="key-foot">
+      <button id="key-close">Close</button>
+    </div>
+  </div>
+</div>
+
 <script>
 (function () {
   var $ = function (id) { return document.getElementById(id); };
   var el = {};
   ['voice','dj-badge','dj-toggle','sfx-status','track-name','track-meta','src-badge','art',
    'wave-select','tools-btn','tools-menu','amb-state','vs-state','q-tools-btn','q-tools-menu','btn-install','mini-bar','mini-art','mini-name','mini-play','mini-next',
-   'btn-push',
+   'btn-push','btn-key',
+   'key-modal','key-card','key-value','key-reveal','key-copy','key-panel','key-copy-panel','key-viz','key-copy-viz','key-close',
    'btn-play','btn-shuffle','btn-repeat','btn-prev','btn-next','btn-clear','progress','t-now','t-dur','vol',
    'queue','queue-count','queue-total','btn-jump','empty','search','btn-q-add','btn-q-play',
    'lyrics','lyrics-plain','lyrics-card',
@@ -500,6 +539,7 @@ body.guest #guilds{display:none}
     GUEST_UI=true;
     document.body.classList.add('guest');
     setConnected(connected);
+    if(el['btn-key'])el['btn-key'].style.display='none';
     var b=document.createElement('div');
     b.id='guest-banner';
     b.style.cssText='position:fixed;left:50%;transform:translateX(-50%);bottom:14px;z-index:99;'
@@ -1024,6 +1064,8 @@ body.guest #guilds{display:none}
       case 'p':cmd('previous');break;
       case 's':cmd('shuffle',{shuffle:!(state&&state.shuffle)});break;
       case 'r':el['btn-repeat'].onclick();break;
+      case 'K':if(!GUEST)el['btn-key'].onclick();break;
+      case 'Escape':if(el['key-modal'].style.display==='flex')closeKeyModal();break;
     }
   });
 
@@ -1067,6 +1109,52 @@ body.guest #guilds{display:none}
       toast('success','Notifications on');await updatePushBtn();
     }catch(e){toast('error','Could not enable notifications');}
   };
+
+  /* ---------- access key ---------- */
+  var keyLoaded=false,keyRevealed=false;
+  function maskKey(k){return k?k.slice(0,2)+'••••••••••••'+k.slice(-2):''}
+  function copyText(text,label){
+    var done=function(){toast('success',label+' copied')};
+    if(navigator.clipboard&&navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text).then(done,function(){fallbackCopy(text,done)});
+    }else{fallbackCopy(text,done)}
+  }
+  function fallbackCopy(text,done){
+    // clipboard API needs a secure context; a plain-http panel falls back here.
+    var ta=document.createElement('textarea');
+    ta.value=text;ta.style.cssText='position:fixed;opacity:0;pointer-events:none';
+    document.body.appendChild(ta);ta.select();
+    try{document.execCommand('copy');done()}catch(e){toast('error','Copy failed — select the text manually')}
+    document.body.removeChild(ta);
+  }
+  async function loadAccessKey(){
+    if(keyLoaded)return true;
+    try{
+      var r=await fetch('/api/access');
+      if(r.status===401){toast('error','Only an authorised panel can show the key');return false}
+      if(!r.ok){toast('error','Could not load the key');return false}
+      var d=await r.json();
+      el['key-value'].value=d.key||'';
+      el['key-value'].type=keyRevealed?'text':'password';
+      el['key-panel'].value=d.panelUrl||'';
+      el['key-viz'].value=d.vizUrl||'';
+      keyLoaded=true;
+      return true;
+    }catch(e){toast('error','Could not load the key');return false}
+  }
+  function openKeyModal(){el['key-modal'].style.display='flex';void loadAccessKey()}
+  function closeKeyModal(){el['key-modal'].style.display='none'}
+  el['btn-key'].onclick=function(){ if(el['key-modal'].style.display==='flex')closeKeyModal();else openKeyModal(); };
+  el['key-close'].onclick=closeKeyModal;
+  el['key-modal'].addEventListener('click',function(e){if(e.target===el['key-modal'])closeKeyModal()});
+  el['key-reveal'].onclick=function(){
+    keyRevealed=!keyRevealed;
+    el['key-value'].type=keyRevealed?'text':'password';
+    el['key-reveal'].textContent=keyRevealed?'🙈':'👁';
+  };
+  el['key-copy'].onclick=function(){copyText(el['key-value'].value,'Key')};
+  el['key-copy-panel'].onclick=function(){copyText(el['key-panel'].value,'Panel link')};
+  el['key-copy-viz'].onclick=function(){copyText(el['key-viz'].value,'Visualizer link')};
 
   // PWA: register the (cache-free) service worker so the panel is installable.
   if ('serviceWorker' in navigator) {
