@@ -982,6 +982,51 @@ export interface AudioFeatures {
   duration_ms: number;
 }
 
+/**
+ * Free mirror of Spotify's retired `/audio-features` (ReccoBeats). Returns the
+ * same fields for the tracks it knows; unknown ids are simply absent. Spotify
+ * returns 403 for this endpoint on most apps since Nov 2024, so without this the
+ * queue's tracks carry no features and smart shuffle has nothing to rank by.
+ */
+async function reccoBeatsFeatures(ids: string[]): Promise<Map<string, AudioFeatures>> {
+  const out = new Map<string, AudioFeatures>();
+  const RECCO_MAX = 40; // the mirror caps ids per request
+  for (let i = 0; i < ids.length; i += RECCO_MAX) {
+    const chunk = ids.slice(i, i + RECCO_MAX);
+    try {
+      const res = await fetchWithTimeout(
+        `https://api.reccobeats.com/v1/audio-features?ids=${chunk.join(',')}`,
+        { headers: { Accept: 'application/json' } },
+      );
+      if (!res.ok) continue;
+      const data = (await res.json()) as {
+        content?: Array<Partial<AudioFeatures> & { href?: string; id?: string }>;
+      };
+      for (const f of data.content ?? []) {
+        const sid = f.href?.match(/track\/([A-Za-z0-9]{22})/)?.[1];
+        if (!sid) continue;
+        out.set(sid, {
+          danceability: f.danceability ?? 0.5,
+          energy: f.energy ?? 0.5,
+          valence: f.valence ?? 0.5,
+          tempo: f.tempo ?? 0,
+          acousticness: f.acousticness ?? 0.3,
+          instrumentalness: f.instrumentalness ?? 0,
+          liveness: f.liveness ?? 0.1,
+          speechiness: f.speechiness ?? 0.05,
+          key: f.key ?? -1,
+          mode: f.mode ?? 1,
+          time_signature: f.time_signature ?? 4,
+          duration_ms: f.duration_ms ?? 0,
+        });
+      }
+    } catch {
+      /* mirror unavailable — leave these featureless */
+    }
+  }
+  return out;
+}
+
 /** Batch-fetch audio features for up to 100 Spotify track IDs. */
 export async function getAudioFeatures(trackIds: string[]): Promise<Map<string, AudioFeatures>> {
   await loadCache();
@@ -995,27 +1040,47 @@ export async function getAudioFeatures(trackIds: string[]): Promise<Map<string, 
     else missing.push(id);
   }
   if (missing.length === 0) return out;
-  throwIfSpotifyCooling();
-  const token = await getAccessToken();
-  // Spotify batches in chunks of 100.
-  for (let i = 0; i < missing.length; i += 100) {
-    const chunk = missing.slice(i, i + 100);
-    const res = await fetchWithTimeout(
-      `${API_URL}/audio-features?ids=${chunk.join(',')}`,
-      { headers: { Authorization: `Bearer ${token}` } },
-    );
-     if (res.status === 429) {
-       const wait = noteSpotifyRateLimit(res);
-       throw new SpotifyError(`Spotify API rate-limited — try again in about ${Math.max(1, Math.ceil(wait / 60))} min.`, 429, wait);
-     }
-     if (!res.ok) break;
-    const data = (await res.json()) as { audio_features: (AudioFeatures | null)[] };
-    for (let j = 0; j < chunk.length; j++) {
-      const af = data.audio_features?.[j];
-       if (af) {
-         out.set(chunk[j], af);
-         cacheSet(`features:${chunk[j]}`, af, 7 * 24 * 60 * 60 * 1000);
-       }
+  // Try Spotify first for whatever apps still have access; when it 403s (the
+  // endpoint is retired for most apps) backfill the rest from the mirror below.
+  try {
+    throwIfSpotifyCooling();
+    const token = await getAccessToken();
+    // Spotify batches in chunks of 100.
+    for (let i = 0; i < missing.length; i += 100) {
+      const chunk = missing.slice(i, i + 100);
+      const res = await fetchWithTimeout(
+        `${API_URL}/audio-features?ids=${chunk.join(',')}`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (res.status === 429) {
+        const wait = noteSpotifyRateLimit(res);
+        throw new SpotifyError(`Spotify API rate-limited — try again in about ${Math.max(1, Math.ceil(wait / 60))} min.`, 429, wait);
+      }
+      if (res.status === 403) {
+        console.warn('[spotify] /audio-features returned 403 (retired for this app) — falling back to ReccoBeats');
+        break;
+      }
+      if (!res.ok) break;
+      const data = (await res.json()) as { audio_features: (AudioFeatures | null)[] };
+      for (let j = 0; j < chunk.length; j++) {
+        const af = data.audio_features?.[j];
+        if (af) {
+          out.set(chunk[j], af);
+          cacheSet(`features:${chunk[j]}`, af, 7 * 24 * 60 * 60 * 1000);
+        }
+      }
+    }
+  } catch (err) {
+    // A genuine rate-limit must surface; anything else (no token, network) just
+    // means we fall through to the mirror.
+    if (err instanceof SpotifyError && err.status === 429) throw err;
+  }
+  const stillMissing = missing.filter((id) => !out.has(id));
+  if (stillMissing.length > 0) {
+    const rb = await reccoBeatsFeatures(stillMissing);
+    for (const [id, af] of rb) {
+      out.set(id, af);
+      cacheSet(`features:${id}`, af, 7 * 24 * 60 * 60 * 1000);
     }
   }
   return out;
