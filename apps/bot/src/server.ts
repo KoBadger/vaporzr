@@ -16,6 +16,97 @@ import { statsStore } from './stats.js';
 
 /** Pre-gzipped vendor assets — preset chunks are tens of MB of JS. */
 const vendorCache = new Map<string, { body: Buffer; gzip: boolean }>();
+
+/**
+ * Track artwork, relayed through this origin.
+ *
+ * A Discord Activity runs under a CSP that Discord injects, and its img-src does
+ * not include the artwork CDNs — so a bare `https://i.scdn.co/...` in an <img>
+ * fails INSIDE the Activity while working perfectly in a browser. The visualizer
+ * then shows a broken-image icon even though the URL is valid. Serving the image
+ * from our own origin sidesteps the policy entirely, since the page's own origin
+ * is always allowed.
+ *
+ * Host-locked on purpose: this must never become an open image proxy.
+ */
+const ART_HOSTS = new Set([
+  'i.scdn.co',
+  'image-cdn-fa.spotifycdn.com',
+  'image-cdn-ak.spotifycdn.com',
+  'image-cdn-origin.spotifycdn.com',
+  'mosaic.scdn.co',
+  'i.ytimg.com',
+  'img.youtube.com',
+  'yt3.ggpht.com',
+  'lh3.googleusercontent.com',
+]);
+const artCache = new Map<string, { body: Buffer; type: string; at: number }>();
+const ART_TTL_MS = 6 * 60 * 60 * 1000;
+const ART_MAX_BYTES = 6 * 1024 * 1024;
+
+async function serveArtwork(url: URL, res: http.ServerResponse): Promise<void> {
+  const raw = url.searchParams.get('u') ?? '';
+  // Only ever fetch http(s) from the allowlist. Parsing with URL (not a string
+  // test) is what makes a lookalike host like i.scdn.co.evil.com fail.
+  let target: URL;
+  try {
+    target = new URL(raw);
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Bad artwork URL.');
+    return;
+  }
+  if (target.protocol !== 'https:' || !ART_HOSTS.has(target.hostname)) {
+    res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Artwork host not allowed.');
+    return;
+  }
+  const key = target.toString();
+  const hit = artCache.get(key);
+  if (hit && Date.now() - hit.at < ART_TTL_MS) {
+    res.writeHead(200, {
+      'Content-Type': hit.type,
+      'Cache-Control': 'public, max-age=86400',
+      'X-Art-Cache': 'hit',
+    });
+    res.end(hit.body);
+    return;
+  }
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    const upstream = await fetch(key, { signal: ctrl.signal, redirect: 'follow' });
+    clearTimeout(timer);
+    if (!upstream.ok) {
+      res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Artwork unavailable.');
+      return;
+    }
+    const type = upstream.headers.get('content-type') ?? 'image/jpeg';
+    if (!type.startsWith('image/')) {
+      res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Artwork was not an image.');
+      return;
+    }
+    const body = Buffer.from(await upstream.arrayBuffer());
+    if (body.length === 0 || body.length > ART_MAX_BYTES) {
+      res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Artwork too large.');
+      return;
+    }
+    if (artCache.size > 200) artCache.clear();
+    artCache.set(key, { body, type, at: Date.now() });
+    res.writeHead(200, {
+      'Content-Type': type,
+      'Cache-Control': 'public, max-age=86400',
+      'X-Art-Cache': 'miss',
+    });
+    res.end(body);
+  } catch {
+    res.writeHead(504, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Artwork fetch timed out.');
+  }
+}
 import { playlistStore } from './playlists.js';
 import { probeYoutube, youtubeHealth } from './youtube.js';
 import { addPushSubscription, pushPublicKey, pushSubscriptionCount, removePushSubscription } from './push.js';
@@ -445,10 +536,15 @@ async function handleRoute(
         return;
       }
     }
+    // Artwork relay — see serveArtwork() for why the image is not loaded direct.
+    if (url.pathname === '/art') {
+      await serveArtwork(url, res);
+      return;
+    }
+
     // Static vendor bundles for the web visualizer (butterchurn etc.) plus the
     // lazily-loaded preset library under presets/.
-    if (url.pathname.startsWith('/vendor/')) {
-      const rel = url.pathname.slice('/vendor/'.length);
+    if (url.pathname.startsWith('/vendor/')) {      const rel = url.pathname.slice('/vendor/'.length);
       if (/^[\w.-]+\.(m?js|json)$/.test(rel) || /^presets\/[\w.-]+\.(m?js|json)$/.test(rel)) {
         try {
           const target = path.join(__dirname, '..', 'public', 'vendor', rel);

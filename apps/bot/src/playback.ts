@@ -443,6 +443,16 @@ export class PlaybackController {
     const outgoingUri = this.queue.getCurrentTrack()?.uri ?? null;
     const plan = planCrossfade(durationMs, positionMs, this.currentStartOffsetMs, xfadeMs);
     if (!plan) return;
+    // A real blend is coming, and it replaces the baked tail fade for BOTH sides
+    // of the handoff:
+    //   - the OUTGOING track must play at full level to its end, because the
+    //     blend sums the incoming head ON TOP of it. Letting ffmpeg ramp the
+    //     outgoing side to zero over the same window means the sum loses that
+    //     half and the handoff audibly dips instead of blending.
+    //   - the INCOMING stream must not bake its own fade-out for the NEXT
+    //     handoff either; that is scheduled when it starts.
+    // Both are one-shot, so a stream that never gets a blend keeps its fade-out.
+    this.voice.suppressCurrentTailFade(Math.max(0, durationMs - positionMs));
     this.crossfadeTimer = setTimeout(() => {
       this.crossfadeTimer = null;
       void this.startCrossfade(outgoingUri, next, xfadeMs);

@@ -16,6 +16,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import { Readable, Transform } from 'node:stream';
 import { config } from './config.js';
+import { tailFadeSeconds } from './crossfade.js';
 
 /**
  * User-Agent used when the bot itself (Node fetch) pulls a media stream.
@@ -81,6 +82,13 @@ export class VoiceManager {
   private audioFx = '';
   /** Tail fade-out (seconds) applied to every decoded stream; 0 = hard cut. */
   private fadeOutSec = 2.5;
+  /**
+   * When > 0, the stream playing now was told a crossfade owns its tail, so the
+   * baked fade-out is replaced by the blend. Measured as "this stream has at
+   * least this much playtime left", which lets a stale flag from a finished
+   * stream be ignored instead of silently stripping the fade from the next one.
+   */
+  private suppressFadeIfRemainingMs = 0;
   /** Ducking: lower the music while channel members are speaking. */
   private duckAuto: ((userId: string) => boolean) | null = null;
   private duckFactor = 0.25;
@@ -117,6 +125,20 @@ export class VoiceManager {
   /** Set the tail fade-out (seconds) applied to streams started from now on. */
   setFadeOut(sec: number): void {
     this.fadeOutSec = Math.max(0, Math.min(15, sec));
+  }
+
+  /**
+   * Drop the baked tail fade from the stream that is playing now, because a real
+   * crossfade is handling this handoff instead.
+   *
+   * The ffmpeg `afade=t=out` and the blend describe the same moment and they
+   * stack: the blend sums the incoming head on top of the outgoing audio, so if
+   * ffmpeg is already ramping that audio to zero the sum loses half the mix and
+   * the handoff dips or cuts out. `minRemainingMs` guards against a stale call
+   * landing on a stream that has already moved on.
+   */
+  suppressCurrentTailFade(minRemainingMs: number): void {
+    this.suppressFadeIfRemainingMs = Math.max(0, Math.round(minRemainingMs));
   }
 
   /** Set a one-shot start offset (ms) for the next decoded stream (crossfade). */
@@ -680,7 +702,15 @@ export class VoiceManager {
     const filters = [config.audioNormFilter, 'afade=t=in:st=0:d=0.4'];
     // Tail fade so a track eases out instead of cutting off. Sits downstream of
     // the normalize stage; skipped for very short tracks, resumes near the end, or when off.
-    const fade = this.fadeOutSec;
+    //
+    // A scheduled crossfade already fades this track out — its own equal-power
+    // ramp, summed over the outgoing audio AFTER this filter chain. Baking an
+    // afade-out here as well stacks the two, so the sum loses the outgoing half
+    // and the handoff dips or cuts out early. tailFadeSeconds() encodes that
+    // decision (and the staleness guard) so it is unit-tested, not re-derived here.
+    const remainMs = opts.durationMs && opts.durationMs > 0 ? opts.durationMs - requestedSeekMs : 0;
+    const fade = tailFadeSeconds(this.fadeOutSec, remainMs, this.suppressFadeIfRemainingMs);
+    this.suppressFadeIfRemainingMs = 0;
     if (fade > 0 && opts.durationMs && opts.durationMs > 0) {
       const remainSec = (opts.durationMs - requestedSeekMs) / 1000;
       if (remainSec > fade + 0.5) {

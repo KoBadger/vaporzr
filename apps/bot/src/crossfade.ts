@@ -75,6 +75,29 @@ export function linearIn(t: number): number {
   return Math.max(0, Math.min(1, t));
 }
 
+/**
+ * How long the baked ffmpeg tail fade should be for a stream, in seconds.
+ *
+ * The baked `afade=t=out` and a real crossfade describe the SAME handoff, and
+ * they stack: the blend sums the incoming track's head on top of the outgoing
+ * audio, so if ffmpeg is also ramping that audio to zero the sum loses half the
+ * mix and the handoff dips — heard as a song cutting out early. When a blend
+ * owns this tail the baked fade must be 0.
+ *
+ * `suppressedRemainingMs` is set by playback when it schedules a blend and is
+ * the playtime the stream had left at that moment. It is only honoured while it
+ * still describes THIS stream: if the remaining playtime has since dropped below
+ * it we have moved on, and a stale value must not strip a later track's fade.
+ */
+export function tailFadeSeconds(
+  fadeOutSec: number,
+  remainingMs: number,
+  suppressedRemainingMs: number,
+): number {
+  if (suppressedRemainingMs > 0 && remainingMs >= suppressedRemainingMs) return 0;
+  return fadeOutSec;
+}
+
 function clamp16(v: number): number {
   return Math.max(-32768, Math.min(32767, Math.round(v)));
 }

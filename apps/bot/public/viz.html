@@ -1907,12 +1907,32 @@ body.mobile #fps{top:calc(52px + var(--sait))}
       overlay.className='';
       title.textContent=st.track.name||'Playing';
       artists.textContent=(st.track.artists||[]).join(', ');
-      art.src=st.track.image||'';
+      setArt(st.track.image);
       synthTrack={name:st.track.name||'',artists:(st.track.artists||[]).join(', ')};
     }else{
       overlay.className='hidden';
       synthTrack=null;
     }
+  }
+  /**
+   * Artwork goes through /art, not straight to the CDN.
+   *
+   * An Activity runs under the CSP Discord injects, whose img-src does not cover
+   * the artwork hosts — so a direct <img src="https://i.scdn.co/..."> silently
+   * fails in the Activity (broken-image icon) while working fine in a browser.
+   * Our own origin is always allowed, so relay it. A track with no image at all
+   * hides the tile instead of pointing src at "" and showing the broken icon.
+   */
+  function setArt(src){
+    if(!src||!/^https?:\/\//i.test(src)){
+      // No artwork (a local file, or a source that carries none): hide the tile
+      // rather than point src at "" and render the browser's broken-image icon.
+      art.removeAttribute('src');
+      art.style.visibility='hidden';
+      return;
+    }
+    art.style.visibility='';
+    art.src=location.origin+'/art?u='+encodeURIComponent(src);
   }
   function renderGuilds(){
     guildBar.innerHTML='';

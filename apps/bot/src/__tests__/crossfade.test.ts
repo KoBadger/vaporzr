@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canCrossfade, crossfadePcm, equalPowerIn, equalPowerOut, fadeInPcm, linearIn, planCrossfade, tempoMatchRatio } from '../crossfade.js';
+import { canCrossfade, crossfadePcm, equalPowerIn, equalPowerOut, fadeInPcm, linearIn, planCrossfade, tailFadeSeconds, tempoMatchRatio } from '../crossfade.js';
 
 describe('canCrossfade (the overlap gate)', () => {
   it('schedules a blend whenever we generate the audio ourselves', () => {
@@ -132,5 +132,50 @@ describe('tempoMatchRatio', () => {
   it('leaves very different tempos alone rather than stretching badly', () => {
     expect(tempoMatchRatio(90, 160)).toBe(1); // 0.56x
     expect(tempoMatchRatio(180, 90)).toBe(1); // 2x
+  });
+});
+
+describe('tailFadeSeconds (the baked fade vs a real crossfade)', () => {
+  it('keeps the fade when no blend owns the tail', () => {
+    expect(tailFadeSeconds(2.5, 200_000, 0)).toBe(2.5);
+    expect(tailFadeSeconds(6, 200_000, 0)).toBe(6);
+  });
+
+  it('drops the fade entirely while a blend owns this tail', () => {
+    // Playback scheduled a blend and recorded the playtime this stream had left.
+    // Without this the two fades stack and the song cuts out early.
+    expect(tailFadeSeconds(2.5, 200_000, 200_000)).toBe(0);
+    expect(tailFadeSeconds(6, 285_000, 285_000)).toBe(0);
+  });
+
+  it('honours the flag on a stream that starts partway in (a crossfade handoff)', () => {
+    // The incoming track was blended into, so it starts ~6s in. Its remaining
+    // playtime is what the next schedule will report, and it still matches.
+    expect(tailFadeSeconds(6, 279_000, 279_000)).toBe(0);
+  });
+
+  it('ignores a stale flag rather than stripping a later track\'s fade', () => {
+    // A blend was scheduled for a stream with 285s left; this stream only has
+    // 40s left, so it is a LATER track and must keep its fade-out. Reporting the
+    // fade here is what prevents "every track after a crossfade stops fading".
+    expect(tailFadeSeconds(6, 40_000, 285_000)).toBe(6);
+    expect(tailFadeSeconds(2.5, 1_000, 200_000)).toBe(2.5);
+  });
+
+  it('treats a zero or negative remaining time as a later stream', () => {
+    expect(tailFadeSeconds(6, 0, 285_000)).toBe(6);
+    expect(tailFadeSeconds(6, -1, 285_000)).toBe(6);
+  });
+
+  it('never returns a negative or NaN fade', () => {
+    for (const [f, r, s] of [
+      [0, 1000, 0],
+      [2.5, 0, 0],
+      [2.5, Number.NaN, 0],
+    ] as Array<[number, number, number]>) {
+      const v = tailFadeSeconds(f, r, s);
+      expect(Number.isFinite(v)).toBe(true);
+      expect(v).toBeGreaterThanOrEqual(0);
+    }
   });
 });

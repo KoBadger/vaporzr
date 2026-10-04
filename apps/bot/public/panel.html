@@ -558,6 +558,20 @@ body.guest #guilds{display:none}
   el.sens.addEventListener('input',function(){setSens(Number(el.sens.value)/100,true)});
 
   /* ---------- rendering ---------- */
+  /**
+   * Artwork goes through /art, not straight to the CDN.
+   *
+   * An Activity/embedded view runs under the CSP Discord injects, whose img-src
+   * does not cover the artwork hosts, so a direct <img src="https://i.scdn.co/…">
+   * silently fails there while working fine in a plain browser — the tile shows
+   * a broken-image icon. Our own origin is always allowed, so relay it. A track
+   * with no artwork returns '' so callers can render their own fallback instead
+   * of an empty src.
+   */
+  function artUrl(src){
+    if(!src||!/^https?:\/\//i.test(src))return '';
+    return '/art?u='+encodeURIComponent(src);
+  }
   function paintProgress(){
     var max=Number(el.progress.max)||1,pos=Number(el.progress.value)||0;
     el.progress.style.backgroundSize=Math.min(100,(pos/max)*100)+'% 100%';
@@ -613,7 +627,8 @@ body.guest #guilds{display:none}
       var t=state.track;
       el['track-name'].textContent=t?t.name:'Nothing playing';
       el['track-meta'].textContent=t?(t.artists?t.artists.join(', '):'')+(t.album?' — '+t.album:''):'Queue something below or use 🔎 search';
-      el.art.src=(t&&t.image)?t.image:'';
+      var artSrc=artUrl(t&&t.image);
+      if(artSrc)el.art.src=artSrc;else el.art.removeAttribute('src');
       el.art.style.display=t?'block':'none';
       el['btn-play'].textContent=state.playing?'⏸':'▶';
       el['btn-play'].setAttribute('data-tip',state.playing?'Pause (Space)':'Play (Space)');
@@ -638,7 +653,7 @@ body.guest #guilds{display:none}
       document.querySelector('.hero-card').classList.toggle('paused',!state.playing);
     }
     var mb=el['mini-bar'];
-    if(mb){mb.classList.toggle('show',!!t);if(t){el['mini-art'].src=t.image||'';el['mini-name'].textContent=t.name||'';el['mini-play'].textContent=(state&&state.playing)?'\u275A\u275A':'\u25B6';}}
+    if(mb){mb.classList.toggle('show',!!t);if(t){var ma=artUrl(t.image);if(ma)el['mini-art'].src=ma;else el['mini-art'].removeAttribute('src');el['mini-name'].textContent=t.name||'';el['mini-play'].textContent=(state&&state.playing)?'\u275A\u275A':'\u25B6';}}
     renderQueue();renderDj();
   }
 
@@ -682,7 +697,7 @@ body.guest #guilds{display:none}
       cb.onclick=function(ev){ev.stopPropagation();if(cb.checked)selected.add(i);else selected.delete(i);li.classList.toggle('selected',cb.checked);syncSelBar();};
       li.insertBefore(cb,li.firstChild);
       var art;
-      if(t.image){art=document.createElement('img');art.className='qart';art.loading='lazy';art.src=t.image;art.alt='';art.onerror=function(){art.replaceWith(mkArtFallback(t))}}
+      if(t.image){art=document.createElement('img');art.className='qart';art.loading='lazy';art.src=artUrl(t.image);art.alt='';art.onerror=function(){art.replaceWith(mkArtFallback(t))}}
       else{art=mkArtFallback(t)}
       li.appendChild(art);
       var d=document.createElement('div');d.className='qn';
