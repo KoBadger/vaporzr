@@ -95,8 +95,12 @@ export class QueueManager {
     }
   }
 
-  /** When nothing is playing (idle / restored-paused / stale cursor), jump to a
-   *  freshly added track so it plays immediately instead of an old queued one. */
+  /** When the queue was empty, point the cursor at the first track added so
+   *  playback starts there. It must NOT run on later idle adds: walking the
+   *  cursor forward on every add ended it on the newest tail track, which made
+   *  the queue look "finished", which made the NEXT add reset the cursor to -1
+   *  and insert at the FRONT — queuing songs ahead of everything already
+   *  waiting. */
   private advanceToAdded(addedIndex: number, countAfter: number): void {
     if (!this.state.playing && this.currentIndex >= 0 && this.currentIndex < countAfter) {
       this.currentIndex = addedIndex;
@@ -106,16 +110,30 @@ export class QueueManager {
   enqueue(
     track: Omit<TrackInfo, 'addedBy' | 'addedAt'>,
     requestedBy: string,
-    opts?: { keepCursor?: boolean },
+    opts?: { keepCursor?: boolean; background?: boolean; next?: boolean },
   ): { added: boolean; currentIndex: number } {
     const item = { ...track, addedBy: requestedBy, addedAt: Date.now() };
+    const wasEmpty = this.tracks.length === 0;
     this.resetCursorIfFinished();
     let newIndex: number;
-    if (this.state.shuffle && this.tracks.length > 0) {
-      // Spotify-style: drop it at a random spot among the upcoming tracks.
+    // Where a new track lands depends on WHO added it.
+    //
+    // A user asked for this track, so with shuffle off it goes to the tail
+    // (yielding to what is already queued) and with shuffle ON it is inserted
+    // among the upcoming tracks — Spotify-style, so a shuffled queue stays
+    // shuffled rather than queuing everything in request order.
+    //
+    // A BACKGROUND filler (Endless Wave top-up) always appends to the tail. It
+    // must never be scattered in among tracks a listener chose, and never ahead
+    // of them: the wave tops up repeatedly while shuffle is on, so scattering
+    // each refill is what made a shuffled queue look jumbled.
+    const isBackground = opts?.background === true || requestedBy === 'endless-wave';
+    if (this.state.shuffle && this.tracks.length > 0 && !isBackground) {
+      // Insert among the upcoming tracks, inclusive of the very next slot.
+      // `next` keeps it exactly next (deterministic).
       const start = this.currentIndex === -1 ? 0 : this.currentIndex + 1;
       const end = this.tracks.length;
-      newIndex = start + Math.floor(Math.random() * (end - start + 1));
+      newIndex = opts?.next ? start : start + Math.floor(Math.random() * (end - start + 1));
       this.tracks.splice(Math.min(newIndex, end), 0, item);
     } else {
       newIndex = this.tracks.length;
@@ -134,16 +152,28 @@ export class QueueManager {
 
   enqueueMany(tracks: Omit<TrackInfo, 'addedBy' | 'addedAt'>[], requestedBy: string): number {
     if (tracks.length === 0) return -1;
+    const wasEmpty = this.tracks.length === 0;
     this.resetCursorIfFinished();
     const addedIndex = this.tracks.length;
-    if (this.state.shuffle && this.tracks.length > 0) {
-      // enqueue() counts each track and notifies listeners itself, so the bulk
-      // bookkeeping below must not run here or totalEnqueued double-counts.
-      for (const t of tracks) this.enqueue(t, requestedBy);
+    const isBackground = requestedBy === 'endless-wave';
+    if (this.state.shuffle && this.tracks.length > 0 && !isBackground) {
+      // A user handed us a LIST. Scattering each item at its own random spot
+      // would shuffle the list against itself and destroy the order the user
+      // chose (an album plays out of sequence). Instead pick ONE insertion
+      // point and keep the batch intact there, so the list arrives in order.
+      const start = this.currentIndex === -1 ? 0 : this.currentIndex + 1;
+      const end = this.tracks.length;
+      const at = start + Math.floor(Math.random() * (end - start + 1));
+      const items = tracks.map((t) => ({ ...t, addedBy: requestedBy, addedAt: Date.now() }));
+      this.tracks.splice(Math.min(at, end), 0, ...items);
+      if (this.currentIndex === -1) this.currentIndex = 0;
+      this.totalEnqueued += items.length;
+      this.emitQueue();
     } else {
       for (const t of tracks) this.tracks.push({ ...t, addedBy: requestedBy, addedAt: Date.now() });
       if (this.currentIndex === -1) this.currentIndex = 0;
-      this.advanceToAdded(addedIndex, this.tracks.length);
+      // Only establish the cursor on a cold start — see advanceToAdded.
+      if (wasEmpty) this.advanceToAdded(addedIndex, this.tracks.length);
       this.totalEnqueued += tracks.length;
       this.emitQueue();
     }

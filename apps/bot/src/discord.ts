@@ -8054,9 +8054,9 @@ export class DiscordBot {
           return;
         }
         // keepCursor: background refills must not move the playing cursor
-        // (see QueueManager.enqueue) — otherwise `upcoming`/`ahead` above lie
-        // and skips land on "queue ended" at a pinned tail.
-        s.queue.enqueue(resolved, 'endless-wave', { keepCursor: true });
+        // (see QueueManager.enqueue). background: they must also never be
+        // scattered among the tracks the listener chose — they append.
+        s.queue.enqueue(resolved, 'endless-wave', { keepCursor: true, background: true });
         enqueuedThisRun++;
         s.endlessWave.generated++;
         EW.noteWaveQueued(s.endlessWave, resolved.artists);
