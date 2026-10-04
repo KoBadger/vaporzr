@@ -79,6 +79,7 @@ button.icon{width:36px;padding:0;justify-content:center;display:inline-flex;alig
 .badge.on { color:#86efac;border-color:rgba(134,239,172,.45) }
 #conn-dot{width:8px;height:8px;border-radius:50%;background:#f59e0b;box-shadow:0 0 8px rgba(245,158,11,.7);transition:.3s;display:inline-block}
 #conn-dot.live{background:#22c55e;box-shadow:0 0 8px rgba(34,197,94,.7)}
+#conn-dot.guest{background:#60a5fa;box-shadow:0 0 8px rgba(96,165,250,.7)}
 
 /* hero */
 #track { display:flex;gap:14px;align-items:center }
@@ -495,7 +496,10 @@ body.guest #guilds{display:none}
     send(Object.assign({type:'cmd',command:command},extra||{}));
   }
   function enableGuestMode(){
+    if(GUEST_UI)return;
+    GUEST_UI=true;
     document.body.classList.add('guest');
+    setConnected(connected);
     var b=document.createElement('div');
     b.id='guest-banner';
     b.style.cssText='position:fixed;left:50%;transform:translateX(-50%);bottom:14px;z-index:99;'
@@ -751,8 +755,8 @@ body.guest #guilds{display:none}
 
   function setConnected(c){
     connected=c;
-    el['conn-dot'].className=c?'live':'';
-    el['conn-text'].textContent=c?'live':'reconnecting…';
+    el['conn-dot'].className=c?(GUEST?'guest':'live'):'';
+    el['conn-text'].textContent=c?(GUEST?'view-only':'live'):'reconnecting…';
   }
 
   /* ---------- mini spectrum (self-healing canvas size) ---------- */
@@ -790,16 +794,20 @@ body.guest #guilds{display:none}
   }
 
   /* ---------- connection ---------- */
+  var GUEST=false,GUEST_UI=false;
   function connect(){
     var loc=window.location;
-    var GUEST=false;
     var qPort=new URLSearchParams(loc.search).get('port');
+    // Carry ?key= onto the socket so a keyed link authenticates even when the
+    // vz_key cookie is absent (HttpOnly cookie, fresh profile, private window).
+    var qKey=new URLSearchParams(loc.search).get('key');
     var wsUrl;
     if(loc.protocol==='http:'||loc.protocol==='https:'){
       wsUrl=(loc.protocol==='https:'?'wss://':'ws://')+loc.host+'/ws';
     }else{
       wsUrl='ws://'+(loc.hostname||'127.0.0.1')+':'+(qPort||'4876')+'/ws';
     }
+    if(qKey)wsUrl+='?key='+encodeURIComponent(qKey);
     try{ws=new WebSocket(wsUrl)}
     catch(e){setTimeout(connect,3000);return}
     ws.onopen=function(){
@@ -836,7 +844,11 @@ body.guest #guilds{display:none}
           lastBarAt=Date.now();
           for(var k=0;k<BARS;k++)target[k]=Math.max(0,Math.min(1,(msg.bars[k]||0)*sensitivity));
           break;
-        case 'panel:notice':toast(msg.level||'info',msg.text);break;
+        case 'panel:notice':
+          // The server tells us up-front when this socket is unauthorised, so a
+          // guest never appears to be a working panel.
+          if(msg.notice==='guest'||msg.auth===false){GUEST=true;enableGuestMode()}
+          toast(msg.level||'info',msg.text);break;
       }
     };
     ws.onclose=function(){setConnected(false);setTimeout(connect,3000)};

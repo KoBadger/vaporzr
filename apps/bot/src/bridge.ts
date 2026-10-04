@@ -23,7 +23,7 @@ import { config } from './config.js';
 import { DEFAULT_THEME, themeById } from './themes.js';
 import { analyzer } from './analyzer.js';
 import { searchAndResolveYoutube } from './youtube.js';
-import { secretEquals } from './secretCompare.js';
+import { secretEquals, socketHasShareKey } from './secretCompare.js';
 import { playlistStore } from './playlists.js';
 
 interface Client {
@@ -106,17 +106,28 @@ export class Bridge {
       // Share-key auth: keyed sockets get full control; keyless sockets connect
       // as guests — they can watch (snapshots, visuals) but commands are ignored.
       if (config.shareKey) {
-        const cookie = req.headers.cookie ?? '';
-        const m = /(?:^|;\s*)vz_key=([^;]+)/.exec(cookie);
-        let value = m?.[1];
-        if (value !== undefined) {
+        // Accept the key from the cookie OR the ?key= query param — see
+        // socketHasShareKey for why both are required.
+        const authed = socketHasShareKey(req.url, req.headers.cookie, config.shareKey);
+        this.socketAuthed.set(socket, authed);
+        if (!authed) {
+          // Don't let a guest look like a working panel: say so immediately, on
+          // the socket, so the UI can switch to view-only instead of swallowing
+          // every press in silence.
           try {
-            value = decodeURIComponent(value);
+            socket.send(
+              JSON.stringify({
+                type: 'panel:notice',
+                level: 'error',
+                notice: 'guest',
+                auth: false,
+                text: 'View-only: this panel is not authorised. Open the /key give link to control playback.',
+              }),
+            );
           } catch {
-            /* malformed encoding — compare raw */
+            /* socket already gone */
           }
         }
-        this.socketAuthed.set(socket, secretEquals(value, config.shareKey));
       } else {
         this.socketAuthed.set(socket, true);
       }
