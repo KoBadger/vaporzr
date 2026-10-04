@@ -682,7 +682,7 @@ export class PlaybackController {
     this.tracksPlayed++;
 
     if (current.source === 'youtube') {
-      await this.playYoutube(current);
+      await this.playYoutube(current, generation);
       return;
     }
 
@@ -697,17 +697,17 @@ export class PlaybackController {
     }
 
     if (current.source === 'suno') {
-      await this.playSuno(current);
+      await this.playSuno(current, generation);
       return;
     }
 
     if (current.source === 'soundcloud') {
-      await this.playSoundcloud(current);
+      await this.playSoundcloud(current, generation);
       return;
     }
 
     if (current.source === 'apple') {
-      await this.playApple(current);
+      await this.playApple(current, generation);
       return;
     }
 
@@ -877,7 +877,7 @@ export class PlaybackController {
   }
 
   /** Server-side YouTube via ffmpeg straight into the voice channel. */
-  private async playYoutube(current: TrackInfo): Promise<void> {
+  private async playYoutube(current: TrackInfo, generation: number): Promise<void> {
     this.spotifyFallback = false;
     this.stopSpotifyFeed();
     this.stopSpotifyProgress();
@@ -903,6 +903,11 @@ export class PlaybackController {
       if (!video) {
         video = await resolveYoutubeVideo(current.uri.replace('youtube:video:', ''));
       }
+      // A slow YouTube resolve (5-17s) can outlive its play(): if a newer play()
+      // has superseded us, bail BEFORE starting a stream. Otherwise the stale
+      // resolve started a stream that the newer play immediately replaced,
+      // restarting the track from 0 — the audible mid-song cut-out.
+      if (generation !== this.playGeneration || this.queue.getCurrentTrack()?.uri !== current.uri) return;
       this.currentUri = current.uri;
       this.currentVideo = video;
       this.lastYoutubeVideoId = video.videoId;
@@ -1049,7 +1054,7 @@ export class PlaybackController {
     this.sendVisualizer({ type: 'cmd', command: 'stop' });
   }
 
-  private async playSuno(current: TrackInfo): Promise<void> {
+  private async playSuno(current: TrackInfo, generation: number): Promise<void> {
     const uuid = current.uri.replace('suno:', '');
     // Suno's CDN kills long-lived streams mid-track ("Invalid data found" while
     // demuxing), so play a downloaded copy: reuse it when present, otherwise
@@ -1071,6 +1076,7 @@ export class PlaybackController {
         return null;
       });
     }
+    if (generation !== this.playGeneration || this.queue.getCurrentTrack()?.uri !== current.uri) return;
     this.spotifyFallback = false;
     this.stopSpotifyFeed();
     this.stopSpotifyProgress();
@@ -1104,7 +1110,7 @@ export class PlaybackController {
     this.sendVisualizer({ type: 'cmd', command: 'stop' });
   }
 
-  private async playSoundcloud(current: TrackInfo): Promise<void> {
+  private async playSoundcloud(current: TrackInfo, generation: number): Promise<void> {
     let video = this.streamCache.get(current.uri);
     if (!video && current.streamUrl) {
       video = {
@@ -1125,6 +1131,7 @@ export class PlaybackController {
       video = await resolveSoundcloudVideo(soundcloudUriToUrl(current.uri));
       this.cacheSet(current.uri, video);
     }
+    if (generation !== this.playGeneration || this.queue.getCurrentTrack()?.uri !== current.uri) return;
     this.spotifyFallback = false;
     this.stopSpotifyFeed();
     this.stopSpotifyProgress();
@@ -1151,7 +1158,7 @@ export class PlaybackController {
   }
 
   /** Apple Music tracks carry metadata only — play the YouTube match. */
-  private async playApple(current: TrackInfo): Promise<void> {
+  private async playApple(current: TrackInfo, generation: number): Promise<void> {
     let video = this.streamCache.get(current.uri);
     if (!video) {
       const match = await resolveApplePlayback(current);
@@ -1161,6 +1168,7 @@ export class PlaybackController {
       video = match;
       this.cacheSet(current.uri, video);
     }
+    if (generation !== this.playGeneration || this.queue.getCurrentTrack()?.uri !== current.uri) return;
     this.spotifyFallback = false;
     this.stopSpotifyFeed();
     this.stopSpotifyProgress();
