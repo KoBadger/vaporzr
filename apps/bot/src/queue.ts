@@ -28,6 +28,15 @@ export class QueueManager {
   private state: PlaybackState = emptyState();
   /** Cumulative number of tracks queued over this queue's lifetime. */
   totalEnqueued = 0;
+  /**
+   * True once playback has run the queue to its end. This is what distinguishes
+   * a queue that genuinely FINISHED from one that merely built up while idle —
+   * the two look identical by position alone (cursor on the last track, not
+   * playing), and conflating them made an idle add insert at the FRONT.
+   * Set by markPlayedThrough() from playback when an advance runs off the end;
+   * cleared whenever a new track is added or the cursor moves back.
+   */
+  private playedThrough = false;
 
   constructor(private listeners: QueueListener[] = []) {}
 
@@ -52,16 +61,22 @@ export class QueueManager {
   }
 
   /** Snapshot the queue for persistence. */
-  serialize(): { tracks: TrackInfo[]; currentIndex: number; state: PlaybackState } {
+  serialize(): { tracks: TrackInfo[]; currentIndex: number; state: PlaybackState; playedThrough: boolean } {
     return {
       tracks: this.tracks.map((t) => ({ ...t })),
       currentIndex: this.currentIndex,
       state: { ...this.state },
+      playedThrough: this.playedThrough,
     };
   }
 
   /** Restore a persisted queue. Never auto-resumes — playback starts paused. */
-  restore(data: { tracks: TrackInfo[]; currentIndex: number; state: PlaybackState }): void {
+  restore(data: {
+    tracks: TrackInfo[];
+    currentIndex: number;
+    state: PlaybackState;
+    playedThrough?: boolean;
+  }): void {
     if (!Array.isArray(data.tracks) || data.tracks.length === 0) return;
     this.tracks = data.tracks.map((t) => ({ ...t }));
     // A missing cursor defaults to the first track (a restored queue should have
@@ -69,6 +84,9 @@ export class QueueManager {
     this.currentIndex = data.currentIndex == null
       ? 0
       : Math.min(Math.max(data.currentIndex, -1), this.tracks.length - 1);
+    // Carry the finished marker across a restart so a queue that ran out before
+    // the bot stopped does not silently look "not started" afterwards.
+    this.playedThrough = data.playedThrough === true;
     const current = this.getCurrentTrack();
     this.state = {
       ...this.state,
@@ -87,20 +105,42 @@ export class QueueManager {
     return this.tracks[this.currentIndex];
   }
 
-  /** If the queue finished (cursor on the last track, nothing playing), move the
-   *  cursor so newly added tracks play instead of replaying the last one. */
+  /** Called by playback when an advance runs off the end of the queue — the one
+   *  unambiguous signal that the queue genuinely finished. */
+  markPlayedThrough(): void {
+    if (this.tracks.length === 0) return;
+    this.playedThrough = true;
+    // Park the cursor past the end so a subsequent add appends and takes over.
+    this.currentIndex = -1;
+  }
+
+  /** True when playback has run the queue to its end and nothing has been added
+   *  since. Distinct from "idle on the last track", which is not a finish. */
+  isPlayedThrough(): boolean {
+    return this.playedThrough;
+  }
+
+  /** Clear the finished marker — called when a new track is queued or the cursor
+   *  is moved back to something playable. */
+  private clearPlayedThrough(): void {
+    this.playedThrough = false;
+  }
+
+  /** If the queue genuinely finished (playback ran off the end, nothing playing),
+   *  park the cursor so newly added tracks play instead of replaying the last
+   *  one. Position alone is NOT sufficient: an idle queue that merely built up to
+   *  the last track looks identical, and treating it as finished inserted the
+   *  next add at the FRONT. */
   private resetCursorIfFinished(): void {
-    if (!this.state.playing && this.currentIndex >= 0 && this.currentIndex === this.tracks.length - 1) {
+    if (this.playedThrough && !this.state.playing) {
       this.currentIndex = -1;
     }
   }
 
-  /** When the queue was empty, point the cursor at the first track added so
-   *  playback starts there. It must NOT run on later idle adds: walking the
-   *  cursor forward on every add ended it on the newest tail track, which made
-   *  the queue look "finished", which made the NEXT add reset the cursor to -1
-   *  and insert at the FRONT — queuing songs ahead of everything already
-   *  waiting. */
+  /** Point the cursor at a newly added track so playback starts there. Only
+   *  meaningful on a cold start or after a genuine finish (both leave the cursor
+   *  at -1); it must not run on ordinary idle adds, which would walk the cursor
+   *  forward onto the newest tail track. */
   private advanceToAdded(addedIndex: number, countAfter: number): void {
     if (!this.state.playing && this.currentIndex >= 0 && this.currentIndex < countAfter) {
       this.currentIndex = addedIndex;
@@ -114,7 +154,12 @@ export class QueueManager {
   ): { added: boolean; currentIndex: number } {
     const item = { ...track, addedBy: requestedBy, addedAt: Date.now() };
     const wasEmpty = this.tracks.length === 0;
+    // Capture the finished state BEFORE resetCursorIfFinished parks the cursor:
+    // a finished queue behaves like a cold start for cursor placement.
+    const wasFinished = this.playedThrough;
     this.resetCursorIfFinished();
+    // Adding a track makes the queue playable again.
+    this.clearPlayedThrough();
     let newIndex: number;
     // Where a new track lands depends on WHO added it.
     //
@@ -140,11 +185,17 @@ export class QueueManager {
       this.tracks.push(item);
     }
     if (this.currentIndex === -1) this.currentIndex = 0;
-    // Background refills (Endless Wave top-up) must NOT yank the cursor to the
-    // new tail: while idle that pins the cursor at the end, so the next refill
-    // pass sees an empty upcoming list, re-picks the same song forever, and
-    // skip lands on "queue ended". User-initiated adds keep the jump-to-fresh.
-    if (!opts?.keepCursor) this.advanceToAdded(newIndex, this.tracks.length);
+    // Background refills (Endless Wave top-up) must NOT touch the cursor at all:
+    // while idle that pins it at the tail, the next refill sees an empty
+    // upcoming window, re-picks the same song forever, and skips hit "queue
+    // ended". A user add moves the cursor only on a cold start or after a
+    // genuine finish — NOT on every idle add, which walked it forward to the
+    // newest tail track and made the queue look finished when it never played.
+    if (opts?.next === true) {
+      this.advanceToAdded(newIndex, this.tracks.length);
+    } else if (!opts?.keepCursor && !isBackground && (wasEmpty || wasFinished)) {
+      this.advanceToAdded(newIndex, this.tracks.length);
+    }
     this.totalEnqueued++;
     this.emitQueue();
     return { added: true, currentIndex: this.currentIndex };
@@ -153,7 +204,10 @@ export class QueueManager {
   enqueueMany(tracks: Omit<TrackInfo, 'addedBy' | 'addedAt'>[], requestedBy: string): number {
     if (tracks.length === 0) return -1;
     const wasEmpty = this.tracks.length === 0;
+    const wasFinished = this.playedThrough;
     this.resetCursorIfFinished();
+    // Adding tracks makes the queue playable again.
+    this.clearPlayedThrough();
     const addedIndex = this.tracks.length;
     const isBackground = requestedBy === 'endless-wave';
     if (this.state.shuffle && this.tracks.length > 0 && !isBackground) {
@@ -172,8 +226,11 @@ export class QueueManager {
     } else {
       for (const t of tracks) this.tracks.push({ ...t, addedBy: requestedBy, addedAt: Date.now() });
       if (this.currentIndex === -1) this.currentIndex = 0;
-      // Only establish the cursor on a cold start — see advanceToAdded.
-      if (wasEmpty) this.advanceToAdded(addedIndex, this.tracks.length);
+      // Only establish the cursor on a cold start or after a genuine finish —
+      // an ordinary idle add must not walk it forward (see advanceToAdded).
+      if ((wasEmpty || wasFinished) && !isBackground) {
+        this.advanceToAdded(addedIndex, this.tracks.length);
+      }
       this.totalEnqueued += tracks.length;
       this.emitQueue();
     }
@@ -363,6 +420,7 @@ export class QueueManager {
   clear(): void {
     this.tracks = [];
     this.currentIndex = -1;
+    this.clearPlayedThrough();
     this.state = {
       ...this.state,
       track: undefined,
@@ -386,8 +444,18 @@ export class QueueManager {
   }
 
   previous(): boolean {
+    // From a finished queue the cursor is parked at -1; stepping back is the
+    // natural "replay the last track" gesture, so land on the final track.
+    if (this.playedThrough && this.tracks.length > 0) {
+      this.currentIndex = this.tracks.length - 1;
+      this.clearPlayedThrough();
+      this.emitQueue();
+      return true;
+    }
     if (this.currentIndex > 0) {
       this.currentIndex -= 1;
+      // Stepping back to a playable track un-finishes the queue.
+      this.clearPlayedThrough();
       this.emitQueue();
       return true;
     }

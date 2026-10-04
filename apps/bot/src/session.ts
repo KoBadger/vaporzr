@@ -155,6 +155,7 @@ export class SessionManager {
         tracks: TrackInfo[];
         currentIndex: number;
         state: PlaybackState;
+        playedThrough?: boolean;
         endlessWave?: unknown;
       };
       s.queue.restore(data);

@@ -111,14 +111,20 @@ describe('QueueManager.enqueue cursor behavior', () => {
     }
   });
 
-  it('idle enqueue jumps the cursor to the new tail (existing behavior, unchanged)', () => {
+  it('idle enqueue keeps the cursor on the first track (queue builds in order)', () => {
     const q = new QueueManager();
     q.enqueue(track('spotify:track:a', 'A'), 'user');
     q.enqueue(track('spotify:track:b', 'B'), 'user');
     q.enqueue(track('spotify:track:c', 'C'), 'user');
-    // Unchanged by the shuffle-placement work: an idle add still moves the
-    // cursor to the newly added track so it plays next.
-    expect(q.getSnapshot().currentIndex).toBe(2);
+    // The cursor must not walk forward on every add. When it did it ended on
+    // the newest tail track, which made an idle queue look "finished"; the next
+    // add then inserted at the FRONT and songs landed out of order.
+    expect(q.getSnapshot().currentIndex).toBe(0);
+    expect(q.getSnapshot().tracks.map((t) => t.uri)).toEqual([
+      'spotify:track:a',
+      'spotify:track:b',
+      'spotify:track:c',
+    ]);
   });
 
   it('keepCursor enqueue while idle does not pin the cursor at the new tail', () => {
@@ -198,7 +204,9 @@ describe('QueueManager regressions', () => {
   it('next() and previous() notify listeners so the cursor cannot go stale', () => {
     const q = new QueueManager();
     q.enqueue(track('spotify:track:a', 'A'), 'user');
-    q.enqueue(track('spotify:track:b', 'B'), 'user'); // idle → cursor sits on the tail (1)
+    q.enqueue(track('spotify:track:b', 'B'), 'user');
+    // The cursor stays on track 0 while idle, so walk it to the end first.
+    expect(q.next()).toBe(true); // 0 → 1
     let changes = 0;
     q.subscribe({ onQueueChanged: () => { changes++; }, onStateChanged: () => {} });
     expect(q.next()).toBe(false); // already at the end — no movement, no emit
