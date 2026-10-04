@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { config } from './config.js';
 
 /**
  * Download an http(s) media stream to a temp file using Node's fetch (Range
@@ -23,6 +24,32 @@ export type RefreshUrl = () => Promise<string | undefined>;
 /** A 403/429 that a fresh URL may fix — distinct from a genuinely bad URL. */
 class RetryableUrlError extends Error {}
 
+/** Cached undici ProxyAgents, keyed by proxy URL (mirrors VoiceManager.mediaFetch). */
+const proxyAgents = new Map<string, unknown>();
+
+/**
+ * Fetch a media URL, routing googlevideo through the residential proxy when one
+ * is configured. googlevideo URLs are signed against the proxy exit IP that
+ * minted them, so fetching them directly returns 403 with ZERO bytes — the same
+ * reason the playback path routes through a pooled ProxyAgent.
+ */
+async function mediaFetch(url: string, init: RequestInit): Promise<Response> {
+  const proxy = config.youtubeProxy && /googlevideo\.com\//.test(url) ? config.youtubeProxy : '';
+  if (!proxy) return fetch(url, init);
+  try {
+    let agent = proxyAgents.get(proxy);
+    if (!agent) {
+      const { ProxyAgent } = await import('undici');
+      agent = new ProxyAgent(proxy);
+      proxyAgents.set(proxy, agent);
+    }
+    const { fetch: uFetch } = await import('undici');
+    return (await uFetch(url, { ...init, dispatcher: agent } as never)) as unknown as Response;
+  } catch {
+    return fetch(url, init);
+  }
+}
+
 async function downloadOnce(url: string, file: string, maxBytes: number): Promise<number> {
   let handle: Awaited<ReturnType<typeof fs.promises.open>> | null = null;
   try {
@@ -30,7 +57,7 @@ async function downloadOnce(url: string, file: string, maxBytes: number): Promis
     let offset = 0;
     const CHUNK = 512 * 1024;
     for (;;) {
-      const res = await fetch(url, {
+      const res = await mediaFetch(url, {
         headers: { 'User-Agent': UA, Range: `bytes=${offset}-${offset + CHUNK - 1}` },
       });
       if (res.status === 416) break; // past EOF
