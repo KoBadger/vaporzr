@@ -6699,28 +6699,77 @@ export class DiscordBot {
     | { ok: false; text: string }
     | { ok: true; ra: ResolvedTrack; rb: ResolvedTrack; ia: string; ib: string; dir: string }
   > {
-    const ra = (await resolvePlayInput(a).catch(() => []))[0];
-    const rb = (await resolvePlayInput(b).catch(() => []))[0];
+    // YouTube resolution is intermittent — anti-bot walls come and go, and a
+    // single transient wall used to fail the whole mashup with a misleading
+    // "unresolvable" message. Retry a few times with a short backoff before
+    // giving up, and log the real reason when we do.
+    const resolveInput = async (input: string): Promise<ResolvedTrack | undefined> => {
+      let lastErr: unknown;
+      for (let i = 0; i < 3; i++) {
+        try {
+          const hit = (await resolvePlayInput(input))[0];
+          if (hit) return hit;
+        } catch (err) {
+          lastErr = err;
+        }
+        if (i < 2) await new Promise((res) => setTimeout(res, 700));
+      }
+      if (lastErr) {
+        console.warn(
+          `[mashup] could not resolve "${input}": ${lastErr instanceof Error ? lastErr.message : lastErr}`,
+        );
+      }
+      return undefined;
+    };
+    const ra = await resolveInput(a);
+    const rb = await resolveInput(b);
     if (!ra || !rb) return { ok: false, text: 'Need two resolvable tracks (links or names).' };
-    const ta = await EW.resolveCandidate(ra).catch(() => null);
-    const tb = await EW.resolveCandidate(rb).catch(() => null);
-    const ua = ra.streamUrl ?? ta?.streamUrl;
-    const ub = rb.streamUrl ?? tb?.streamUrl;
+
+    // Re-mint a fresh signed stream URL for the same track. googlevideo URLs are
+    // bound to the proxy exit that minted them and expire; a stale URL is a 403.
+    const refreshStream = async (track: ResolvedTrack): Promise<string | undefined> => {
+      const vid = /^youtube:video:([\w-]+)$/.exec(track.uri)?.[1];
+      if (vid) {
+        const v = await resolveYoutubeVideo(vid).catch(() => null);
+        return v?.streamUrl;
+      }
+      if (track.uri.startsWith('spotify:')) {
+        // resolveCandidate re-searches YouTube for Spotify tracks (its first
+        // branch), so this genuinely re-mints rather than returning the old URL.
+        const t = await EW.resolveCandidate({ ...track, streamUrl: undefined }).catch(() => null);
+        return t?.streamUrl;
+      }
+      const again = (await resolvePlayInput(track.uri).catch(() => []))[0];
+      return again?.streamUrl;
+    };
+
+    const resolveStream = async (track: ResolvedTrack): Promise<string | undefined> => {
+      for (let i = 0; i < 3; i++) {
+        const t = await EW.resolveCandidate(track).catch(() => null);
+        if (t?.streamUrl) return t.streamUrl;
+        if (i < 2) await new Promise((res) => setTimeout(res, 700));
+      }
+      return undefined;
+    };
+    const ua = ra.streamUrl ?? (await resolveStream(ra));
+    const ub = rb.streamUrl ?? (await resolveStream(rb));
     if (!ua || !ub) return { ok: false, text: 'Could not resolve a playable stream for one of those.' };
     const dir = path.join(config.dataDir, 'uploads', `mash-${Date.now()}`);
     await fs.mkdir(dir, { recursive: true });
     cleanup.push(dir);
-    const grab = async (url: string, base: string): Promise<string | null> => {
+    const grab = async (url: string, base: string, track: ResolvedTrack): Promise<string | null> => {
       if (!/^https?:\/\//i.test(url)) return url;
-      const tmp = await downloadToTempFile(url);
+      // Pass a refresh callback so an expired/throttled URL is re-minted and the
+      // download retried instead of failing outright.
+      const tmp = await downloadToTempFile(url, undefined, () => refreshStream(track));
       if (!tmp) return null;
       cleanup.push(tmp);
       const dest = path.join(dir, `${base}${path.extname(tmp) || '.mp3'}`);
       await fs.copyFile(tmp, dest);
       return dest;
     };
-    const ia = await grab(ua, 'a');
-    const ib = await grab(ub, 'b');
+    const ia = await grab(ua, 'a', ra);
+    const ib = await grab(ub, 'b', rb);
     if (!ia || !ib) return { ok: false, text: 'Could not download one of those tracks.' };
     return { ok: true, ra, rb, ia, ib, dir };
   }

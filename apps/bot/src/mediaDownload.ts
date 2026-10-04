@@ -13,8 +13,17 @@ import path from 'node:path';
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
 
-export async function downloadToTempFile(url: string, maxBytes = 80 * 1024 * 1024): Promise<string | null> {
-  const file = path.join(os.tmpdir(), `vaporzr-mix-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+/**
+ * Optional way for a caller to obtain a FRESH URL for the same media. googlevideo
+ * signed URLs expire and intermittently answer 403; when this is supplied the
+ * download transparently retries from byte 0 with a new URL instead of failing.
+ */
+export type RefreshUrl = () => Promise<string | undefined>;
+
+/** A 403/429 that a fresh URL may fix — distinct from a genuinely bad URL. */
+class RetryableUrlError extends Error {}
+
+async function downloadOnce(url: string, file: string, maxBytes: number): Promise<number> {
   let handle: Awaited<ReturnType<typeof fs.promises.open>> | null = null;
   try {
     handle = await fs.promises.open(file, 'w');
@@ -25,6 +34,11 @@ export async function downloadToTempFile(url: string, maxBytes = 80 * 1024 * 102
         headers: { 'User-Agent': UA, Range: `bytes=${offset}-${offset + CHUNK - 1}` },
       });
       if (res.status === 416) break; // past EOF
+      if (res.status === 403 || res.status === 429) {
+        // Signed-URL throttle/expiry: signal the caller to refresh. Any bytes
+        // already written are discarded by the caller before retrying.
+        throw new RetryableUrlError(`HTTP ${res.status}`);
+      }
       if (res.status !== 206 && res.status !== 200) throw new Error(`HTTP ${res.status}`);
       const chunk = Buffer.from(await res.arrayBuffer());
       if (!chunk.length) break;
@@ -33,19 +47,49 @@ export async function downloadToTempFile(url: string, maxBytes = 80 * 1024 * 102
       if (offset >= maxBytes) break;
       if (chunk.length < CHUNK) break;
     }
-    await handle.close();
-    handle = null;
-    if (offset === 0) {
-      fs.rmSync(file, { force: true });
-      return null;
-    }
-    return file;
-  } catch {
+    return offset;
+  } finally {
     try {
       await handle?.close();
     } catch {
       /* ignore */
     }
+  }
+}
+
+export async function downloadToTempFile(
+  url: string,
+  maxBytes = 80 * 1024 * 1024,
+  refreshUrl?: RefreshUrl,
+): Promise<string | null> {
+  const file = path.join(os.tmpdir(), `vaporzr-mix-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  let current = url;
+  // One original attempt plus up to two refreshed attempts, mirroring the
+  // playback path's refresh-on-403 behaviour.
+  const MAX_ATTEMPTS = refreshUrl ? 3 : 1;
+  try {
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      try {
+        const bytes = await downloadOnce(current, file, maxBytes);
+        if (bytes === 0) {
+          fs.rmSync(file, { force: true });
+          return null;
+        }
+        return file;
+      } catch (err) {
+        const retryable = err instanceof RetryableUrlError;
+        const canRetry = retryable && refreshUrl && attempt < MAX_ATTEMPTS - 1;
+        if (!canRetry) throw err;
+        fs.rmSync(file, { force: true }); // discard the partial before retrying
+        const fresh = await refreshUrl!().catch(() => undefined);
+        if (!fresh) throw err;
+        console.warn(`[mix] stream URL rejected (${(err as Error).message}) — refreshed and retrying`);
+        current = fresh;
+      }
+    }
+    fs.rmSync(file, { force: true });
+    return null;
+  } catch {
     fs.rmSync(file, { force: true });
     return null;
   }
