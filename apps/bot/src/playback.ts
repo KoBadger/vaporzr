@@ -97,6 +97,12 @@ export class PlaybackController {
   private positionTimer: NodeJS.Timeout | null = null;
   /** Last time the Spotify-feed stall recovery re-issued playback (debounce). */
   private lastStallRecoveryAt = 0;
+  /** URI + timestamp of the last play() start, to ignore a duplicate play() for
+   *  the same track fired within milliseconds (an end-timer racing a stream-end
+   *  tears down each other's PCM feed, leaving silence the watchdog then
+   *  "recovers" by restarting the track from the top). */
+  private lastPlayUri: string | null = null;
+  private lastPlayStartedAt = 0;
   private currentUri: string | null = null;
   /** Device we last successfully issued Spotify commands to (librespot). */
   private spotifyDeviceId?: string;
@@ -638,12 +644,28 @@ export class PlaybackController {
   }
 
   async play(): Promise<void> {
+    const current = this.queue.getCurrentTrack();
+    if (!current) return;
+    // Duplicate-start guard: an end-timer racing a stream-end (or a resume) can
+    // call play() twice for the same track within a few milliseconds. Two
+    // concurrent starts tear down each other's Spotify PCM feed, leaving ~30s of
+    // silence that the stall watchdog then "recovers" by restarting the track
+    // from the top — heard as the song cutting out and replaying. Let the first
+    // start win; do NOT bump playGeneration here, or the in-flight start would
+    // cancel itself.
+    const now = Date.now();
+    if (this.lastPlayUri === current.uri && now - this.lastPlayStartedAt < 750) {
+      console.log(
+        `[playback] ignoring duplicate play() for "${current.name}" (${now - this.lastPlayStartedAt}ms after start)`,
+      );
+      return;
+    }
+    this.lastPlayUri = current.uri;
+    this.lastPlayStartedAt = now;
     const generation = ++this.playGeneration;
     this.stopAmbient();
     this.clearSpotifyRetry();
     this.applyAudioFx();
-    const current = this.queue.getCurrentTrack();
-    if (!current) return;
     // Consume a pending crossfade handoff (set only on a natural end): the next
     // decoded track starts partway in, because its head already played as an
     // overlay on the outgoing track.
@@ -834,6 +856,26 @@ export class PlaybackController {
     });
   }
 
+  /**
+   * Re-mint a YouTube stream URL, retrying the transient anti-bot wall (which
+   * "usually lands on a clean exit" on a later attempt) before giving up. A
+   * mid-track stream failure used to refresh once, hit the wall, and kill the
+   * song; retrying the refresh keeps the track alive.
+   */
+  private async refreshYoutubeUrl(videoId: string): Promise<string> {
+    let lastErr: unknown;
+    for (let i = 0; i < 3; i++) {
+      try {
+        const v = await resolveYoutubeVideo(videoId);
+        if (v.streamUrl) return v.streamUrl;
+      } catch (err) {
+        lastErr = err;
+      }
+      if (i < 2) await new Promise((r) => setTimeout(r, 700 * (i + 1)));
+    }
+    throw lastErr instanceof Error ? lastErr : new Error('could not refresh YouTube stream URL');
+  }
+
   /** Server-side YouTube via ffmpeg straight into the voice channel. */
   private async playYoutube(current: TrackInfo): Promise<void> {
     this.spotifyFallback = false;
@@ -876,7 +918,7 @@ export class PlaybackController {
         volume: this.queue.getState().volume,
         onEnd: this.serverStreamOnEnd(),
         retries: 4,
-        refreshUrl: () => resolveYoutubeVideo(video.videoId).then((v) => v.streamUrl),
+        refreshUrl: () => this.refreshYoutubeUrl(video.videoId),
       });
       this.scheduleEnd(video.durationMs, 0);
       this.schedulePreload(video.durationMs, 0);
@@ -940,7 +982,7 @@ export class PlaybackController {
       volume: this.queue.getState().volume,
       onEnd: this.serverStreamOnEnd(),
       retries: 4,
-      refreshUrl: () => resolveYoutubeVideo(video.videoId).then((v) => v.streamUrl),
+      refreshUrl: () => this.refreshYoutubeUrl(video.videoId),
     });
     this.scheduleEnd(durationMs, 0);
     this.schedulePreload(durationMs, 0);
@@ -1194,7 +1236,7 @@ export class PlaybackController {
       volume: this.queue.getState().volume,
       onEnd: this.serverStreamOnEnd(),
       retries: 4,
-      refreshUrl: () => resolveYoutubeVideo(video.videoId).then((v) => v.streamUrl),
+      refreshUrl: () => this.refreshYoutubeUrl(video.videoId),
     });
   }
 
@@ -1431,7 +1473,7 @@ export class PlaybackController {
         onEnd: () => {
           if (this.ambientActive) void this.playAmbientLoop();
         },
-        refreshUrl: () => resolveYoutubeVideo(v.videoId).then((x) => x.streamUrl),
+        refreshUrl: () => this.refreshYoutubeUrl(v.videoId),
       });
     } catch {
       this.ambientActive = false;

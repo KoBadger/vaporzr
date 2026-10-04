@@ -837,19 +837,46 @@ export class VoiceManager {
     async function* chunks(): AsyncGenerator<Buffer> {
       let offset = 0;
       for (;;) {
-        const res = await self.mediaFetch(url, {
-          headers: {
-            'User-Agent': STREAM_USER_AGENT,
-            Range: `bytes=${offset}-${offset + CHUNK_BYTES - 1}`,
-          },
-          signal: abort.signal,
-        });
-        if (res.status === 416) return; // requested past EOF — track fully fetched
-        if (res.status !== 206 && res.status !== 200) throw new Error(`HTTP ${res.status}`);
-        const chunk = Buffer.from(await res.arrayBuffer());
+        const range = `bytes=${offset}-${offset + CHUNK_BYTES - 1}`;
+        // Retry a transient stall of the SAME range before failing the stream. A
+        // single stalled 256 KiB request (a proxy hiccup) used to abort the whole
+        // track and trigger a URL refresh — which can itself hit YouTube's
+        // anti-bot wall, audible as the song cutting out mid-way. Re-requesting
+        // the same bytes is far cheaper and usually succeeds.
+        let chunk: Buffer | null = null;
+        let total = NaN;
+        let done = false;
+        let lastErr: unknown;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          if (abort.signal.aborted) throw lastErr ?? new Error('aborted');
+          try {
+            const res = await self.mediaFetch(url, {
+              headers: { 'User-Agent': STREAM_USER_AGENT, Range: range },
+              signal: abort.signal,
+            });
+            if (res.status === 416) {
+              done = true; // requested past EOF — track fully fetched
+              break;
+            }
+            if (res.status !== 206 && res.status !== 200) throw new Error(`HTTP ${res.status}`);
+            chunk = Buffer.from(await res.arrayBuffer());
+            const contentRange = res.headers.get('content-range'); // "bytes start-end/total"
+            total = contentRange ? Number(contentRange.split('/')[1]) : NaN;
+            break;
+          } catch (err) {
+            lastErr = err;
+            if (abort.signal.aborted) throw err;
+            if (attempt < 2) {
+              console.warn(
+                `[voice] chunk ${range} failed (${err instanceof Error ? err.message : err}) — retrying ${attempt + 1}/2`,
+              );
+              await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+            }
+          }
+        }
+        if (done) return;
+        if (!chunk) throw lastErr ?? new Error('chunk fetch failed');
         if (chunk.length === 0) return;
-        const contentRange = res.headers.get('content-range'); // "bytes start-end/total"
-        const total = contentRange ? Number(contentRange.split('/')[1]) : NaN;
         offset += chunk.length;
         yield chunk;
         if (Number.isFinite(total) ? offset >= total : chunk.length < CHUNK_BYTES) return;
