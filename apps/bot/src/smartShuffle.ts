@@ -1,4 +1,4 @@
-import type { AudioFeatures } from './spotify.js';
+import type { AudioFeatures } from '@vaporzr/core/spotify';
 
 /**
  * Smart shuffle: order the *upcoming* queue by musical flow instead of at

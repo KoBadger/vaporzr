@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { keyDistance, orderByVibe, vibeDistance } from '../smartShuffle.js';
-import type { AudioFeatures } from '../spotify.js';
+import type { AudioFeatures } from '@vaporzr/core/spotify';
 
 /** Minimal AudioFeatures with sane defaults. */
 function feat(over: Partial<AudioFeatures> = {}): AudioFeatures {

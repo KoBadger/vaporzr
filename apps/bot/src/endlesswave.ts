@@ -6,12 +6,12 @@ import {
   getAudioFeatures,
   getRecommendations,
   searchTracks,
-} from './spotify.js';
-import { searchAndResolveYoutube } from './youtube.js';
-import { deezerArtistProfile, deezerRelatedTracks, peekArtistProfile } from './deezer.js';
+} from '@vaporzr/core/spotify';
+import { searchAndResolveYoutube } from '@vaporzr/core/youtube';
+import { deezerArtistProfile, deezerRelatedTracks, peekArtistProfile } from '@vaporzr/core/deezer';
 import type { TrackInfo } from '@vaporzr/shared';
 
-export type { AudioFeatures } from './spotify.js';
+export type { AudioFeatures } from '@vaporzr/core/spotify';
 
 /* ---------- Types ---------- */
 

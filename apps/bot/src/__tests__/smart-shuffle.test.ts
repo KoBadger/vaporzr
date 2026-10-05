@@ -6,7 +6,7 @@ import {
   SHUFFLE_MODE_LABEL,
   type ShuffleMode,
 } from '../smartShuffle.js';
-import type { AudioFeatures } from '../spotify.js';
+import type { AudioFeatures } from '@vaporzr/core/spotify';
 
 /** Deterministic LCG so the fixtures are identical on every run. */
 function rnd(seed: number): () => number {

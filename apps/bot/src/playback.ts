@@ -3,10 +3,10 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { QueueManager } from './queue.js';
-import { resolveYoutubeVideo, searchAndResolveYoutube, type ResolvedVideo } from './youtube.js';
-import { resolveSuno, probeDuration, cachedSunoAudio, cacheSunoAudio } from './suno.js';
-import { resolveSoundcloudVideo, soundcloudUriToUrl } from './soundcloud.js';
-import { resolveApplePlayback } from './apple.js';
+import { resolveYoutubeVideo, searchAndResolveYoutube, type ResolvedVideo } from '@vaporzr/core/youtube';
+import { resolveSuno, probeDuration, cachedSunoAudio, cacheSunoAudio } from '@vaporzr/core/suno';
+import { resolveSoundcloudVideo, soundcloudUriToUrl } from '@vaporzr/core/soundcloud';
+import { resolveApplePlayback } from '@vaporzr/core/apple';
 import { dj, sfxById, type SfxSound } from './soundboard.js';
 import type { AudioTransport } from '@vaporzr/core/transport';
 import { librespotDeviceId, type SpotifyBackend } from '@vaporzr/core/librespot';
@@ -24,7 +24,7 @@ import {
   spotifySetVolume,
   SpotifyError,
   type ResolvedTrack,
-} from './spotify.js';
+} from '@vaporzr/core/spotify';
 
 export type SendFn = (msg: CommandMessage) => void;
 
@@ -1292,7 +1292,7 @@ export class PlaybackController {
     // (the "previous song keeps playing after stop/clear" bug).
     const dev = this.spotifyDeviceId;
     if (dev) {
-      void import('./spotify.js')
+      void import('@vaporzr/core/spotify')
         .then((m) => m.spotifyPause(dev))
         .catch(() => {});
     }

@@ -10,14 +10,14 @@ const mocks = vi.hoisted(() => ({
   peekArtistProfile: vi.fn((..._args: unknown[]): { name: string; genres: string[]; related: string[] } | null => null),
 }));
 
-vi.mock('../deezer.js', () => ({
+vi.mock('@vaporzr/core/deezer', () => ({
   deezerRelatedTracks: (...args: unknown[]) => mocks.deezerRelatedTracks(...args),
   deezerArtistProfile: (...args: unknown[]) => mocks.deezerArtistProfile(...args),
   peekArtistProfile: (...args: unknown[]) => mocks.peekArtistProfile(...args),
 }));
 
-vi.mock('../spotify.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../spotify.js')>();
+vi.mock('@vaporzr/core/spotify', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@vaporzr/core/spotify')>();
   return {
     ...actual,
     getRecommendations: (...args: unknown[]) => mocks.getRecommendations(...args),
@@ -26,8 +26,8 @@ vi.mock('../spotify.js', async (importOriginal) => {
   };
 });
 
-vi.mock('../youtube.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../youtube.js')>();
+vi.mock('@vaporzr/core/youtube', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@vaporzr/core/youtube')>();
   return {
     ...actual,
     searchAndResolveYoutube: (...args: unknown[]) => mocks.searchAndResolveYoutube(...args),
@@ -39,7 +39,7 @@ vi.mock('../youtube.js', async (importOriginal) => {
 // smart path, so stub the token store instead of depending on a local
 // data/tokens.json (which CI doesn't have — that made these tests pass only on
 // the dev machine).
-vi.mock('../tokenStore.js', () => ({
+vi.mock('@vaporzr/core/tokenStore', () => ({
   tokenStore: {
     load: () => ({ access_token: 'test', refresh_token: 'test', expires_at: Date.now() + 3_600_000 }),
     save: () => {},
@@ -78,7 +78,7 @@ import {
   restoreState,
 } from '../endlesswave.js';
 import type { EndlessWaveState } from '../endlesswave.js';
-import type { AudioFeatures, ResolvedTrack } from '../spotify.js';
+import type { AudioFeatures, ResolvedTrack } from '@vaporzr/core/spotify';
 import type { TrackInfo } from '@vaporzr/shared';
 
 /* ---------- helpers ---------- */

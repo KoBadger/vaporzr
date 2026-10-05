@@ -22,7 +22,7 @@ import { Session, SessionManager } from './session.js';
 import { config } from '@vaporzr/core/config';
 import { DEFAULT_THEME, themeById } from './themes.js';
 import { analyzer } from './analyzer.js';
-import { searchAndResolveYoutube } from './youtube.js';
+import { searchAndResolveYoutube } from '@vaporzr/core/youtube';
 import { secretEquals, socketHasShareKey } from './secretCompare.js';
 import { playlistStore } from './playlists.js';
 

@@ -40,7 +40,7 @@ import {
 import { generateDependencyReport } from '@discordjs/voice';
 import { config } from '@vaporzr/core/config';
 import { getCrossfadeMs, setCrossfadeMs } from './crossfadeStore.js';
-import { getRecommendations, resolveTracks, searchCandidates, searchTracks, SpotifyError, getAudioFeatures, extractSpotifyId, type AudioFeatures, type RecommendationParams, type ResolvedTrack } from './spotify.js';
+import { getRecommendations, resolveTracks, searchCandidates, searchTracks, SpotifyError, getAudioFeatures, extractSpotifyId, type AudioFeatures, type RecommendationParams, type ResolvedTrack } from '@vaporzr/core/spotify';
 import { orderByVibe, SHUFFLE_MODE_LABEL, type ShuffleMode } from './smartShuffle.js';
 import { THEMES, themeById } from './themes.js';
 import {
@@ -56,16 +56,16 @@ import {
   youtubeHealth,
   YoutubeError,
   type YoutubeHealth,
-} from './youtube.js';
-import { isSunoUrl, resolveSuno } from './suno.js';
-import { isAppleMusicUrl, resolveAppleMusicUrl } from './apple.js';
+} from '@vaporzr/core/youtube';
+import { isSunoUrl, resolveSuno } from '@vaporzr/core/suno';
+import { isAppleMusicUrl, resolveAppleMusicUrl } from '@vaporzr/core/apple';
 import {
   isSoundcloudSetUrl,
   isSoundcloudUrl,
   resolveSoundcloudSet,
   resolveSoundcloudVideo,
   SoundcloudError,
-} from './soundcloud.js';
+} from '@vaporzr/core/soundcloud';
 import { Session, SessionManager } from './session.js';
   import { fetchLyrics, type LyricsResult, type SyncedLine } from './lyrics.js';
 import { PermissionsManager } from './permissions.js';
@@ -83,7 +83,7 @@ import { packCategoryFields, chunkFieldsIntoEmbeds, aliasIndexFields } from './h
 import { V_ALIASES, V_DISPATCH_ALIASES } from './aliases.js';
 import { ttsEngine } from './tts.js';
 import { pushBroadcast, pushSubscriptionCount } from './push.js';
-import { downloadToTempFile } from './mediaDownload.js';
+import { downloadToTempFile } from '@vaporzr/core/mediaDownload';
 import { renderRadarGif, type RadarMetric } from './images.js';
 import { parseVibe, vibeIsSteerable, type ParsedVibe } from './vibe.js';
 
@@ -2730,7 +2730,7 @@ export class DiscordBot {
         }
         await interaction.deferReply();
         try {
-          const { refreshYoutubeCookies } = await import('./youtube.js');
+          const { refreshYoutubeCookies } = await import('@vaporzr/core/youtube');
           const saved = await refreshYoutubeCookies();
           await interaction.followUp(saved.ok
             ? `✅ Cookies refreshed and written to \`${saved.path}\` (${saved.lines} cookies).`

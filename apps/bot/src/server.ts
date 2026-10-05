@@ -5,7 +5,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { config } from '@vaporzr/core/config';
-import { buildAuthorizeUrl, exchangeCode, getAccessToken, SpotifyError, spotifyCacheSize } from './spotify.js';
+import { buildAuthorizeUrl, exchangeCode, getAccessToken, SpotifyError, spotifyCacheSize } from '@vaporzr/core/spotify';
 import { tokenStore } from '@vaporzr/core/tokenStore';
 import { Bridge } from './bridge.js';
 import { SessionManager } from './session.js';
@@ -108,7 +108,7 @@ async function serveArtwork(url: URL, res: http.ServerResponse): Promise<void> {
   }
 }
 import { playlistStore } from './playlists.js';
-import { probeYoutube, youtubeHealth } from './youtube.js';
+import { probeYoutube, youtubeHealth } from '@vaporzr/core/youtube';
 import { addPushSubscription, pushPublicKey, pushSubscriptionCount, removePushSubscription } from './push.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));

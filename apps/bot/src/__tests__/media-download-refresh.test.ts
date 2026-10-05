@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
-import { downloadToTempFile } from '../mediaDownload.js';
+import { downloadToTempFile } from '@vaporzr/core/mediaDownload';
 
 const ok = (body: string) => new Response(Buffer.from(body), { status: 200 });
 

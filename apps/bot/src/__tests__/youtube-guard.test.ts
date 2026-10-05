@@ -6,8 +6,8 @@ import {
   isProxyError,
   scoreHit,
   shouldRetryYtDlp,
-} from '../youtube.js';
-import type { ResolvedVideo } from '../youtube.js';
+} from '@vaporzr/core/youtube';
+import type { ResolvedVideo } from '@vaporzr/core/youtube';
 
 describe('alert confirmation (decidePublish)', () => {
   const fresh = () => ({ published: 'ok' as const, pending: null as null | string });

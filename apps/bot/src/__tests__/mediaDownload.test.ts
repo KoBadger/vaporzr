@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
-import { downloadToTempFile } from '../mediaDownload.js';
+import { downloadToTempFile } from '@vaporzr/core/mediaDownload';
 
 describe('downloadToTempFile', () => {
   afterEach(() => vi.unstubAllGlobals());
