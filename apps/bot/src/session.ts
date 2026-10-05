@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { QueueManager } from './queue.js';
-import { PlaybackController, type SendFn } from './playback.js';
+import { QueueManager } from '@vaporzr/core/queue';
+import { PlaybackController, type SendFn } from '@vaporzr/core/playback';
 import { VoiceManager } from './voice.js';
 import type { SpotifyBackend } from '@vaporzr/core/librespot';
 import { config } from '@vaporzr/core/config';

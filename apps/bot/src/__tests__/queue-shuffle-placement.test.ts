@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { QueueManager, type QueueListener } from '../queue.js';
+import { QueueManager, type QueueListener } from '@vaporzr/core/queue';
 import type { OutboundMessage } from '@vaporzr/shared';
 
 const listeners: QueueListener[] = [

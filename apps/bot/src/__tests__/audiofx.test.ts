@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildAudioFxChain, EQ_PRESETS, isEqPreset } from '../audiofx.js';
+import { buildAudioFxChain, EQ_PRESETS, isEqPreset } from '@vaporzr/core/audiofx';
 
 describe('buildAudioFxChain (EQ + loudnorm)', () => {
   it('flat with nothing else yields an empty chain', () => {

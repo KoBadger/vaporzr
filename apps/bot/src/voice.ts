@@ -16,7 +16,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import { Readable, Transform } from 'node:stream';
 import { config } from '@vaporzr/core/config';
-import { tailFadeSeconds } from './crossfade.js';
+import { tailFadeSeconds } from '@vaporzr/core/crossfade';
 import type { AudioTransport } from '@vaporzr/core/transport';
 
 /**

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canCrossfade, crossfadePcm, equalPowerIn, equalPowerOut, fadeInPcm, linearIn, planCrossfade, tailFadeSeconds, tempoMatchRatio } from '../crossfade.js';
+import { canCrossfade, crossfadePcm, equalPowerIn, equalPowerOut, fadeInPcm, linearIn, planCrossfade, tailFadeSeconds, tempoMatchRatio } from '@vaporzr/core/crossfade';
 
 describe('canCrossfade (the overlap gate)', () => {
   it('schedules a blend whenever we generate the audio ourselves', () => {

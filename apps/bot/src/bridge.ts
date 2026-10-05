@@ -12,8 +12,8 @@ import {
   type VaporzrTheme,
   type MediaSource,
 } from '@vaporzr/shared';
-import { QueueManager } from './queue.js';
-import { PlaybackController } from './playback.js';
+import { QueueManager } from '@vaporzr/core/queue';
+import { PlaybackController } from '@vaporzr/core/playback';
 import { PermissionsManager } from './permissions.js';
 import { VoiceManager } from './voice.js';
 import { LibrespotManager, type SpotifyBackend } from '@vaporzr/core/librespot';
@@ -21,7 +21,7 @@ import { GoLibrespotManager } from '@vaporzr/core/golibrespot';
 import { Session, SessionManager } from './session.js';
 import { config } from '@vaporzr/core/config';
 import { DEFAULT_THEME, themeById } from './themes.js';
-import { analyzer } from './analyzer.js';
+import { analyzer } from '@vaporzr/core/analyzer';
 import { searchAndResolveYoutube } from '@vaporzr/core/youtube';
 import { secretEquals, socketHasShareKey } from './secretCompare.js';
 import { playlistStore } from '@vaporzr/core/playlists';

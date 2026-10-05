@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { emptyState } from '@vaporzr/shared';
-import { QueueManager } from '../queue.js';
+import { QueueManager } from '@vaporzr/core/queue';
 
 function track(uri: string, name = uri): { uri: string; name: string; artists: string[]; album: string; durationMs: number } {
   return { uri, name, artists: ['Artist'], album: '', durationMs: 200_000 };

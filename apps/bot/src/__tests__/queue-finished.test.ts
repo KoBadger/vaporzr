@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { QueueManager } from '../queue.js';
+import { QueueManager } from '@vaporzr/core/queue';
 
 function track(uri: string, name: string) {
   return { uri, name, artists: [name], album: 'Test Album', durationMs: 180000, source: 'spotify' as const };

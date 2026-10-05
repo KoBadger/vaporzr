@@ -69,7 +69,7 @@ import {
 import { Session, SessionManager } from './session.js';
   import { fetchLyrics, type LyricsResult, type SyncedLine } from '@vaporzr/core/lyrics';
 import { PermissionsManager } from './permissions.js';
-import { analyzer } from './analyzer.js';
+import { analyzer } from '@vaporzr/core/analyzer';
 import { vizTunnel } from './tunnel.js';
 import { renderPanelIconPng, PANEL_ICON_FALLBACKS } from './panelIcons.js';
 import type { Bridge } from './bridge.js';
