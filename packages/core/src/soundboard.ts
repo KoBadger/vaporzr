@@ -130,7 +130,7 @@ export class DjManager {
   async getPcm(id: string): Promise<Buffer | null> {
     if (this.pcmCache.has(id)) return this.pcmCache.get(id) ?? null;
     if (!sfxById(id)) return null;
-    const filePath = path.join(repoRoot, 'apps', 'bot', 'assets', 'sfx', `${id}.wav`);
+    const filePath = path.join(repoRoot, 'packages', 'core', 'assets', 'sfx', `${id}.wav`);
     if (!fs.existsSync(filePath)) return null;
     const pcm = await decodePcm(filePath);
     this.pcmCache.set(id, pcm);
