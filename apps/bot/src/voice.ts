@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import { Readable, Transform } from 'node:stream';
 import { config } from './config.js';
 import { tailFadeSeconds } from './crossfade.js';
+import type { AudioTransport } from './transport.js';
 
 /**
  * User-Agent used when the bot itself (Node fetch) pulls a media stream.
@@ -36,7 +37,7 @@ const MEDIA_IO_TIMEOUT_US = 20_000_000;
  * forwarded from the local loopback capture. The bot shows up as a normal
  * VC member and is the audio source for everyone in the channel.
  */
-export class VoiceManager {
+export class VoiceManager implements AudioTransport {
   private connection: VoiceConnection | null = null;
   private player: AudioPlayer | null = null;
   private stream: Transform | null = null;

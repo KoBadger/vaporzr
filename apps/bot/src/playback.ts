@@ -8,7 +8,7 @@ import { resolveSuno, probeDuration, cachedSunoAudio, cacheSunoAudio } from './s
 import { resolveSoundcloudVideo, soundcloudUriToUrl } from './soundcloud.js';
 import { resolveApplePlayback } from './apple.js';
 import { dj, sfxById, type SfxSound } from './soundboard.js';
-import type { VoiceManager } from './voice.js';
+import type { AudioTransport } from './transport.js';
 import { librespotDeviceId, type SpotifyBackend } from './librespot.js';
 import { config } from './config.js';
 import { analyzer } from './analyzer.js';
@@ -155,7 +155,7 @@ export class PlaybackController {
   constructor(
     private queue: QueueManager,
     private sendVisualizer: SendFn,
-    private voice: VoiceManager,
+    private voice: AudioTransport,
     private librespot: SpotifyBackend | null = null,
   ) {
     this.loadStreamCache();
