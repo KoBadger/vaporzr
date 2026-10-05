@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { config } from './config.js';
+import { config } from '@vaporzr/core/config';
 
 /**
  * Mini-game state (DJ Duel, Stump the Bot, Track Roulette) — persisted per guild

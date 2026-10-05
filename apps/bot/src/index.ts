@@ -1,4 +1,4 @@
-import { config } from './config.js';
+import { config } from '@vaporzr/core/config';
 import { SessionManager } from './session.js';
 import { PermissionsManager } from './permissions.js';
 import { startServer } from './server.js';

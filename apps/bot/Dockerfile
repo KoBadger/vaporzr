@@ -44,6 +44,7 @@ RUN mkdir -p apps/bot/public/vendor/presets \
 
 COPY package.json package-lock.json ./
 COPY packages/shared ./packages/shared
+COPY packages/core ./packages/core
 COPY apps/bot ./apps/bot
 COPY apps/player ./apps/player
 COPY apps/spicetify ./apps/spicetify

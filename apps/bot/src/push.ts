@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import webpush from 'web-push';
-import { config } from './config.js';
+import { config } from '@vaporzr/core/config';
 
 interface PushSub {
   endpoint: string;

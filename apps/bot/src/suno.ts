@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { config } from './config.js';
+import { config } from '@vaporzr/core/config';
 import type { ResolvedVideo } from './youtube.js';
 
 export class SunoError extends Error {}

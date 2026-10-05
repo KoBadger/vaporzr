@@ -15,9 +15,9 @@ import {
 import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import { Readable, Transform } from 'node:stream';
-import { config } from './config.js';
+import { config } from '@vaporzr/core/config';
 import { tailFadeSeconds } from './crossfade.js';
-import type { AudioTransport } from './transport.js';
+import type { AudioTransport } from '@vaporzr/core/transport';
 
 /**
  * User-Agent used when the bot itself (Node fetch) pulls a media stream.

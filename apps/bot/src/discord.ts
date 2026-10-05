@@ -38,7 +38,7 @@ import {
   type User,
 } from 'discord.js';
 import { generateDependencyReport } from '@discordjs/voice';
-import { config } from './config.js';
+import { config } from '@vaporzr/core/config';
 import { getCrossfadeMs, setCrossfadeMs } from './crossfadeStore.js';
 import { getRecommendations, resolveTracks, searchCandidates, searchTracks, SpotifyError, getAudioFeatures, extractSpotifyId, type AudioFeatures, type RecommendationParams, type ResolvedTrack } from './spotify.js';
 import { orderByVibe, SHUFFLE_MODE_LABEL, type ShuffleMode } from './smartShuffle.js';
@@ -8014,7 +8014,7 @@ export class DiscordBot {
     // once one appears (finished /login) we shouldn't stay on the lesser mode.
     if (s.endlessWave.basic && !s.endlessWave.active) {
       try {
-        const { tokenStore } = await import('./tokenStore.js');
+        const { tokenStore } = await import('@vaporzr/core/tokenStore');
         if (tokenStore.load()?.refresh_token) {
           console.log('[autoplay] OAuth token available — upgrading basic → smart');
           this.setAutoplayMode(s, 'smart');

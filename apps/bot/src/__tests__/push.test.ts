@@ -17,7 +17,7 @@ vi.mock('web-push', () => ({
 }));
 
 import { addPushSubscription, pushBroadcast, pushPublicKey, pushSubscriptionCount, removePushSubscription } from '../push.js';
-import { config } from '../config.js';
+import { config } from '@vaporzr/core/config';
 
 describe('push store', () => {
   let tmp: string;

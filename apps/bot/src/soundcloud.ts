@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { config } from './config.js';
+import { config } from '@vaporzr/core/config';
 import { searchAndResolveYoutube } from './youtube.js';
 import type { ResolvedTrack } from './spotify.js';
 

@@ -1,5 +1,5 @@
-import { config } from './config.js';
-import { tokenStore } from './tokenStore.js';
+import { config } from '@vaporzr/core/config';
+import { tokenStore } from '@vaporzr/core/tokenStore';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';

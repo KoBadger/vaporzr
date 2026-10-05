@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { GamesStore, describeFit, explainFit, fitPercent, keyToQuery, pickRoulette, pickRouletteWeighted } from '../games.js';
-import { config } from '../config.js';
+import { config } from '@vaporzr/core/config';
 
 describe('game scoring helpers', () => {
   it('fitPercent turns EW\'s "lower is better" score into 5..99', () => {

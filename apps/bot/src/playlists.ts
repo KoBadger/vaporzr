@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { config } from './config.js';
+import { config } from '@vaporzr/core/config';
 
 /** A queueable track persisted in a saved playlist (stream URL resolved on load). */
 export interface SavedTrack {

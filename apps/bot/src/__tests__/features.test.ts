@@ -7,7 +7,7 @@ import { VoiceManager } from '../voice.js';
 import { PlaybackController, STREAM_CACHE_SAVE_DEBOUNCE_MS } from '../playback.js';
 import { Session } from '../session.js';
 import { parseSleepSpec } from '../discord.js';
-import { config } from '../config.js';
+import { config } from '@vaporzr/core/config';
 import type { ResolvedVideo } from '../youtube.js';
 
 function video(uri: string, streamUrl = `https://stream.example/${uri}.m3u8`): ResolvedVideo {

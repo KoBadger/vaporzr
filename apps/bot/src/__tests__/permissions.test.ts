@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { PermissionsManager } from '../permissions.js';
-import { config } from '../config.js';
+import { config } from '@vaporzr/core/config';
 
 describe('PermissionsManager guild settings', () => {
   let tmp: string;

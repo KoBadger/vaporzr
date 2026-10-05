@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { StatsStore } from '../stats.js';
-import { config } from '../config.js';
+import { config } from '@vaporzr/core/config';
 
 describe('StatsStore daily history', () => {
   let tmp: string;

@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import readline from 'node:readline';
-import { config } from './config.js';
+import { config } from '@vaporzr/core/config';
 
 /**
  * Ephemeral Cloudflare quick tunnel ("Try Cloudflare") that exposes the local

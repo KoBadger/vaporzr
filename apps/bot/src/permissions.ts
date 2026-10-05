@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { config } from './config.js';
+import { config } from '@vaporzr/core/config';
 import type { PermissionLevel } from '@vaporzr/shared';
 import type { Guild } from 'discord.js';
 

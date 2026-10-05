@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { config } from './config.js';
+import { config } from '@vaporzr/core/config';
 
 export interface TtsClip {
   /** 48 kHz stereo Int16 PCM, ready for the voice mixer. */

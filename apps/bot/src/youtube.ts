@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { config } from './config.js';
+import { config } from '@vaporzr/core/config';
 import type { ResolvedTrack } from './spotify.js';
 
 export class YoutubeError extends Error {}

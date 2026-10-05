@@ -5,6 +5,14 @@ import ffmpegStatic from 'ffmpeg-static';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+/**
+ * Monorepo root, derived from this file's location (`packages/core/src`). Used
+ * for the defaults that must keep pointing at the bot's/player's own folders now
+ * that the engine lives in its own workspace package. Env vars override all of
+ * these in production, so this only affects local dev.
+ */
+export const repoRoot = path.resolve(__dirname, '..', '..', '..');
+
 export const config = {
   discordToken: process.env.DISCORD_TOKEN ?? '',
   spotifyClientId: process.env.SPOTIFY_CLIENT_ID ?? '',
@@ -18,7 +26,7 @@ export const config = {
   bindAddress: process.env.BIND_ADDRESS ?? '0.0.0.0',
   redirectUri: process.env.SPOTIFY_REDIRECT_URI ?? `http://localhost:${process.env.PORT ?? 4876}/callback`,
   ownerId: process.env.OWNER_ID ?? '',
-  dataDir: process.env.DATA_DIR ?? path.join(__dirname, '..', 'data'),
+  dataDir: process.env.DATA_DIR ?? path.join(repoRoot, 'apps', 'bot', 'data'),
   youtubeApiKey: process.env.YOUTUBE_API_KEY ?? '',
 ytDlpPath: process.env.YT_DLP_PATH ?? path.join(__dirname, '..', '..', '..', 'vendor', 'yt-dlp', 'yt-dlp'),
    /** Path to a Netscape-format cookies.txt for YouTube. Authenticated requests
@@ -174,7 +182,7 @@ cloudflaredPath:
   /** TOTP version param for the web-player token endpoint. */
   spotifyTotpVer: process.env.SPOTIFY_TOTP_VER ?? '61',
   /** Player app directory (Electron) and binary used to open the player window. */
-  playerDir: process.env.PLAYER_DIR ?? path.join(__dirname, '..', '..', 'player'),
+  playerDir: process.env.PLAYER_DIR ?? path.join(repoRoot, 'apps', 'player'),
 electronPath:
      process.env.ELECTRON_PATH ?? path.join(__dirname, '..', '..', '..', 'node_modules', 'electron', 'dist', 'electron'),
 };
