@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { GamesStore, describeFit, explainFit, fitPercent, keyToQuery, pickRoulette, pickRouletteWeighted } from '../games.js';
+import { GamesStore, describeFit, explainFit, fitPercent, keyToQuery, pickRoulette, pickRouletteWeighted } from '@vaporzr/core/games';
 import { config } from '@vaporzr/core/config';
 
 describe('game scoring helpers', () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { keyDistance, orderByVibe, vibeDistance } from '../smartShuffle.js';
+import { keyDistance, orderByVibe, vibeDistance } from '@vaporzr/core/smartShuffle';
 import type { AudioFeatures } from '@vaporzr/core/spotify';
 
 /** Minimal AudioFeatures with sane defaults. */

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { scoreBreakdown, scoreCandidate } from '../endlesswave.js';
+import { scoreBreakdown, scoreCandidate } from '@vaporzr/core/endlesswave';
 import type { AudioFeatures, ResolvedTrack } from '@vaporzr/core/spotify';
 
 const track = (over: Partial<ResolvedTrack> = {}): ResolvedTrack => ({

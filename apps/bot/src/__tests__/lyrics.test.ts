@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseSyncedLines } from '../lyrics.js';
+import { parseSyncedLines } from '@vaporzr/core/lyrics';
 
 describe('parseSyncedLines (LRC parser)', () => {
   it('parses timestamped lines with milliseconds', () => {

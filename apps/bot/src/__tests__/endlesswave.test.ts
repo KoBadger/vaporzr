@@ -76,8 +76,8 @@ import {
   noteWaveDeadEnd,
   serializeState,
   restoreState,
-} from '../endlesswave.js';
-import type { EndlessWaveState } from '../endlesswave.js';
+} from '@vaporzr/core/endlesswave';
+import type { EndlessWaveState } from '@vaporzr/core/endlesswave';
 import type { AudioFeatures, ResolvedTrack } from '@vaporzr/core/spotify';
 import type { TrackInfo } from '@vaporzr/shared';
 

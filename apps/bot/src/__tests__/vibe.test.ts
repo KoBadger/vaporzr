@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseVibe, vibeIsSteerable } from '../vibe.js';
+import { parseVibe, vibeIsSteerable } from '@vaporzr/core/vibe';
 
 describe('parseVibe (natural-language vibe requests)', () => {
   it('maps single adjectives to audio-feature targets', () => {

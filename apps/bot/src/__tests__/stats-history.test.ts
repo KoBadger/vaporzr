@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { StatsStore } from '../stats.js';
+import { StatsStore } from '@vaporzr/core/stats';
 import { config } from '@vaporzr/core/config';
 
 describe('StatsStore daily history', () => {

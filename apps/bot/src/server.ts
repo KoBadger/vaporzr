@@ -12,7 +12,7 @@ import { SessionManager } from './session.js';
 import { PermissionsManager } from './permissions.js';
 import { vizTunnel } from './tunnel.js';
 import { secretEquals } from './secretCompare.js';
-import { statsStore } from './stats.js';
+import { statsStore } from '@vaporzr/core/stats';
 
 /** Pre-gzipped vendor assets — preset chunks are tens of MB of JS. */
 const vendorCache = new Map<string, { body: Buffer; gzip: boolean }>();
@@ -107,7 +107,7 @@ async function serveArtwork(url: URL, res: http.ServerResponse): Promise<void> {
     res.end('Artwork fetch timed out.');
   }
 }
-import { playlistStore } from './playlists.js';
+import { playlistStore } from '@vaporzr/core/playlists';
 import { probeYoutube, youtubeHealth } from '@vaporzr/core/youtube';
 import { addPushSubscription, pushPublicKey, pushSubscriptionCount, removePushSubscription } from './push.js';
 

@@ -7,14 +7,14 @@ import { resolveYoutubeVideo, searchAndResolveYoutube, type ResolvedVideo } from
 import { resolveSuno, probeDuration, cachedSunoAudio, cacheSunoAudio } from '@vaporzr/core/suno';
 import { resolveSoundcloudVideo, soundcloudUriToUrl } from '@vaporzr/core/soundcloud';
 import { resolveApplePlayback } from '@vaporzr/core/apple';
-import { dj, sfxById, type SfxSound } from './soundboard.js';
+import { dj, sfxById, type SfxSound } from '@vaporzr/core/soundboard';
 import type { AudioTransport } from '@vaporzr/core/transport';
 import { librespotDeviceId, type SpotifyBackend } from '@vaporzr/core/librespot';
 import { config } from '@vaporzr/core/config';
 import { analyzer } from './analyzer.js';
 import { buildAudioFxChain, isEqPreset } from './audiofx.js';
 import { canCrossfade, fadeInPcm, planCrossfade, tempoMatchRatio } from './crossfade.js';
-import * as EW from './endlesswave.js';
+import * as EW from '@vaporzr/core/endlesswave';
 import {
   spotifyPause,
   spotifyPlay,

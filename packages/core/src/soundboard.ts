@@ -1,10 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
-import { config } from '@vaporzr/core/config';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+import { config, repoRoot } from '@vaporzr/core/config';
 
 export interface SfxSound {
   id: string;
@@ -133,7 +130,7 @@ export class DjManager {
   async getPcm(id: string): Promise<Buffer | null> {
     if (this.pcmCache.has(id)) return this.pcmCache.get(id) ?? null;
     if (!sfxById(id)) return null;
-    const filePath = path.join(__dirname, '..', 'assets', 'sfx', `${id}.wav`);
+    const filePath = path.join(repoRoot, 'apps', 'bot', 'assets', 'sfx', `${id}.wav`);
     if (!fs.existsSync(filePath)) return null;
     const pcm = await decodePcm(filePath);
     this.pcmCache.set(id, pcm);

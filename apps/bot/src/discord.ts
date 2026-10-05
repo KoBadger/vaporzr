@@ -41,7 +41,7 @@ import { generateDependencyReport } from '@discordjs/voice';
 import { config } from '@vaporzr/core/config';
 import { getCrossfadeMs, setCrossfadeMs } from './crossfadeStore.js';
 import { getRecommendations, resolveTracks, searchCandidates, searchTracks, SpotifyError, getAudioFeatures, extractSpotifyId, type AudioFeatures, type RecommendationParams, type ResolvedTrack } from '@vaporzr/core/spotify';
-import { orderByVibe, SHUFFLE_MODE_LABEL, type ShuffleMode } from './smartShuffle.js';
+import { orderByVibe, SHUFFLE_MODE_LABEL, type ShuffleMode } from '@vaporzr/core/smartShuffle';
 import { THEMES, themeById } from './themes.js';
 import {
   isGenericMediaUrl,
@@ -67,25 +67,25 @@ import {
   SoundcloudError,
 } from '@vaporzr/core/soundcloud';
 import { Session, SessionManager } from './session.js';
-  import { fetchLyrics, type LyricsResult, type SyncedLine } from './lyrics.js';
+  import { fetchLyrics, type LyricsResult, type SyncedLine } from '@vaporzr/core/lyrics';
 import { PermissionsManager } from './permissions.js';
 import { analyzer } from './analyzer.js';
 import { vizTunnel } from './tunnel.js';
 import { renderPanelIconPng, PANEL_ICON_FALLBACKS } from './panelIcons.js';
 import type { Bridge } from './bridge.js';
 import type { PermissionLevel, TrackInfo, PlaybackState } from '@vaporzr/shared';
-import * as EW from './endlesswave.js';
-import { playlistStore } from './playlists.js';
-import { statsStore } from './stats.js';
-import { trackKey } from './stats.js';
-import { gamesStore, fitPercent, describeFit, pickRouletteWeighted, keyToQuery, explainFit } from './games.js';
+import * as EW from '@vaporzr/core/endlesswave';
+import { playlistStore } from '@vaporzr/core/playlists';
+import { statsStore } from '@vaporzr/core/stats';
+import { trackKey } from '@vaporzr/core/stats';
+import { gamesStore, fitPercent, describeFit, pickRouletteWeighted, keyToQuery, explainFit } from '@vaporzr/core/games';
 import { packCategoryFields, chunkFieldsIntoEmbeds, aliasIndexFields } from './help.js';
 import { V_ALIASES, V_DISPATCH_ALIASES } from './aliases.js';
-import { ttsEngine } from './tts.js';
+import { ttsEngine } from '@vaporzr/core/tts';
 import { pushBroadcast, pushSubscriptionCount } from './push.js';
 import { downloadToTempFile } from '@vaporzr/core/mediaDownload';
-import { renderRadarGif, type RadarMetric } from './images.js';
-import { parseVibe, vibeIsSteerable, type ParsedVibe } from './vibe.js';
+import { renderRadarGif, type RadarMetric } from '@vaporzr/core/images';
+import { parseVibe, vibeIsSteerable, type ParsedVibe } from '@vaporzr/core/vibe';
 
 /** First non-internal IPv4 address of this machine — reachable from the LAN. */
 function localIp(): string {

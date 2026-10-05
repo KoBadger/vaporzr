@@ -7,7 +7,7 @@ import type { SpotifyBackend } from '@vaporzr/core/librespot';
 import { config } from '@vaporzr/core/config';
 import { getCrossfadeMs } from './crossfadeStore.js';
 import type { PlaybackState, TrackInfo } from '@vaporzr/shared';
-import * as EW from './endlesswave.js';
+import * as EW from '@vaporzr/core/endlesswave';
 
 /**
  * One guild's isolated playback: its own queue, voice connection, and playback

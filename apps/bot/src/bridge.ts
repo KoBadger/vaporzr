@@ -24,7 +24,7 @@ import { DEFAULT_THEME, themeById } from './themes.js';
 import { analyzer } from './analyzer.js';
 import { searchAndResolveYoutube } from '@vaporzr/core/youtube';
 import { secretEquals, socketHasShareKey } from './secretCompare.js';
-import { playlistStore } from './playlists.js';
+import { playlistStore } from '@vaporzr/core/playlists';
 
 interface Client {
   socket: WebSocket;

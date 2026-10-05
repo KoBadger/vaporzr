@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { sanitizeTtsText, ttsEngine } from '../tts.js';
+import { sanitizeTtsText, ttsEngine } from '@vaporzr/core/tts';
 
 describe('sanitizeTtsText', () => {
   it('collapses whitespace and strips symbols a voice cannot read', () => {

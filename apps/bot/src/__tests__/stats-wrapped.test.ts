@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { StatsStore, trackKey } from '../stats.js';
+import { StatsStore, trackKey } from '@vaporzr/core/stats';
 import { config } from '@vaporzr/core/config';
 
 describe('StatsStore Wrapped (monthly aggregates)', () => {

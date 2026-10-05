@@ -5,7 +5,7 @@ import {
   keyDistance,
   SHUFFLE_MODE_LABEL,
   type ShuffleMode,
-} from '../smartShuffle.js';
+} from '@vaporzr/core/smartShuffle';
 import type { AudioFeatures } from '@vaporzr/core/spotify';
 
 /** Deterministic LCG so the fixtures are identical on every run. */
