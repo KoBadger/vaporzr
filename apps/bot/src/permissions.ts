@@ -16,11 +16,15 @@ interface GuildConfig {
   /** Spoken DJ announcements enabled for this guild (default false). */
   tts?: boolean;
   /**
-   * Channel where the bot may post the automatic "now playing" strip. null/unset
-   * = never auto-post (default) — the bot must only post unsolicited messages
-   * where it was explicitly told to.
+   * Channel where the bot may post the automatic "now playing" strip. Unset =
+   * follow the room's active channel (the one it last interacted in).
    */
   npChannel?: string | null;
+  /**
+   * Auto now-playing strip on/off. Unset = ON: the strip follows the active
+   * channel automatically. Set false via `/npchannel off` or `/follow off`.
+   */
+  npAuto?: boolean;
   /** Play a generative ambient pad when the queue ends (default false). */
   ambient?: boolean;
   /** Allow /skipto — jump to a future queued track, dropping the ones skipped. */
@@ -245,7 +249,7 @@ export class PermissionsManager {
     this.save(guildId);
   }
 
-  /** Channel allowed to receive the auto now-playing strip (null = disabled). */
+  /** Channel allowed to receive the auto now-playing strip (null = use the active channel). */
   getNpChannel(guildId: string): string | null {
     return this.load(guildId).npChannel ?? null;
   }
@@ -253,6 +257,17 @@ export class PermissionsManager {
   setNpChannel(guildId: string, channelId: string | null): void {
     const cfg = this.load(guildId);
     cfg.npChannel = channelId;
+    this.save(guildId);
+  }
+
+  /** Whether the automatic now-playing strip is on (default true = always-on). */
+  getNpAuto(guildId: string): boolean {
+    return this.load(guildId).npAuto !== false;
+  }
+
+  setNpAuto(guildId: string, on: boolean): void {
+    const cfg = this.load(guildId);
+    cfg.npAuto = on;
     this.save(guildId);
   }
 

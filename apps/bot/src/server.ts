@@ -547,7 +547,14 @@ async function handleRoute(
     if (url.pathname.startsWith('/vendor/')) {      const rel = url.pathname.slice('/vendor/'.length);
       if (/^[\w.-]+\.(m?js|json)$/.test(rel) || /^presets\/[\w.-]+\.(m?js|json)$/.test(rel)) {
         try {
-          const target = path.join(__dirname, '..', 'public', 'vendor', rel);
+          let target = path.join(__dirname, '..', 'public', 'vendor', rel);
+          // Preset files may be overridden by the persistent data volume — e.g. a
+          // newer cream-of-the-crop library dropped at $DATA_DIR/presets survives
+          // deploys (unlike the image). Prefer that copy when it exists.
+          if (rel.startsWith('presets/') && process.env.DATA_DIR) {
+            const override = path.join(process.env.DATA_DIR, 'presets', rel.slice('presets/'.length));
+            if (fs.existsSync(override)) target = override;
+          }
           const isJson = rel.endsWith('.json');
           const type = isJson ? 'application/json' : 'application/javascript';
           const headers: Record<string, string> = {

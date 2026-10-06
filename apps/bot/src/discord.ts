@@ -2118,10 +2118,12 @@ export class DiscordBot {
         const gid = interaction.guildId;
         if (!gid) return void (await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral }));
         if (interaction.options.getBoolean('off')) {
+          this.perms.setNpAuto(gid, false);
           this.perms.setNpChannel(gid, null);
           await this.clearMiniNp(gid);
           await interaction.reply({ content: '🌙 Now-playing strip **disabled**.', flags: MessageFlags.Ephemeral });
         } else {
+          this.perms.setNpAuto(gid, true);
           this.perms.setNpChannel(gid, interaction.channelId);
           this.miniTrackUri.delete(gid);
           await interaction.reply({
@@ -3274,10 +3276,12 @@ export class DiscordBot {
           if (!canUse('npchannel')) return void (await deny());
           if (!message.guildId) return void (await message.reply('Must be used in a server.'));
           if (/^(off|0|false|disable)$/i.test(args.trim())) {
+            this.perms.setNpAuto(message.guildId, false);
             this.perms.setNpChannel(message.guildId, null);
             await this.clearMiniNp(message.guildId);
             await message.reply('🌙 Now-playing strip **disabled**.');
           } else {
+            this.perms.setNpAuto(message.guildId, true);
             this.perms.setNpChannel(message.guildId, message.channelId);
             this.miniTrackUri.delete(message.guildId);
             // Name the target and call out a voice channel's text chat — that's
@@ -4559,16 +4563,18 @@ export class DiscordBot {
   /** On boot, remove stray strips for guilds that never opted in (see /npchannel). */
   private async cleanupMiniNp(): Promise<void> {
     for (const guildId of [...this.miniNp.keys()]) {
-      if (!this.perms.getNpChannel(guildId)) await this.clearMiniNp(guildId);
+      if (!this.perms.getNpAuto(guildId)) await this.clearMiniNp(guildId);
     }
   }
 
   private async maybeAutoMiniNp(guildId: string | undefined, st: PlaybackState): Promise<void> {
     if (!guildId || !st.track) return;
-    // Opt-in only. The strip used to target "the last channel a command ran in",
-    // which made the bot post now-playing updates in unrelated main channels.
-    // Now it only posts where an admin explicitly set one (/npchannel).
-    const channelId = this.perms.getNpChannel(guildId);
+    // Always-on now-playing: the strip follows the room. It targets an explicitly
+    // set channel if one exists, otherwise the channel the room last interacted
+    // in — so it updates with every song without anyone running /follow.
+    // `/npchannel off` (or `/follow off`) sets npAuto=false to stop it.
+    if (!this.perms.getNpAuto(guildId)) return;
+    const channelId = this.perms.getNpChannel(guildId) ?? this.lastTextChannel.get(guildId);
     if (!channelId) return;
     // A command reply for this exact track is already the visible now-playing —
     // don't also auto-post a strip (that was the "two identical embeds"
@@ -7621,17 +7627,19 @@ export class DiscordBot {
   /** /follow — pin the live now-playing strip in a channel (same setting as /npchannel). */
   private async followNowPlaying(gid: string, channelId: string, off: boolean): Promise<string> {
     if (off) {
+      this.perms.setNpAuto(gid, false);
       this.perms.setNpChannel(gid, null);
       await this.clearMiniNp(gid);
-      return '🌙 Now-playing strip unpinned — it will stop updating.';
+      return '🌙 Now-playing strip **off** — it will stop updating. Turn it back on with `V@follow`.';
     }
+    this.perms.setNpAuto(gid, true);
     this.perms.setNpChannel(gid, channelId);
     this.miniTrackUri.delete(gid);
     // Post it immediately instead of waiting for the next track change.
     void this.maybeAutoMiniNp(gid, this.sessionFor(gid).queue.getState());
     return (
-      `📌 **Pinned** — the live now-playing strip will stay in <#${channelId}> and update with every new song.\n` +
-      'Unpin with `V@follow off` (or `/npchannel off`).'
+      `📌 **Following** — the live now-playing strip will stay in <#${channelId}> and update with every new song.\n` +
+      'Turn it off with `V@follow off`.'
     );
   }
 
@@ -8286,7 +8294,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/toggle` · `V@t` — pause/resume',
       '`/skip` · `V@s` — skip (non-DJs start a vote)',
       '`/nowplaying` · `V@np` — what\'s playing',
-      '`/follow` · `V@follow` — pin the live now-playing strip in this channel (it updates with every song; `off` removes it)',
+      '`/follow` · `V@follow` — the now-playing strip follows the active channel by default; this pins it here (`off` turns it off)',
       '`/volume <0-100>` · `V@v` — set the volume',
       '`/clear` · `V@c` — stop and clear the queue',
       '`/jump <lyric>` · `V@jump` — jump to a lyric line (e.g. "to the chorus")',
@@ -8365,7 +8373,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/voteskip on|off` · `V@vs` — require a majority vote to skip (off = anyone can skip)',
       '`/duck [seconds]` · `V@duck` — manually lower the music so people can talk',
       '`/duckmode off|auto|hosts` · `V@dmode` — auto-lower music while people talk (mod)',
-      '`/npchannel` · `V@npc` — post the live now-playing strip in this channel (mod; `off` disables)',
+      '`/npchannel` · `V@npc` — pin the live now-playing strip to this channel (mod; `off` disables it)',
       '`/hype on|off` · `V@hype` — auto-hype: drop a hit on strong beats',
       '`/mix <a> <b>` · `V@mix <a> | <b>` — crossfade two tracks into one mix',
       '`/mashup <a> <b>` · `V@mashup <a> | <b>` — render a tempo/key-matched blend (downloadable) + 5 similar tracks',

@@ -196,6 +196,26 @@ body.mobile #fps{top:calc(52px + var(--sait))}
   body.mobile #dock{gap:6px;padding:6px 10px}
   body.mobile .dock-btn{width:34px;height:34px}
 }
+/* ---------- Mini tile (Discord voice-channel mini view / PIP) ----------
+   The chrome that earns its place on a full window is just clutter in a tile a
+   few hundred pixels wide, so drop it and let the scene + track info breathe. */
+body.mini #guild-bar{display:none}
+body.mini #fps{display:none}
+body.mini #topbar{padding:8px calc(12px + var(--sair)) 8px calc(12px + var(--sail))}
+body.mini #logo-icon{width:22px;height:22px;border-radius:6px}
+body.mini #logo-text{font-size:12px;letter-spacing:1px}
+body.mini #logo-sub{display:none}
+body.mini #status-pill{padding:3px 9px;font-size:10px}
+body.mini #overlay{padding:10px 14px 56px;background:linear-gradient(transparent,rgba(5,6,15,.86))}
+body.mini #track-row{gap:10px}
+body.mini #art{width:40px;height:40px;border-radius:6px}
+body.mini #title{font-size:13px}
+body.mini #artists{font-size:11px;margin-top:1px}
+body.mini #badge{margin-top:4px;font-size:9px;padding:1px 6px}
+body.mini #preset-name{bottom:60px;left:12px;font-size:10px;max-width:60%}
+body.mini #dock{bottom:calc(8px + var(--saib));gap:6px;padding:6px 10px;border-radius:12px}
+body.mini .dock-btn{width:32px;height:32px;font-size:14px;border-radius:9px}
+body.mini #preset-lib,body.mini .sens-wrap{display:none}
 </style>
 </head>
 <body>
@@ -253,7 +273,6 @@ body.mobile #fps{top:calc(52px + var(--sait))}
     <span id="preset-count"></span>
     <span id="preset-bar"><i id="preset-fill"></i></span>
   </div>
-  <button class="dock-btn" id="btn-curated" data-tip="Curated presets only">✨</button>
   <button class="dock-btn" id="btn-calm" data-tip="Calm mode — gentler brightness, stricter flash guard" title="">🌙</button>
   <button class="dock-btn" id="btn-lock" data-tip="Lock current preset">🔓</button>
   <button class="dock-btn" id="btn-synth" data-tip="Synthwave road (Endless Wave)">🛣</button>
@@ -283,11 +302,8 @@ body.mobile #fps{top:calc(52px + var(--sait))}
 
 <script src="/vendor/butterchurn.min.js"></script>
 <script src="/vendor/butterchurnExtraImages.min.js"></script>
-<script src="/vendor/butterchurnPresets.min.js"></script>
-<script src="/vendor/butterchurnPresetsExtra.min.js"></script>
-<script src="/vendor/butterchurnPresetsExtra2.min.js"></script>
-<script src="/vendor/butterchurnPresetsMD1.min.js"></script>
-<script src="/vendor/butterchurnPresetsBaron.min.js"></script>
+<!-- Presets come from the projectM "cream of the crop" library, streamed lazily
+     from /vendor/presets/* (see loadPresetChunks). No uneven bundled packs. -->
 <script>
 (function(){
   var $=function(id){return document.getElementById(id)},
@@ -313,12 +329,24 @@ body.mobile #fps{top:calc(52px + var(--sait))}
         (window.matchMedia('(pointer:coarse)').matches || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent));
     }catch(e){return false}
   })();
-  var MOBILE=TOUCH||ACTIVITY&&(function(){
-    // An Activity on a small viewport is a handset or a small tablet tile.
-    try{return Math.min(screen.width,screen.height)<=820}catch(e){return false}
-  })();
+  var MOBILE=false,MINI=false;
+  /* Layout density follows the REAL viewport, not the screen. Discord shows the
+     Activity in a small voice-channel tile / PIP even on a large monitor, so
+     keying off screen size crammed the full desktop chrome into a tiny box.
+     `mobile` = compact layout; `mini` = strip the chrome that is just clutter. */
+  function syncViewport(){
+    var w=window.innerWidth||0,h=window.innerHeight||0,m=Math.min(w,h);
+    // Compact layout for phones and genuinely small viewports; `mini` only for a
+    // small tile that is narrow AND short (Discord VC mini view / PIP), so a full
+    // phone in landscape (wide, short) still keeps its server tabs.
+    MOBILE=TOUCH||(m>0&&m<=560);
+    MINI=(w>0&&w<=640&&h>0&&h<=420);
+    document.body.classList.toggle('mobile',MOBILE);
+    document.body.classList.toggle('mini',MINI);
+  }
   if(TOUCH){document.documentElement.classList.add('touch');document.body.classList.add('touch')}
-  if(MOBILE)document.body.classList.add('mobile');
+  syncViewport();
+  window.addEventListener('resize',syncViewport);
 
   var THEMES=[
     {id:'vaporzr',name:'Vaporzr',accent:'#6a5cff',accent2:'#00f0ff'},
@@ -506,17 +534,11 @@ body.mobile #fps{top:calc(52px + var(--sait))}
   var actx=null,analyser=null,gainNode=null,nextAt=0,milkOn=false,
       bcViz=null,presetNames=[],presetIdx=-1,presetLocked=false,cycleTimer=null;
 
-  /* Merged preset pool: base + Extra + Extra2 + MD1 (the classic ~374) plus the
-     modern "Cream of the Crop" baron pack (+762), which is what current
-     projectM ships. Baron is merged last so its curated takes win. */
+  /* Preset pool. Everything here is the projectM "cream of the crop" set,
+     streamed lazily from /vendor/presets/* (see loadPresetChunks) — there are no
+     uneven third-party packs to dilute it. */
   var presetPool={};
-  function allPresets(){
-    [window.butterchurnPresets,window.butterchurnPresetsExtra,window.butterchurnPresetsExtra2,window.butterchurnPresetsMD1,window.butterchurnPresetsBaron]
-      .forEach(function(P){
-        if(P&&typeof P.getPresets==='function'){try{Object.assign(presetPool,P.getPresets())}catch(e){}}
-      });
-    return presetPool;
-  }
+  function allPresets(){return presetPool}
   /* Strobe blacklist (session+local): presets that flash hard get skipped. */
   var strobeBL=[];
   try{strobeBL=JSON.parse(localStorage.getItem('vzStrobeBL')||'[]')}catch(e){strobeBL=[]}
@@ -526,28 +548,24 @@ body.mobile #fps{top:calc(52px + var(--sait))}
     try{localStorage.setItem('vzStrobeBL',JSON.stringify(strobeBL.slice(-300)))}catch(e){}
   }
 
-  /* ---------- lazy preset library (Cream of the Crop, ~10k) ----------
-     The bundled packs above load synchronously, so first paint never waits.
-     The big library is name-first: a tiny index so the HUD/counters know the
-     whole library, then the chunks stream in while the browser is idle.
-     Rotation only ever picks from LOADED presets, so you never see a spinner,
-     a black frame or a hard cut — just the usual 2.5s blend. */
+  /* ---------- lazy preset library (projectM "cream of the crop") ----------
+     Name-first: a tiny index so the HUD/counters know the whole library, then
+     the chunks stream in while the browser is idle. Rotation only ever picks
+     from LOADED presets, so you never see a spinner, a black frame or a hard
+     cut — just the usual 2.5s blend. */
   var libTotal=0,libCurated=0,libRaw=0,libChunks=[];
-  /* Curation gate. The mega-library is uneven — roughly a third of it is
-     visually broken or jarring — so only presets that pass the curator's
-     quality/reliability catalog are rotated. `?all=1`, or the ✨ dock toggle,
-     lifts the filter (persisted). */
+  /* Curation gate. The pool is already the projectM "cream of the crop" set, so
+     curated.json lists exactly those names; anything not in it is dropped.
+     There is no "show everything" escape hatch — the old uneven library and its
+     persisted toggle are gone. */
   var curatedNames=null;
-  var showAll=false;
-  try{showAll=localStorage.getItem('vzShowAll')==='1'}catch(e){}
-  try{if(new URLSearchParams(location.search).get('all')==='1')showAll=true}catch(e){}
-  function allowed(name){return showAll||!curatedNames||curatedNames.has(name)}
+  function allowed(name){return !curatedNames||curatedNames.has(name)}
   function updatePresetDock(){
     var el=$('preset-count');if(!el)return;
     var loaded=presetNames.length;
-    var total=showAll?(libRaw||libTotal):libTotal;
+    var total=libTotal;
     if(!total){el.textContent=loaded.toLocaleString()+' presets';return}
-    el.textContent=loaded.toLocaleString()+' of '+total.toLocaleString()+(showAll?' presets':' curated');
+    el.textContent=loaded.toLocaleString()+' of '+total.toLocaleString()+' curated';
     var fill=$('preset-fill');
     if(fill)fill.style.width=Math.min(100,(loaded/total)*100).toFixed(1)+'%';
   }
@@ -587,6 +605,8 @@ body.mobile #fps{top:calc(52px + var(--sait))}
             var P=window['butterchurnPresetsChunk'+i];
             if(P&&typeof P.getPresets==='function'){try{Object.assign(presetPool,P.getPresets());}catch(e){}}
             refreshPresetNames();
+            // First chunk in: if MilkDrop is already on and waiting, start it.
+            if(presetIdx<0&&presetNames.length&&bcViz)loadPreset(0,1.5);
             next();
           };
           s.onerror=next;
@@ -623,7 +643,7 @@ body.mobile #fps{top:calc(52px + var(--sait))}
     if(butterchurn.default&&typeof butterchurn.default.createVisualizer==='function'){BC_LIB=butterchurn.default;return BC_LIB}
     return null;
   }
-  function butterAvailable(){return !!bcLib()&&typeof butterchurnPresets!=='undefined'}
+  function butterAvailable(){return !!bcLib()}
 
   function refreshUnlock(){
     var has=butterAvailable();
@@ -770,22 +790,6 @@ body.mobile #fps{top:calc(52px + var(--sait))}
     showPresetName.t=setTimeout(function(){presetNameEl.style.opacity='0'},3000);
   };
   $('btn-next').onclick=function(){loadPreset(pickIndex(presetIdx+1,1),1.2)};
-  /* Curated ↔ everything. Curated hides the roughly two-thirds of the library
-     that renders broken or jarring; toggling reveals it and remembers. */
-  (function(){
-    var b=$('btn-curated');
-    if(!b)return;
-    var sync=function(){
-      b.classList.toggle('active',!showAll);
-      b.title=showAll?'Showing every preset — click for curated only':'Curated presets only — click to show everything';
-    };
-    b.onclick=function(){
-      showAll=!showAll;
-      try{localStorage.setItem('vzShowAll',showAll?'1':'0')}catch(e){}
-      sync();refreshPresetNames();showPresetName();
-    };
-    sync();
-  })();
   $('btn-prev').onclick=function(){loadPreset(pickIndex(presetIdx-1,-1),1.2)};
   $('btn-lock').onclick=function(){
     presetLocked=!presetLocked;
@@ -1961,8 +1965,9 @@ body.mobile #fps{top:calc(52px + var(--sait))}
      instead TOGGLES the bar, and it stays until tapped again. */
   var dockTimer=null,dockPinned=false;
   function pokeDock(){
+    if(MINI)return; // a mini tile reveals the bar only on tap, never on hover
     dock.classList.add('show');
-    if(MOBILE)return;
+    if(TOUCH)return;
     clearTimeout(dockTimer);
     dockTimer=setTimeout(function(){dock.classList.remove('show')},3800);
   }
@@ -1976,7 +1981,12 @@ body.mobile #fps{top:calc(52px + var(--sait))}
     else dock.classList.remove('show');
   },{passive:true});
   window.addEventListener('pointerdown',function(e){
-    if(MOBILE||dock.contains(e.target))return;
+    if(TOUCH||dock.contains(e.target))return;
+    if(MOBILE){ // a tap toggles the compact bar; it stays until tapped again
+      dockPinned=!dockPinned;
+      dock.classList.toggle('show',dockPinned);
+      return;
+    }
     pokeDock();
   },{passive:true});
 
