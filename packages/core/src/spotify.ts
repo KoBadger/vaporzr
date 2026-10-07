@@ -330,6 +330,9 @@ export interface ResolvedTrack {
   /** Estimated Spotify-style features for sources without a real analysis
    *  (e.g. Deezer). Lets the wave score off-source candidates musically. */
   estimatedFeatures?: AudioFeatures;
+  /** cosine.club audio-similarity score (0..1, higher = sounds more like the
+   *  seed). Only set on candidates from the cosine similarity source. */
+  cosineScore?: number;
 }
 
 interface SpotifyTrack {

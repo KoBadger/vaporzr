@@ -7,7 +7,8 @@ import {
   getRecommendations,
   searchTracks,
 } from '@vaporzr/core/spotify';
-import { searchAndResolveYoutube } from '@vaporzr/core/youtube';
+import { resolveYoutubeVideo, searchAndResolveYoutube } from '@vaporzr/core/youtube';
+import { cosineEnabled, cosineSimilarCandidates } from '@vaporzr/core/cosine';
 import { deezerArtistProfile, deezerRelatedTracks, peekArtistProfile } from '@vaporzr/core/deezer';
 import type { TrackInfo } from '@vaporzr/shared';
 
@@ -668,7 +669,7 @@ export function warmArtistProfiles(artists: Iterable<string>): void {
  *  heuristics below, so callers keep working without an API round-trip. */
 /** One component of a candidate's score, so a verdict can be explained. */
 export interface ScoreTerm {
-  id: 'features' | 'key' | 'source' | 'duration' | 'artist' | 'genre' | 'jitter';
+  id: 'features' | 'key' | 'source' | 'duration' | 'artist' | 'genre' | 'cosine' | 'jitter';
   /** Short human phrase (positive = good for the fit). */
   label: string;
   /** Points added to the RAW score, where lower is better. */
@@ -733,10 +734,24 @@ export function scoreBreakdown(
     terms.push({ id: 'source', label: 'known Spotify source', points: -10 });
   }
 
-  if (track.durationMs >= 120_000 && track.durationMs <= 420_000) {
-    terms.push({ id: 'duration', label: 'normal track length', points: -5 });
-  } else {
-    terms.push({ id: 'duration', label: 'unusual track length', points: 10 });
+  // cosine.club audio similarity — how much this pick actually *sounds* like
+  // what's playing. The strongest signal we have for electronic seeds.
+  if (typeof track.cosineScore === 'number') {
+    terms.push({
+      id: 'cosine',
+      label: 'sounds like what\u2019s playing',
+      points: -(track.cosineScore * 40),
+    });
+  }
+
+  // Skip the length heuristic when we have no duration (e.g. a cosine candidate
+  // before its stream is resolved) rather than penalising it as "unusual".
+  if (track.durationMs > 0) {
+    if (track.durationMs >= 120_000 && track.durationMs <= 420_000) {
+      terms.push({ id: 'duration', label: 'normal track length', points: -5 });
+    } else {
+      terms.push({ id: 'duration', label: 'unusual track length', points: 10 });
+    }
   }
 
   const trackArtist = (track.artists[0] ?? '').toLowerCase().trim();
@@ -914,6 +929,25 @@ export async function pickNextTrack(
     }
     allCandidates.push(...candidates);
     survivors = viable(candidates);
+  }
+
+  // Strategy 1b: cosine.club audio similarity. True "sounds like what's playing"
+  // picks (each with a confidence score) from a ~2M-track electronic/underground
+  // catalog, merged alongside the Spotify candidates so scoring picks the best of
+  // both. No-op without an API key, or when the seed isn't in cosine's catalog.
+  if (cosineEnabled() && recentTracks.length > 0) {
+    const last = recentTracks[recentTracks.length - 1];
+    try {
+      const cos = await cosineSimilarCandidates(
+        { name: last.name, artists: last.artists, uri: last.uri },
+        30,
+      );
+      allCandidates.push(...cos);
+      const cosViable = viable(cos);
+      if (cosViable.length > 0) survivors = survivors.concat(cosViable);
+    } catch {
+      // best-effort — cosine must never break a pick
+    }
   }
 
   // Strategy 2: Spotify search fallback. Seed the query with the most recent
@@ -1149,10 +1183,23 @@ export async function pickBasicTrack(
   };
 
   let survivors: ResolvedTrack[] = [];
-  try {
-    survivors = (await searchTracks(seed, 20)).filter(ok);
-  } catch {
-    survivors = [];
+  // cosine.club audio similarity first when available — a much better "sounds
+  // like this" pick than a text search of the seed artist.
+  if (cosineEnabled()) {
+    try {
+      survivors = (
+        await cosineSimilarCandidates({ name: last.name, artists: last.artists, uri: last.uri }, 20)
+      ).filter(ok);
+    } catch {
+      survivors = [];
+    }
+  }
+  if (survivors.length === 0) {
+    try {
+      survivors = (await searchTracks(seed, 20)).filter(ok);
+    } catch {
+      survivors = [];
+    }
   }
   if (survivors.length === 0) {
     try {
@@ -1236,6 +1283,25 @@ export async function resolveCandidate(track: ResolvedTrack): Promise<TrackInfo 
         addedBy: 'endless-wave',
         addedAt: Date.now(),
       };
+    }
+    // A cosine.club pick points at an exact YouTube video — resolve that upload
+    // directly instead of text-searching, which could land on a different take.
+    if (!track.streamUrl && track.uri.startsWith('youtube:video:')) {
+      const video = await resolveYoutubeVideo(track.uri);
+      if (video && !isBadResult(video.name, video.artists)) {
+        return {
+          uri: track.uri,
+          name: track.name || video.name,
+          artists: track.artists.length > 0 ? track.artists : video.artists,
+          album: track.album,
+          durationMs: track.durationMs || video.durationMs,
+          image: track.image ?? video.image,
+          source: 'youtube',
+          streamUrl: video.streamUrl,
+          addedBy: 'endless-wave',
+          addedAt: Date.now(),
+        };
+      }
     }
     // Metadata-only pick (e.g. Deezer fallback): resolve a YouTube stream by
     // name+artist so it can actually play.
