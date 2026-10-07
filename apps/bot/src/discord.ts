@@ -48,9 +48,11 @@ import {
   isGenericMediaUrl,
   isYoutubePlaylistUrl,
   isYoutubeUrl,
+  probeYoutube,
   resolveGenericMediaUrl,
   resolveYoutubePlaylist,
   resolveYoutubeVideo,
+  rotateYoutubeProxy,
   searchAndResolveYoutube,
   searchYoutube,
   setYoutubeHealthListener,
@@ -699,6 +701,11 @@ export class DiscordBot {
     string,
     { guildId: string; key: string; userId: string; track: { uri: string; name: string; artists: string[]; album: string; durationMs: number; source: string; image?: string } }
   >();
+  /** nonce -> a /similar candidate list waiting on a queue button press. */
+  private similarPending = new Map<
+    string,
+    { guildId: string; userId: string; tracks: ResolvedTrack[]; at: number }
+  >();
   /** guildId -> mood visuals on; moodColor tints now-playing colors from features. */
   private moodOn = new Set<string>();
   private moodColor = new Map<string, number>();
@@ -1167,6 +1174,8 @@ export class DiscordBot {
         await this.handleQueueAdjust(interaction);
       } else if (interaction.customId.startsWith('roulette:')) {
         await this.handleRouletteButton(interaction);
+      } else if (interaction.customId.startsWith('similar:')) {
+        await this.handleSimilarButton(interaction);
       } else {
         await this.handleButton(interaction);
       }
@@ -2809,17 +2818,40 @@ export class DiscordBot {
           );
           break;
         }
+        const list = cands.slice(0, 8);
         const embed = new EmbedBuilder()
           .setTitle(`🔎 Sounds like ${truncate(seed.name, 60)}`)
           .setDescription(
-            cands
-              .slice(0, 8)
+            list
               .map((c, i) => `${i + 1}. ${truncate(c.name, 58)} — ${Math.round((c.cosineScore ?? 0) * 100)}%`)
               .join('\n'),
           )
-          .setFooter({ text: 'cosine.club audio similarity · /play one to queue it' })
+          .setFooter({ text: 'cosine.club audio similarity' })
           .setColor(this.themeColor());
-        await interaction.followUp({ embeds: [embed] });
+        const nonce = Math.random().toString(36).slice(2, 10);
+        this.similarPending.set(nonce, {
+          guildId: interaction.guildId ?? '',
+          userId: interaction.user.id,
+          tracks: list,
+          at: Date.now(),
+        });
+        if (this.similarPending.size > 50) {
+          const oldest = this.similarPending.keys().next().value;
+          if (oldest) this.similarPending.delete(oldest);
+        }
+        const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`similar:queue:${nonce}`)
+            .setLabel(`Queue all (${list.length})`)
+            .setEmoji('➕')
+            .setStyle(ButtonStyle.Success),
+          new ButtonBuilder()
+            .setCustomId(`similar:one:${nonce}`)
+            .setLabel('Surprise me')
+            .setEmoji('🎲')
+            .setStyle(ButtonStyle.Secondary),
+        );
+        await interaction.followUp({ embeds: [embed], components: [row] });
         break;
       }
 
@@ -3044,16 +3076,35 @@ export class DiscordBot {
           const cands = await cosineSimilarCandidates(seed, 10).catch(() => []);
           if (cands.length === 0)
             return void (await message.reply(`🔎 No cosine.club matches for **${truncate(seed.name, 60)}**.`));
+          const list = cands.slice(0, 8);
           const embed = new EmbedBuilder()
             .setTitle(`🔎 Sounds like ${truncate(seed.name, 60)}`)
             .setDescription(
-              cands
-                .slice(0, 8)
+              list
                 .map((c, i) => `${i + 1}. ${truncate(c.name, 58)} — ${Math.round((c.cosineScore ?? 0) * 100)}%`)
                 .join('\n'),
             )
             .setColor(this.themeColor());
-          await message.reply({ embeds: [embed] });
+          const nonce = Math.random().toString(36).slice(2, 10);
+          this.similarPending.set(nonce, {
+            guildId: message.guildId ?? '',
+            userId: message.author.id,
+            tracks: list,
+            at: Date.now(),
+          });
+          const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder()
+              .setCustomId(`similar:queue:${nonce}`)
+              .setLabel(`Queue all (${list.length})`)
+              .setEmoji('➕')
+              .setStyle(ButtonStyle.Success),
+            new ButtonBuilder()
+              .setCustomId(`similar:one:${nonce}`)
+              .setLabel('Surprise me')
+              .setEmoji('🎲')
+              .setStyle(ButtonStyle.Secondary),
+          );
+          await message.reply({ embeds: [embed], components: [row] });
           break;
         }
 
@@ -4825,9 +4876,9 @@ export class DiscordBot {
 
   /** DM the owner when the YouTube canary flips to a broken state. */
   private async alertYoutubeHealth(status: YoutubeHealth): Promise<void> {
-    const text =
+    let text =
       status === 'auth'
-        ? '⚠️ **Vaporzr: YouTube is refusing the bot** — the anti-bot wall persisted even through the residential proxy, so the cookies are stale or the PO token is missing. Check `/health` (`youtube`) and refresh `/opt/vaporzr/cookies.txt` if the cookies are old.'
+        ? '⚠️ **Vaporzr: YouTube is refusing the bot** — the anti-bot wall persisted even through the residential proxy, so the cookies are stale or the PO token is missing. Check `/health` (`youtube`) and refresh the cookies with `/cookie-upload` if they are old.'
         : status === 'blocked'
           ? '⚠️ **Vaporzr: YouTube is blocking the bot\'s IP** — no residential proxy is configured (`YOUTUBE_PROXY` in `/opt/vaporzr/.env`), which is the usual cause for a datacenter address. Refreshing cookies alone will not fix this.'
           : status === 'proxy'
@@ -4836,6 +4887,17 @@ export class DiscordBot {
               ? '⚠️ **Vaporzr: YouTube resolution is failing** — check `/health` (`youtube`) and the network.'
               : '';
     if (!text) return;
+    // The residential proxy is STICKY (DataImpulse holds one exit for `sessttl`
+    // minutes), so a flagged exit otherwise sticks for up to an hour. On the wall,
+    // rotate the session to a fresh exit and re-probe shortly after.
+    if (status === 'auth') {
+      const rotated = rotateYoutubeProxy();
+      if (rotated) {
+        text += '\n\n🔄 Rotated the residential proxy exit — re-checking in ~30s.';
+        const t = setTimeout(() => void probeYoutube(), 30_000);
+        t.unref?.();
+      }
+    }
     void pushBroadcast({ title: 'Vaporzr', body: text.replace(/\*\*/g, ''), url: '/panel' }).catch(() => {});
     const owner = config.ownerId;
     if (owner) {
@@ -7797,6 +7859,48 @@ export class DiscordBot {
       }
     }
     await interaction.reply({ content: `🚫 Banned **${offer.track.name}** from roulette${note}`, flags: MessageFlags.Ephemeral }).catch(() => {});
+  }
+
+  /** /similar — queue one or all of the cosine-similar candidates. */
+  private async handleSimilarButton(interaction: ButtonInteraction): Promise<void> {
+    const [, action, nonce] = interaction.customId.split(':');
+    const stash = nonce ? this.similarPending.get(nonce) : undefined;
+    if (!stash || stash.tracks.length === 0) {
+      await interaction.reply({ content: 'That list expired — run `/similar` again.', flags: MessageFlags.Ephemeral }).catch(() => {});
+      return;
+    }
+    if (!this.canUse('play', interaction)) {
+      await interaction.reply({ content: "⛔ You don't have permission to queue tracks.", flags: MessageFlags.Ephemeral }).catch(() => {});
+      return;
+    }
+    const s = this.sessionFor(interaction.guildId);
+    const picks =
+      action === 'one' ? [stash.tracks[Math.floor(Math.random() * stash.tracks.length)]] : stash.tracks;
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    let queued = 0;
+    let failed = 0;
+    for (let i = 0; i < picks.length; i++) {
+      try {
+        const info = await EW.resolveCandidate(picks[i]);
+        if (info) {
+          s.queue.enqueue(info, interaction.user.username);
+          queued++;
+        } else {
+          failed++;
+        }
+      } catch {
+        failed++;
+      }
+      if (picks.length > 2) {
+        await interaction.editReply(`➕ Queuing… ${i + 1}/${picks.length}`).catch(() => {});
+      }
+    }
+    await interaction
+      .editReply(
+        `✅ Queued **${queued}** track${queued === 1 ? '' : 's'} from the cosine.club list` +
+          (failed ? ` — ${failed} couldn't be resolved.` : '.'),
+      )
+      .catch(() => {});
   }
 
   /** /follow — pin the live now-playing strip in a channel (same setting as /npchannel). */

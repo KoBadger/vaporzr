@@ -183,8 +183,7 @@ export function isProxyError(msg: string): boolean {
   return !isBotWall(msg) && /proxy|tunnel|407|econnrefused/i.test(msg);
 }
 
-/** Age of the YouTube cookies file in days (null when unset or missing). */
-export function cookieAgeDays(): number | null {
+/** Age of the YouTube cookies file in days (null when unset or missing). */export function cookieAgeDays(): number | null {
   try {
     const src = activeCookiesPath();
     if (!src) return null;
@@ -193,6 +192,30 @@ export function cookieAgeDays(): number | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Rotate the residential proxy's sticky session so the next requests land on a
+ * different exit IP. DataImpulse picks the sticky exit with a `sessid` param in
+ * the username and its sticky ports hold one IP for `sessttl` minutes — so a
+ * flagged exit otherwise sticks around for up to an hour. Returns the new proxy
+ * URL (also updating config); returns the current one unchanged when no proxy is
+ * set or it can't be parsed.
+ */
+export function rotateYoutubeProxy(): string {
+  const cur = config.youtubeProxy;
+  if (!cur) return '';
+  const sess = Math.random().toString(36).slice(2, 10);
+  // The username carries the session tag (DataImpulse: `acct__sessid.X;sessttl.N`).
+  // A URL round-trip would drop the `;sessttl` param, so rewrite the raw string.
+  let out: string;
+  if (/sessid\./i.test(cur)) {
+    out = cur.replace(/sessid\.[^;:@]*/i, `sessid.${sess}`);
+  } else {
+    out = cur.replace(/^(https?:\/\/)([^:@/]+)/i, (_m, scheme: string, user: string) => `${scheme}${user};sessid.${sess}`);
+  }
+  config.youtubeProxy = out;
+  return out;
 }
 
 /** Actionable text for the anti-bot wall. It deliberately does NOT claim the
