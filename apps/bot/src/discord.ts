@@ -41,7 +41,8 @@ import { generateDependencyReport } from '@discordjs/voice';
 import { config } from '@vaporzr/core/config';
 import { getCrossfadeMs, setCrossfadeMs } from './crossfadeStore.js';
 import { getRecommendations, resolveTracks, searchCandidates, searchTracks, SpotifyError, getAudioFeatures, extractSpotifyId, type AudioFeatures, type RecommendationParams, type ResolvedTrack } from '@vaporzr/core/spotify';
-import { orderByVibe, SHUFFLE_MODE_LABEL, type ShuffleMode } from '@vaporzr/core/smartShuffle';
+import { orderByVibe, orderBySonic, SHUFFLE_MODE_LABEL, type ShuffleMode } from '@vaporzr/core/smartShuffle';
+import { cosineEnabled, cosineSimilarScores, cosineSimilarCandidates, cosineRoomFit } from '@vaporzr/core/cosine';
 import { THEMES, themeById } from './themes.js';
 import {
   isGenericMediaUrl,
@@ -169,11 +170,12 @@ const COMMANDS = [
     .addStringOption((o) =>
       o
         .setName('mode')
-        .setDescription('Reorder instead of toggling: smart, arc, or key')
+        .setDescription('Reorder instead of toggling: smart, arc, key, or sonic')
         .addChoices(
           { name: 'smart — flows from the current track', value: 'smart' },
           { name: 'arc — warm-up, peak, wind-down', value: 'arc' },
           { name: 'key — harmonic key mixing', value: 'key' },
+          { name: 'sonic — audio similarity to now (cosine.club)', value: 'sonic' },
         ),
     )
     .addBooleanOption((o) => o.setName('enabled').setDescription('On or off (used when no mode is given)')),
@@ -410,6 +412,18 @@ const COMMANDS = [
     .setName('cookie-refresh')
     .setDescription('Refresh YouTube cookies from your browser (write to youtubeCookiesPath)')
     .addBooleanOption((o) => o.setName('confirm').setDescription('Confirm you want to export cookies from your browser').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('cookie-upload')
+    .setDescription('Upload a Netscape cookies.txt to refresh YouTube cookies (owner only)')
+    .addAttachmentOption((o) =>
+      o.setName('file').setDescription('A cookies.txt exported from your browser (Netscape format)').setRequired(true),
+    ),
+  new SlashCommandBuilder()
+    .setName('similar')
+    .setDescription('Find tracks that sound like the current one (cosine.club)')
+    .addStringOption((o) =>
+      o.setName('query').setDescription("Seed with this instead of what's playing").setRequired(false),
+    ),
   new SlashCommandBuilder()
     .setName('device')
     .setDescription('Manage the Spotify Connect device (librespot)')
@@ -1731,7 +1745,7 @@ export class DiscordBot {
         if (!this.requireLevel('shuffle', interaction)) return this.deny(interaction);
         const modeArg = interaction.options.getString('mode');
         if (modeArg) {
-          const mode = (modeArg === 'arc' ? 'arc' : modeArg === 'key' ? 'key' : 'flow') as ShuffleMode;
+          const mode = (modeArg === 'arc' ? 'arc' : modeArg === 'key' ? 'key' : modeArg === 'sonic' ? 'sonic' : 'flow') as ShuffleMode;
           // A smart reorder replaces the upcoming order with a deliberate one,
           // so random shuffle must go off or it re-randomises at the next track.
           const wasShuffle = s.queue.getState().shuffle;
@@ -2744,6 +2758,71 @@ export class DiscordBot {
         break;
       }
 
+      case 'cookie-upload': {
+        if (!this.perms.isOwner(interaction.user.id)) return this.deny(interaction);
+        const file = interaction.options.getAttachment('file', true);
+        await interaction.deferReply();
+        try {
+          if (file.size > 512 * 1024) {
+            await interaction.followUp('⚠️ That file is too large for a cookies.txt (max 512 KB).');
+            break;
+          }
+          const res = await fetch(file.url);
+          if (!res.ok) {
+            await interaction.followUp(`⚠️ Could not download the attachment (HTTP ${res.status}).`);
+            break;
+          }
+          const { saveYoutubeCookies } = await import('@vaporzr/core/youtube');
+          const saved = await saveYoutubeCookies(await res.text());
+          await interaction.followUp(
+            saved.ok
+              ? `✅ Cookies saved (${saved.lines} lines) — YouTube requests use them immediately.`
+              : `⚠️ ${saved.error}`,
+          );
+        } catch (err) {
+          await interaction.followUp(`⚠️ Cookie upload failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        break;
+      }
+
+      case 'similar': {
+        await interaction.deferReply();
+        if (!cosineEnabled()) {
+          await interaction.followUp("🔎 cosine.club isn't configured (no COSINE_API_KEY).");
+          break;
+        }
+        const q = interaction.options.getString('query');
+        const cur = s.queue.getCurrentTrack();
+        const seed = q
+          ? { name: q, artists: [] as string[], uri: '' }
+          : cur
+            ? { name: cur.name, artists: cur.artists, uri: cur.uri }
+            : null;
+        if (!seed) {
+          await interaction.followUp('🔎 Nothing is playing — give me a track with `/similar query:…`.');
+          break;
+        }
+        const cands = await cosineSimilarCandidates(seed, 10).catch(() => []);
+        if (cands.length === 0) {
+          await interaction.followUp(
+            `🔎 No cosine.club matches for **${truncate(seed.name, 60)}** — its catalogue is electronic/underground, so it may not know this track.`,
+          );
+          break;
+        }
+        const embed = new EmbedBuilder()
+          .setTitle(`🔎 Sounds like ${truncate(seed.name, 60)}`)
+          .setDescription(
+            cands
+              .slice(0, 8)
+              .map((c, i) => `${i + 1}. ${truncate(c.name, 58)} — ${Math.round((c.cosineScore ?? 0) * 100)}%`)
+              .join('\n'),
+          )
+          .setFooter({ text: 'cosine.club audio similarity · /play one to queue it' })
+          .setColor(this.themeColor());
+        await interaction.followUp({ embeds: [embed] });
+        break;
+      }
+
       case 'diag':
         await interaction.reply({ embeds: [this.diagEmbed(interaction.guildId)] });
         break;
@@ -2952,6 +3031,32 @@ export class DiscordBot {
           break;
         }
 
+        case 'similar': {
+          if (!cosineEnabled()) return void (await message.reply("🔎 cosine.club isn't configured."));
+          const seedQ = args.trim();
+          const cur = s.queue.getCurrentTrack();
+          const seed = seedQ
+            ? { name: seedQ, artists: [] as string[], uri: '' }
+            : cur
+              ? { name: cur.name, artists: cur.artists, uri: cur.uri }
+              : null;
+          if (!seed) return void (await message.reply('🔎 Nothing is playing — try `V@similar <track>`.'));
+          const cands = await cosineSimilarCandidates(seed, 10).catch(() => []);
+          if (cands.length === 0)
+            return void (await message.reply(`🔎 No cosine.club matches for **${truncate(seed.name, 60)}**.`));
+          const embed = new EmbedBuilder()
+            .setTitle(`🔎 Sounds like ${truncate(seed.name, 60)}`)
+            .setDescription(
+              cands
+                .slice(0, 8)
+                .map((c, i) => `${i + 1}. ${truncate(c.name, 58)} — ${Math.round((c.cosineScore ?? 0) * 100)}%`)
+                .join('\n'),
+            )
+            .setColor(this.themeColor());
+          await message.reply({ embeds: [embed] });
+          break;
+        }
+
         case 'np':
         case 'nowplaying': {
           if (!message.inGuild()) return void (await message.reply('Must be used inside a server.'));
@@ -3049,7 +3154,9 @@ export class DiscordBot {
                 ? 'arc'
                 : arg === 'key' || arg === 'keys' || arg === 'harmonic'
                   ? 'key'
-                  : null;
+                  : arg === 'sonic' || arg === 'audio' || arg === 'sound'
+                    ? 'sonic'
+                    : null;
           if (smart) {
             // A smart shuffle REPLACES the upcoming order with a deliberate one,
             // so it must not fight the random shuffle toggle: leaving that on
@@ -6072,6 +6179,57 @@ export class DiscordBot {
           : `only ${total} track${total === 1 ? '' : 's'} in the queue`;
       return { skipReason: `🔀 Nothing to reorder — ${why}. Queue a few more, or \`V@qa\` to check.` };
     }
+    // Sonic flow: order the queue by cosine.club audio similarity to what's
+    // playing. Cosine-only, so it says so plainly when the current track isn't
+    // in its (electronic/underground) catalogue.
+    if (mode === 'sonic') {
+      const curSonic = s.queue.getCurrentTrack();
+      let scores = new Map<string, number>();
+      if (curSonic && cosineEnabled()) {
+        try {
+          scores = await cosineSimilarScores(
+            { name: curSonic.name, artists: curSonic.artists, uri: curSonic.uri },
+            100,
+          );
+        } catch {
+          /* best-effort */
+        }
+      }
+      if (scores.size === 0) {
+        return {
+          skipReason:
+            '🔀 Sonic flow needs cosine.club and a current track it knows — it only covers electronic/underground music. Try `flow` instead.',
+        };
+      }
+      const norm = (x: string): string => x.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+      const scoreOf = (t: TrackInfo): number | undefined => {
+        const n = norm(t.name);
+        if (n.length < 3) return undefined;
+        let best: number | undefined;
+        for (const [k, sc] of scores) {
+          if (k.includes(n) || n.includes(k)) {
+            if (best === undefined || sc > best) best = sc;
+          }
+        }
+        return best;
+      };
+      const { ordered, withoutFeatures } = orderBySonic(upcoming, scoreOf);
+      const moved = s.queue.reorderUpcoming(ordered.map((t) => t.uri));
+      const embed = new EmbedBuilder()
+        .setTitle(`🔀 Smart shuffle — ${SHUFFLE_MODE_LABEL[mode]}`)
+        .setDescription(
+          ordered
+            .slice(0, 12)
+            .map((t, i) => `${i + 1}. ${srcEmoji(t.source)} ${truncate(t.name, 52)}`)
+            .join('\n') +
+            (ordered.length > 12 ? `\n… +${ordered.length - 12} more` : '') +
+            (withoutFeatures ? `\n-# ${withoutFeatures} with no cosine match kept at the end` : '') +
+            (moved === 0 ? '\n-# already in the best order' : '') +
+            (wasShuffle ? '\n-# random shuffle was on — turned off so this order holds' : ''),
+        )
+        .setColor(this.themeColor());
+      return { embed };
+    }
     // One batched features call for every Spotify id we can map.
     const ids: string[] = [];
     for (const t of upcoming) {
@@ -7271,6 +7429,22 @@ export class DiscordBot {
     const targets = EW.buildTargets(st);
     const env = EW.buildNeighbourhood(st);
     const features = await this.featuresFor(track);
+    // Audio room-fit (cosine.club): how much this track sounds like the room's
+    // recently played tracks. Best-effort and cached — undefined for seeds the
+    // (electronic/underground) catalogue doesn't know.
+    let cosineScore: number | undefined;
+    if (cosineEnabled()) {
+      const snap = s.queue.getSnapshot();
+      const recent = snap.tracks
+        .slice(Math.max(0, snap.currentIndex - 4), Math.max(0, snap.currentIndex) + 1)
+        .map((t) => ({ name: t.name, artists: t.artists }));
+      if (recent.length > 0) {
+        cosineScore = await cosineRoomFit(
+          { name: track.name, artists: track.artists, uri: track.uri },
+          recent,
+        ).catch(() => undefined);
+      }
+    }
     const candidate = {
       uri: track.uri,
       name: track.name,
@@ -7278,6 +7452,7 @@ export class DiscordBot {
       album: track.album ?? '',
       durationMs: track.durationMs,
       source: track.source ?? 'spotify',
+      cosineScore,
     };
     const { total, terms } = EW.scoreBreakdown(candidate, targets, st.recentArtists ?? [], features, env, { jitter: false });
     return { fit: fitPercent(total), insufficient, reasons: explainFit(terms), features: !!features };
@@ -8295,6 +8470,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/skip` · `V@s` — skip (non-DJs start a vote)',
       '`/nowplaying` · `V@np` — what\'s playing',
       '`/follow` · `V@follow` — the now-playing strip follows the active channel by default; this pins it here (`off` turns it off)',
+      '`/similar [track]` · `V@similar` — find tracks that sound like what\'s playing (cosine.club)',
       '`/volume <0-100>` · `V@v` — set the volume',
       '`/clear` · `V@c` — stop and clear the queue',
       '`/jump <lyric>` · `V@jump` — jump to a lyric line (e.g. "to the chorus")',
@@ -8439,7 +8615,8 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/invite` · `V@invite` — add Vaporzr to a server',
       '`/key show|rotate` · `V@key show` — reveal the access key, or rotate it (admin)',
       '`/perms` — command levels & roles (admin)',
-      '`/cookie-refresh` — re-export YouTube cookies (admin)',
+      '`/cookie-refresh` — re-export YouTube cookies from a browser (admin; only works where a browser exists)',
+      '`/cookie-upload` — upload a cookies.txt to refresh YouTube cookies (owner)',
       '`/player` · `V@player` — desktop player window (admin)',
     ],
   },

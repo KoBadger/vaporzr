@@ -102,6 +102,86 @@ function videoId(url?: string): string | null {
 }
 
 /**
+ * Resolve a track to its cosine catalog id — exact YouTube id first, else an
+ * artist+title search. Cached. Best-effort: null when unknown.
+ */
+export async function cosineResolveId(seed: { name: string; artists?: string[]; uri?: string }): Promise<string | null> {
+  if (!cosineEnabled()) return null;
+  const ytId = seed.uri?.match(/^youtube:video:(.+)$/)?.[1];
+  if (ytId) {
+    const hits = await cosineLookupByUrl(`https://www.youtube.com/watch?v=${ytId}`);
+    if (hits[0]) return hits[0].id;
+  }
+  const q = `${seed.artists?.[0] ?? ''} ${seed.name ?? ''}`.trim();
+  if (!q) return null;
+  const hits = await cosineSearch(q, 5);
+  return hits[0]?.id ?? null;
+}
+
+const normName = (s: unknown): string =>
+  String(s ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+
+/**
+ * How much a track sounds like the room's recent tracks (0..1), from cosine:
+ * resolve the track, then take the best similarity to any recent track that
+ * appears among its audio neighbours. Undefined when unknown (non-electronic
+ * seeds, no key, or API trouble) — callers should treat that as "no signal".
+ */
+export async function cosineRoomFit(
+  track: { name: string; artists?: string[]; uri?: string },
+  recent: Array<{ name: string; artists?: string[] }>,
+): Promise<number | undefined> {
+  if (!cosineEnabled() || recent.length === 0) return undefined;
+  const id = await cosineResolveId(track);
+  if (!id) return undefined;
+  const similar = await cosineSimilar(id, 50);
+  if (similar.length === 0) return undefined;
+  const recentNames = new Set<string>();
+  for (const t of recent) {
+    for (const n of [normName(t.name), ...(t.artists ?? []).map(normName)]) {
+      if (n.length >= 3) recentNames.add(n);
+    }
+  }
+  if (recentNames.size === 0) return undefined;
+  let best: number | undefined;
+  for (const s of similar) {
+    const names = [normName(s.name), normName(s.artist)];
+    if (names.some((n) => n.length >= 3 && recentNames.has(n))) {
+      if (best === undefined || s.score > best) best = s.score;
+    }
+  }
+  return best;
+}
+
+/**
+ * A normalized-string → best similarity score map for tracks that sound like the
+ * seed (both the full "Artist - Title" and the bare title are keyed). Used by
+ * the `sonic` shuffle to rank the queue against the current track. Empty when
+ * cosine is disabled or the seed is unknown.
+ */
+export async function cosineSimilarScores(
+  seed: { name: string; artists?: string[]; uri?: string },
+  limit = 100,
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (!cosineEnabled()) return out;
+  const id = await cosineResolveId(seed);
+  if (!id) return out;
+  const similar = await cosineSimilar(id, limit);
+  for (const s of similar) {
+    for (const n of [normName(s.name), normName(s.artist)]) {
+      if (n.length < 3) continue;
+      const prev = out.get(n);
+      if (prev === undefined || s.score > prev) out.set(n, s.score);
+    }
+  }
+  return out;
+}
+
+/**
  * Turn the current track into scored cosine candidates. Resolves the seed by
  * exact YouTube id when we have one (precise), else by an artist+title search.
  * Returns [] when cosine is disabled, the seed isn't in the catalog, or the API
@@ -113,19 +193,7 @@ export async function cosineSimilarCandidates(
 ): Promise<ResolvedTrack[]> {
   if (!cosineEnabled()) return [];
 
-  let id: string | null = null;
-
-  const ytId = seed.uri?.match(/^youtube:video:(.+)$/)?.[1];
-  if (ytId) {
-    const hits = await cosineLookupByUrl(`https://www.youtube.com/watch?v=${ytId}`);
-    if (hits[0]) id = hits[0].id;
-  }
-  if (!id) {
-    const q = `${seed.artists?.[0] ?? ''} ${seed.name ?? ''}`.trim();
-    if (!q) return [];
-    const hits = await cosineSearch(q, 5);
-    if (hits[0]) id = hits[0].id;
-  }
+  const id = await cosineResolveId(seed);
   if (!id) return [];
 
   const similar = await cosineSimilar(id, limit);
@@ -142,6 +210,7 @@ export async function cosineSimilarCandidates(
       durationMs: 0,
       source: 'youtube',
       cosineScore: typeof t.score === 'number' ? t.score : undefined,
+      cosineId: t.id,
     });
   }
   return out;

@@ -2,8 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   clearCosineCache,
   cosineEnabled,
+  cosineRoomFit,
   cosineSearch,
   cosineSimilarCandidates,
+  cosineSimilarScores,
 } from '@vaporzr/core/cosine';
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -125,5 +127,59 @@ describe('cosine.club client', () => {
     );
     expect(out).toEqual([]);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('builds a name→score map for the sonic shuffle', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: unknown) => {
+        if (String(url).includes('/tracks/lookup')) {
+          return jsonResponse({ data: [{ id: 'seed1' }], success: true });
+        }
+        if (String(url).includes('/similar')) {
+          return jsonResponse({
+            data: {
+              similar_tracks: [
+                { id: 'a', name: 'Rocco - One Passionate Night', artist: 'Rocco', score: 0.9 },
+                { id: 'b', name: 'Other Thing', artist: 'X', score: 0.5 },
+              ],
+            },
+            success: true,
+          });
+        }
+        return jsonResponse({});
+      }),
+    );
+    const scores = await cosineSimilarScores({ name: 'Seed', artists: ['A'], uri: 'youtube:video:v1' }, 100);
+    expect(scores.get('rocco one passionate night')).toBe(0.9);
+    expect(scores.get('other thing')).toBe(0.5);
+  });
+
+  it('measures room fit against recent tracks', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: unknown) => {
+        if (String(url).includes('/tracks/lookup')) {
+          return jsonResponse({ data: [{ id: 'seed1' }], success: true });
+        }
+        if (String(url).includes('/similar')) {
+          return jsonResponse({
+            data: {
+              similar_tracks: [{ id: 'a', name: 'Your Love', artist: 'Frankie Knuckles', score: 0.88 }],
+            },
+            success: true,
+          });
+        }
+        return jsonResponse({});
+      }),
+    );
+    const fit = await cosineRoomFit({ name: 'Candidate', artists: ['Z'], uri: 'youtube:video:v2' }, [
+      { name: 'Your Love', artists: ['Frankie Knuckles'] },
+    ]);
+    expect(fit).toBe(0.88);
+  });
+
+  it('room fit is undefined with no recent tracks', async () => {
+    expect(await cosineRoomFit({ name: 'X', artists: ['Y'] }, [])).toBeUndefined();
   });
 });

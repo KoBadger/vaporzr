@@ -82,6 +82,25 @@ interface YtDlpMeta {
 /** Monotonic id so concurrent yt-dlp calls never share a temp cookie file. */
 let cookieCopySeq = 0;
 
+/** Writable cookie jar in the data volume. When present it overrides the
+ *  (usually read-only) mounted YOUTUBE_COOKIES_PATH, so cookies can be refreshed
+ *  or uploaded from Discord without remounting anything. */
+export function liveCookiesPath(): string {
+  return path.join(config.dataDir, 'youtube-cookies.txt');
+}
+
+/** The cookie jar actually in effect: the uploaded/live one if it exists, else
+ *  the configured (mounted) path. Null when neither is available. */
+function activeCookiesPath(): string | null {
+  try {
+    const live = liveCookiesPath();
+    if (fs.existsSync(live)) return live;
+  } catch {
+    /* fall through to the configured path */
+  }
+  return config.youtubeCookiesPath || null;
+}
+
 /**
  * Copy the cookie jar to a per-call temp file. yt-dlp always DUMPS the jar
  * back to the --cookies path on exit; on a read-only mount (the VPS ships
@@ -91,13 +110,14 @@ let cookieCopySeq = 0;
  * racing on the same file. Returns null when cookies are unavailable.
  */
 function stageCookieCopy(): string | null {
-  if (!config.youtubeCookiesPath) return null;
+  const src = activeCookiesPath();
+  if (!src) return null;
   try {
     const file = path.join(
       os.tmpdir(),
       `vz-cookies-${process.pid}-${++cookieCopySeq}.txt`,
     );
-    fs.copyFileSync(config.youtubeCookiesPath, file);
+    fs.copyFileSync(src, file);
     return file;
   } catch {
     return null;
@@ -166,8 +186,9 @@ export function isProxyError(msg: string): boolean {
 /** Age of the YouTube cookies file in days (null when unset or missing). */
 export function cookieAgeDays(): number | null {
   try {
-    if (!config.youtubeCookiesPath) return null;
-    const st = fs.statSync(config.youtubeCookiesPath);
+    const src = activeCookiesPath();
+    if (!src) return null;
+    const st = fs.statSync(src);
     return Math.max(0, Math.round((Date.now() - st.mtimeMs) / 86_400_000));
   } catch {
     return null;
@@ -183,7 +204,7 @@ export function describeBotWall(): string {
   const age = cookieAgeDays();
   const ageText = age === null ? '`missing`' : `${age} day${age === 1 ? '' : 's'} old`;
   return config.youtubeProxy
-    ? `YouTube refused the request (anti-bot wall). Cookies are ${ageText} and a residential proxy IS configured — so either the proxy's exit IP is flagged too, the cookies are stale, or the PO token is missing. Retrying usually lands on a clean exit.`
+    ? `YouTube refused the request (anti-bot wall). Cookies are ${ageText} and a residential proxy IS configured — so either the proxy's exit IP is flagged too, the cookies are stale, or the PO token is missing. Retrying usually lands on a clean exit; if it keeps happening, refresh the cookies with \`/cookie-upload\`.`
     : `YouTube refused the request (anti-bot wall) and NO residential proxy is set. Cookies are ${ageText}. A flagged datacenter IP is the usual cause — refreshing cookies alone will not fix that; set YOUTUBE_PROXY in /opt/vaporzr/.env.`;
 }
 
@@ -964,19 +985,55 @@ export async function searchYoutube(query: string, limit = 5): Promise<ResolvedT
 }
 
 /**
+ * Validate and store a Netscape-format cookie jar (e.g. one uploaded from a
+ * browser). Written to the writable live path, which then overrides the
+ * read-only mount. Returns the number of cookie lines stored.
+ */
+export async function saveYoutubeCookies(
+  text: string,
+): Promise<{ ok: true; path: string; lines: number } | { ok: false; error: string }> {
+  const trimmed = String(text ?? '').trim();
+  if (!trimmed) return { ok: false, error: 'The uploaded file was empty.' };
+  const hasHeader = /#\s*(Netscape|HTTP Cookie File)/i.test(trimmed);
+  const hasYt = /(^|\t)youtube\.com\t|\t\.youtube\.com\t/i.test(trimmed) || /youtube\.com/i.test(trimmed);
+  if (!hasHeader && !hasYt) {
+    return {
+      ok: false,
+      error:
+        'That does not look like a Netscape cookies.txt export — no youtube.com cookie lines found. Export with a "Get cookies.txt LOCALLY"-style extension.',
+    };
+  }
+  const lines = trimmed.split('\n').filter((l) => l && !l.startsWith('#')).length;
+  if (lines < 3) {
+    return { ok: false, error: `Only ${lines} cookie line(s) found — export a fresh youtube.com jar.` };
+  }
+  try {
+    const target = liveCookiesPath();
+    await fs.promises.mkdir(path.dirname(target), { recursive: true });
+    await fs.promises.writeFile(target, trimmed.endsWith('\n') ? trimmed : `${trimmed}\n`, 'utf8');
+    return { ok: true, path: target, lines };
+  } catch (err) {
+    return { ok: false, error: `Could not write cookies: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
+/**
  * Refresh the YouTube cookie jar by extracting cookies from a browser and
- * writing them to the configured YOUTUBE_COOKIES_PATH. Uses yt-dlp's
- * --cookies-from-browser so the exported jar stays in the Netscape format
- * the rest of the code expects.
+ * writing them to the writable live path. Uses yt-dlp's --cookies-from-browser
+ * so the exported jar stays in the Netscape format the rest of the code expects.
  *
- * Browser options, in order of preference: chrome, chromium, edge, firefox.
- * Returns { ok: true, path, lines } on success, { ok: false, error } on failure.
+ * This only works on a machine that HAS a browser profile. The bot runs in a
+ * container with none, so on the VPS every browser probe fails — in that case
+ * the error says so plainly instead of leaking a confusing yt-dlp message, and
+ * points at `/cookie-upload`.
  */
 export async function refreshYoutubeCookies(
   browser: 'chrome' | 'chromium' | 'edge' | 'firefox' = 'chrome',
 ): Promise<{ ok: true; path: string; lines: number } | { ok: false; error: string }> {
-  const target = config.youtubeCookiesPath || path.join(config.dataDir, 'youtube-cookies.txt');
+  const target = liveCookiesPath();
   const browsers = [browser, 'chrome', 'chromium', 'edge', 'firefox'];
+  let lastErr = '';
+  let sawNoBrowser = false;
   for (const b of [...new Set(browsers)]) {
     try {
       await fs.promises.mkdir(path.dirname(target), { recursive: true });
@@ -992,10 +1049,19 @@ export async function refreshYoutubeCookies(
       const lines = raw.split('\n').filter((l) => l && !l.startsWith('#')).length;
       return { ok: true, path: target, lines };
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (b === browsers[browsers.length - 1]) return { ok: false, error: msg };
+      lastErr = err instanceof Error ? err.message : String(err);
+      // yt-dlp's "could not find <browser> cookies database" — no browser here.
+      if (/could not find|no such file|cookies database|unsupported browser|not found/i.test(lastErr)) {
+        sawNoBrowser = true;
+      }
       continue;
     }
   }
-  return { ok: false, error: 'No browser cookie export succeeded.' };
+  return {
+    ok: false,
+    error: sawNoBrowser
+      ? 'No browser is available in this environment (the bot runs in a container), so cookies cannot be exported here. ' +
+        'Export cookies.txt on a machine with a browser and either upload it with `/cookie-upload` or replace /opt/vaporzr/cookies.txt on the host.'
+      : lastErr || 'No browser cookie export succeeded.',
+  };
 }

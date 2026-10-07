@@ -333,6 +333,9 @@ export interface ResolvedTrack {
   /** cosine.club audio-similarity score (0..1, higher = sounds more like the
    *  seed). Only set on candidates from the cosine similarity source. */
   cosineScore?: number;
+  /** cosine.club catalog id — the same recording maps to one id across
+   *  uploads, so it doubles as an audio-based "same song" fingerprint. */
+  cosineId?: string;
 }
 
 interface SpotifyTrack {

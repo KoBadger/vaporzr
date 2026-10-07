@@ -46,6 +46,9 @@ export interface EndlessWaveState {
   longestRun: number;
   /** Distinct artists auto-queued this session. */
   artistSet: Set<string>;
+  /** cosine.club ids of tracks auto-queued this session — audio-based dedup so
+   *  the same recording under a different upload can't be queued twice. */
+  queuedCosineIds: Set<string>;
 }
 
 export interface EndlessWaveSnapshot {
@@ -132,6 +135,7 @@ export function createState(overrides?: Partial<EWConfig>): EndlessWaveState {
     runStreak: 0,
     longestRun: 0,
     artistSet: new Set(),
+    queuedCosineIds: new Set(),
   };
 }
 
@@ -161,6 +165,7 @@ function resetSession(state: EndlessWaveState): void {
   state.runStreak = 0;
   state.longestRun = 0;
   state.artistSet.clear();
+  state.queuedCosineIds.clear();
 }
 
 export function deactivate(state: EndlessWaveState): void {
@@ -257,6 +262,7 @@ export interface EndlessWavePersist {
   runStreak: number;
   longestRun: number;
   artistSet: string[];
+  queuedCosineIds: string[];
 }
 
 /** Flatten a live state for on-disk persistence. */
@@ -276,6 +282,7 @@ export function serializeState(state: EndlessWaveState): EndlessWavePersist {
     runStreak: state.runStreak,
     longestRun: state.longestRun,
     artistSet: [...state.artistSet],
+    queuedCosineIds: [...state.queuedCosineIds],
   };
 }
 
@@ -298,6 +305,7 @@ export function restoreState(data: Partial<EndlessWavePersist>): EndlessWaveStat
   if (typeof data.runStreak === 'number') s.runStreak = data.runStreak;
   if (typeof data.longestRun === 'number') s.longestRun = data.longestRun;
   for (const a of data.artistSet ?? []) s.artistSet.add(String(a).toLowerCase().trim());
+  for (const id of data.queuedCosineIds ?? []) s.queuedCosineIds.add(String(id));
   return s;
 }
 
@@ -832,6 +840,13 @@ export async function pickNextTrack(
 ): Promise<ResolvedTrack | null> {
   if (!state.active) return null;
 
+  // Record a picked cosine id so its recording can't be queued again this
+  // session (audio-based dedup — see queuedCosineIds).
+  const take = (t: ResolvedTrack): ResolvedTrack => {
+    if (t.cosineId) state.queuedCosineIds.add(t.cosineId);
+    return t;
+  };
+
   // Smart leans on the Spotify Web API (recommendations / similar-artists),
   // which needs a LINKED account (OAuth refresh token). Without one those calls
   // can't produce candidates, so smart silently queues nothing and the music
@@ -884,6 +899,9 @@ export async function pickNextTrack(
       if (isLongFormMix(c)) { logReject(c.name, 'long-form mix/set'); return false; }
       if (isDuplicate(state, c.uri)) { logReject(c.name, 'already played this session'); return false; }
       if (upcomingUris.has(c.uri)) { logReject(c.name, 'already queued'); return false; }
+      // Audio-based dedup: cosine maps a recording to one id across uploads, so
+      // the same song under a different video is caught even when the uri differs.
+      if (c.cosineId && state.queuedCosineIds.has(c.cosineId)) { logReject(c.name, 'same recording already queued (cosine)'); return false; }
       if (excludeUris?.has(c.uri)) { logReject(c.name, 'previously failed to resolve'); return false; }
       if (isRemixOrCover(state, c.name, c.artists)) { logReject(c.name, 'remix/cover of played track'); return false; }
       if (nameVariants(normalizeTrackName(c.name), c.artists, state.recentArtists).some((v) => upcomingNames.has(v))) { logReject(c.name, 'variant already queued'); return false; }
@@ -1094,7 +1112,7 @@ export async function pickNextTrack(
     // Warm the runners-up's profiles in the background so the NEXT pick has
     // genre/relatedness data instead of scoring blind.
     warmArtistProfiles(survivors.slice(0, 6).map((c) => c.artists[0] ?? ''));
-    return survivors[0];
+    return take(survivors[0]);
   }
 
   // Smart strategies dead-ended. Rather than going silent, relax the artist
@@ -1107,7 +1125,7 @@ export async function pickNextTrack(
     survivors = viable(allCandidates);
     if (survivors.length > 0) {
       console.log('[endlesswave] relaxed artist cooldown to avoid a gap');
-      return survivors[0];
+      return take(survivors[0]);
     }
   }
 
@@ -1120,7 +1138,7 @@ export async function pickNextTrack(
     survivors = viable(allCandidates);
     if (survivors.length > 0) {
       console.log('[endlesswave] dropped artist cooldown to keep the wave going');
-      return survivors[0];
+      return take(survivors[0]);
     }
   }
 
@@ -1169,6 +1187,7 @@ export async function pickBasicTrack(
     if (isLongFormMix(c)) return false;
     if (isDuplicate(state, c.uri)) return false;
     if (upcomingUris.has(c.uri)) return false;
+    if (c.cosineId && state.queuedCosineIds.has(c.cosineId)) return false;
     if (nameVariants(normalizeTrackName(c.name), c.artists, []).some((v) => upcomingNames.has(v))) return false;
     if (excludeUris?.has(c.uri)) return false;
     if (isRemixOrCover(state, c.name, c.artists)) return false;
@@ -1232,7 +1251,9 @@ export async function pickBasicTrack(
   // No vibe scoring — just a mild random pick among the shortest few candidates.
   survivors.sort((a, b) => (a.durationMs || 0) - (b.durationMs || 0));
   const pool = survivors.slice(0, Math.min(3, survivors.length));
-  return pool[Math.floor(Math.random() * pool.length)];
+  const chosen = pool[Math.floor(Math.random() * pool.length)];
+  if (chosen.cosineId) state.queuedCosineIds.add(chosen.cosineId);
+  return chosen;
 }
 
 /* ---------- Resolve helper ---------- */

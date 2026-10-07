@@ -12,12 +12,13 @@ import type { AudioFeatures } from '@vaporzr/core/spotify';
  * Tracks without features (e.g. a YouTube-only upload) keep their exact
  * position, so a shuffle never drops or piles them up.
  */
-export type ShuffleMode = 'flow' | 'arc' | 'key';
+export type ShuffleMode = 'flow' | 'arc' | 'key' | 'sonic';
 
 export const SHUFFLE_MODE_LABEL: Record<ShuffleMode, string> = {
   flow: 'flow',
   arc: 'arc (warm-up → peak → wind-down)',
   key: 'harmonic key',
+  sonic: 'sonic flow (cosine.club)',
 };
 
 /** Camelot wheel: 1..12 + major/minor. */
@@ -55,11 +56,14 @@ const WEIGHTS: Record<ShuffleMode, { energy: number; valence: number; tempo: num
   flow: { energy: 0.5, valence: 0.35, tempo: 0.1, acoustic: 0.05, key: 0.1 },
   arc: { energy: 0.55, valence: 0.25, tempo: 0.1, acoustic: 0.05, key: 0.1 },
   key: { energy: 0.25, valence: 0.15, tempo: 0.1, acoustic: 0.1, key: 0.5 },
+  // `sonic` is ordered by cosine similarity (orderBySonic), not by features —
+  // this entry only satisfies the Record type; vibeDistance falls back to flow.
+  sonic: { energy: 0.5, valence: 0.35, tempo: 0.1, acoustic: 0.05, key: 0.1 },
 };
 
 /** Weighted musical distance in 0..1 (0 = same vibe). */
 export function vibeDistance(a: AudioFeatures, b: AudioFeatures, mode: ShuffleMode = 'flow'): number {
-  const w = WEIGHTS[mode];
+  const w = WEIGHTS[mode] ?? WEIGHTS.flow;
   const tempo = Math.min(1, Math.abs(a.tempo - b.tempo) / 60);
   return (
     w.energy * Math.abs(a.energy - b.energy) +
@@ -161,4 +165,26 @@ export function orderByVibe<T>(
   let k = 0;
   const ordered = items.map((it) => (featOf(it) ? ranked[k++] : it));
   return { ordered, withoutFeatures };
+}
+
+/**
+ * Order by cosine.club audio similarity to an anchor (see the `sonic` shuffle
+ * mode). Items with a known similarity sort first, closest first; the rest keep
+ * their original order afterwards. Falls back to the original order when fewer
+ * than two items have a score.
+ */
+export function orderBySonic<T>(
+  items: T[],
+  scoreOf: (t: T) => number | undefined,
+): { ordered: T[]; withoutFeatures: number } {
+  const scored: Array<{ item: T; s: number }> = [];
+  const unknown: T[] = [];
+  for (const item of items) {
+    const s = scoreOf(item);
+    if (typeof s === 'number' && s > 0) scored.push({ item, s });
+    else unknown.push(item);
+  }
+  if (scored.length < 2) return { ordered: items, withoutFeatures: unknown.length };
+  scored.sort((a, b) => b.s - a.s);
+  return { ordered: [...scored.map((x) => x.item), ...unknown], withoutFeatures: unknown.length };
 }
