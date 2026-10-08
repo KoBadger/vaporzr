@@ -87,6 +87,7 @@ import { V_ALIASES, V_DISPATCH_ALIASES } from './aliases.js';
 import { ttsEngine } from '@vaporzr/core/tts';
 import { pushBroadcast, pushSubscriptionCount } from './push.js';
 import { downloadToTempFile } from '@vaporzr/core/mediaDownload';
+import { separateStemsReplicate, replicateStemsEnabled } from '@vaporzr/core/stemSeparation';
 import { renderRadarGif, type RadarMetric } from '@vaporzr/core/images';
 import { parseVibe, vibeIsSteerable, type ParsedVibe } from '@vaporzr/core/vibe';
 
@@ -6881,6 +6882,19 @@ export class DiscordBot {
     if (existsSync(cVoc) && existsSync(cOth)) {
       console.log(`[mashup] stems cache hit (${cacheKey})`);
       return { vocals: cVoc, other: cOth };
+    }
+    // Hosted GPU separation when a Replicate token is set: the same htdemucs
+    // model in ~80s instead of ~29 min on CPU. It writes into the same cache
+    // dir, so a repeat pair is instant either way. On any failure we fall
+    // through to the local run rather than failing the mashup.
+    if (replicateStemsEnabled()) {
+      const hosted = await separateStemsReplicate(file, cacheDir);
+      if (hosted) {
+        console.log(`[mashup] stems via Replicate (${cacheKey})`);
+        void this.pruneStems();
+        return hosted;
+      }
+      console.warn('[mashup] Replicate stems unavailable — falling back to local Demucs');
     }
     const outDir = path.join(config.dataDir, 'uploads', `stems-${Date.now()}-${Math.floor(Math.random() * 1e6)}`);
     cleanup.push(outDir);

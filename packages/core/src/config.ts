@@ -28,6 +28,14 @@ export const config = {
   ownerId: process.env.OWNER_ID ?? '',
   dataDir: process.env.DATA_DIR ?? path.join(repoRoot, 'apps', 'bot', 'data'),
   youtubeApiKey: process.env.YOUTUBE_API_KEY ?? '',
+  /**
+   * Replicate API token. When set, `V@mashup` separates stems on Replicate's
+   * hosted Demucs (GPU, ~2¢/song, ~80s) instead of the local CPU run (~29 min).
+   * Empty = local Demucs only.
+   */
+  replicateApiToken: process.env.REPLICATE_API_TOKEN ?? '',
+  /** Replicate Demucs model slug used for hosted stem separation. */
+  replicateDemucsModel: process.env.REPLICATE_DEMUCS_MODEL ?? 'cjwbw/demucs',
 ytDlpPath: process.env.YT_DLP_PATH ?? path.join(__dirname, '..', '..', '..', 'vendor', 'yt-dlp', 'yt-dlp'),
    /** Path to a Netscape-format cookies.txt for YouTube. Authenticated requests
     *  avoid most 403s and throttling that cause mid-track stream cuts. */
