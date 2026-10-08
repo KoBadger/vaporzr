@@ -7112,19 +7112,25 @@ export class DiscordBot {
     const dur = Math.max(30, Math.min(180, durSec || 90));
     const v1 = path.join(dir, 'v1.mp3');
     const v2 = path.join(dir, 'v2.mp3');
-    // Trim the theatrical intro (leading near-silence) from both stems and
-    // stretch the instrumental to the vocal's tempo, into plain intermediates.
-    // Doing this as its own pass lets us MEASURE the residual beat offset before
-    // the mix — matching tempo alone still leaves the sides half a beat apart.
+    // Trim each side's theatrical intro and stretch the instrumental to the
+    // vocal's tempo, into plain intermediates. The trimmed backing doubles as
+    // that side's BEAT REFERENCE — see the alignment below.
     const trim = 'silenceremove=start_periods=1:start_silence=0.05:start_threshold=-45dB';
     const fade = `loudnorm=I=-14:TP=-1.5:LRA=11,alimiter=limit=0.95,afade=t=in:st=0:d=2,afade=t=out:st=${dur - 3}:d=3`;
-    const prepSide = async (voc: string, inst: string, chain: string, tag: string): Promise<{ voc: string; inst: string }> => {
+    const prepSide = async (
+      voc: string,
+      inst: string,
+      chain: string,
+      tag: string,
+    ): Promise<{ voc: string; ref: string; inst: string }> => {
       const vo = path.join(dir, `prep-${tag}-voc.wav`);
+      const ref = path.join(dir, `prep-${tag}-ref.wav`);
       const io = path.join(dir, `prep-${tag}-inst.wav`);
-      cleanup.push(vo, io);
+      cleanup.push(vo, ref, io);
       await this.runFfmpeg(['-hide_banner', '-loglevel', 'error', '-i', voc, '-af', `${trim},aresample=48000`, '-c:a', 'pcm_s16le', '-y', vo]);
-      await this.runFfmpeg(['-hide_banner', '-loglevel', 'error', '-i', inst, '-af', `${trim},${chain}`, '-c:a', 'pcm_s16le', '-y', io]);
-      return { voc: vo, inst: io };
+      await this.runFfmpeg(['-hide_banner', '-loglevel', 'error', '-i', inst, '-af', `${trim},aresample=48000`, '-c:a', 'pcm_s16le', '-y', ref]);
+      await this.runFfmpeg(['-hide_banner', '-loglevel', 'error', '-i', ref, '-af', chain, '-c:a', 'pcm_s16le', '-y', io]);
+      return { voc: vo, ref, inst: io };
     };
     // `adelay` nudges the earlier side so the downbeats land together.
     const mix = (voc: string, inst: string, delayVoc: number, delayInst: number, out: string): string[] => {
@@ -7155,12 +7161,17 @@ export class DiscordBot {
     try {
       const p1 = await prepSide(sa.vocals, sb.other, this.stretchChain(tempoA, fa?.key, tempoB, fb?.key), '1');
       const p2 = await prepSide(sb.vocals, sa.other, this.stretchChain(tempoB, fb?.key, tempoA, fa?.key), '2');
-      // Positive lag = the vocal is late, so delay the backing (and vice versa).
-      const lag1 = await beatAlignLagMs(p1.voc, p1.inst);
-      const lag2 = await beatAlignLagMs(p2.voc, p2.inst);
+      // Align the BACKINGS, not the vocal: percussion is what carries a beat
+      // grid, and a vocal's word onsets don't line up with drums (measuring
+      // vocal-vs-backing produced up to 1.4s of nonsense on same-recording
+      // stems). The vocal is already on its own backing's grid, so shifting the
+      // other side's backing onto that grid lines the vocal up too.
+      const lag1 = await beatAlignLagMs(p1.ref, p2.inst);
+      const lag2 = await beatAlignLagMs(p2.ref, p1.inst);
       console.log(`[mashup] beat align: v1 ${Math.round(lag1)}ms · v2 ${Math.round(lag2)}ms`);
-      await this.runFfmpeg(mix(p1.voc, p1.inst, Math.max(0, -lag1), Math.max(0, lag1), v1));
-      await this.runFfmpeg(mix(p2.voc, p2.inst, Math.max(0, -lag2), Math.max(0, lag2), v2));
+      // Positive lag = the second file (the backing) is early, so delay it.
+      await this.runFfmpeg(mix(p1.voc, p2.inst, 0, Math.max(0, lag1), v1));
+      await this.runFfmpeg(mix(p2.voc, p1.inst, 0, Math.max(0, lag2), v2));
     } catch (err) {
       return { ok: false, text: `Render failed: ${err instanceof Error ? err.message : err}`, files: [], similar: [] };
     }
