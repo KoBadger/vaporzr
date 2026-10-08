@@ -36,6 +36,8 @@ export const config = {
   replicateApiToken: process.env.REPLICATE_API_TOKEN ?? '',
   /** Replicate Demucs model slug used for hosted stem separation. */
   replicateDemucsModel: process.env.REPLICATE_DEMUCS_MODEL ?? 'cjwbw/demucs',
+  /** Pin a specific Replicate model version; empty = look up the latest once. */
+  replicateDemucsVersion: process.env.REPLICATE_DEMUCS_VERSION ?? '',
 ytDlpPath: process.env.YT_DLP_PATH ?? path.join(__dirname, '..', '..', '..', 'vendor', 'yt-dlp', 'yt-dlp'),
    /** Path to a Netscape-format cookies.txt for YouTube. Authenticated requests
     *  avoid most 403s and throttling that cause mid-track stream cuts. */

@@ -56,19 +56,39 @@ async function uploadFile(file: string): Promise<string> {
 
 /** Kick off a Demucs prediction for an uploaded file. */
 async function createPrediction(audioUrl: string): Promise<ReplicatePrediction> {
-  const [owner, name] = config.replicateDemucsModel.split('/');
-  if (!owner || !name) throw new Error(`bad REPLICATE_DEMUCS_MODEL "${config.replicateDemucsModel}"`);
-  const res = await fetch(`${API}/models/${owner}/${name}/predictions`, {
+  const version = await resolveVersion();
+  const res = await fetch(`${API}/predictions`, {
     method: 'POST',
     headers: { ...auth(), 'Content-Type': 'application/json' },
     // `stem: 'vocals'` asks the 2-stem path (vocals + the rest), which is all a
     // mashup needs and is faster/cheaper than the full 4-stem split.
     body: JSON.stringify({
+      version,
       input: { audio: audioUrl, model_name: 'htdemucs', output_format: 'mp3', mp3_bitrate: 320, stem: 'vocals' },
     }),
   });
   if (!res.ok) throw new Error(`prediction create ${res.status}: ${short(await res.text().catch(() => ''))}`);
   return (await res.json()) as ReplicatePrediction;
+}
+
+/**
+ * The model version to run. `/v1/predictions` needs an explicit version hash
+ * (the model-scoped endpoint 404s for community models), so we look up the
+ * model's latest version once and reuse it. `REPLICATE_DEMUCS_VERSION` pins it.
+ */
+let cachedVersion = '';
+async function resolveVersion(): Promise<string> {
+  if (config.replicateDemucsVersion) return config.replicateDemucsVersion;
+  if (cachedVersion) return cachedVersion;
+  const [owner, name] = config.replicateDemucsModel.split('/');
+  if (!owner || !name) throw new Error(`bad REPLICATE_DEMUCS_MODEL "${config.replicateDemucsModel}"`);
+  const res = await fetch(`${API}/models/${owner}/${name}`, { headers: auth() });
+  if (!res.ok) throw new Error(`model lookup ${res.status}: ${short(await res.text().catch(() => ''))}`);
+  const json = (await res.json()) as { latest_version?: { id?: string } };
+  const id = json.latest_version?.id;
+  if (!id) throw new Error('model has no latest_version');
+  cachedVersion = id;
+  return id;
 }
 
 /** Poll a prediction until it finishes (or the timeout elapses). */

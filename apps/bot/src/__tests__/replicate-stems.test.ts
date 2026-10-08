@@ -37,7 +37,10 @@ describe('replicate stem separation', () => {
         if (u.endsWith('/files')) {
           return new Response(JSON.stringify({ urls: { get: 'https://files.example/abc' } }), { status: 200 });
         }
-        if (u.endsWith('/predictions') && init?.method === 'POST') {
+        if (u.endsWith('/models/cjwbw/demucs')) {
+          return new Response(JSON.stringify({ latest_version: { id: 'ver-123' } }), { status: 200 });
+        }
+        if (u.endsWith('/v1/predictions') && init?.method === 'POST') {
           return new Response(JSON.stringify({ id: 'p1', status: 'starting' }), { status: 200 });
         }
         if (u.endsWith('/predictions/p1')) {
@@ -62,7 +65,8 @@ describe('replicate stem separation', () => {
     expect((await fs.readFile(r!.other)).toString()).toBe('stem-bytes');
     expect(polls).toBeGreaterThanOrEqual(1);
     expect(calls.some((c) => c.startsWith('POST https://api.replicate.com/v1/files'))).toBe(true);
-    expect(calls.some((c) => c.startsWith('POST https://api.replicate.com/v1/models/cjwbw/demucs/predictions'))).toBe(true);
+    expect(calls.some((c) => c.startsWith('POST https://api.replicate.com/v1/predictions'))).toBe(true);
+    expect(calls.some((c) => c.startsWith('GET https://api.replicate.com/v1/models/cjwbw/demucs'))).toBe(true);
   });
 
   it('falls back (returns null) when the prediction fails', async () => {
