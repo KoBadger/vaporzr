@@ -109,3 +109,69 @@ export async function estimateTempo(file: string, timeoutMs = 30_000): Promise<n
     return null;
   }
 }
+
+/**
+ * Lag (in frames) that best lines up `b` onto `a` within ±`maxLag` frames.
+ * Positive means `b`'s events happen `lag` frames BEFORE `a`'s — i.e. delay `b`
+ * by `lag` to align them. Zero-mean normalised so loudness doesn't bias it.
+ */
+export function alignLagFrames(a: Float64Array, b: Float64Array, maxLag: number): number {
+  const norm = (x: Float64Array): Float64Array => {
+    let m = 0;
+    for (let i = 0; i < x.length; i++) m += x[i];
+    m /= x.length || 1;
+    const y = new Float64Array(x.length);
+    for (let i = 0; i < x.length; i++) y[i] = x[i] - m;
+    return y;
+  };
+  const A = norm(a);
+  const B = norm(b);
+  const score = (d: number): number | null => {
+    let sum = 0;
+    let n = 0;
+    for (let i = 0; i < B.length; i++) {
+      const j = i + d;
+      if (j < 0 || j >= A.length) continue;
+      sum += A[j] * B[i];
+      n++;
+    }
+    return n < 10 ? null : sum / n;
+  };
+  // Search outward from zero and only accept a STRICTLY better score, so the
+  // periodic ties an onset envelope always produces resolve to the smallest
+  // correction rather than an arbitrary beat multiple.
+  let best = 0;
+  let bestScore = score(0) ?? -Infinity;
+  for (let d = 1; d <= maxLag; d++) {
+    for (const dd of [d, -d]) {
+      const s = score(dd);
+      if (s != null && s > bestScore) {
+        bestScore = s;
+        best = dd;
+      }
+    }
+  }
+  return best;
+}
+
+/**
+ * Beat-phase offset (ms) between two audio files. Positive = delay the SECOND
+ * file (`b`) to line its beats up with the first (`a`).
+ *
+ * Tempo matching alone doesn't align downbeats: two tracks can run at the same
+ * BPM and still sit half a beat apart, which reads as "sloppy" rather than
+ * "wrong". This measures the residual offset from the onset envelopes.
+ */
+export async function beatAlignLagMs(aFile: string, bFile: string, maxLagMs = 1500, timeoutMs = 30_000): Promise<number> {
+  try {
+    const [pa, pb] = await Promise.all([
+      decodeMono(aFile, RATE, timeoutMs),
+      decodeMono(bFile, RATE, timeoutMs),
+    ]);
+    if (!pa || !pb) return 0;
+    const frames = alignLagFrames(onsetEnvelope(pa, HOP), onsetEnvelope(pb, HOP), Math.round(maxLagMs / 10));
+    return frames * 10;
+  } catch {
+    return 0;
+  }
+}

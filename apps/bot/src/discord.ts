@@ -88,7 +88,7 @@ import { ttsEngine } from '@vaporzr/core/tts';
 import { pushBroadcast, pushSubscriptionCount } from './push.js';
 import { downloadToTempFile } from '@vaporzr/core/mediaDownload';
 import { separateStemsReplicate, replicateStemsEnabled } from '@vaporzr/core/stemSeparation';
-import { estimateTempo } from '@vaporzr/core/tempo';
+import { estimateTempo, beatAlignLagMs } from '@vaporzr/core/tempo';
 import { renderRadarGif, type RadarMetric } from '@vaporzr/core/images';
 import { parseVibe, vibeIsSteerable, type ParsedVibe } from '@vaporzr/core/vibe';
 
@@ -7112,38 +7112,55 @@ export class DiscordBot {
     const dur = Math.max(30, Math.min(180, durSec || 90));
     const v1 = path.join(dir, 'v1.mp3');
     const v2 = path.join(dir, 'v2.mp3');
-    // Trim the theatrical intro (leading near-silence) from both stems so the
-    // vocals and the backing actually start together, then loudness-match.
+    // Trim the theatrical intro (leading near-silence) from both stems and
+    // stretch the instrumental to the vocal's tempo, into plain intermediates.
+    // Doing this as its own pass lets us MEASURE the residual beat offset before
+    // the mix — matching tempo alone still leaves the sides half a beat apart.
     const trim = 'silenceremove=start_periods=1:start_silence=0.05:start_threshold=-45dB';
     const fade = `loudnorm=I=-14:TP=-1.5:LRA=11,alimiter=limit=0.95,afade=t=in:st=0:d=2,afade=t=out:st=${dur - 3}:d=3`;
-    const mk = (voc: string, inst: string, chain: string, out: string): string[] => [
-      '-hide_banner',
-      '-loglevel',
-      'error',
-      '-i',
-      voc,
-      '-i',
-      inst,
-      '-filter_complex',
-      `[0:a]${trim},aresample=48000[v];[1:a]${trim},${chain}[i];[v][i]amix=inputs=2:duration=longest:normalize=0,${fade}[out]`,
-      '-map',
-      '[out]',
-      '-t',
-      String(dur),
-      '-c:a',
-      'libmp3lame',
-      '-b:a',
-      '192k',
-      '-y',
-      out,
-    ];
+    const prepSide = async (voc: string, inst: string, chain: string, tag: string): Promise<{ voc: string; inst: string }> => {
+      const vo = path.join(dir, `prep-${tag}-voc.wav`);
+      const io = path.join(dir, `prep-${tag}-inst.wav`);
+      cleanup.push(vo, io);
+      await this.runFfmpeg(['-hide_banner', '-loglevel', 'error', '-i', voc, '-af', `${trim},aresample=48000`, '-c:a', 'pcm_s16le', '-y', vo]);
+      await this.runFfmpeg(['-hide_banner', '-loglevel', 'error', '-i', inst, '-af', `${trim},${chain}`, '-c:a', 'pcm_s16le', '-y', io]);
+      return { voc: vo, inst: io };
+    };
+    // `adelay` nudges the earlier side so the downbeats land together.
+    const mix = (voc: string, inst: string, delayVoc: number, delayInst: number, out: string): string[] => {
+      const vc = delayVoc > 0 ? `adelay=${Math.round(delayVoc)}:all=1,` : '';
+      const ic = delayInst > 0 ? `adelay=${Math.round(delayInst)}:all=1,` : '';
+      return [
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-i',
+        voc,
+        '-i',
+        inst,
+        '-filter_complex',
+        `[0:a]${vc}aresample=48000[v];[1:a]${ic}aresample=48000[i];[v][i]amix=inputs=2:duration=longest:normalize=0,${fade}[out]`,
+        '-map',
+        '[out]',
+        '-t',
+        String(dur),
+        '-c:a',
+        'libmp3lame',
+        '-b:a',
+        '192k',
+        '-y',
+        out,
+      ];
+    };
     try {
-      await this.runFfmpeg(
-        mk(sa.vocals, sb.other, this.stretchChain(tempoA, fa?.key, tempoB, fb?.key), v1),
-      );
-      await this.runFfmpeg(
-        mk(sb.vocals, sa.other, this.stretchChain(tempoB, fb?.key, tempoA, fa?.key), v2),
-      );
+      const p1 = await prepSide(sa.vocals, sb.other, this.stretchChain(tempoA, fa?.key, tempoB, fb?.key), '1');
+      const p2 = await prepSide(sb.vocals, sa.other, this.stretchChain(tempoB, fb?.key, tempoA, fa?.key), '2');
+      // Positive lag = the vocal is late, so delay the backing (and vice versa).
+      const lag1 = await beatAlignLagMs(p1.voc, p1.inst);
+      const lag2 = await beatAlignLagMs(p2.voc, p2.inst);
+      console.log(`[mashup] beat align: v1 ${Math.round(lag1)}ms · v2 ${Math.round(lag2)}ms`);
+      await this.runFfmpeg(mix(p1.voc, p1.inst, Math.max(0, -lag1), Math.max(0, lag1), v1));
+      await this.runFfmpeg(mix(p2.voc, p2.inst, Math.max(0, -lag2), Math.max(0, lag2), v2));
     } catch (err) {
       return { ok: false, text: `Render failed: ${err instanceof Error ? err.message : err}`, files: [], similar: [] };
     }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { onsetEnvelope, bestTempo } from '@vaporzr/core/tempo';
+import { onsetEnvelope, bestTempo, alignLagFrames } from '@vaporzr/core/tempo';
 
 const RATE = 8000;
 const HOP = 80; // 10 ms
@@ -32,5 +32,27 @@ describe('tempo estimation', () => {
   it('returns null for a flat/silent signal', () => {
     const silence = Buffer.alloc(RATE * 2 * 10);
     expect(bestTempo(onsetEnvelope(silence, HOP))).toBeNull();
+  });
+});
+
+describe('beat-phase alignment', () => {
+  const pulses = (n: number, period: number, phase = 0): Float64Array => {
+    const a = new Float64Array(n);
+    for (let i = phase; i < n; i += period) a[i] = 1;
+    return a;
+  };
+
+  it('finds no shift for identical envelopes', () => {
+    expect(alignLagFrames(pulses(400, 50), pulses(400, 50), 40)).toBe(0);
+  });
+
+  it('reports the shift when one envelope arrives later', () => {
+    // b's beats are 7 frames after a's → negative lag (delay a to line up).
+    expect(alignLagFrames(pulses(400, 50), pulses(400, 50, 7), 40)).toBe(-7);
+  });
+
+  it('resolves periodic ties to the smallest correction', () => {
+    // A 20-frame period ties at 0, ±20, ±40 within the window; 0 must win.
+    expect(alignLagFrames(pulses(400, 20), pulses(400, 20), 40)).toBe(0);
   });
 });
