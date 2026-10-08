@@ -704,6 +704,11 @@ export function looksUnplayable(name: string, durationMs: number, opts: YoutubeS
     if (durationMs > wantMs + 5 * 60_000 && durationMs > wantMs * 2.5) return true;
     // A sub-minute upload is a snippet/preview, not the song.
     if (wantMs > 180_000 && durationMs < 60_000) return true;
+    // A MUCH shorter upload (less than half the track) is a preview, a radio
+    // edit, or simply the wrong take — playing it makes the song stop well
+    // before its real end. Symmetric to the egregiously-long guard above; the
+    // margin keeps a legitimately shorter YouTube cut from being rejected.
+    if (wantMs > 120_000 && durationMs < wantMs * 0.5 - 30_000) return true;
   }
   return false;
 }

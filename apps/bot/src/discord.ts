@@ -427,6 +427,12 @@ const COMMANDS = [
       o.setName('query').setDescription("Seed with this instead of what's playing").setRequired(false),
     ),
   new SlashCommandBuilder()
+    .setName('config')
+    .setDescription('Set several playback settings at once')
+    .addStringOption((o) =>
+      o.setName('settings').setDescription('e.g. "bass +3; crossfade 2; norm on; ew smart"').setRequired(false),
+    ),
+  new SlashCommandBuilder()
     .setName('device')
     .setDescription('Manage the Spotify Connect device (librespot)')
     .addSubcommand((sc) => sc.setName('list').setDescription('Show the current Spotify device status'))
@@ -706,6 +712,8 @@ export class DiscordBot {
     string,
     { guildId: string; userId: string; tracks: ResolvedTrack[]; at: number }
   >();
+  /** guildId -> recently applied V@config clauses (most recent first). */
+  private recentConfig = new Map<string, string[]>();
   /** guildId -> mood visuals on; moodColor tints now-playing colors from features. */
   private moodOn = new Set<string>();
   private moodColor = new Map<string, number>();
@@ -2855,6 +2863,20 @@ export class DiscordBot {
         break;
       }
 
+      case 'config': {
+        if (!this.requireLevel('config', interaction)) return this.deny(interaction);
+        const gid = interaction.guildId;
+        if (!gid) {
+          await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral });
+          break;
+        }
+        await interaction.reply({
+          content: await this.runConfig(s, gid, interaction.options.getString('settings') ?? ''),
+          flags: MessageFlags.Ephemeral,
+        });
+        break;
+      }
+
       case 'diag':
         await interaction.reply({ embeds: [this.diagEmbed(interaction.guildId)] });
         break;
@@ -3105,6 +3127,13 @@ export class DiscordBot {
               .setStyle(ButtonStyle.Secondary),
           );
           await message.reply({ embeds: [embed], components: [row] });
+          break;
+        }
+
+        case 'config': {
+          if (!canUse('config')) return void (await deny());
+          if (!message.guildId) return void (await message.reply('Must be used in a server.'));
+          await message.reply(await this.runConfig(s, message.guildId, args));
           break;
         }
 
@@ -7903,8 +7932,132 @@ export class DiscordBot {
       .catch(() => {});
   }
 
-  /** /follow — pin the live now-playing strip in a channel (same setting as /npchannel). */
-  private async followNowPlaying(gid: string, channelId: string, off: boolean): Promise<string> {
+  /** Split a `V@config` line into `key value` clauses (`;`/newline separated). */
+  private parseConfigClauses(input: string): Array<{ key: string; value: string }> {
+    const out: Array<{ key: string; value: string }> = [];
+    for (const part of String(input ?? '').split(/[;\n]+/)) {
+      const t = part.trim();
+      if (!t) continue;
+      const m = t.match(/^([a-zA-Z]+)\s*[:=]?\s*(.*)$/);
+      if (!m) continue;
+      out.push({ key: m[1].toLowerCase(), value: (m[2] ?? '').trim().toLowerCase() });
+    }
+    return out;
+  }
+
+  /** Apply one `key value` config clause. Returns a short human label. */
+  private applyConfigClause(s: Session, gid: string, key: string, value: string): string {
+    const off = /^(off|false|no|0|none|disable)$/.test(value);
+    const on = /^(on|true|yes|1|enable)$/.test(value);
+    switch (key) {
+      case 'bass':
+      case 'bassboost': {
+        if (off || !value) {
+          s.playback.setBassBoost(0);
+          return 'bass off';
+        }
+        const db = Math.min(12, Math.max(2, Math.round(Number.parseFloat(value.replace(/[^0-9.]/g, '')) || 0)));
+        s.playback.setBassBoost(db);
+        return `bass +${db}dB`;
+      }
+      case 'crossfade':
+      case 'xfade': {
+        let ms: number;
+        if (on) ms = getCrossfadeMs(gid) || config.crossfadeMs || 6000;
+        else if (off || !value) ms = 0;
+        else {
+          const sec = Number.parseFloat(value.replace(/s$/, ''));
+          if (!Number.isFinite(sec) || sec < 0 || sec > 15) return 'crossfade: use 0–15s';
+          ms = Math.round(sec * 1000);
+        }
+        const applied = setCrossfadeMs(gid, ms);
+        s.playback.setCrossfade(applied);
+        return applied > 0 ? `crossfade ${(applied / 1000).toFixed(1)}s` : 'crossfade off';
+      }
+      case 'norm':
+      case 'normalize': {
+        s.playback.setLoudnorm(!off);
+        return `norm ${!off ? 'on' : 'off'}`;
+      }
+      case 'eq': {
+        const preset = value || 'flat';
+        if (!s.playback.setEq(preset)) return `eq: unknown "${preset}"`;
+        return `eq ${preset}`;
+      }
+      case 'speed': {
+        const f =
+          value === 'nightcore' ? 1.25 : value === 'slowed' ? 0.85 : !value || value === 'normal' ? 1 : Number.parseFloat(value);
+        if (!Number.isFinite(f) || f <= 0) return 'speed: bad value';
+        s.playback.setSpeed(f);
+        return `speed ${f.toFixed(2)}×`;
+      }
+      case 'ew':
+      case 'autoplay':
+      case 'endwav': {
+        const mode = off ? 'off' : value === 'basic' ? 'basic' : 'smart';
+        EW.setMode(s.endlessWave, mode);
+        return `autoplay ${mode}`;
+      }
+      case 'mood': {
+        if (off) this.moodOn.delete(gid);
+        else this.moodOn.add(gid);
+        return `mood ${off ? 'off' : 'on'}`;
+      }
+      case 'tts': {
+        this.perms.setTts(gid, !off);
+        return `tts ${!off ? 'on' : 'off'}`;
+      }
+      case 'ambient': {
+        this.perms.setAmbient(gid, !off);
+        return `ambient ${!off ? 'on' : 'off'}`;
+      }
+      case 'duck':
+      case 'duckmode': {
+        const mode = value === 'auto' || value === 'hosts' ? value : 'off';
+        this.perms.setDuckMode(gid, mode);
+        return `duck ${mode}`;
+      }
+      case 'voteskip':
+      case 'vs': {
+        this.perms.setVoteSkip(gid, !off);
+        return `voteskip ${!off ? 'on' : 'off'}`;
+      }
+      case 'repeat': {
+        s.playback.setRepeat(!off);
+        return `repeat ${!off ? 'on' : 'off'}`;
+      }
+      case 'shuffle': {
+        s.playback.shuffle(!off);
+        return `shuffle ${!off ? 'on' : 'off'}`;
+      }
+      default:
+        return `? ${key}`;
+    }
+  }
+
+  /** The `V@config` reply: applied clauses + the recently used ones. */
+  private async runConfig(s: Session, gid: string, input: string): Promise<string> {
+    const clauses = this.parseConfigClauses(input);
+    if (clauses.length === 0) {
+      const recent = this.recentConfig.get(gid) ?? [];
+      return [
+        '🎛️ **Config** — set several things at once:',
+        '`V@config bass +3; crossfade 2; norm on; ew smart`',
+        '',
+        'Keys: `bass <dB>` · `crossfade <0-15|on|off>` · `norm <on|off>` · `eq <preset>` · `speed <nightcore|slowed|normal>`',
+        '`ew <off|basic|smart>` · `mood <on|off>` · `tts <on|off>` · `ambient <on|off>` · `duck <off|auto|hosts>` · `voteskip <on|off>` · `repeat <on|off>` · `shuffle <on|off>`',
+        recent.length ? `\n**Recently used here:** \`${recent[0]}\`` : '',
+      ].join('\n');
+    }
+    const applied: string[] = [];
+    for (const { key, value } of clauses) applied.push(this.applyConfigClause(s, gid, key, value));
+    const line = input.trim();
+    const recent = this.recentConfig.get(gid) ?? [];
+    this.recentConfig.set(gid, [line, ...recent.filter((x) => x !== line)].slice(0, 5));
+    return `🎛️ Applied ${applied.length} setting${applied.length === 1 ? '' : 's'}: ${applied.join(' · ')}`;
+  }
+
+  /** /follow — pin the live now-playing strip in a channel (same setting as /npchannel). */  private async followNowPlaying(gid: string, channelId: string, off: boolean): Promise<string> {
     if (off) {
       this.perms.setNpAuto(gid, false);
       this.perms.setNpChannel(gid, null);
@@ -8647,6 +8800,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/eq <preset>` · `V@eq` — EQ presets: bass / vocal / night / warm / lofi (flat = off)',
       '`/norm <on|off>` · `V@norm` — loudness match: level every source to Spotify-standard volume',
       '`/bassboost <5|8|10>` · `V@bass` — bass boost',
+      '`/config <settings>` · `V@config` — set several at once, e.g. `bass +3; crossfade 2; norm on; ew smart`',
       '`/sfx <id>` · `V@sfx` — play a sound effect',
       '`/dj` · `V@dj` — toggle the soundboard (mod)',
       '`/djrole @role` · `V@djrole` — set the DJ role (mod) — DJs skip without a vote',

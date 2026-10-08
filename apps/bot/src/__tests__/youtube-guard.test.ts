@@ -209,6 +209,26 @@ describe('isClearlyWrongMatch (speed fallback guard)', () => {
     expect(isClearlyWrongMatch(v, 'liquid game', { name: 'liquid game', artists: ['Sweeps'], durationMs: 240_000 })).toBe(true);
   });
 
+  it('rejects a much shorter upload (preview/radio edit for an extended mix)', () => {
+    // Live symptom: a 489s extended mix resolved to a 210s video, so the song
+    // stopped at 3:30 of 8:09 — "cutting out towards the end".
+    const v = video({
+      name: 'The Age Of Love (Charlotte de Witte & Enrico Sangiuliano Remix)',
+      durationMs: 210_000,
+      channel: 'Charlotte de Witte',
+    });
+    expect(
+      isClearlyWrongMatch(v, 'The Age Of Love', { name: 'The Age Of Love', artists: ['Age Of Love'], durationMs: 489_000 }),
+    ).toBe(true);
+  });
+
+  it('still accepts a moderately shorter upload', () => {
+    const v = video({ name: 'End Of Summer - Tame Impala', durationMs: 400_000, channel: 'Tame Impala - Topic' });
+    expect(
+      isClearlyWrongMatch(v, 'End Of Summer', { name: 'End Of Summer', artists: ['Tame Impala'], durationMs: 489_000 }),
+    ).toBe(false);
+  });
+
   it('still accepts a legitimately longer upload', () => {
     const v = video({ name: 'End Of Summer - Tame Impala (Official Audio)', durationMs: 270_000, channel: 'Tame Impala - Topic' });
     expect(isClearlyWrongMatch(v, 'End Of Summer', { name: 'End Of Summer', artists: ['Tame Impala'], durationMs: 240_000 })).toBe(false);
