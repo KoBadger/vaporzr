@@ -88,6 +88,7 @@ import { ttsEngine } from '@vaporzr/core/tts';
 import { pushBroadcast, pushSubscriptionCount } from './push.js';
 import { downloadToTempFile } from '@vaporzr/core/mediaDownload';
 import { separateStemsReplicate, replicateStemsEnabled } from '@vaporzr/core/stemSeparation';
+import { estimateTempo } from '@vaporzr/core/tempo';
 import { renderRadarGif, type RadarMetric } from '@vaporzr/core/images';
 import { parseVibe, vibeIsSteerable, type ParsedVibe } from '@vaporzr/core/vibe';
 
@@ -7063,7 +7064,13 @@ export class DiscordBot {
       if (semis > 6) semis -= 12;
     }
     const pitch = Math.pow(2, semis / 12);
-    const tempo = targetTempo > 0 && srcTempo > 0 ? Math.max(0.7, Math.min(1.4, targetTempo / srcTempo)) : 1;
+    let ratio = targetTempo > 0 && srcTempo > 0 ? targetTempo / srcTempo : 1;
+    // Fold octave errors (a detector reporting 60 for a 120 BPM track) into the
+    // stretchable band before clamping, so the stretch corrects the tempo
+    // instead of hitting the limit.
+    while (ratio > 1.4) ratio /= 2;
+    while (ratio < 0.7) ratio *= 2;
+    const tempo = Math.max(0.7, Math.min(1.4, ratio));
     return `rubberband=tempo=${tempo.toFixed(4)}:pitch=${pitch.toFixed(4)},aresample=48000`;
   }
 
@@ -7096,6 +7103,12 @@ export class DiscordBot {
       };
     }
     const { fa, fb } = await this.mashupTuning(ra, rb);
+    // Tempo is often missing (non-Spotify tracks, or Spotify tracks the
+    // ReccoBeats backfill doesn't cover). Estimate it from the instrumentals so
+    // the blend is still time-aligned instead of layering two different tempos
+    // and drifting apart.
+    const tempoA = fa?.tempo || (await estimateTempo(sa.other)) || 0;
+    const tempoB = fb?.tempo || (await estimateTempo(sb.other)) || 0;
     const dur = Math.max(30, Math.min(180, durSec || 90));
     const v1 = path.join(dir, 'v1.mp3');
     const v2 = path.join(dir, 'v2.mp3');
@@ -7126,10 +7139,10 @@ export class DiscordBot {
     ];
     try {
       await this.runFfmpeg(
-        mk(sa.vocals, sb.other, this.stretchChain(fa?.tempo ?? 0, fa?.key, fb?.tempo ?? 0, fb?.key), v1),
+        mk(sa.vocals, sb.other, this.stretchChain(tempoA, fa?.key, tempoB, fb?.key), v1),
       );
       await this.runFfmpeg(
-        mk(sb.vocals, sa.other, this.stretchChain(fb?.tempo ?? 0, fb?.key, fa?.tempo ?? 0, fa?.key), v2),
+        mk(sb.vocals, sa.other, this.stretchChain(tempoB, fb?.key, tempoA, fa?.key), v2),
       );
     } catch (err) {
       return { ok: false, text: `Render failed: ${err instanceof Error ? err.message : err}`, files: [], similar: [] };
@@ -7143,7 +7156,10 @@ export class DiscordBot {
       ? await getRecommendations({ seedTracks: seeds, limit: 5 }).catch(() => [])
       : [];
     const keyNote = fa && fb ? ` · keys ${DiscordBot.KEY_NAMES[fa.key] ?? '?'}/${DiscordBot.KEY_NAMES[fb.key] ?? '?'}` : '';
-    const tempoNote = fa?.tempo && fb?.tempo ? ` · ${Math.round(fa.tempo)}/${Math.round(fb.tempo)} BPM` : '';
+    const tempoNote =
+      tempoA && tempoB
+        ? ` · ${Math.round(tempoA)}/${Math.round(tempoB)} BPM${(!fa?.tempo && tempoA > 0) || (!fb?.tempo && tempoB > 0) ? ' (detected)' : ''}`
+        : '';
     return {
       ok: true,
       text:
