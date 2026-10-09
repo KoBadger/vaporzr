@@ -268,6 +268,7 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
 <div id="dock">
   <button class="dock-btn" id="btn-prev" title="Previous preset">⏮</button>
   <button class="dock-btn" id="btn-next" title="Next preset">⏭</button>
+  <button class="dock-btn" id="btn-preset-shuffle" title="Shuffle preset">🎲</button>
   <button class="dock-btn" id="btn-presets" title="Browse presets">🔎</button>
   <div id="preset-lib">
     <span id="preset-count"></span>
@@ -504,6 +505,9 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
         case 'endlesswave':
           markVisual();
           handleEndlessWave(msg);
+          break;
+        case 'preset:nav':
+          navPreset(msg.action);
           break;
         case 'visuals:frame':
           markVisual();
@@ -749,6 +753,19 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
     presetIdx=((i%presetNames.length)+presetNames.length)%presetNames.length;
     try{bcViz.loadPreset(allPresets()[presetNames[presetIdx]],blend||2)}catch(e){}
     showPresetName();
+    reportPreset();
+  }
+  /* Tell the panels which visual is on screen (the dock shows a now-showing label). */
+  function reportPreset(){
+    if(!presetNames[presetIdx]||!ws||ws.readyState!==WebSocket.OPEN)return;
+    try{ws.send(JSON.stringify({type:'visuals:preset',name:presetNames[presetIdx],index:presetIdx,total:presetNames.length}))}catch(e){}
+  }
+  /* Panel-driven navigation: each visualizer advances its own preset pool. */
+  function navPreset(action){
+    if(!presetNames.length)return;
+    if(action==='prev')loadPreset(pickIndex(presetIdx-1,-1),1.2);
+    else if(action==='shuffle')loadPreset(Math.floor(Math.random()*presetNames.length),1.2);
+    else loadPreset(pickIndex(presetIdx+1,1),1.2);
   }
   function showPresetName(){
     if(presetIdx<0||!presetNames[presetIdx])return;
@@ -791,6 +808,7 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
   };
   $('btn-next').onclick=function(){loadPreset(pickIndex(presetIdx+1,1),1.2)};
   $('btn-prev').onclick=function(){loadPreset(pickIndex(presetIdx-1,-1),1.2)};
+  $('btn-preset-shuffle').onclick=function(){loadPreset(Math.floor(Math.random()*presetNames.length),1.2)};
   $('btn-lock').onclick=function(){
     presetLocked=!presetLocked;
     this.textContent=presetLocked?'🔒':'🔓';

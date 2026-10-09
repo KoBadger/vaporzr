@@ -326,6 +326,16 @@ export class Bridge {
         if (!this.isAuthed(socket)) return;
         this.onBurstData?.(msg.data);
         break;
+      case 'visuals:preset':
+        // A visualizer moved to a new preset — mirror it to every panel.
+        this.broadcastPanels({
+          type: 'visuals:preset',
+          name: msg.name,
+          index: msg.index,
+          total: msg.total,
+          guildId: msg.guildId,
+        });
+        break;
       case 'cmd':
         if (!this.isAuthed(socket)) return;
         if (!this.allowCommand(socket)) return;
@@ -510,6 +520,15 @@ export class Bridge {
           console.log(`[bridge] sensitivity set to ${v}x via panel`);
         }
         break;
+      case 'preset': {
+        // Presets live in each visualizer (the desktop player ships its own pack,
+        // the web viz streams the curated library), so relay the *intent* and let
+        // every visualizer advance its own pool.
+        const action = msg.presetAction ?? 'next';
+        this.broadcast({ type: 'preset:nav', action, guildId: this.primaryGuildId ?? undefined });
+        console.log(`[bridge] preset ${action} via panel`);
+        break;
+      }
       case 'theme':
         if (msg.themeId) {
           const t = themeById(msg.themeId);

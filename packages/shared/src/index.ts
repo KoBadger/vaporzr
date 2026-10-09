@@ -107,6 +107,7 @@ export type CommandName =
   | 'openVisuals'
   | 'switchGuild'
   | 'sensitivity'
+  | 'preset'
   | 'theme'
   | 'move'
   | 'playSearch'
@@ -153,6 +154,8 @@ export interface CommandMessage {
   guildId?: string;
   /** Beat-reactivity multiplier (0.5–1.5) for command: 'sensitivity'. */
   sensitivity?: number;
+  /** Visual preset navigation for command: 'preset'. */
+  presetAction?: 'next' | 'prev' | 'shuffle';
   /** Theme id for command: 'theme'. */
   themeId?: string;
   /** Destination position for command: 'move' (with index = source). */
@@ -175,6 +178,8 @@ export type InboundMessage =
   | { type: 'audio:chunk'; data: string }
   | { type: 'audio:pcm'; guildId: string; data: string }
   | { type: 'visuals:sensitivity'; multiplier: number }
+  /** A visualizer reporting which preset it just moved to. */
+  | { type: 'visuals:preset'; name: string; index?: number; total?: number; guildId?: string }
   | { type: 'state:request' }
   | { type: 'panel:subscribe'; channels: Array<'state' | 'queue' | 'visuals' | 'pcm'>; guildId?: string }
   /** Base64-encoded WebM clip captured by a visualizer window (/burst). */
@@ -191,6 +196,10 @@ export type OutboundMessage =
   | { type: 'visuals:bars'; bars: number[]; guildId?: string }
   | { type: 'visuals:enabled'; enabled: boolean }
   | { type: 'visuals:sensitivity'; multiplier: number }
+  /** Panel-driven preset navigation, relayed to every visualizer. */
+  | { type: 'preset:nav'; action: 'next' | 'prev' | 'shuffle'; guildId?: string }
+  /** Current preset a visualizer is showing (for the panel's now-showing label). */
+  | { type: 'visuals:preset'; name: string; index?: number; total?: number; guildId?: string }
   | { type: 'audio:forward'; enabled: boolean }
   | { type: 'audio:pcm'; guildId: string; data: string }
   | { type: 'guilds:list'; guilds: Array<{ id: string; name: string }> }

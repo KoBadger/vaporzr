@@ -440,6 +440,13 @@ body.guest #guilds{display:none}
         <input type="range" id="sens" min="50" max="150" value="100" data-tip="How hard visuals react to beats (global)" />
         <span id="sens-val">1.00×</span>
       </div>
+      <div class="mlabel">VISUAL</div>
+      <div class="mrow" id="viz-nav">
+        <button id="btn-viz-prev" data-tip="Previous visual">↩ Prev</button>
+        <button id="btn-viz-next" data-tip="Next visual">✨ Next</button>
+        <button id="btn-viz-shuffle" data-tip="Shuffle visual">🎲 Shuffle</button>
+      </div>
+      <div class="sub" id="viz-now" style="margin:6px 0 2px">Showing —</div>
       <div class="viz-links">
         <a class="viz-link" id="link-viz" href="/viz" target="_blank">🌈 Visualizer</a>
         <a class="viz-link" id="link-viz-fs" href="/viz" target="_blank">🖥️ Fullscreen mode</a>
@@ -507,7 +514,7 @@ body.guest #guilds{display:none}
    'q-selbar','q-selcount','q-sel-remove','q-sel-clear',
    'stats-body','btn-stats-refresh','stats-chart',
    'vibe-name','btn-vibe-save','btn-vibe-load','vibe-list','btn-vibes-refresh',
-   'swatches','sens','sens-val','link-viz','guilds','toasts',
+   'swatches','sens','sens-val','link-viz','guilds','toasts','btn-viz-prev','btn-viz-next','btn-viz-shuffle','viz-now',
    'conn-dot','conn-text'].forEach(function (id) { el[id] = $(id); });
 
   var ws = null, state = null, queue = [], djEnabled = false, connected = false;
@@ -880,6 +887,9 @@ body.guest #guilds{display:none}
         case 'endlesswave':waveMode=msg.mode||(msg.active?'smart':'off');renderWave();break;
         case 'theme':for(var j=0;j<THEMES.length;j++)if(THEMES[j].id===(msg.theme&&msg.theme.id))applyTheme(THEMES[j]);break;
         case 'visuals:sensitivity':setSens(msg.multiplier,false);break;
+        case 'visuals:preset':
+          if(el['viz-now'])el['viz-now'].textContent='Showing '+(msg.name||'—')+(msg.total?'  ·  '+((msg.index||0)+1)+'/'+msg.total:'');
+          break;
         case 'visuals:bars':
           lastBarAt=Date.now();
           for(var k=0;k<BARS;k++)target[k]=Math.max(0,Math.min(1,(msg.bars[k]||0)*sensitivity));
@@ -921,6 +931,11 @@ body.guest #guilds{display:none}
   el['btn-clear'].onclick=function(){cmd('clear');toast('info','Queue cleared')};
   el['dj-toggle'].onclick=function(){cmd('dj',{djEnabled:!djEnabled})};
   el['wave-select'].onchange=function(){cmd('endlesswave',{mode:el['wave-select'].value})};
+  // Visual preset navigation — the bot relays this to every visualizer
+  // (the desktop player and each /viz tab advance their own preset pool).
+  el['btn-viz-prev'].onclick=function(){cmd('preset',{presetAction:'prev'})};
+  el['btn-viz-next'].onclick=function(){cmd('preset',{presetAction:'next'})};
+  el['btn-viz-shuffle'].onclick=function(){cmd('preset',{presetAction:'shuffle'})};
   (function(){
     var menu=el['tools-menu'],btn=el['tools-btn'];if(!menu||!btn)return;
     function close(){menu.classList.remove('open')}

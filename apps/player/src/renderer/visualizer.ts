@@ -12,6 +12,19 @@ const SCREENSAVER = new URLSearchParams(window.location.search).get('screensaver
 const BROADCAST = new URLSearchParams(window.location.search).get('broadcast') === '1';
 /** Explicit socket URL (wss://host/ws) for a bot on another machine. */
 const WS_URL = new URLSearchParams(window.location.search).get('ws') ?? undefined;
+/** Where to fetch the Endless Wave wallpaper + poster. Follows the socket host so
+ *  a remote bot still serves its own assets; falls back to the local bot port. */
+const ASSET_BASE = (() => {
+  if (WS_URL) {
+    try {
+      const u = new URL(WS_URL);
+      return `${u.protocol === 'wss:' ? 'https:' : 'http:'}//${u.host}`;
+    } catch {
+      /* malformed URL — fall through to the local bot */
+    }
+  }
+  return `http://127.0.0.1:${port}`;
+})();
 
 const canvas = document.getElementById('viz') as HTMLCanvasElement;
 const ewCanvas = document.getElementById('ew') as HTMLCanvasElement;
@@ -43,6 +56,9 @@ const btnNext = document.getElementById('btn-next') as HTMLButtonElement;
 const btnShuffle = document.getElementById('btn-shuffle') as HTMLButtonElement;
 const btnWave = document.getElementById('btn-wave') as HTMLButtonElement;
 const btnPreset = document.getElementById('btn-preset') as HTMLButtonElement;
+const btnPresetBack = document.getElementById('btn-preset-back') as HTMLButtonElement;
+const btnPresetShuffle = document.getElementById('btn-preset-shuffle') as HTMLButtonElement;
+const presetToast = document.getElementById('preset-toast') as HTMLDivElement;
 const btnSfx = {
   airhorn: document.getElementById('btn-sfx-airhorn') as HTMLButtonElement,
   drop: document.getElementById('btn-sfx-drop') as HTMLButtonElement,
@@ -134,6 +150,10 @@ const client = new WsClient({
       queueBridgePcm(msg.data);
     } else if (msg.type === 'visuals:sensitivity') {
       applySensitivity(msg.multiplier);
+    } else if (msg.type === 'preset:nav') {
+      if (msg.action === 'prev') previousPreset(1.2);
+      else if (msg.action === 'shuffle') shufflePreset(1.5);
+      else nextPreset(1.5);
     }
   },
 });
@@ -196,6 +216,9 @@ const prefersReducedMotion =
 
 /** Per-frame bass/mid/treble + kick/BPM estimate from the shared analyser. */
 function sampleLevels(): SynthLevels {
+  // Kick pulses decay every frame so the glow breathes with the beat instead of
+  // latching at max (matches drawSynth in the web visualizer).
+  synthKickBoost = Math.max(0, synthKickBoost * 0.9);
   if (analyser) {
     if (!freqData || freqData.length !== analyser.frequencyBinCount) {
       freqData = new Uint8Array(analyser.frequencyBinCount);
@@ -335,7 +358,15 @@ function wireControls(): void {
     const next = waveMode === 'off' ? 'basic' : waveMode === 'basic' ? 'smart' : 'off';
     sendCmd('endlesswave', { mode: next });
   });
-  btnPreset.addEventListener('click', () => cyclePreset());
+  btnPreset.addEventListener('click', (e) => {
+    if (e.shiftKey) {
+      clearBlacklist();
+      return;
+    }
+    nextPreset(1.5);
+  });
+  btnPresetBack.addEventListener('click', () => previousPreset(1.2));
+  btnPresetShuffle.addEventListener('click', () => shufflePreset(1.5));
   btnSynth.addEventListener('click', () => setSynthActive(!synthActive));
   btnDjToggle.addEventListener('click', () => sendCmd('dj', { djEnabled: !djEnabled }));
   for (const [id, btn] of Object.entries(btnSfx)) {
@@ -369,7 +400,15 @@ function wireControls(): void {
         break;
       case 'p':
       case 'P':
-        cyclePreset();
+        nextPreset(1.5);
+        break;
+      case 'r':
+      case 'R':
+        shufflePreset(1.5);
+        break;
+      case 'b':
+      case 'B':
+        previousPreset(1.2);
         break;
       case 'e':
       case 'E':
@@ -871,10 +910,204 @@ function playNextBridgePcmChunk(): void {
   src.start();
 }
 
-function cyclePreset(): void {
+// ---- Preset manager: curation, dead-visual watchdog, history ----
+
+/** Presets that rendered black or never reacted — skipped on every future cycle. */
+let presetBlacklist: Set<string> = new Set();
+try {
+  const raw = localStorage.getItem('vaporzr.presetBlacklist');
+  if (raw) presetBlacklist = new Set(JSON.parse(raw) as string[]);
+} catch {
+  /* storage unavailable */
+}
+
+function persistBlacklist(): void {
+  try {
+    localStorage.setItem('vaporzr.presetBlacklist', JSON.stringify([...presetBlacklist]));
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+function blacklistPreset(name: string): void {
+  if (!name || presetBlacklist.has(name)) return;
+  presetBlacklist.add(name);
+  persistBlacklist();
+  log(`Skipped dead visual: ${name}`);
+}
+
+function clearBlacklist(): void {
+  const n = presetBlacklist.size;
+  presetBlacklist.clear();
+  persistBlacklist();
+  log(`Cleared ${n} skipped visual${n === 1 ? '' : 's'}`);
+}
+
+/** Recently shown presets, so shuffle doesn't immediately repeat itself. */
+let presetRecent: string[] = [];
+const PRESET_RECENT_MAX = 14;
+/** Visit stack (last entry = current) powering the back button. */
+let presetHistory: number[] = [];
+
+let presetToastTimer: number | null = null;
+function showPresetName(name: string): void {
+  if (!presetToast) return;
+  presetToast.textContent = name;
+  presetToast.classList.add('visible');
+  if (presetToastTimer) window.clearTimeout(presetToastTimer);
+  presetToastTimer = window.setTimeout(() => presetToast.classList.remove('visible'), 3200);
+}
+
+function presetAvailable(name: string): boolean {
+  return !presetBlacklist.has(name);
+}
+
+function loadPresetAt(index: number, blend: number, pushHistory = true): void {
   if (!visualizer || presetNames.length === 0) return;
-  currentPresetIndex = (currentPresetIndex + 1 + Math.floor(Math.random() * Math.max(1, presetNames.length - 1))) % presetNames.length;
-  visualizer.loadPreset(presets[presetNames[currentPresetIndex]], 1.5);
+  if (index < 0 || index >= presetNames.length) return;
+  currentPresetIndex = index;
+  const name = presetNames[index];
+  try {
+    visualizer.loadPreset(presets[name], blend);
+  } catch (e) {
+    log(`Visual failed to load: ${e instanceof Error ? e.message : String(e)}`);
+    blacklistPreset(name);
+    if (presetBlacklist.size < presetNames.length) {
+      window.setTimeout(() => nextPreset(0.6), 60);
+    }
+    return;
+  }
+  if (pushHistory) {
+    presetHistory.push(index);
+    if (presetHistory.length > 200) presetHistory.shift();
+  }
+  presetRecent.push(name);
+  if (presetRecent.length > PRESET_RECENT_MAX) presetRecent.shift();
+  showPresetName(name);
+  armPresetWatch(name);
+  // Let the panel show which visual is on screen.
+  client.send({ type: 'visuals:preset', name, index, total: presetNames.length });
+}
+
+/** Next visual, skipping anything the watchdog has condemned. */
+function nextPreset(blend = 1.5): void {
+  const n = presetNames.length;
+  if (!n) return;
+  for (let k = 1; k <= n; k++) {
+    const i = (currentPresetIndex + k) % n;
+    if (presetAvailable(presetNames[i])) {
+      loadPresetAt(i, blend);
+      return;
+    }
+  }
+  // Everything condemned — fall back so the show never stalls.
+  loadPresetAt((currentPresetIndex + 1) % n, blend);
+}
+
+/** Step back through the visit history. */
+function previousPreset(blend = 1.2): void {
+  if (presetHistory.length < 2) {
+    log('No earlier visual');
+    return;
+  }
+  presetHistory.pop(); // drop the one on screen
+  const prev = presetHistory.pop();
+  if (prev == null) return;
+  loadPresetAt(prev, blend);
+}
+
+/** Random visual, avoiding recent picks and condemned presets. */
+function shufflePreset(blend = 1.5): void {
+  if (!presetNames.length) return;
+  let pool = presetNames.filter((n) => presetAvailable(n) && !presetRecent.includes(n));
+  if (!pool.length) pool = presetNames.filter(presetAvailable);
+  if (!pool.length) pool = presetNames.slice();
+  const name = pool[Math.floor(Math.random() * pool.length)];
+  loadPresetAt(presetNames.indexOf(name), blend);
+}
+
+// ---- Dead-visual watchdog ----
+// Butterchurn ships ~100 stock presets and a fair few of them render black or
+// never react to the audio. Instead of guessing which, we watch the rendered
+// canvas: a visual that stays black — or stays frozen while music is clearly
+// playing — is condemned and skipped from then on (persisted in localStorage).
+
+const sampleCanvas = document.createElement('canvas');
+sampleCanvas.width = 32;
+sampleCanvas.height = 18;
+const sampleCtx = sampleCanvas.getContext('2d', { willReadFrequently: true });
+
+interface PresetWatch {
+  name: string;
+  startedAt: number;
+  lastSampleAt: number;
+  samples: number[];
+  staticStrikes: number;
+}
+let presetWatch: PresetWatch | null = null;
+
+function armPresetWatch(name: string): void {
+  presetWatch = { name, startedAt: performance.now(), lastSampleAt: 0, samples: [], staticStrikes: 0 };
+}
+
+/** Mean luminance (0..1) of the current visual, or -1 if unreadable. */
+function sampleLuminance(): number {
+  if (!sampleCtx || !visualizer) return -1;
+  try {
+    sampleCtx.drawImage(canvas, 0, 0, sampleCanvas.width, sampleCanvas.height);
+    const d = sampleCtx.getImageData(0, 0, sampleCanvas.width, sampleCanvas.height).data;
+    let sum = 0;
+    for (let i = 0; i < d.length; i += 4) sum += d[i] + d[i + 1] + d[i + 2];
+    return sum / (d.length / 4) / 765;
+  } catch {
+    return -1;
+  }
+}
+
+const WATCH_GRACE_MS = 3500;
+const WATCH_SAMPLE_MS = 220;
+const WATCH_BLACK = 0.014;
+const WATCH_STATIC_DELTA = 0.0035;
+const WATCH_STATIC_STRIKES = 2;
+
+/** Called right after visualizer.render() while a butterchurn preset is on screen. */
+function watchTick(levels: SynthLevels): void {
+  const w = presetWatch;
+  if (!w) return;
+  const now = performance.now();
+  if (now - w.lastSampleAt < WATCH_SAMPLE_MS) return;
+  w.lastSampleAt = now;
+  const lum = sampleLuminance();
+  if (lum < 0) return;
+  w.samples.push(lum);
+  if (w.samples.length > 18) w.samples.shift();
+  if (now - w.startedAt < WATCH_GRACE_MS) return;
+  if (w.samples.length < 8) return;
+
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const s of w.samples) {
+    if (s < lo) lo = s;
+    if (s > hi) hi = s;
+  }
+
+  if (hi < WATCH_BLACK) {
+    blacklistPreset(w.name);
+    presetWatch = null;
+    nextPreset(0.6);
+    return;
+  }
+
+  // Visible but frozen while the track is clearly playing => not reacting.
+  if (levels.energy > 0.07 && hi - lo < WATCH_STATIC_DELTA) {
+    w.staticStrikes += 1;
+    w.samples.length = 0;
+    if (w.staticStrikes >= WATCH_STATIC_STRIKES) {
+      blacklistPreset(w.name);
+      presetWatch = null;
+      nextPreset(0.6);
+    }
+  }
 }
 
 function resize(): void {
@@ -899,9 +1132,11 @@ function renderLoop(): void {
       synthBars,
       t ? { name: t.name || '', artists: (t.artists || []).join(', ') } : null,
       prefersReducedMotion,
+      ewVideo,
     );
   } else if (visualizer) {
     visualizer.render();
+    watchTick(lv);
   }
   requestAnimationFrame(renderLoop);
 }
@@ -1039,7 +1274,7 @@ function updateOverlayIdle(playing: boolean): void {
 
 function init(): void {
   presets = butterchurnPresets.getPresets();
-  presetNames = Object.keys(presets);
+  presetNames = Object.keys(presets).sort();
   log(`Loaded ${presetNames.length} presets`);
 
   wireControls();
@@ -1055,8 +1290,8 @@ function init(): void {
   // with CORS so frame forwarding stays untainted.
   try {
     ewVideo.crossOrigin = 'anonymous';
-    ewVideo.src = `http://127.0.0.1:${port}/ew-bg.mp4`;
-    ewVideo.poster = `http://127.0.0.1:${port}/ew-bg.jpg`;
+    ewVideo.src = `${ASSET_BASE}/ew-bg.mp4`;
+    ewVideo.poster = `${ASSET_BASE}/ew-bg.jpg`;
   } catch {
     /* video layer stays on its static fallback */
   }
@@ -1133,10 +1368,10 @@ function init(): void {
         height: h,
         pixelRatio: dpr,
       });
-      visualizer.loadPreset(presets[presetNames[0]], 0);
+      loadPresetAt(0, 0);
       visualizer.connectAudio(analyser);
       log('Visualizer running');
-      presetCycle = window.setInterval(cyclePreset, 30000);
+      presetCycle = window.setInterval(() => nextPreset(2.5), 30000);
     } catch (e) {
       log(`butterchurn init failed: ${e instanceof Error ? e.message : String(e)}`);
     }

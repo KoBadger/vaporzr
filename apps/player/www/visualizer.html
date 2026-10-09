@@ -18,6 +18,22 @@
     font-family: monospace; font-size: 11px; text-shadow: 0 0 6px rgba(120,160,255,.6);
     transition: opacity .25s; }
 
+  /* ---- Preset name toast (shows what the current visual is called) ---- */
+  #preset-toast {
+    position: fixed; top: 42px; left: 50%; z-index: 16;
+    transform: translateX(-50%) translateY(-6px);
+    padding: 5px 14px; border-radius: 999px;
+    background: rgba(10,15,30,.62); border: 1px solid rgba(140,160,255,.3);
+    color: #e2e8f0; font-family: system-ui, sans-serif; font-size: 12px;
+    letter-spacing: .3px; backdrop-filter: blur(10px);
+    box-shadow: 0 4px 20px rgba(0,0,0,.5), 0 0 18px var(--vz-glow);
+    opacity: 0; pointer-events: none;
+    max-width: min(70vw, 620px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    transition: opacity .35s, transform .35s;
+  }
+  #preset-toast.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
+  body.chrome-hidden #preset-toast { opacity: 0; }
+
   /* ---- Window chrome (frameless title strip) ---- */
   #chrome-bar {
     position: fixed; top: 0; left: 0; right: 0; height: 30px; z-index: 18;
@@ -267,6 +283,7 @@
     </div>
   </div>
 
+  <div id="preset-toast"></div>
   <div id="status">starting…</div>
 
   <div id="controls" class="visible">
@@ -285,7 +302,9 @@
       <button class="ctrl-btn" id="btn-shuffle" title="Shuffle (S)">🔀</button>
       <button class="ctrl-btn" id="btn-wave" title="Cycle autoplay: off → basic → smart">🚫</button>
       <span id="ctrl-spacer"></span>
-      <button class="ctrl-btn" id="btn-preset" title="Cycle visualizer preset (P)">✨</button>
+      <button class="ctrl-btn" id="btn-preset-back" title="Previous visual (B)">↩</button>
+      <button class="ctrl-btn" id="btn-preset" title="Next visual (P) · Shift-click to un-skip all">✨</button>
+      <button class="ctrl-btn" id="btn-preset-shuffle" title="Shuffle visual (R)">🎲</button>
       <button class="ctrl-btn" id="btn-synth" title="Synthwave road (Endless Wave, E)">🛣</button>
       <span id="ctrl-volume"><span>🔉</span><input id="ctrl-vol" type="range" min="0" max="100" value="50" step="1" /></span>
     </div>
@@ -300,7 +319,7 @@
       <button class="ctrl-btn" id="btn-sfx-applause" title="Applause">👏</button>
       <button class="ctrl-btn" id="btn-sfx-countdown" title="Countdown">🔟</button>
     </div>
-    <div id="ctrl-hint">Space play/pause · S shuffle · P preset · E synthwave · ↑↓ volume · ←→ seek · Esc hide · H chrome</div>
+    <div id="ctrl-hint">Space play/pause · S shuffle tracks · P next visual · R shuffle visual · B back · E synthwave · ↑↓ volume · ←→ seek · Esc hide · H chrome</div>
   </div>
   <button id="controls-toggle" title="Toggle controls (C)">🎛</button>
 
