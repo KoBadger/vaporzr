@@ -563,7 +563,15 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
      There is no "show everything" escape hatch — the old uneven library and its
      persisted toggle are gone. */
   var curatedNames=null;
-  function allowed(name){return !curatedNames||curatedNames.has(name)}
+  /* Presets the offline render-scan proved are blank (white/black/flat grey)
+     for their whole run. Dropped from the pool outright so they are never
+     served — the runtime watchdog is only the backstop for anything new.
+     Regenerate blank.json by re-running the scan. */
+  var blankNames=null;
+  function allowed(name){
+    if(blankNames&&blankNames.has(name))return false;
+    return !curatedNames||curatedNames.has(name);
+  }
   function updatePresetDock(){
     var el=$('preset-count');if(!el)return;
     var loaded=presetNames.length;
@@ -588,17 +596,23 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
   }
   function loadPresetChunks(){
     // Curation list first — it decides what the chunks are allowed to add.
-    fetch('/vendor/presets/curated.json')
-      .then(function(r){return r.ok?r.json():null})
-      .then(function(c){
-        if(c&&c.names&&c.names.length){curatedNames=new Set(c.names);refreshPresetNames();}
+    Promise.all([
+      fetch('/vendor/presets/curated.json').then(function(r){return r.ok?r.json():null}).catch(function(){return null}),
+      fetch('/vendor/presets/blank.json').then(function(r){return r.ok?r.json():null}).catch(function(){return null})
+    ])
+      .then(function(res){
+        var c=res[0],b=res[1];
+        if(c&&c.names&&c.names.length)curatedNames=new Set(c.names);
+        if(b&&b.names&&b.names.length)blankNames=new Set(b.names);
+        refreshPresetNames();
       })
       .catch(function(){/* no curation file — show everything */})
       .then(function(){return fetch('/vendor/presets/index.json')})
       .then(function(r){return r.ok?r.json():null})
       .then(function(idx){
         if(!idx||!idx.chunks||!idx.chunks.length)return;
-        libTotal=idx.total||0;libCurated=idx.curated||0;libRaw=idx.raw||0;libChunks=idx.chunks;
+        var blank=(blankNames?blankNames.size:0);
+        libTotal=Math.max(0,(idx.total||0)-blank);libCurated=Math.max(0,(idx.curated||0)-blank);libRaw=idx.raw||0;libChunks=idx.chunks;
         updatePresetDock();
         var step=function(i){
           if(i>=libChunks.length)return;
