@@ -1875,22 +1875,37 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
      Calm mode tightens the strobe trigger. Always on — safety first. */
   var thumb=document.createElement('canvas');thumb.width=48;thumb.height=27;
   var tctx=thumb.getContext('2d',{willReadFrequently:true});
-  var prevLuma=null,prevMean=null,stillCount=0,strobeHits=0,lastStrobeAt=0;
+  var prevLuma=null,prevMean=null,stillCount=0,strobeHits=0,lastStrobeAt=0,blankCount=0;
   setInterval(function(){
     if(!bcViz||!actx||bcBroken)return;
     if(bcCanvas.style.display==='none')return;
     try{
       tctx.drawImage(bcCanvas,0,0,48,27);
       var d=tctx.getImageData(0,0,48,27).data;
-      var n=d.length/4,sum=0,diff=0;
+      var n=d.length/4,sum=0,sumSq=0,diff=0;
       for(var i=0,j=0;i<d.length;i+=4,j++){
         var l=d[i]*0.299+d[i+1]*0.587+d[i+2]*0.114;
-        sum+=l;
+        sum+=l;sumSq+=l*l;
         if(prevLuma)diff+=Math.abs(l-prevLuma[j]);
       }
       var mean=sum/n,motion=prevLuma?diff/n:255;
+      var sd=Math.sqrt(Math.max(0,sumSq/n-mean*mean));
       var now=Date.now();
       var audioActive=now-lastBarAt<5000;
+      // Blank-frame guard: a near-uniform frame (flat white, black or grey)
+      // that persists while music plays is a dead visual. Contrast (std-dev)
+      // catches all three — the pool was only scanned for BLACK, so bright
+      // blanks slipped through, and a slightly-animated white frame keeps
+      // enough "motion" to dodge the still-skip below.
+      if(audioActive){
+        if(sd<3.0){blankCount++;}else{blankCount=0;}
+        if(blankCount>=8&&!presetLocked){
+          blankCount=0;
+          blacklistPreset(presetNames[presetIdx]);
+          loadPreset(pickIndex(presetIdx+1,1),1.5);
+          return;
+        }
+      }else blankCount=0;
       // Still-preset skip: nothing moving while music plays.
       if(audioActive){
         if(motion<1.0){stillCount++;}else{stillCount=0;}

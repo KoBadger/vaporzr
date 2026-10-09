@@ -1042,25 +1042,33 @@ interface PresetWatch {
   startedAt: number;
   lastSampleAt: number;
   samples: number[];
+  sdSamples: number[];
   staticStrikes: number;
 }
 let presetWatch: PresetWatch | null = null;
 
 function armPresetWatch(name: string): void {
-  presetWatch = { name, startedAt: performance.now(), lastSampleAt: 0, samples: [], staticStrikes: 0 };
+  presetWatch = { name, startedAt: performance.now(), lastSampleAt: 0, samples: [], sdSamples: [], staticStrikes: 0 };
 }
 
-/** Mean luminance (0..1) of the current visual, or -1 if unreadable. */
-function sampleLuminance(): number {
-  if (!sampleCtx || !visualizer) return -1;
+/** Mean luminance (0..1) and contrast (std-dev, 0..1) of the visual, or null. */
+function sampleStats(): { mean: number; sd: number } | null {
+  if (!sampleCtx || !visualizer) return null;
   try {
     sampleCtx.drawImage(canvas, 0, 0, sampleCanvas.width, sampleCanvas.height);
     const d = sampleCtx.getImageData(0, 0, sampleCanvas.width, sampleCanvas.height).data;
+    const n = d.length / 4;
     let sum = 0;
-    for (let i = 0; i < d.length; i += 4) sum += d[i] + d[i + 1] + d[i + 2];
-    return sum / (d.length / 4) / 765;
+    let sumSq = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      const l = (d[i] + d[i + 1] + d[i + 2]) / 765;
+      sum += l;
+      sumSq += l * l;
+    }
+    const mean = sum / n;
+    return { mean, sd: Math.sqrt(Math.max(0, sumSq / n - mean * mean)) };
   } catch {
-    return -1;
+    return null;
   }
 }
 
@@ -1069,6 +1077,8 @@ const WATCH_SAMPLE_MS = 220;
 const WATCH_BLACK = 0.014;
 const WATCH_STATIC_DELTA = 0.0035;
 const WATCH_STATIC_STRIKES = 2;
+/** Contrast below this (std-dev of luminance) reads as a flat/blank frame. */
+const WATCH_BLANK_SD = 0.012;
 
 /** Called right after visualizer.render() while a butterchurn preset is on screen. */
 function watchTick(levels: SynthLevels): void {
@@ -1077,10 +1087,12 @@ function watchTick(levels: SynthLevels): void {
   const now = performance.now();
   if (now - w.lastSampleAt < WATCH_SAMPLE_MS) return;
   w.lastSampleAt = now;
-  const lum = sampleLuminance();
-  if (lum < 0) return;
-  w.samples.push(lum);
+  const st = sampleStats();
+  if (!st) return;
+  w.samples.push(st.mean);
+  w.sdSamples.push(st.sd);
   if (w.samples.length > 18) w.samples.shift();
+  if (w.sdSamples.length > 18) w.sdSamples.shift();
   if (now - w.startedAt < WATCH_GRACE_MS) return;
   if (w.samples.length < 8) return;
 
@@ -1092,6 +1104,19 @@ function watchTick(levels: SynthLevels): void {
   }
 
   if (hi < WATCH_BLACK) {
+    blacklistPreset(w.name);
+    presetWatch = null;
+    nextPreset(0.6);
+    return;
+  }
+
+  // Flat frame while the track is clearly playing => a blank visual (white,
+  // black or grey). Contrast, not brightness, is what separates a dead blank
+  // from a legitimately bright scene, so a bright/blank preset is caught here
+  // rather than sailing past the black check.
+  let sdHi = -Infinity;
+  for (const s of w.sdSamples) if (s > sdHi) sdHi = s;
+  if (levels.energy > 0.07 && sdHi < WATCH_BLANK_SD) {
     blacklistPreset(w.name);
     presetWatch = null;
     nextPreset(0.6);
