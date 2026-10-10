@@ -45,6 +45,8 @@ export class Bridge {
   private lastQueue: QueueSnapshot = { tracks: [], currentIndex: -1 };
   private theme: VaporzrTheme = DEFAULT_THEME;
   private sensitivity = 1.0;
+  /** Seconds each visual preset dwells before auto-advancing (panel-controlled). */
+  private presetCycleSec = 45;
   onBurstData: ((data: string) => void) | null = null;
   librespot: SpotifyBackend;
   /** Routed to the Discord layer when the panel changes autoplay mode. */
@@ -89,6 +91,13 @@ export class Bridge {
       ) as { multiplier: number };
       if (s && typeof s.multiplier === 'number') this.sensitivity = s.multiplier;
     } catch { /* no saved sensitivity yet */ }
+
+    try {
+      const c = JSON.parse(
+        fs.readFileSync(path.join(config.dataDir, 'preset-cycle.json'), 'utf8'),
+      ) as { seconds: number };
+      if (c && typeof c.seconds === 'number') this.presetCycleSec = Math.max(5, Math.min(600, Math.round(c.seconds)));
+    } catch { /* no saved preset cycle yet */ }
 
     // Backend selection: go-librespot (soloist) or librespot-org (default).
     this.librespot =
@@ -524,6 +533,11 @@ export class Bridge {
         // Presets live in each visualizer (the desktop player ships its own pack,
         // the web viz streams the curated library), so relay the *intent* and let
         // every visualizer advance its own pool.
+        if (typeof msg.presetCycle === 'number') {
+          this.setPresetCycle(msg.presetCycle);
+          console.log(`[bridge] preset dwell set to ${this.presetCycleSec}s via panel`);
+          break;
+        }
         const action = msg.presetAction ?? 'next';
         this.broadcast({ type: 'preset:nav', action, guildId: this.primaryGuildId ?? undefined });
         console.log(`[bridge] preset ${action} via panel`);
@@ -717,6 +731,20 @@ export class Bridge {
     this.broadcastVisualizers(msg);
   }
 
+  getPresetCycle(): number { return this.presetCycleSec; }
+
+  /** How long a visual preset stays up. Persisted like sensitivity so a fresh
+   *  viewer (or the Activity) picks up the same pace on connect. */
+  setPresetCycle(seconds: number): void {
+    const secs = Math.max(5, Math.min(600, Math.round(seconds)));
+    this.presetCycleSec = secs;
+    try {
+      fs.mkdirSync(config.dataDir, { recursive: true });
+      fs.writeFileSync(path.join(config.dataDir, 'preset-cycle.json'), JSON.stringify({ seconds: secs }, null, 2), 'utf8');
+    } catch { /* non-fatal */ }
+    this.broadcast({ type: 'preset:cycle', seconds: secs, guildId: this.primaryGuildId ?? undefined });
+  }
+
   getSensitivity(): number { return this.sensitivity; }
 
   setSensitivity(multiplier: number): void {
@@ -782,6 +810,7 @@ export class Bridge {
       primaryGuildId: this.primaryGuildId ?? undefined,
       guilds: guildsForClient.length > 0 ? guildsForClient : undefined,
       sensitivity: this.sensitivity,
+      presetCycle: this.presetCycleSec,
       guest: config.shareKey ? !authed : undefined,
       endlesswave: primaryEw ? primaryEw.active : undefined,
       endlesswaveMode: primaryEw

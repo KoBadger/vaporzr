@@ -87,6 +87,8 @@ let presets: Record<string, unknown> = {};
 let presetNames: string[] = [];
 let currentPresetIndex = 0;
 let presetCycle: number | null = null;
+/** Seconds each visual stays up before auto-advancing (panel-controlled). */
+let presetCycleSec = 45;
 
 // YouTube playback state (two video elements enable crossfade between tracks)
 let ytUri: string | null = null;
@@ -144,6 +146,7 @@ const client = new WsClient({
       // the web visualizer: only a live 'endlesswave' broadcast may turn it off.
       if (msg.endlesswaveMode) setWaveMode(msg.endlesswaveMode);
       else if (msg.endlesswave === true) handleEndlessWave(true);
+      if (typeof msg.presetCycle === 'number') setPresetCycle(msg.presetCycle, false);
     } else if (msg.type === 'dj:update') {
       setDjEnabled(msg.enabled);
     } else if (msg.type === 'audio:pcm') {
@@ -154,6 +157,8 @@ const client = new WsClient({
       if (msg.action === 'prev') previousPreset(1.2);
       else if (msg.action === 'shuffle') shufflePreset(1.5);
       else nextPreset(1.5);
+    } else if (msg.type === 'preset:cycle') {
+      setPresetCycle(msg.seconds);
     }
   },
 });
@@ -194,6 +199,22 @@ function applySensitivity(multiplier: number): void {
   if (analyser) analyser.smoothingTimeConstant = smoothing;
   try { localStorage.setItem('vaporzr.sensitivity', String(multiplier)); } catch {}
   log(`Sensitivity set to ${multiplier.toFixed(2)}x (smoothing ${smoothing.toFixed(2)})`);
+}
+
+/** (Re)start the preset carousel at the configured pace. 0 = manual. */
+function startPresetCycle(): void {
+  if (presetCycle) window.clearInterval(presetCycle);
+  presetCycle = null;
+  if (presetCycleSec <= 0) return;
+  presetCycle = window.setInterval(() => nextPreset(2.5), presetCycleSec * 1000);
+}
+
+/** Panel-driven dwell time — the same global setting the web visualizer uses. */
+function setPresetCycle(secs: number, persist = true): void {
+  presetCycleSec = Math.max(0, Math.min(600, Math.round(secs || 0)));
+  if (persist) { try { localStorage.setItem('vaporzr.presetCycle', String(presetCycleSec)); } catch {} }
+  startPresetCycle();
+  log(`Preset pace: ${presetCycleSec > 0 ? `${presetCycleSec}s per visual` : 'manual'}`);
 }
 
 // ---- Endless Wave synthwave scene (VISUALDON DeLorean) ----
@@ -1383,6 +1404,10 @@ function init(): void {
       if (saved) applySensitivity(Number(saved));
     } catch {}
     try {
+      const pc = localStorage.getItem('vaporzr.presetCycle');
+      if (pc != null) presetCycleSec = Math.max(0, Math.min(600, Number(pc) || 0));
+    } catch {}
+    try {
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       const w = canvas.clientWidth || 1280;
       const h = canvas.clientHeight || 720;
@@ -1396,7 +1421,8 @@ function init(): void {
       loadPresetAt(0, 0);
       visualizer.connectAudio(analyser);
       log('Visualizer running');
-      presetCycle = window.setInterval(() => nextPreset(2.5), 30000);
+      presetCycle = null;
+      startPresetCycle();
     } catch (e) {
       log(`butterchurn init failed: ${e instanceof Error ? e.message : String(e)}`);
     }

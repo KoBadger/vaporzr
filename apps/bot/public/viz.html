@@ -445,6 +445,7 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
           if(msg.state)showState(msg.state);
           if(msg.theme){for(var i=0;i<THEMES.length;i++)if(THEMES[i].id===msg.theme.id)applyTheme(THEMES[i])}
           if(typeof msg.sensitivity==='number')setSensitivity(msg.sensitivity,false);
+          if(typeof msg.presetCycle==='number')setPresetCycle(msg.presetCycle,true);
           // A snapshot only ever AUTO-ENABLES synth (EW is on). It must never
           // turn OFF a manually selected synth view — only a live 'endlesswave'
           // broadcast (an actual state change) may do that.
@@ -509,6 +510,9 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
         case 'preset:nav':
           navPreset(msg.action);
           break;
+        case 'preset:cycle':
+          setPresetCycle(msg.seconds,true);
+          break;
         case 'visuals:frame':
           markVisual();
           lastFrameAt=Date.now();
@@ -537,6 +541,29 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
   /* ---------- MilkDrop (Butterchurn) + WebAudio pipeline ---------- */
   var actx=null,analyser=null,gainNode=null,nextAt=0,milkOn=false,
       bcViz=null,presetNames=[],presetIdx=-1,presetLocked=false,cycleTimer=null;
+  /* Seconds each visual stays up before auto-advancing. Panel-controlled and
+     global (relayed as preset:cycle), cached locally so a reload keeps the pace.
+     0 = never auto-advance. */
+  var presetCycleMs=45000;
+  try{var _pc=parseInt(localStorage.getItem('vzPresetCycle')||'',10);if(_pc>=0&&_pc<=600)presetCycleMs=_pc*1000;}catch(e){}
+  function startCycle(){
+    if(cycleTimer){clearInterval(cycleTimer);cycleTimer=null}
+    if(presetCycleMs<=0)return;
+    cycleTimer=setInterval(function(){
+      if(!presetLocked&&document.visibilityState==='visible')loadPreset(pickIndex(presetIdx+1,1),2.5);
+    },presetCycleMs);
+  }
+  function setPresetCycle(secs,persist){
+    secs=Math.max(0,Math.min(600,Math.round(secs||0)));
+    presetCycleMs=secs*1000;
+    if(persist){try{localStorage.setItem('vzPresetCycle',String(secs))}catch(e){}}
+    startCycle();
+    if(presetNameEl){
+      presetNameEl.textContent='Pace — '+(secs>0?secs+'s per visual':'manual (no auto-advance)');
+      presetNameEl.style.opacity='1';
+      showPresetName.t=setTimeout(function(){presetNameEl.style.opacity='0'},2500);
+    }
+  }
 
   /* Preset pool. Everything here is the projectM "cream of the crop" set,
      streamed lazily from /vendor/presets/* (see loadPresetChunks) — there are no
@@ -751,9 +778,7 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
       presetNames=Object.keys(allPresets()).sort().filter(function(n){return strobeBL.indexOf(n)<0});
       updatePresetDock();
       loadPreset(Math.floor(Math.random()*presetNames.length),0.1);
-      cycleTimer=setInterval(function(){
-        if(!presetLocked&&document.visibilityState==='visible')loadPreset(pickIndex(presetIdx+1,1),2.5);
-      },15000);
+      startCycle();
       showPresetName();
       /* Pull the big library in behind the scenes — never blocks the show. */
       loadPresetChunks();

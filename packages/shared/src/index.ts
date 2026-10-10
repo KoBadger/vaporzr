@@ -156,6 +156,8 @@ export interface CommandMessage {
   sensitivity?: number;
   /** Visual preset navigation for command: 'preset'. */
   presetAction?: 'next' | 'prev' | 'shuffle';
+  /** Seconds each visual preset stays on screen for command: 'preset'. */
+  presetCycle?: number;
   /** Theme id for command: 'theme'. */
   themeId?: string;
   /** Destination position for command: 'move' (with index = source). */
@@ -187,7 +189,7 @@ export type InboundMessage =
   | CommandMessage;
 
 export type OutboundMessage =
-  | { type: 'snapshot'; state: PlaybackState; queue: QueueSnapshot; permissions?: PermissionSnapshot; voice?: { joined: boolean; channelId?: string }; theme?: VaporzrTheme; djEnabled?: boolean; primaryGuildId?: string; guilds?: Array<{ id: string; name: string }>; sensitivity?: number; guest?: boolean; endlesswave?: boolean; endlesswaveMode?: 'off' | 'basic' | 'smart'; ambient?: boolean; voteSkip?: boolean; skipForward?: boolean }
+  | { type: 'snapshot'; state: PlaybackState; queue: QueueSnapshot; permissions?: PermissionSnapshot; voice?: { joined: boolean; channelId?: string }; theme?: VaporzrTheme; djEnabled?: boolean; primaryGuildId?: string; guilds?: Array<{ id: string; name: string }>; sensitivity?: number; presetCycle?: number; guest?: boolean; endlesswave?: boolean; endlesswaveMode?: 'off' | 'basic' | 'smart'; ambient?: boolean; voteSkip?: boolean; skipForward?: boolean }
   | { type: 'state:update'; state: PlaybackState; guildId?: string }
   | { type: 'queue:update'; queue: QueueSnapshot }
   | { type: 'perm:update'; permissions: PermissionSnapshot }
@@ -198,6 +200,8 @@ export type OutboundMessage =
   | { type: 'visuals:sensitivity'; multiplier: number }
   /** Panel-driven preset navigation, relayed to every visualizer. */
   | { type: 'preset:nav'; action: 'next' | 'prev' | 'shuffle'; guildId?: string }
+  /** Panel-driven preset dwell time (seconds), relayed to every visualizer. */
+  | { type: 'preset:cycle'; seconds: number; guildId?: string }
   /** Current preset a visualizer is showing (for the panel's now-showing label). */
   | { type: 'visuals:preset'; name: string; index?: number; total?: number; guildId?: string }
   | { type: 'audio:forward'; enabled: boolean }

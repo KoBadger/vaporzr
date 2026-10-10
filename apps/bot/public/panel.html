@@ -446,6 +446,17 @@ body.guest #guilds{display:none}
         <button id="btn-viz-next" data-tip="Next visual">✨ Next</button>
         <button id="btn-viz-shuffle" data-tip="Shuffle visual">🎲 Shuffle</button>
       </div>
+      <div class="mrow" id="viz-pace">
+        <label for="preset-cycle">PACE</label>
+        <select id="preset-cycle" data-tip="How long each visual stays before switching (global)">
+          <option value="15">15 s</option>
+          <option value="30">30 s</option>
+          <option value="45">45 s</option>
+          <option value="60">1 min</option>
+          <option value="90">90 s</option>
+          <option value="120">2 min</option>
+        </select>
+      </div>
       <div class="sub" id="viz-now" style="margin:6px 0 2px">Showing —</div>
       <div class="viz-links">
         <a class="viz-link" id="link-viz" href="/viz" target="_blank">🌈 Visualizer</a>
@@ -514,11 +525,11 @@ body.guest #guilds{display:none}
    'q-selbar','q-selcount','q-sel-remove','q-sel-clear',
    'stats-body','btn-stats-refresh','stats-chart',
    'vibe-name','btn-vibe-save','btn-vibe-load','vibe-list','btn-vibes-refresh',
-   'swatches','sens','sens-val','link-viz','guilds','toasts','btn-viz-prev','btn-viz-next','btn-viz-shuffle','viz-now',
+   'swatches','sens','sens-val','link-viz','guilds','toasts','btn-viz-prev','btn-viz-next','btn-viz-shuffle','viz-now','preset-cycle',
    'conn-dot','conn-text'].forEach(function (id) { el[id] = $(id); });
 
   var ws = null, state = null, queue = [], djEnabled = false, connected = false;
-  var sensitivity = 1.0, themeId = 'vaporzr';
+  var sensitivity = 1.0, themeId = 'vaporzr', presetCycleSec = 45;
   var waveMode = 'off';
   var skipForward = false;
   var selected = new Set(), dragIndex = -1;
@@ -607,6 +618,22 @@ body.guest #guilds{display:none}
     if(fromUser)cmd('sensitivity',{sensitivity:v});
   }
   el.sens.addEventListener('input',function(){setSens(Number(el.sens.value)/100,true)});
+
+  /* ---------- visual preset pace ---------- */
+  /* How long each visual stays up before auto-advancing. Global: the bot relays
+     it to every visualizer, and a fresh viewer gets it in the snapshot. */
+  function setCycle(secs,fromUser){
+    secs=Math.max(5,Math.min(600,Math.round(secs||45)));
+    presetCycleSec=secs;
+    if(el['preset-cycle']){
+      var v=String(secs),has=false;
+      for(var i=0;i<el['preset-cycle'].options.length;i++)if(el['preset-cycle'].options[i].value===v)has=true;
+      if(!has){var o=document.createElement('option');o.value=v;o.textContent=secs+' s';el['preset-cycle'].appendChild(o);}
+      el['preset-cycle'].value=v;
+    }
+    if(fromUser)cmd('preset',{presetCycle:secs});
+  }
+  if(el['preset-cycle'])el['preset-cycle'].addEventListener('change',function(){setCycle(Number(el['preset-cycle'].value),true)});
 
   /* ---------- rendering ---------- */
   /**
@@ -876,6 +903,7 @@ body.guest #guilds{display:none}
           if(msg.skipForward!=null)skipForward=msg.skipForward;
           if(msg.theme){for(var i=0;i<THEMES.length;i++)if(THEMES[i].id===msg.theme.id)applyTheme(THEMES[i])}
           if(typeof msg.sensitivity==='number')setSens(msg.sensitivity,false);
+          if(typeof msg.presetCycle==='number')setCycle(msg.presetCycle,false);
           if(msg.voice)el.voice.textContent=msg.voice.joined?'🔊 streaming':'🔇 not streaming';
           if(msg.guilds&&msg.primaryGuildId)renderGuilds(msg.guilds,msg.primaryGuildId);
           render();renderDj();renderWave();break;
@@ -887,6 +915,7 @@ body.guest #guilds{display:none}
         case 'endlesswave':waveMode=msg.mode||(msg.active?'smart':'off');renderWave();break;
         case 'theme':for(var j=0;j<THEMES.length;j++)if(THEMES[j].id===(msg.theme&&msg.theme.id))applyTheme(THEMES[j]);break;
         case 'visuals:sensitivity':setSens(msg.multiplier,false);break;
+        case 'preset:cycle':setCycle(msg.seconds,false);break;
         case 'visuals:preset':
           if(el['viz-now'])el['viz-now'].textContent='Showing '+(msg.name||'—')+(msg.total?'  ·  '+((msg.index||0)+1)+'/'+msg.total:'');
           break;
