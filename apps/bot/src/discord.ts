@@ -3741,7 +3741,12 @@ export class DiscordBot {
         }
 
         case 'key': {
-          const wantsRotate = (message.content.trim().split(/\s+/)[2] ?? '') === 'rotate';
+          // Sub-command comes from `args` (everything after the command word).
+          // Indexing into `message.content` was wrong: for `V@key show` the raw
+          // content is "V@key show", so token [2] is undefined — the `show`
+          // branch never ran (and `V@key rotate` never rotated either).
+          const keySub = args.trim().split(/\s+/)[0]?.toLowerCase() ?? '';
+          const wantsRotate = keySub === 'rotate';
           if (wantsRotate) {
             if (!this.perms.isOwner(message.author.id)) return void (await deny());
             const newKey = randomBytes(12).toString('base64url');
@@ -3765,7 +3770,7 @@ export class DiscordBot {
             await message.reply(`🔑 New key issued — all previous links and remembered devices are dead.\n${linkLine}`);
             break;
           }
-          const keyArg = (message.content.trim().split(/\s+/)[2] ?? '').toLowerCase();
+          const keyArg = keySub;
           // owner-only (matches the slash command): the links grant full panel control.
           if (!this.perms.isOwner(message.author.id)) return void (await deny());
           if (!config.shareKey) {
@@ -3775,11 +3780,15 @@ export class DiscordBot {
           if (keyArg === 'show' || keyArg === 'key') {
             const sPl = vizTunnel.panelLink();
             const sVl = vizTunnel.vizLink();
+            // The key gets its own line and its own code span so it can be copied
+            // on its own — you should not have to fish it out of a URL. The
+            // pre-authorized links follow as a separate block.
             await message.reply(
-              `🔑 **Current key:** \`${config.shareKey}\`\n` +
+              `🔑 **Current key**\n\`${config.shareKey}\`\n\n` +
+                `**Pre-authorized links** (key included):\n` +
                 `🎛️ Panel: <${sPl.url}?key=${config.shareKey}>\n` +
                 `🌈 Visualizer: <${sVl.url}?key=${config.shareKey}>\n` +
-                `*Tap the key to copy · V@key rotate to revoke all*`,
+                `*Tap the key above to copy · V@key rotate to revoke all*`,
             );
             break;
           }

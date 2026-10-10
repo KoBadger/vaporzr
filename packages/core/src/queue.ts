@@ -457,6 +457,22 @@ export class QueueManager {
     return false;
   }
 
+  /**
+   * Point the cursor at the track with this uri. Used to restore the invariant
+   * that, while audio is playing, the cursor must point at the PLAYING track:
+   * the playback layer resolves "the current track" through this cursor, so a
+   * cursor that has drifted ahead (e.g. a "move cursor then play" that never
+   * actually started) silently disables every advance path. Returns true when
+   * it actually moved.
+   */
+  focusUri(uri: string): boolean {
+    const idx = this.tracks.findIndex((t) => t.uri === uri);
+    if (idx < 0 || idx === this.currentIndex) return false;
+    this.currentIndex = idx;
+    this.emitQueue();
+    return true;
+  }
+
   /** Swap two positions (used by the interactive queue editor). */
   swap(a: number, b: number): boolean {
     if (a === b) return false;

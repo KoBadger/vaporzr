@@ -408,13 +408,16 @@ export class PlaybackController {
     // AHEAD of what the listener actually hears by the buffer depth — so
     // advancing at durationMs clips the ending. +6s lets the buffered tail drain.
     const wait = Math.min(remaining + 6000, 6 * 60 * 60 * 1000);
-    const trackS = Math.round((this.queue.getCurrentTrack()?.durationMs ?? 0) / 1000);
+    // Resolve the PLAYING track (state.track), not the cursor: endUri must match
+    // the track this timer was armed for, or onTrackMaybeEnded rejects it.
+    const scheduled = this.queue.getState().track ?? this.queue.getCurrentTrack();
+    const trackS = Math.round((scheduled?.durationMs ?? 0) / 1000);
     const videoS = Math.round((this.currentVideo?.durationMs ?? 0) / 1000);
     console.log(
       `[playback] end scheduled in ${Math.round(wait / 1000)}s · metadata=${trackS}s video=${videoS}s` +
         `${videoS <= 0 ? ' (video duration UNKNOWN)' : ''}`,
     );
-    this.endUri = this.queue.getCurrentTrack()?.uri ?? null;
+    this.endUri = scheduled?.uri ?? null;
     this.endTimer = setTimeout(() => {
       this.endTimer = null;
       this.onTrackMaybeEnded();
@@ -573,28 +576,33 @@ export class PlaybackController {
   private onTrackMaybeEnded(): void {
     const state = this.queue.getState();
     if (!state.playing) return;
-    const current = this.queue.getCurrentTrack();
+    // The PLAYING track is authoritative — not the queue cursor. Resolving this
+    // through the cursor made a drifted cursor a silent no-op here, so the track
+    // never advanced and the bot stayed quiet until the user skipped.
+    const current = this.playingTrack();
+    if (!current) return;
     // Only advance if we're still on the track this timer was scheduled for.
-    if (this.endUri && current?.uri !== this.endUri) return;
-    if (current && state.track?.uri === current.uri) {
-      const ended = { ...current };
-      const elapsedS = Math.round(
-        (state.positionMs + (state.playing ? Math.max(0, Date.now() - (state.updatedAt || Date.now())) : 0)) / 1000,
-      );
-      const metaS = Math.round((current.durationMs || 0) / 1000);
-      console.log(
-        `[playback] ended "${current.name}" after ~${elapsedS}s of ${metaS}s` +
-          `${metaS > 0 && elapsedS < metaS - 45 ? ' ← CUT SHORT' : ''}`,
-      );
-      if (state.repeat) {
-        this.replayCurrent();
-        return;
-      }
-      this.naturalAdvance = true;
-      this.next();
-      this.naturalAdvance = false;
-      if (this.onTrackEnd) this.onTrackEnd(ended);
+    if (this.endUri && current.uri !== this.endUri) return;
+    // Put the cursor back on the playing track first, so the next track is the
+    // one that follows it rather than whatever the cursor had drifted to.
+    this.resyncCursorToPlaying();
+    const ended = { ...current };
+    const elapsedS = Math.round(
+      (state.positionMs + (state.playing ? Math.max(0, Date.now() - (state.updatedAt || Date.now())) : 0)) / 1000,
+    );
+    const metaS = Math.round((current.durationMs || 0) / 1000);
+    console.log(
+      `[playback] ended "${current.name}" after ~${elapsedS}s of ${metaS}s` +
+        `${metaS > 0 && elapsedS < metaS - 45 ? ' ← CUT SHORT' : ''}`,
+    );
+    if (state.repeat) {
+      this.replayCurrent();
+      return;
     }
+    this.naturalAdvance = true;
+    this.next();
+    this.naturalAdvance = false;
+    if (this.onTrackEnd) this.onTrackEnd(ended);
   }
 
   /** Replay the current track from the top (repeat mode). */
@@ -612,6 +620,36 @@ export class PlaybackController {
 
   private currentSource(): MediaSource {
     return this.queue.getCurrentTrack()?.source ?? 'spotify';
+  }
+
+  /**
+   * The track the audio layer is actually on. `queue.getCurrentTrack()` is the
+   * CURSOR and can drift ahead of the audio (a cursor move whose play never
+   * started); `state.track` is set by play() and is the authoritative
+   * "now playing". Every end-of-track decision must resolve this way.
+   */
+  private playingTrack(): TrackInfo | undefined {
+    return this.queue.getState().track;
+  }
+
+  /**
+   * Re-point the queue cursor at the track that is actually playing. The end
+   * timer, the Spotify natural-end check and the stall recovery all resolve the
+   * current track through the cursor, so once it has drifted ahead they all bail
+   * — the track never advances and the bot stays silent until the user skips.
+   * Cheap no-op when already in sync. Only called right before advancing (never
+   * mid-start), so it cannot fight a play that is still resolving.
+   */
+  private resyncCursorToPlaying(): void {
+    const playing = this.playingTrack();
+    if (!playing) return;
+    const snap = this.queue.getSnapshot();
+    if (snap.tracks[snap.currentIndex]?.uri === playing.uri) return;
+    if (this.queue.focusUri(playing.uri)) {
+      console.warn(
+        `[playback] queue cursor had drifted off the playing track — re-synced to "${playing.name}" (index ${this.queue.getSnapshot().currentIndex})`,
+      );
+    }
   }
 
   /** True while audio is coming through the bot's own ffmpeg stream. */
@@ -1361,17 +1399,34 @@ export class PlaybackController {
       // falls back to YouTube. Debounced so a burst of stall warnings doesn't
       // hammer the play path.
       const state = this.queue.getState();
-      // Near the end of the track the FIFO feed legitimately runs dry while the
-      // buffered tail drains — let the end timer advance instead of re-seeking
-      // (which used to fire a stale re-play even after the queue had ended).
+      const playing = state.track;
+      if (!playing) return;
+      // A cursor that drifted off the playing track is why this used to do
+      // nothing at all: the source/duration lookups below then referred to the
+      // wrong track.
+      this.resyncCursorToPlaying();
       const pos = state.positionMs ?? 0;
-      const dur = state.durationMs ?? 0;
-      if (dur > 0 && pos >= dur - 8_000) return;
-      if (state.track && state.playing && this.currentSource() === 'spotify' && !this.spotifyFallback) {
+      const dur = playing.durationMs ?? 0;
+      // Near the end of the track the FIFO feed legitimately runs dry while the
+      // buffered tail drains — so do NOT re-seek (that used to replay the tail
+      // after the queue had ended). But a SUSTAINED dry feed here (this only
+      // fires after ~30s without PCM) means the end-of-track advance never
+      // fired: advance instead of waiting forever — that waiting is exactly what
+      // "the song stops near the end and only a skip fixes it" was.
+      if (dur > 0 && pos >= dur - 8_000) {
+        if (state.playing && this.currentUri === playing.uri) {
+          console.warn(`[playback] feed dry at the end of "${playing.name}" — advancing instead of waiting`);
+          this.naturalAdvance = true;
+          this.next();
+          this.naturalAdvance = false;
+        }
+        return;
+      }
+      if (state.playing && (playing.source ?? 'spotify') === 'spotify' && !this.spotifyFallback) {
         const now = Date.now();
         if (!this.lastStallRecoveryAt || now - this.lastStallRecoveryAt > 20_000) {
           this.lastStallRecoveryAt = now;
-          console.warn(`[playback] Spotify feed stalled — re-issuing "${state.track.name}"`);
+          console.warn(`[playback] Spotify feed stalled — re-issuing "${playing.name}"`);
           this.sendVisualizer({ type: 'cmd', command: 'stop' });
           void this.play().catch((err) => {
             console.warn(`[playback] stall re-issue failed: ${err instanceof Error ? err.message : err}`);
@@ -1500,10 +1555,15 @@ export class PlaybackController {
   private startSpotifyProgress(): void {
     this.stopSpotifyProgress();
     this.spotifyProgress = setInterval(() => {
-      if (this.currentSource() !== 'spotify' || this.spotifyFallback) return;
-      if (!this.queue.getState().playing) return;
+      const state = this.queue.getState();
+      // Resolve the PLAYING track, not the cursor: they can diverge, and the
+      // cursor's source/duration then never match the librespot position, so the
+      // natural-end branch below never fires.
+      const playing = state.track;
+      if (!playing || (playing.source ?? 'spotify') !== 'spotify' || this.spotifyFallback) return;
+      if (!state.playing) return;
       let pos = this.librespot?.getPositionMs() ?? 0;
-      const dur = this.queue.getCurrentTrack()?.durationMs ?? 0;
+      const dur = playing.durationMs ?? 0;
       const bytes = this.librespot?.getPcmBytes() ?? 0;
       // The position is derived from captured PCM bytes. After a reconnect (or a
       // rebuilt resampler) that counter can be stale and report a spot far past
@@ -1526,15 +1586,11 @@ export class PlaybackController {
         console.log(
           `[playback] Spotify track ended — position ${Math.round(pos / 1000)}s of ${Math.round(dur / 1000)}s (natural end)`,
         );
-        if (this.onTrackEnd) {
-          const ended = this.queue.getCurrentTrack();
-          this.naturalAdvance = true;
-          this.next();
-          this.naturalAdvance = false;
-          if (ended) this.onTrackEnd(ended);
-        } else {
-          this.next();
-        }
+        this.resyncCursorToPlaying();
+        this.naturalAdvance = true;
+        this.next();
+        this.naturalAdvance = false;
+        if (this.onTrackEnd) this.onTrackEnd(playing);
         return;
       }
       this.lastSpotifyBytes = bytes;
@@ -1559,9 +1615,12 @@ export class PlaybackController {
    * re-issued from the current position.
    */
   async reattachAfterRejoin(): Promise<void> {
-    const cur = this.queue.getCurrentTrack();
-    if (!cur || !this.queue.getState().playing) return;
-    if (this.currentSource() === 'spotify' && !this.spotifyFallback) {
+    if (!this.queue.getState().playing) return;
+    // The cursor can have drifted; every source lookup below goes through it.
+    this.resyncCursorToPlaying();
+    const cur = this.playingTrack();
+    if (!cur) return;
+    if ((cur.source ?? 'spotify') === 'spotify' && !this.spotifyFallback) {
       this.startSpotifyFeed();
       this.librespot?.resetPosition();
       this.lastSpotifyBytes = 0;
