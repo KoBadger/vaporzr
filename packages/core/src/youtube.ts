@@ -893,7 +893,15 @@ async function doSearchAndResolve(
         return !wrong;
       });
       if (ranked.length === 0) {
-        ranked = byScore.filter((cand) => !looksUnplayable(cand.h.title, cand.h.durationSec * 1000, opts));
+        const playable = byScore.filter((cand) => !looksUnplayable(cand.h.title, cand.h.durationSec * 1000, opts));
+        // Even the fallback should avoid a festival set when a studio cut is
+        // available: canonical releases often score BELOW the accept floor
+        // because the artist sits in parentheses the tokeniser drops, while a
+        // live set names the artist in the title and clears it. Prefer
+        // non-live candidates unless the query asked for a live performance.
+        const wantsLive = /\b(live|unplugged|concert|festival|dj\s*set|tiny\s*desk|kexp|bbc|radio\s*1)\b/i.test(query);
+        const nonLive = wantsLive ? playable : playable.filter((cand) => !LIVE_RE.test(cand.h.title));
+        ranked = nonLive.length > 0 ? nonLive : playable;
         if (ranked.length > 0) {
           console.log(`[youtube] no clean match for "${query}" — using best playable candidate "${ranked[0].h.title}"`);
         }
