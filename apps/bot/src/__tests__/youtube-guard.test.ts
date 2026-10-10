@@ -209,6 +209,47 @@ describe('isClearlyWrongMatch (speed fallback guard)', () => {
     expect(isClearlyWrongMatch(v, 'liquid game', { name: 'liquid game', artists: ['Sweeps'], durationMs: 240_000 })).toBe(true);
   });
 
+  it('rejects a festival live set when the query does not ask for live', () => {
+    const v = video({
+      name: 'Charlotte De Witte Age Of Love Live At Tomorrowland Brasil 2024 | Tomorrowland Forever',
+      durationMs: 3_600_000,
+      channel: 'Tomorrowland',
+    });
+    expect(
+      isClearlyWrongMatch(v, 'The Age Of Love Charlotte de Witte', {
+        name: 'The Age Of Love',
+        artists: ['Charlotte de Witte'],
+        durationMs: 0,
+      }),
+    ).toBe(true);
+  });
+
+  it('accepts a live cut when the query asks for one', () => {
+    const v = video({ name: 'Age Of Love (Live at Tomorrowland)', durationMs: 300_000, channel: 'Charlotte de Witte' });
+    expect(
+      isClearlyWrongMatch(v, 'Age Of Love live Charlotte de Witte', {
+        name: 'Age Of Love',
+        artists: ['Charlotte de Witte'],
+        durationMs: 0,
+      }),
+    ).toBe(false);
+  });
+
+  it('still accepts a normal studio upload', () => {
+    const v = video({
+      name: 'Age Of Love - Charlotte de Witte & Enrico Sangiuliano Remix',
+      durationMs: 400_000,
+      channel: 'Charlotte de Witte - Topic',
+    });
+    expect(
+      isClearlyWrongMatch(v, 'Age Of Love Charlotte de Witte', {
+        name: 'Age Of Love',
+        artists: ['Charlotte de Witte'],
+        durationMs: 0,
+      }),
+    ).toBe(false);
+  });
+
   it('rejects a much shorter upload (preview/radio edit for an extended mix)', () => {
     // Live symptom: a 489s extended mix resolved to a 210s video, so the song
     // stopped at 3:30 of 8:09 — "cutting out towards the end".

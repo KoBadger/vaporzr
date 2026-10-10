@@ -735,6 +735,13 @@ export function looksWrong(
   }
   // 2 + 3. Not music at all, or a wildly different length.
   if (looksUnplayable(name, durationMs, opts)) return true;
+  // 4. A live/festival cut when the caller did not ask for one. A plain song
+  //    search surfaces festival sets above the studio release, and a two-hour
+  //    set is never what "play <song>" means. Skipped when the query itself
+  //    asks for a live performance, and the caller still falls back to these
+  //    when nothing else exists (see the ranked/fallback split).
+  const wantsLive = /\b(live|unplugged|concert|festival|dj\s*set|tiny\s*desk|kexp|bbc|radio\s*1)\b/i.test(query);
+  if (!wantsLive && LIVE_RE.test(name)) return true;
   // 4. Score floor.
   const hit: FlatHit = {
     videoId: '',
