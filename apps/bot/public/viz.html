@@ -270,6 +270,7 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
   <button class="dock-btn" id="btn-next" title="Next preset">⏭</button>
   <button class="dock-btn" id="btn-preset-shuffle" title="Shuffle preset">🎲</button>
   <button class="dock-btn" id="btn-presets" title="Browse presets">🔎</button>
+  <button class="dock-btn" id="btn-pace" title="Preset pace — how long each visual stays (this viewer)">⏱</button>
   <div id="preset-lib">
     <span id="preset-count"></span>
     <span id="preset-bar"><i id="preset-fill"></i></span>
@@ -445,7 +446,7 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
           if(msg.state)showState(msg.state);
           if(msg.theme){for(var i=0;i<THEMES.length;i++)if(THEMES[i].id===msg.theme.id)applyTheme(THEMES[i])}
           if(typeof msg.sensitivity==='number')setSensitivity(msg.sensitivity,false);
-          if(typeof msg.presetCycle==='number')setPresetCycle(msg.presetCycle,true);
+          if(typeof msg.presetCycle==='number')setPresetCycle(msg.presetCycle,{global:true});
           // A snapshot only ever AUTO-ENABLES synth (EW is on). It must never
           // turn OFF a manually selected synth view — only a live 'endlesswave'
           // broadcast (an actual state change) may do that.
@@ -511,7 +512,7 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
           navPreset(msg.action);
           break;
         case 'preset:cycle':
-          setPresetCycle(msg.seconds,true);
+          setPresetCycle(msg.seconds,{global:true});
           break;
         case 'visuals:frame':
           markVisual();
@@ -545,7 +546,11 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
      global (relayed as preset:cycle), cached locally so a reload keeps the pace.
      0 = never auto-advance. */
   var presetCycleMs=45000;
-  try{var _pc=parseInt(localStorage.getItem('vzPresetCycle')||'',10);if(_pc>=0&&_pc<=600)presetCycleMs=_pc*1000;}catch(e){}
+  /* Per-viewer override. The panel's global PACE is only the DEFAULT; once you
+     pick your own pace from the dock it sticks for THIS viewer (localStorage)
+     and the global relay no longer overrides it. */
+  var paceOverride=false;
+  try{var _pc=parseInt(localStorage.getItem('vzPresetCycle')||'',10);if(_pc>=0&&_pc<=600){presetCycleMs=_pc*1000;paceOverride=true;}}catch(e){}
   function startCycle(){
     if(cycleTimer){clearInterval(cycleTimer);cycleTimer=null}
     if(presetCycleMs<=0)return;
@@ -553,16 +558,24 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
       if(!presetLocked&&document.visibilityState==='visible')loadPreset(pickIndex(presetIdx+1,1),2.5);
     },presetCycleMs);
   }
-  function setPresetCycle(secs,persist){
+  function setPresetCycle(secs,opts){
+    opts=opts||{};
+    /* A deliberate local choice wins over the global default. */
+    if(opts.global&&paceOverride)return;
     secs=Math.max(0,Math.min(600,Math.round(secs||0)));
     presetCycleMs=secs*1000;
-    if(persist){try{localStorage.setItem('vzPresetCycle',String(secs))}catch(e){}}
+    if(opts.local){paceOverride=true;try{localStorage.setItem('vzPresetCycle',String(secs))}catch(e){}}
     startCycle();
     if(presetNameEl){
-      presetNameEl.textContent='Pace — '+(secs>0?secs+'s per visual':'manual (no auto-advance)');
+      presetNameEl.textContent='Pace — '+(secs>0?secs+'s per visual':'manual (no auto-advance)')+(opts.local?' (this viewer)':'');
       presetNameEl.style.opacity='1';
       showPresetName.t=setTimeout(function(){presetNameEl.style.opacity='0'},2500);
     }
+  }
+  /* Cycle 15 → 30 → 45 → 60 → 90 → 2 min → manual → back. */
+  function cyclePace(){
+    var opts=[15,30,45,60,90,120,0],cur=Math.round(presetCycleMs/1000),i=opts.indexOf(cur);
+    setPresetCycle(opts[(i<0?2:i+1)%opts.length],{local:true});
   }
 
   /* Preset pool. Everything here is the projectM "cream of the crop" set,
@@ -848,6 +861,7 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
   $('btn-next').onclick=function(){loadPreset(pickIndex(presetIdx+1,1),1.2)};
   $('btn-prev').onclick=function(){loadPreset(pickIndex(presetIdx-1,-1),1.2)};
   $('btn-preset-shuffle').onclick=function(){loadPreset(Math.floor(Math.random()*presetNames.length),1.2)};
+  var _bp=$('btn-pace');if(_bp)_bp.onclick=function(){cyclePace()};
   $('btn-lock').onclick=function(){
     presetLocked=!presetLocked;
     this.textContent=presetLocked?'🔒':'🔓';
