@@ -299,3 +299,68 @@ describe('isClearlyWrongMatch (speed fallback guard)', () => {
     expect(isClearlyWrongMatch(v, 'Is This Love - Montmartre Remix Bob Marley & The Wailers', opts)).toBe(false);
   });
 });
+
+describe('scoreHit (artist named inside the title parentheses)', () => {
+  // A canonical release often credits the artist inside "(…)" — Spotify's
+  // "The Age Of Love (Charlotte de Witte & Enrico Sangiuliano Remix)". normText
+  // strips parenthesised content (usually edition noise), which made the artist
+  // invisible to the artist-reward check: the real track then scored as if the
+  // artist were absent, and could sink below the accept floor so only the
+  // no-clean-match fallback would pick it. normTextKeepingParens restores the
+  // reward.
+  const opts = { name: 'The Age Of Love', artists: ['Charlotte de Witte'], durationMs: 383_000 };
+  const query = 'The Age Of Love Charlotte de Witte';
+
+  it('rewards an artist that appears only inside the title parentheses', () => {
+    const withArtist = scoreHit(
+      {
+        videoId: 'a',
+        title: 'The Age Of Love (Charlotte de Witte & Enrico Sangiuliano Remix)',
+        channel: 'Spectrum Recordings',
+        durationSec: 383,
+      },
+      0,
+      query,
+      opts,
+    );
+    const withoutArtist = scoreHit(
+      {
+        videoId: 'b',
+        title: 'The Age Of Love (Enrico Sangiuliano Remix)',
+        channel: 'Spectrum Recordings',
+        durationSec: 383,
+      },
+      0,
+      query,
+      opts,
+    );
+    expect(withArtist).toBeGreaterThan(withoutArtist);
+  });
+
+  it('clears the accept floor and outranks a live set when the artist is only in parentheses', () => {
+    const studio = scoreHit(
+      {
+        videoId: 'a',
+        title: 'The Age Of Love (Charlotte de Witte & Enrico Sangiuliano Remix)',
+        channel: 'Spectrum Recordings',
+        durationSec: 383,
+      },
+      1,
+      query,
+      opts,
+    );
+    const live = scoreHit(
+      {
+        videoId: 'b',
+        title: 'Charlotte De Witte Age Of Love  Live At Tomorrowland Brasil 2024',
+        channel: 'Tomorrowland',
+        durationSec: 150,
+      },
+      0,
+      query,
+      opts,
+    );
+    expect(studio).toBeGreaterThanOrEqual(6);
+    expect(studio).toBeGreaterThan(live);
+  });
+});

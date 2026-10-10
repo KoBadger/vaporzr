@@ -569,6 +569,30 @@ function normText(s: string): string {
     .trim();
 }
 
+/**
+ * Like normText, but KEEPS the words inside ()/[] — only the bracket characters
+ * are dropped.
+ *
+ * normText deliberately discards parenthesised content because that is where
+ * edition noise lives ("(Official Video)", "[Audio HQ]"), and dropping it lets
+ * "Song (Official Video)" compare equal to "Song". But a canonical release also
+ * often names the *artist* there — "Song (Artist Remix)", "Song (Artist & Other
+ * Remix)" — and discarding it made that artist invisible to the artist-reward
+ * check, so the real track lost the +2/+4 it should have earned and could sink
+ * below the accept floor, leaving only the no-clean-match fallback to pick it.
+ *
+ * Used for artist presence only: `normTextKeepingParens(t) ⊇ normText(t)` as a
+ * token set, so switching an artist check to it can only ADD matches, never
+ * remove them.
+ */
+function normTextKeepingParens(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[()[\]{}]/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
 export interface YoutubeSearchOptions {
   /** Canonical track title (used instead of the raw query for token matching). */
   name?: string;
@@ -612,6 +636,11 @@ export function scoreHit(
   opts: YoutubeSearchOptions,
 ): number {
   const t = normText(hit.title);
+  // Artist presence is also checked against the parens-preserving form: a
+  // canonical release often credits the artist inside "(…)" (see
+  // normTextKeepingParens), and dropping that content hid the artist from this
+  // reward so the real track scored as if the artist were absent.
+  const tAll = normTextKeepingParens(hit.title);
   const ch = normText(hit.channel ?? '');
   let score = 10 - rank; // earlier results win ties
 
@@ -632,7 +661,7 @@ export function scoreHit(
     // "Artist - Topic" channels are YouTube's auto-generated official audio.
     if (ch === `${na} topic` || ch.endsWith(' topic') && ch.includes(na)) score += 6;
     else if (ch.includes(na)) score += 4;
-    else if (t.includes(na)) score += 2;
+    else if (tAll.includes(na)) score += 2;
     else score -= 1;
   }
 
