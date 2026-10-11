@@ -4,6 +4,7 @@ import {
   isBotWall,
   isClearlyWrongMatch,
   isProxyError,
+  isProxyExhausted,
   scoreHit,
   shouldRetryYtDlp,
 } from '@vaporzr/core/youtube';
@@ -96,6 +97,24 @@ describe('YouTube failure classification', () => {
     expect(isProxyError(wall)).toBe(false);
     expect(isBotWall('ERROR: Unable to connect to proxy tunnel')).toBe(false);
     expect(isProxyError('ERROR: Requested format is not available')).toBe(false);
+  });
+});
+
+describe('proxy exhaustion is its own diagnosis', () => {
+  // Live case: DataImpulse ran out of traffic and answered 407 TRAFFIC_EXHAUSTED.
+  // The direct fallback then hit YouTube's wall, and because the wall was checked
+  // first the canary reported "auth" (stale cookies) — the wrong cause entirely.
+  const exhausted =
+    'ERROR: Unable to download API page: <urlopen error Tunnel connection failed: 407 TRAFFIC_EXHAUSTED>';
+
+  it('recognises an out-of-traffic proxy', () => {
+    expect(isProxyExhausted(exhausted)).toBe(true);
+    expect(isProxyError(exhausted)).toBe(true);
+  });
+
+  it('does not confuse it with a bot wall or a generic proxy failure', () => {
+    expect(isProxyExhausted("Sign in to confirm you're not a bot")).toBe(false);
+    expect(isProxyExhausted('ProxyError: connection refused')).toBe(false);
   });
 });
 

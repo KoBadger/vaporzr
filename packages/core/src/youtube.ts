@@ -193,6 +193,16 @@ export function isProxyError(msg: string): boolean {
   return !isBotWall(msg) && /proxy|tunnel|407|econnrefused/i.test(msg);
 }
 
+/** The proxy is reachable but has NO TRAFFIC LEFT (DataImpulse answers 407
+ *  TRAFFIC_EXHAUSTED, and other providers say "no balance" / "insufficient
+ *  credit"). Distinct from a generic proxy failure because the fix is to top up,
+ *  not to renew or unset the proxy. */
+export function isProxyExhausted(msg: string): boolean {
+  return /TRAFFIC_EXHAUSTED|no (?:traffic|balance) (?:left|remaining)|insufficient (?:traffic|balance|credit)|out of (?:traffic|balance|credit)/i.test(
+    msg,
+  );
+}
+
 /** Age of the YouTube cookies file in days (null when unset or missing). */export function cookieAgeDays(): number | null {
   try {
     const src = activeCookiesPath();
@@ -340,7 +350,7 @@ async function runYtDlp(args: string[], retries = 2, route?: boolean): Promise<s
  * JS runtime, PO-token provider) so failures — expired cookies, a dead solver, a
  * broken proxy — are caught by a probe instead of the next song.
  */
-export type YoutubeHealth = 'ok' | 'auth' | 'blocked' | 'proxy' | 'down' | 'unknown';
+export type YoutubeHealth = 'ok' | 'auth' | 'blocked' | 'proxy' | 'exhausted' | 'down' | 'unknown';
 const CANARY_URL = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ';
 let ytHealth: YoutubeHealth = 'unknown';
 let ytHealthAt = 0;
@@ -404,13 +414,21 @@ export async function probeYoutube(): Promise<YoutubeHealth> {
     const proxied = await attempt(true);
     if (proxied === 'ok') {
       status = 'ok';
+    } else if (isProxyExhausted(proxied)) {
+      // The proxy is out of traffic. Specific and actionable — and crucially the
+      // DIRECT fallback's anti-bot wall must not relabel this as stale cookies,
+      // which is what sent us chasing the wrong cause when the balance ran out.
+      status = 'exhausted';
+    } else if (isProxyError(proxied)) {
+      // The proxy itself failed (dead, unreachable, 407). Whether or not the
+      // direct route works, the proxy is the actionable cause.
+      status = 'proxy';
     } else {
       // Two routes, four causes: a successful direct attempt means the proxy is
       // the problem; a wall on either route means YouTube is refusing us.
       const direct = await attempt(false);
       if (direct === 'ok') status = 'proxy';
       else if (isBotWall(proxied) || isBotWall(direct)) status = 'auth';
-      else if (isProxyError(proxied)) status = 'proxy';
       else status = 'down';
     }
   } else {

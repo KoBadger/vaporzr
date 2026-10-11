@@ -4933,9 +4933,11 @@ export class DiscordBot {
           ? '⚠️ **Vaporzr: YouTube is blocking the bot\'s IP** — no residential proxy is configured (`YOUTUBE_PROXY` in `/opt/vaporzr/.env`), which is the usual cause for a datacenter address. Refreshing cookies alone will not fix this.'
           : status === 'proxy'
             ? '⚠️ **Vaporzr: the YouTube proxy is failing** — the direct route works but `YOUTUBE_PROXY` does not (dead, exhausted, rejected or unreachable). Resolves still fall back to a direct connection, so playback should continue; renew the proxy or unset it.'
-            : status === 'down'
-              ? '⚠️ **Vaporzr: YouTube resolution is failing** — check `/health` (`youtube`) and the network.'
-              : '';
+            : status === 'exhausted'
+              ? '⚠️ **Vaporzr: the YouTube proxy is OUT OF TRAFFIC** — `YOUTUBE_PROXY` is reachable but has no balance left (DataImpulse answers `407 TRAFFIC_EXHAUSTED`). Top the plan up (DataImpulse → Add GBs) or point `YOUTUBE_PROXY` at another provider. Resolves fall back to a direct connection meanwhile, so some tracks may still work.'
+              : status === 'down'
+                ? '⚠️ **Vaporzr: YouTube resolution is failing** — check `/health` (`youtube`) and the network.'
+                : '';
     if (!text) return;
     // The residential proxy is STICKY (DataImpulse holds one exit for `sessttl`
     // minutes), so a flagged exit otherwise sticks for up to an hour. On the wall,
