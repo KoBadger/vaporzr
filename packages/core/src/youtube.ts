@@ -21,8 +21,18 @@ const YT_PLAYLIST_RE = /(?:youtube\.com|music\.youtube\.com)\/playlist\?(?:[^#]*
  * Audio-first format selection: the bot only plays audio, and YouTube
  * currently serves 403s for the combined video+audio format (itag 18)
  * while audio-only formats (itag 251/140, …) download normally.
+ *
+ * Prefer a LOWER bitrate than plain `bestaudio` would pick. Every YouTube
+ * stream is fetched through a metered proxy, and Discord re-encodes to 64-128
+ * kbps opus anyway — so downloading itag 251 (opus ~160 kbps) pays the proxy
+ * for roughly 2-3x the bytes anyone can actually hear. `bestaudio[abr<=80]`
+ * picks the best stream at or under 80 kbps (itag 250, opus ~70 kbps), which is
+ * transparent after Discord's re-encode and roughly halves the traffic. The
+ * chain falls back to the best audio available when no low-bitrate stream
+ * exists, so it can never fail a resolve that used to work.
  */
-const AUDIO_FORMAT = 'bestaudio[acodec!=none]/best[acodec!=none]/best';
+const AUDIO_FORMAT =
+  'bestaudio[abr<=80]/bestaudio[acodec!=none]/best[acodec!=none]/best';
 
 /** Titles that are plainly not the song: esports/sports highlights, gameplay,
  *  podcasts, reactions, vlogs, news. These match a song name by accident (e.g.
