@@ -216,13 +216,27 @@ export function rotateYoutubeProxy(): string {
   const cur = config.youtubeProxy;
   if (!cur) return '';
   const sess = Math.random().toString(36).slice(2, 10);
-  // The username carries the session tag (DataImpulse: `acct__sessid.X;sessttl.N`).
-  // A URL round-trip would drop the `;sessttl` param, so rewrite the raw string.
+  // The username carries the session tag (DataImpulse residential:
+  // `acct__sessid.X;sessttl.N`). A URL round-trip would drop the `;sessttl`
+  // param, so rewrite the raw string.
   let out: string;
   if (/sessid\./i.test(cur)) {
     out = cur.replace(/sessid\.[^;:@]*/i, `sessid.${sess}`);
   } else {
-    out = cur.replace(/^(https?:\/\/)([^:@/]+)/i, (_m, scheme: string, user: string) => `${scheme}${user};sessid.${sess}`);
+    // No sessid — a DATACENTER plan. DataImpulse documents `sessid` for
+    // residential only; on datacenter the sticky exit is bound to the PORT
+    // (10000-20000), so rotating means moving to a different sticky port.
+    // Appending a sessid there would not change the exit at all.
+    const stickyPort = /:(\d{4,5})\/?$/.exec(cur);
+    const n = stickyPort ? Number(stickyPort[1]) : NaN;
+    if (Number.isFinite(n) && n >= 10000 && n <= 20000) {
+      // Stay inside the sticky range; 1..9999 offset so we never land on the
+      // same port (which would keep the flagged exit).
+      const next = 10000 + (((n - 10000) + 1 + Math.floor(Math.random() * 9998)) % 10000);
+      out = cur.replace(/:(\d{4,5})(\/?)$/, `:${next}$2`);
+    } else {
+      out = cur.replace(/^(https?:\/\/)([^:@/]+)/i, (_m, scheme: string, user: string) => `${scheme}${user};sessid.${sess}`);
+    }
   }
   config.youtubeProxy = out;
   return out;
