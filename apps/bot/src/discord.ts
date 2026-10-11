@@ -562,7 +562,7 @@ const COMMANDS = [
     .setDescription('Remove duplicate tracks from the upcoming queue'),
   new SlashCommandBuilder()
     .setName('bulk')
-    .setDescription('Queue a list of songs at once (one per line, max 10)')
+    .setDescription('Queue a list of songs at once (one per line, max 25)')
     .addStringOption((o) =>
       o
         .setName('tracks')
@@ -1735,7 +1735,7 @@ export class DiscordBot {
         const msg = await channel.send({ embeds: [this.npPayload(s)] });
         this.npMessages.set(guildId, { channelId: interaction.channelId, messageId: msg.id });
         this.scheduleSavePanels();
-        await interaction.reply({ content: '🔴 Live now-playing message posted right here — it updates itself.', flags: MessageFlags.Ephemeral });
+        { const r = await interaction.reply({ content: '🔴 Live now-playing message posted right here — it updates itself.', flags: MessageFlags.Ephemeral }); this.autoExpireNotice(r); }
         break;
       }
 
@@ -1797,7 +1797,7 @@ export class DiscordBot {
         // Always re-post at the bottom of the channel (old copy deleted) so the
         // panel lands where you're looking instead of scrolled up from before.
         await this.repostPanel(interaction.guildId!, interaction.channel as GuildTextBasedChannel | null);
-        await interaction.editReply({ content: '🎛️ Control panel posted right here.' });
+        { const r = await interaction.editReply({ content: '🎛️ Control panel posted right here.' }); this.autoExpireNotice(r); }
         break;
       }
 
@@ -3153,7 +3153,7 @@ export class DiscordBot {
           const sent = await message.channel.send({ embeds: [this.npPayload(s)] });
           this.npMessages.set(guildId, { channelId: message.channelId, messageId: sent.id });
           this.scheduleSavePanels();
-          await message.reply('🔴 Live now-playing message posted right here — it updates itself.');
+          { const m = await message.reply('🔴 Live now-playing message posted right here — it updates itself.'); this.autoExpireNotice(m); }
           break;
         }
 
@@ -3615,19 +3615,23 @@ export class DiscordBot {
             .map((a) => ({ name: a.name ?? 'file', url: a.url }))
             .slice(0, 10);
           const items = parseBulkItems(rawList, files.length);
+          const droppedByCap = Math.max(0, countBulkItems(rawList) - items.length);
           if (items.length === 0 && files.length === 0)
             return void (await message.reply(
-              'Usage: `V@bulk` — mix names, links and attached files, separated by `;` or new lines, max 10 total.\n' +
+              `Usage: \`V@bulk\` — mix names, links and attached files, separated by \`;\` or new lines, max ${BULK_MAX} total.\n` +
                 'e.g. `V@bulk Deltron 3030, Del; https://open.spotify.com/track/…; https://suno.com/song/…` (+ attach a file)',
             ));
           await this.withAck(message, `🔎 Adding ${items.length + files.length} item(s)…`, async () => {
             const resolved: Omit<TrackInfo, 'addedBy' | 'addedAt'>[] = [];
+            const unresolved: string[] = [];
             for (const q of items) {
               try {
                 const t = await resolvePlayInput(q);
                 if (t[0]) resolved.push(t[0]);
+                else unresolved.push(q);
               } catch {
-                /* skip an unresolvable item */
+                // Name it in the reply — a silent skip reads as "it ignored my song".
+                unresolved.push(q);
               }
             }
             for (const f of files) {
@@ -3663,7 +3667,13 @@ export class DiscordBot {
               .setTitle(`Added ${fresh.length} track${fresh.length > 1 ? 's' : ''}`)
               .setDescription(
                 fresh.map((t, i) => `${i + 1}. ${srcEmoji(t.source)} **${truncate(t.name, 60)}**`).join('\n') +
-                  (skipped > 0 ? `\n-# Skipped ${skipped} already in the queue` : ''),
+                  (skipped > 0 ? `\n-# Skipped ${skipped} already in the queue` : '') +
+                  (unresolved.length > 0
+                    ? `\n-# Couldn't find: ${unresolved.map((u) => truncate(u, 40)).join(', ')}`
+                    : '') +
+                  (droppedByCap > 0
+                    ? `\n-# Only the first ${BULK_MAX} items are read per bulk — ${droppedByCap} more were ignored`
+                    : ''),
               )
               .setColor(this.themeColor());
             await message.reply({ embeds: [embed] });
@@ -5572,6 +5582,14 @@ export class DiscordBot {
     setTimeout(() => { msg.delete().catch(() => {}); }, ms);
   }
 
+  /** Transient notice (an expired-button reply, a "posted right here"
+   *  confirmation): remove it after a minute. These are informational only —
+   *  leaving them in chat collects one-line bot replies that no longer mean
+   *  anything once the moment has passed. */
+  private autoExpireNotice(msg: { delete(): Promise<unknown> }): void {
+    this.autoExpire(msg, 60_000);
+  }
+
   private panelPayload(s: Session): { embeds: EmbedBuilder[]; components: ActionRowBuilder<ButtonBuilder>[] } {
     const st = s.queue.getState();
     const track = st.track;
@@ -6235,7 +6253,7 @@ export class DiscordBot {
     if (!this.pendingSearch.has(token)) return;
     this.pendingSearch.delete(token);
     try {
-      await sent?.edit({ content: '⌛ Search expired — run the command again.', embeds: [], components: [] });
+      if (sent) { await sent.edit({ content: '⌛ Search expired — run the command again.', embeds: [], components: [] }); this.autoExpireNotice(sent); }
     } catch {
       /* gone */
     }
@@ -6542,7 +6560,7 @@ export class DiscordBot {
     const token = interaction.customId.slice('vzsearch:'.length);
     const pending = this.pendingSearch.get(token);
     if (!pending) {
-      await interaction.update({ content: '⌛ This search expired — run the command again.', embeds: [], components: [] }).catch(() => {});
+      { const r = await interaction.update({ content: '⌛ This search expired — run the command again.', embeds: [], components: [] }).catch(() => null); if (r) this.autoExpireNotice(r); }
       return;
     }
     this.pendingSearch.delete(token);
@@ -7918,7 +7936,7 @@ export class DiscordBot {
     const [, action, nonce] = interaction.customId.split(':');
     const offer = nonce ? this.rouletteOffers.get(nonce) : undefined;
     if (!offer) {
-      await interaction.reply({ content: 'That roulette offer has expired — spin again with `V@roulette`.', flags: MessageFlags.Ephemeral }).catch(() => {});
+      { const r = await interaction.reply({ content: 'That roulette offer has expired — spin again with `V@roulette`.', flags: MessageFlags.Ephemeral }).catch(() => null); if (r) this.autoExpireNotice(r); }
       return;
     }
     this.rouletteOffers.delete(nonce);
@@ -7962,7 +7980,7 @@ export class DiscordBot {
     const [, action, nonce] = interaction.customId.split(':');
     const stash = nonce ? this.similarPending.get(nonce) : undefined;
     if (!stash || stash.tracks.length === 0) {
-      await interaction.reply({ content: 'That list expired — run `/similar` again.', flags: MessageFlags.Ephemeral }).catch(() => {});
+      { const r = await interaction.reply({ content: 'That list expired — run `/similar` again.', flags: MessageFlags.Ephemeral }).catch(() => null); if (r) this.autoExpireNotice(r); }
       return;
     }
     if (!this.canUse('play', interaction)) {
@@ -8812,7 +8830,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/remove <#>` · `V@rem <#>` — remove a queued track',
       '`V@qa` · `V@qadjust` — interactive queue editor: pick a track, then move / remove / play it now',
       '`/dedupe` · `V@dd` — remove duplicate upcoming tracks',
-      '`/bulk <tracks>` · `V@bulk` — queue a list at once: names, links and/or attached files, one per line or `;` (max 10)',
+      '`/bulk <tracks>` · `V@bulk` — queue a list at once: names, links and/or attached files, one per line or `;` (max 25)',
       '`/skipto` · `V@skipto` — jump to a future track (drops the ones skipped; off by default)',
       '`/skiptoggle on|off` · `V@skiptoggle` — allow /skipto here (mod)',
     ],
@@ -9048,8 +9066,10 @@ async function saveMashupHistory(recs: MashupRecord[]): Promise<void> {
   }
 }
 
-/** Max items a single `/bulk` or `V@bulk` accepts. */
-export const BULK_MAX = 10;
+/** Max items a single `/bulk` or `V@bulk` accepts. Each item is a full resolve
+ *  (sequential, a few seconds each), so this trades breadth against how long the
+ *  command can run. */
+export const BULK_MAX = 25;
 
 /**
  * Split a bulk list into items. Newlines, `;` and `|` all separate items. The
@@ -9063,6 +9083,15 @@ export function parseBulkItems(raw: string, reserved = 0): string[] {
     .map((x) => x.trim())
     .filter(Boolean)
     .slice(0, Math.max(0, BULK_MAX - reserved));
+}
+
+/** How many items a bulk list holds BEFORE the cap is applied. Lets the reply
+ *  say "only the first 10 were read" instead of silently dropping the rest. */
+export function countBulkItems(raw: string): number {
+  return raw
+    .split(/[\n;|]+/)
+    .map((x) => x.trim())
+    .filter(Boolean).length;
 }
 
 async function resolvePlayInput(query: string): Promise<ResolvedTrack[]> {
