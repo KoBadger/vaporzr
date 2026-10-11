@@ -177,12 +177,29 @@ export class QueueManager {
     // each refill is what made a shuffled queue look jumbled.
     const isBackground = opts?.background === true || requestedBy === 'endless-wave';
     if (this.state.shuffle && this.tracks.length > 0 && !isBackground) {
-      // Insert among the upcoming tracks, inclusive of the very next slot.
-      // `next` keeps it exactly next (deterministic).
-      const start = this.currentIndex === -1 ? 0 : this.currentIndex + 1;
-      const end = this.tracks.length;
-      newIndex = opts?.next ? start : start + Math.floor(Math.random() * (end - start + 1));
-      this.tracks.splice(Math.min(newIndex, end), 0, item);
+      // Shuffle is on, but a track the user explicitly asked for must not be
+      // scattered at a random point in the shuffled run: the order you add songs
+      // in is the order you want to hear them, and random placement is what made
+      // a shuffled queue look jumbled. Land it where insertUserBatch() puts a
+      // bulk — after the current track and any already-queued user tracks, but
+      // ahead of the first Endless Wave filler — so successive adds stack up in
+      // request order. `next` still forces the slot directly after the current
+      // track.
+      const afterCurrent = this.currentIndex === -1 ? this.tracks.length : this.currentIndex + 1;
+      if (opts?.next) {
+        newIndex = afterCurrent;
+      } else {
+        let at = afterCurrent;
+        for (let i = afterCurrent; i < this.tracks.length; i++) {
+          if ((this.tracks[i].addedBy ?? '') === 'endless-wave') {
+            at = i;
+            break;
+          }
+          at = i + 1;
+        }
+        newIndex = at;
+      }
+      this.tracks.splice(newIndex, 0, item);
     } else {
       newIndex = this.tracks.length;
       this.tracks.push(item);

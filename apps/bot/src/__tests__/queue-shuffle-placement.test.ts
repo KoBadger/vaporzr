@@ -77,6 +77,35 @@ describe('shuffle placement honours who added the track', () => {
     }
   });
 
+  it('successive user adds with shuffle ON keep request order and never scatter', () => {
+    const q = mk();
+    q.enqueue(track('spotify:track:a', 'A'), 'user');
+    q.setState({ shuffle: true, playing: true });
+    q.enqueue(track('spotify:track:n1', 'N1'), 'user');
+    q.enqueue(track('spotify:track:n2', 'N2'), 'user');
+    q.enqueue(track('spotify:track:n3', 'N3'), 'user');
+    // No random scatter: the order you added them is the order they play.
+    expect(q.getSnapshot().tracks.map((t) => t.uri)).toEqual([
+      'spotify:track:a',
+      'spotify:track:n1',
+      'spotify:track:n2',
+      'spotify:track:n3',
+    ]);
+  });
+
+  it('a user add with shuffle ON lands ahead of endless-wave filler', () => {
+    const q = mk();
+    q.enqueue(track('spotify:track:a', 'A'), 'user');
+    q.setState({ shuffle: true, playing: true });
+    q.enqueue(track('spotify:track:ew', 'EW'), 'endless-wave', { keepCursor: true });
+    q.enqueue(track('spotify:track:n', 'N'), 'user');
+    expect(q.getSnapshot().tracks.map((t) => t.uri)).toEqual([
+      'spotify:track:a',
+      'spotify:track:n',
+      'spotify:track:ew',
+    ]);
+  });
+
   it('an endless-wave refill with shuffle ON never lands ahead of a user track', () => {
     for (let run = 0; run < 40; run++) {
       const q = mk();
