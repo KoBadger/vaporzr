@@ -76,6 +76,7 @@ import {
   noteWaveDeadEnd,
   serializeState,
   restoreState,
+  COSINE_HISTORY_MAX,
 } from '@vaporzr/core/endlesswave';
 import type { EndlessWaveState } from '@vaporzr/core/endlesswave';
 import type { AudioFeatures, ResolvedTrack } from '@vaporzr/core/spotify';
@@ -415,6 +416,21 @@ describe('URI dedup', () => {
     expect(s.playedUris.size).toBeLessThanOrEqual(800);
     // The oldest entries should have been trimmed
     expect(s.playedUris.has('spotify:track:0')).toBe(false);
+  });
+});
+
+describe('cosine recording history is bounded', () => {
+  // This set is only a recent-history guard — tracks still in the queue are
+  // excluded separately via excludeUris. Unbounded, it drained the cosine pool
+  // over a long session until every candidate was rejected as "same recording
+  // already queued (cosine)" and the wave backed off with "no suitable
+  // candidate right now".
+  it('restoreState keeps only the most recent recordings', () => {
+    const ids = Array.from({ length: 5000 }, (_, i) => `id${i}`);
+    const s = restoreState({ queuedCosineIds: ids });
+    expect(s.queuedCosineIds.size).toBeLessThanOrEqual(COSINE_HISTORY_MAX);
+    expect(s.queuedCosineIds.has('id4999')).toBe(true);
+    expect(s.queuedCosineIds.has('id0')).toBe(false);
   });
 });
 

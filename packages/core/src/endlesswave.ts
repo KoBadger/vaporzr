@@ -168,6 +168,28 @@ function resetSession(state: EndlessWaveState): void {
   state.queuedCosineIds.clear();
 }
 
+/**
+ * How many recently-picked cosine recordings to remember. This set is only a
+ * recent-history guard — tracks currently in the queue are already excluded via
+ * `excludeUris` — so leaving it unbounded bought nothing and slowly drained the
+ * cosine pool: over a long session every recording the wave had EVER picked
+ * stayed excluded, until candidates were rejected wholesale as "same recording
+ * already queued (cosine)" and it backed off with "no suitable candidate right
+ * now". Bounded, the wave can revisit a recording it played a while ago instead
+ * of starving.
+ */
+export const COSINE_HISTORY_MAX = 300;
+
+/** Record a picked recording, evicting the oldest once the window is full. */
+function rememberCosine(state: EndlessWaveState, id: string): void {
+  state.queuedCosineIds.add(id);
+  while (state.queuedCosineIds.size > COSINE_HISTORY_MAX) {
+    const oldest = state.queuedCosineIds.values().next().value;
+    if (oldest === undefined) break;
+    state.queuedCosineIds.delete(oldest);
+  }
+}
+
 export function deactivate(state: EndlessWaveState): void {
   state.active = false;
   state.basic = false;
@@ -305,7 +327,7 @@ export function restoreState(data: Partial<EndlessWavePersist>): EndlessWaveStat
   if (typeof data.runStreak === 'number') s.runStreak = data.runStreak;
   if (typeof data.longestRun === 'number') s.longestRun = data.longestRun;
   for (const a of data.artistSet ?? []) s.artistSet.add(String(a).toLowerCase().trim());
-  for (const id of data.queuedCosineIds ?? []) s.queuedCosineIds.add(String(id));
+  for (const id of (data.queuedCosineIds ?? []).slice(-COSINE_HISTORY_MAX)) s.queuedCosineIds.add(String(id));
   return s;
 }
 
@@ -843,7 +865,7 @@ export async function pickNextTrack(
   // Record a picked cosine id so its recording can't be queued again this
   // session (audio-based dedup — see queuedCosineIds).
   const take = (t: ResolvedTrack): ResolvedTrack => {
-    if (t.cosineId) state.queuedCosineIds.add(t.cosineId);
+    if (t.cosineId) rememberCosine(state, t.cosineId);
     return t;
   };
 
@@ -1252,7 +1274,7 @@ export async function pickBasicTrack(
   survivors.sort((a, b) => (a.durationMs || 0) - (b.durationMs || 0));
   const pool = survivors.slice(0, Math.min(3, survivors.length));
   const chosen = pool[Math.floor(Math.random() * pool.length)];
-  if (chosen.cosineId) state.queuedCosineIds.add(chosen.cosineId);
+  if (chosen.cosineId) rememberCosine(state, chosen.cosineId);
   return chosen;
 }
 
