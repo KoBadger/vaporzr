@@ -1,11 +1,13 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import {
+  apiFlatSearch,
   decidePublish,
   describeBotWall,
   isBotWall,
   isClearlyWrongMatch,
   isProxyError,
   isProxyExhausted,
+  parseIsoDuration,
   scoreHit,
   shouldRetryYtDlp,
 } from '@vaporzr/core/youtube';
@@ -410,5 +412,69 @@ describe('describeBotWall (honest anti-bot diagnosis)', () => {
     expect(msg).toContain('/cookie-upload');
     expect(msg).toContain('cookies are being rejected');
     expect(msg).toContain('not the cause');
+  });
+});
+
+describe('apiFlatSearch (keyed YouTube Data API search)', () => {
+  const prevKey = config.youtubeApiKey;
+  afterEach(() => {
+    config.youtubeApiKey = prevKey;
+    vi.unstubAllGlobals();
+  });
+
+  it('maps search.list + videos.list into ranked hits with durations', async () => {
+    config.youtubeApiKey = 'test-key';
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', async (url: string) => {
+      calls.push(String(url));
+      if (String(url).includes('/search?')) {
+        return {
+          ok: true,
+          json: async () => ({
+            items: [
+              { id: { videoId: 'aaa' }, snippet: { title: 'Around The World', channelTitle: 'Daft Punk' } },
+              { id: { videoId: 'bbb' }, snippet: { title: 'Around The World (Live)', channelTitle: 'Someone' } },
+            ],
+          }),
+        } as unknown as Response;
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          items: [
+            {
+              id: 'aaa',
+              snippet: { title: 'Around The World', channelTitle: 'Daft Punk - Topic' },
+              contentDetails: { duration: 'PT3M23S' },
+            },
+            {
+              id: 'bbb',
+              snippet: { title: 'Around The World (Live)', channelTitle: 'Someone' },
+              contentDetails: { duration: 'PT7M1S' },
+            },
+          ],
+        }),
+      } as unknown as Response;
+    });
+
+    const hits = await apiFlatSearch('Daft Punk Around The World');
+    // The API's relevance order is preserved (rank feeds scoreHit()).
+    expect(hits.map((h) => h.videoId)).toEqual(['aaa', 'bbb']);
+    expect(hits[0].durationSec).toBe(203);
+    expect(hits[1].durationSec).toBe(421);
+    expect(hits[0].channel).toBe('Daft Punk - Topic');
+    expect(calls.some((c) => c.includes('/videos?'))).toBe(true);
+  });
+
+  it('returns nothing without a key, so the caller falls back to yt-dlp', async () => {
+    config.youtubeApiKey = '';
+    expect(await apiFlatSearch('anything')).toEqual([]);
+  });
+
+  it('parses ISO-8601 durations', () => {
+    expect(parseIsoDuration('PT3M23S')).toBe(203);
+    expect(parseIsoDuration('PT1H2M3S')).toBe(3723);
+    expect(parseIsoDuration('PT45S')).toBe(45);
+    expect(parseIsoDuration('')).toBe(0);
   });
 });

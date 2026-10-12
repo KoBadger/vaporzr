@@ -554,6 +554,78 @@ export async function resolveGenericMediaUrl(input: string): Promise<ResolvedVid
 }
 
 const SEARCH_URL = 'https://www.googleapis.com/youtube/v3/search';
+const VIDEOS_URL = 'https://www.googleapis.com/youtube/v3/videos';
+
+/** ISO-8601 duration ("PT3M23S") → seconds. */
+export function parseIsoDuration(iso: string): number {
+  const m = /^P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/.exec(iso ?? '');
+  if (!m) return 0;
+  const [, d, h, mi, s] = m;
+  return Number(d ?? 0) * 86400 + Number(h ?? 0) * 3600 + Number(mi ?? 0) * 60 + Number(s ?? 0);
+}
+
+/**
+ * Metadata-only search through the Data API v3.
+ *
+ * YouTube gates its search PAGE by IP reputation — a datacenter address (the
+ * bot's own VPS, or a datacenter proxy) gets "Sign in to confirm you're not a
+ * bot" while direct video fetches keep working. This endpoint is KEYED, so the
+ * IP is irrelevant: it is how to search when the page is walled. The free quota
+ * is 10,000 units/day and this costs ~101 (search.list 100 + videos.list 1)
+ * ⇒ ~99 searches/day at no cost. `videos.list` supplies the durations the
+ * length guards need.
+ */
+export async function apiFlatSearch(query: string, limit = 5): Promise<FlatHit[]> {
+  const key = config.youtubeApiKey;
+  if (!key) return [];
+  const sRes = await fetch(
+    `${SEARCH_URL}?part=snippet&type=video&maxResults=${limit}&q=${encodeURIComponent(query)}&key=${key}`,
+    { signal: AbortSignal.timeout(8000) },
+  );
+  if (!sRes.ok) throw new Error(`search.list HTTP ${sRes.status}`);
+  const sJson = (await sRes.json()) as { items?: SearchItem[] };
+  const items = sJson.items ?? [];
+  const ids = items.map((i) => i.id?.videoId).filter((v): v is string => !!v);
+  if (ids.length === 0) return [];
+
+  const meta = new Map<string, { title: string; channel: string; durationSec: number }>();
+  try {
+    const vRes = await fetch(`${VIDEOS_URL}?part=contentDetails,snippet&id=${ids.join(',')}&key=${key}`, {
+      signal: AbortSignal.timeout(8000),
+    });
+    if (vRes.ok) {
+      const vJson = (await vRes.json()) as {
+        items?: Array<{
+          id?: string;
+          snippet?: { title?: string; channelTitle?: string };
+          contentDetails?: { duration?: string };
+        }>;
+      };
+      for (const it of vJson.items ?? []) {
+        if (!it.id) continue;
+        meta.set(it.id, {
+          title: it.snippet?.title ?? '',
+          channel: it.snippet?.channelTitle ?? 'YouTube',
+          durationSec: parseIsoDuration(it.contentDetails?.duration ?? ''),
+        });
+      }
+    }
+  } catch {
+    // Durations are a nice-to-have; the snippet data below still works without.
+  }
+
+  // Keep the API's relevance order — rank feeds scoreHit().
+  return ids.map((id, i) => {
+    const m = meta.get(id);
+    const snip = items[i]?.snippet;
+    return {
+      videoId: id,
+      title: m?.title || snip?.title || '',
+      channel: m?.channel || snip?.channelTitle || 'YouTube',
+      durationSec: m?.durationSec ?? 0,
+    };
+  });
+}
 
 /**
  * Resolve a YouTube playlist into lightweight tracks (id + title). Extremely
@@ -673,8 +745,20 @@ interface FlatHit {
   durationSec: number;
 }
 
-/** Fast metadata-only YouTube search (no per-video extraction). */
+/** Fast metadata-only YouTube search (no per-video extraction). Prefers the
+ *  keyed Data API — which ignores the search-page IP gate — and falls back to
+ *  the yt-dlp scrape when no key is set or the API call fails. */
 async function flatSearch(query: string): Promise<FlatHit[]> {
+  if (config.youtubeApiKey) {
+    try {
+      const hits = await apiFlatSearch(query);
+      if (hits.length > 0) return hits;
+    } catch (err) {
+      console.warn(
+        `[youtube] API search failed (${err instanceof Error ? err.message : err}) — falling back to yt-dlp search`,
+      );
+    }
+  }
   const SEP = '\t';
   const raw = await runYtDlp([
     '--no-playlist',
