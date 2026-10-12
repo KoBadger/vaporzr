@@ -12,6 +12,7 @@ import type { AudioTransport } from '@vaporzr/core/transport';
 import { librespotDeviceId, type SpotifyBackend } from '@vaporzr/core/librespot';
 import { config } from '@vaporzr/core/config';
 import { analyzer } from './analyzer.js';
+import { LocalFeatureCollector, toAudioFeatures } from './audioFeatures.js';
 import { buildAudioFxChain, isEqPreset } from './audiofx.js';
 import { canCrossfade, fadeInPcm, planCrossfade, tempoMatchRatio } from './crossfade.js';
 import * as EW from '@vaporzr/core/endlesswave';
@@ -152,6 +153,9 @@ export class PlaybackController {
   /** Cumulative number of tracks that have started playing. */
   tracksPlayed = 0;
 
+  /** Measures energy/tempo/key from the audio we decode for each track. */
+  private featureCollector = new LocalFeatureCollector();
+
   constructor(
     private queue: QueueManager,
     private sendVisualizer: SendFn,
@@ -164,6 +168,9 @@ export class PlaybackController {
     this.voice.setOnVoiceReconnect(() => {
       void this.resumeAfterReconnect();
     });
+    // Measure what we play, so `V@shuffle smart|arc|key` can order the tracks the
+    // feature mirror does not know (see audioFeatures.ts).
+    this.voice.setFeatureTap((data) => this.featureCollector.feed(data));
   }
 
   /**
@@ -655,6 +662,27 @@ export class PlaybackController {
     }
   }
 
+  /**
+   * Measure the track that just finished from the audio we decoded for it, and
+   * attach the result to its queue entry.
+   *
+   * Smart shuffle and Endless Wave both read `estimatedFeatures`, so this is what
+   * lets `V@shuffle smart|arc|key` order a track the feature mirror does not know
+   * — measured from what actually played, for free, with no third party. Called
+   * before every advance, so a skipped track still contributes what it played.
+   */
+  private flushLocalFeatures(): void {
+    const track = this.queue.getState().track ?? this.queue.getCurrentTrack();
+    const est = this.featureCollector.estimate();
+    this.featureCollector.reset();
+    if (!est || !track) return;
+    this.queue.attachEstimatedFeatures(track.uri, toAudioFeatures(est, track.durationMs ?? 0));
+    console.log(
+      `[features] measured "${track.name}" — energy ${est.energy.toFixed(2)} · ` +
+        `${Math.round(est.tempo)} BPM · key ${est.key < 0 ? 'unknown' : `${est.key}${est.mode === 1 ? ' major' : ' minor'}`}`,
+    );
+  }
+
   /** True while audio is coming through the bot's own ffmpeg stream. */
   private usingServerStream(): boolean {
     const src = this.currentSource();
@@ -703,6 +731,8 @@ export class PlaybackController {
     }
     this.lastPlayUri = current.uri;
     this.lastPlayStartedAt = now;
+    // Measure this track from scratch (see flushLocalFeatures).
+    this.featureCollector.reset();
     const generation = ++this.playGeneration;
     this.stopAmbient();
     this.clearSpotifyRetry();
@@ -1730,6 +1760,7 @@ export class PlaybackController {
   }
 
   next(keepXfade = false): void {
+    this.flushLocalFeatures();
     this.playGeneration++;
     this.clearPreloadTimer();
     this.clearCrossfadeTimer();
@@ -1795,6 +1826,7 @@ export class PlaybackController {
   }
 
   previous(): void {
+    this.flushLocalFeatures();
     this.playGeneration++;
     this.clearPreloadTimer();
     this.clearCrossfadeTimer();
@@ -1959,6 +1991,7 @@ export class PlaybackController {
 
   /** Stop everything (queue cleared). */
   stopAll(): void {
+    this.flushLocalFeatures();
     this.playGeneration++;
     this.clearEndTimer();
     this.clearPreloadTimer();

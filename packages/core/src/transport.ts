@@ -54,6 +54,8 @@ export interface AudioTransport {
   setOnVoiceReconnect(cb: (() => void) | null): void;
   setStallRecovery(cb: (() => void) | null): void;
   setSpectrumTap(cb: ((data: Buffer) => void) | null): void;
+  /** Feed the local audio-feature collector (independent of the analyzer tap). */
+  setFeatureTap(cb: ((data: Buffer) => void) | null): void;
 
   // ---- pause / resume ----
   pause(): void;

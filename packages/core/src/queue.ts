@@ -528,6 +528,20 @@ export class QueueManager {
     return true;
   }
 
+  /**
+   * Attach a locally-measured feature estimate to a queued track. Smart shuffle
+   * and Endless Wave both read `estimatedFeatures`, so this is how a track the
+   * feature mirror does not know still becomes orderable by how it sounds.
+   * Returns true when the track was found.
+   */
+  attachEstimatedFeatures(uri: string, features: unknown): boolean {
+    const t = this.tracks.find((x) => x.uri === uri);
+    if (!t) return false;
+    (t as { estimatedFeatures?: unknown }).estimatedFeatures = features;
+    this.emitQueue();
+    return true;
+  }
+
   /** Swap two positions (used by the interactive queue editor). */
   swap(a: number, b: number): boolean {
     if (a === b) return false;

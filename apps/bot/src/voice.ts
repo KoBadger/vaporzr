@@ -62,6 +62,9 @@ export class VoiceManager implements AudioTransport {
   private pcmTap: ((data: Buffer) => void) | null = null;
   /** Dedicated spectrum-analyzer feed — independent of pcmTap so both coexist. */
   private spectrumTap: ((data: Buffer) => void) | null = null;
+  /** Local audio-feature measurement feed — its own slot so the analyzer tap
+   *  (which is only installed for the visualizer) cannot starve it. */
+  private featureTap: ((data: Buffer) => void) | null = null;
   /** Called when the active stream's write buffer drains (resume a paused source). */
   private onStreamDrain: (() => void) | null = null;
   /** Called after repeated stall warnings to try un-sticking the feed chain. */
@@ -150,6 +153,11 @@ export class VoiceManager implements AudioTransport {
   /** Feed the bot-side spectrum analyzer (separate slot from setPcmTap). */
   setSpectrumTap(cb: ((data: Buffer) => void) | null): void {
     this.spectrumTap = cb;
+  }
+
+  /** Feed the local audio-feature collector (separate slot from the analyzer). */
+  setFeatureTap(cb: ((data: Buffer) => void) | null): void {
+    this.featureTap = cb;
   }
 
   /** Re-point the join/leave notification (the bridge wires the primary session). */
@@ -598,6 +606,7 @@ export class VoiceManager implements AudioTransport {
         const out = this.mixSfx(chunk as Buffer);
         this.pcmTap?.(out);
         this.spectrumTap?.(out);
+        this.featureTap?.(out);
         cb(null, out);
       },
     });
