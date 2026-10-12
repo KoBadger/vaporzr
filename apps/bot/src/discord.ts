@@ -4550,6 +4550,11 @@ export class DiscordBot {
     // stream — otherwise the track plays on silently and trips the stall watchdog.
     if (state.playing) void s.playback.reattachAfterRejoin();
     console.log('[discord] auto-joined voice channel');
+    // A fresh join re-enables the now-playing follow. A previous `V@follow off`
+    // must not silently outlive the session — the strip is how everyone sees what
+    // is playing, so joining always turns it back on and posts it right away.
+    this.perms.setNpAuto(s.guildId, true);
+    void this.maybeAutoMiniNp(s.guildId, s.queue.getState());
     return true;
   }
 
@@ -4675,6 +4680,9 @@ export class DiscordBot {
     const state = s.queue.getState();
     if (state.playing) void s.playback.reattachAfterRejoin();
     console.log('[discord] auto-joined voice channel');
+    // Same as the message path: joining turns the now-playing follow back on.
+    this.perms.setNpAuto(s.guildId, true);
+    void this.maybeAutoMiniNp(s.guildId, s.queue.getState());
     return true;
   }
 
@@ -6411,7 +6419,10 @@ export class DiscordBot {
       return (t as { estimatedFeatures?: AudioFeatures }).estimatedFeatures ?? null;
     };
     const anchor = anchorId ? (features.get(anchorId) ?? null) : null;
-    const { ordered, withoutFeatures } = orderByVibe(upcoming, anchor, mode, featOf);
+    // Pass the artist so a track the mirror does not know can be ranked by the
+    // average vibe of that artist's other tracks in the queue, instead of being
+    // left unranked — which is why smart shuffle only ever moved part of a queue.
+    const { ordered, withoutFeatures } = orderByVibe(upcoming, anchor, mode, featOf, (t) => (t.artists ?? [])[0] ?? '');
     const moved = s.queue.reorderUpcoming(ordered.map((t) => t.uri));
     const embed = new EmbedBuilder()
       .setTitle(`🔀 Smart shuffle — ${SHUFFLE_MODE_LABEL[mode]}`)

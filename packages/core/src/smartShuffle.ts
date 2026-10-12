@@ -142,28 +142,72 @@ function arcOrder<T>(pool: Item<T>[], anchor: AudioFeatures | null): Item<T>[] {
   return out;
 }
 
+/** Continuous "vibe" fields, averaged when imputing. `key`/`mode` are
+ *  deliberately excluded — a key is circular, so an averaged one is meaningless. */
+const VIBE_FIELDS = [
+  'danceability',
+  'energy',
+  'valence',
+  'tempo',
+  'acousticness',
+  'instrumentalness',
+  'liveness',
+  'speechiness',
+] as const satisfies ReadonlyArray<keyof AudioFeatures>;
+
 /**
  * Reorder `items` starting from the anchor's vibe. Featureless items keep their
  * original index; the rest are filled in around them.
+ *
+ * When `artistOf` is supplied, a featureless track inherits the AVERAGE vibe of
+ * its artist's other tracks in this same list, and is then ranked like any other.
+ * Same-artist is a real signal — a catalogue sounds consistent — whereas the
+ * mirror's unknown half used to be left entirely unranked, which is what made
+ * `smart` reorder only part of a queue. Imputation is skipped for `key` mode,
+ * where an averaged key would be nonsense.
  */
 export function orderByVibe<T>(
   items: T[],
   anchor: AudioFeatures | null,
   mode: ShuffleMode,
   featOf: (t: T) => AudioFeatures | null,
+  artistOf?: (t: T) => string,
 ): { ordered: T[]; withoutFeatures: number } {
   const withF: Item<T>[] = [];
-  let withoutFeatures = 0;
+  const featureless: T[] = [];
   for (const item of items) {
     const f = featOf(item);
     if (f) withF.push({ item, f });
-    else withoutFeatures++;
+    else featureless.push(item);
   }
+  if (mode !== 'key' && artistOf && featureless.length > 0 && withF.length > 0) {
+    const byArtist = new Map<string, { sum: Record<string, number>; n: number }>();
+    for (const { item, f } of withF) {
+      const a = (artistOf(item) ?? '').toLowerCase().trim();
+      if (!a) continue;
+      const acc = byArtist.get(a) ?? { sum: {}, n: 0 };
+      for (const k of VIBE_FIELDS) acc.sum[k] = (acc.sum[k] ?? 0) + (f[k] as number);
+      acc.n++;
+      byArtist.set(a, acc);
+    }
+    for (const item of [...featureless]) {
+      const a = (artistOf(item) ?? '').toLowerCase().trim();
+      const acc = a ? byArtist.get(a) : undefined;
+      if (!acc) continue;
+      const avg = { key: -1, mode: 1, time_signature: 4, duration_ms: 0 } as AudioFeatures;
+      const rec = avg as unknown as Record<string, number>;
+      for (const k of VIBE_FIELDS) rec[k] = acc.sum[k] / acc.n;
+      withF.push({ item, f: avg });
+      featureless.splice(featureless.indexOf(item), 1);
+    }
+  }
+  const withoutFeatures = featureless.length;
   if (withF.length < 2) return { ordered: items, withoutFeatures };
 
   const ranked = (mode === 'arc' ? arcOrder(withF, anchor) : greedyOrder(withF, anchor, mode)).map((x) => x.item);
+  const rankedItems = new Set(withF.map((x) => x.item));
   let k = 0;
-  const ordered = items.map((it) => (featOf(it) ? ranked[k++] : it));
+  const ordered = items.map((it) => (rankedItems.has(it) ? ranked[k++] : it));
   return { ordered, withoutFeatures };
 }
 

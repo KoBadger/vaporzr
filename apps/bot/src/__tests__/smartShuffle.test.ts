@@ -88,6 +88,54 @@ describe('orderByVibe — flow', () => {
   });
 });
 
+describe('orderByVibe — artist imputation', () => {
+  interface ArtistTile {
+    uri: string;
+    artist: string;
+    f: AudioFeatures | null;
+  }
+
+  it("ranks a featureless track by its artist's average vibe", () => {
+    const tiles: ArtistTile[] = [
+      { uri: 'x1', artist: 'X', f: feat({ energy: 0.9, valence: 0.9 }) },
+      { uri: 'x2', artist: 'X', f: null }, // unknown to the mirror
+      { uri: 'y1', artist: 'Y', f: feat({ energy: 0.1, valence: 0.1 }) },
+    ];
+    const { ordered, withoutFeatures } = orderByVibe(
+      tiles,
+      feat({ energy: 0.9, valence: 0.9 }),
+      'flow',
+      (t) => t.f,
+      (t) => t.artist,
+    );
+    // X's unknown track inherits X's high energy, so it stays with X rather than
+    // being left unranked (which is why smart shuffle only moved part of a queue).
+    expect(withoutFeatures).toBe(0);
+    const uris = ordered.map((t) => t.uri);
+    expect(uris.indexOf('x2')).toBeLessThan(uris.indexOf('y1'));
+  });
+
+  it('does not impute for key mode — an averaged key would be meaningless', () => {
+    const tiles: ArtistTile[] = [
+      { uri: 'x1', artist: 'X', f: feat({ key: 0 }) },
+      { uri: 'x2', artist: 'X', f: null },
+      { uri: 'y1', artist: 'Y', f: feat({ key: 6 }) },
+    ];
+    const { withoutFeatures } = orderByVibe(tiles, feat(), 'key', (t) => t.f, (t) => t.artist);
+    expect(withoutFeatures).toBe(1);
+  });
+
+  it('leaves featureless tracks unranked when no artist getter is supplied', () => {
+    const tiles: ArtistTile[] = [
+      { uri: 'x1', artist: 'X', f: feat() },
+      { uri: 'x2', artist: 'X', f: null },
+      { uri: 'y1', artist: 'Y', f: feat() },
+    ];
+    const { withoutFeatures } = orderByVibe(tiles, feat(), 'flow', (t) => t.f);
+    expect(withoutFeatures).toBe(1);
+  });
+});
+
 describe('orderByVibe — arc', () => {
   it('builds a curve that peaks rather than starting at full energy', () => {
     vi.spyOn(Math, 'random').mockReturnValue(0.5);
