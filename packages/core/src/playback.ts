@@ -311,6 +311,9 @@ export class PlaybackController {
               name: track.name,
               artists: track.artists,
               durationMs: track.durationMs,
+              // Background preload: nobody is waiting, so let the accuracy path
+              // check more candidates instead of settling for the fast-path hit.
+              patienceMs: 30_000,
             });
           }
         }

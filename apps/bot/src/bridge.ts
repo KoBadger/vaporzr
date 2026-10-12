@@ -407,13 +407,19 @@ export class Bridge {
             const source = uri.startsWith('youtube:') ? 'youtube' : 'spotify';
             this.queue.enqueue({ uri, name: uri, artists: [], album: '', durationMs: 0, source }, 'panel');
           }
+          // Remember where we were. If the requested track cannot start, the
+          // cursor must not be left parked on a track that never played — the
+          // playback layer then treats it as current while the audio is still on
+          // the old track, which silently disables every advance path.
+          const before = this.queue.getState().track?.uri ?? '';
           while (this.queue.getCurrentTrack()?.uri !== msg.uris[0]) {
             if (!this.queue.next()) break;
           }
+          void this.playback.play().catch((err) => {
+            console.error('[bridge] play failed:', err instanceof Error ? err.message : String(err));
+            if (before) this.queue.focusUri(before);
+          });
         }
-        void this.playback.play().catch((err) => {
-          console.error('[bridge] play failed:', err instanceof Error ? err.message : String(err));
-        });
         break;
       case 'pause':
         this.playback.pause();
@@ -584,13 +590,17 @@ export class Bridge {
             );
             this.notice('success', `${playNow ? 'Now playing' : 'Added'}: ${video.name}`);
             if (playNow) {
-              // Point the cursor at the fresh track when idle, then start.
+              // Point the cursor at the fresh track when idle, then start. If it
+              // cannot start, put the cursor back so it never diverges from the
+              // audio that is actually playing.
+              const before = this.queue.getState().track?.uri ?? '';
               while (this.queue.getCurrentTrack()?.uri !== video.uri) {
                 if (!this.queue.next()) break;
               }
               void this.playback.play().catch((err) => {
                 console.error('[bridge] playSearch playback failed:', err instanceof Error ? err.message : err);
                 this.notice('error', `Playback failed: ${err instanceof Error ? err.message : err}`);
+                if (before) this.queue.focusUri(before);
               });
             }
           } catch (err) {

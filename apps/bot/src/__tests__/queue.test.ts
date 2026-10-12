@@ -32,6 +32,26 @@ describe('QueueManager.filterNew', () => {
     const q = new QueueManager();
     expect(q.filterNew([track('spotify:track:a', 'A'), track('spotify:track:a', 'A')])).toHaveLength(1);
   });
+
+  it('keeps two different songs that share a title and artist but differ in length', () => {
+    // A self-titled "Intro" and a reprise can share a title + lead artist. The
+    // old key collapsed them and silently dropped the second one.
+    const q = new QueueManager();
+    q.enqueue({ ...track('spotify:track:a', 'Intro'), durationMs: 180_000 }, 'user');
+    const other = { ...track('spotify:track:b', 'Intro'), durationMs: 420_000 };
+    expect(q.filterNew([other])).toHaveLength(1);
+  });
+
+  it('still drops the same song from a different upload when the lengths agree', () => {
+    const q = new QueueManager();
+    q.enqueue({ ...track('spotify:track:a', 'Mikado'), artists: ['Kredo'], durationMs: 200_000 }, 'user');
+    const other = {
+      ...track('youtube:video:x', 'Mikado - Official Audio'),
+      artists: ['Kredo - Topic'],
+      durationMs: 201_000,
+    };
+    expect(q.filterNew([other])).toHaveLength(0);
+  });
 });
 
 describe('QueueManager.insertUserBatch', () => {

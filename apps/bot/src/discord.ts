@@ -754,6 +754,9 @@ export class DiscordBot {
   private miniNpSuppress = new Map<string, string>();
   /** Message IDs already processed — guards against Discord retrying messageCreate. */
   private processedMessages = new Set<string>();
+  /** The last tracks removed from the queue (per guild), so `V@undo` can put them
+   *  back. A single slot: a second removal replaces it. */
+  private lastRemoved = new Map<string, TrackInfo[]>();
   private panelRefreshQueued = false;
   /** messageId -> live karaoke session (synced lines + track), edited by a ticker. */
   private static readonly KARAOKE_MAX_SESSIONS = 200;
@@ -3161,6 +3164,11 @@ export class DiscordBot {
         case 'clear':
         case 'stop': {
           if (!canUse('clear')) return void (await deny());
+          {
+            // Keep the queue so V@undo can bring it back after a mis-click.
+            const snapshot = s.queue.getSnapshot().tracks;
+            if (snapshot.length) this.lastRemoved.set(message.guildId ?? '', snapshot.map((t) => ({ ...t })));
+          }
           s.playback.stopAll();
           s.queue.clear();
           { const m4 = await message.reply('🗑️ Queue cleared'); this.autoExpire(m4); }
@@ -3203,15 +3211,44 @@ export class DiscordBot {
             break;
           }
           const names: string[] = [];
+          const removed: TrackInfo[] = [];
           for (const idx of [...targets].sort((a, b) => b - a)) {
             const r = s.removeFromQueue(idx);
-            if (r) names.push(r.name);
+            if (r) {
+              names.push(r.name);
+              removed.push(r);
+            }
           }
+          // Collected in descending index order; store ascending so V@undo
+          // restores the original running order.
+          if (removed.length) this.lastRemoved.set(message.guildId ?? '', removed.reverse());
           const left = s.queue.getSnapshot().tracks.length;
           await message.reply(
             `🧹 Removed ${names.length} track${names.length > 1 ? 's' : ''} — ${left} left in the queue:\n` +
               names.map((n) => `• ${truncate(n, 60)}`).join('\n') +
               (misses.length ? `\n-# Out of range: ${misses.join(', ')}` : ''),
+          );
+          break;
+        }
+
+        case 'undo': {
+          if (!canUse('remove')) return void (await deny());
+          const key = message.guildId ?? '';
+          const removed = this.lastRemoved.get(key);
+          if (!removed || removed.length === 0) {
+            { const m = await message.reply('Nothing to undo.'); this.autoExpire(m); }
+            break;
+          }
+          this.lastRemoved.delete(key);
+          // Put them back as a user block (in their original running order) —
+          // same placement as any other explicit add.
+          s.queue.insertUserBatch(
+            removed.map(({ addedBy: _addedBy, addedAt: _addedAt, ...rest }) => rest),
+            message.author.username,
+          );
+          await message.reply(
+            `↩️ Restored ${removed.length} track${removed.length > 1 ? 's' : ''}:\n` +
+              removed.map((t) => `• ${truncate(t.name, 60)}`).join('\n'),
           );
           break;
         }
@@ -8830,6 +8867,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/shuffle` · `V@sh` — shuffle the queue',
       '`V@shuffle smart` · `arc` · `key` — smart shuffle: order the upcoming tracks by vibe (flow), a set curve, or harmonic key',
       '`/remove <#>` · `V@rem <#>` — remove a queued track',
+      '`V@undo` — put back the tracks from the last removal or clear',
       '`V@qa` · `V@qadjust` — interactive queue editor: pick a track, then move / remove / play it now',
       '`/dedupe` · `V@dd` — remove duplicate upcoming tracks',
       '`/bulk <tracks>` · `V@bulk` — queue a list at once: names, links and/or attached files, one per line or `;` (max 25)',

@@ -642,6 +642,11 @@ export interface YoutubeSearchOptions {
   artists?: string[];
   /** Expected length; near-exact durations get a bonus, way-off ones a penalty. */
   durationMs?: number;
+  /** How long the accuracy path may spend extracting candidates before falling
+   *  back to the fused fast-path result. Defaults to RESOLVE_BUDGET_MS, which is
+   *  sized for a resolve a listener is WAITING on. A background preload has
+   *  nobody waiting, so it can afford to check more candidates and pick better. */
+  patienceMs?: number;
 }
 
 interface FlatHit {
@@ -978,7 +983,7 @@ async function doSearchAndResolve(
         }
       }
       const shortlist = ranked.slice(0, 3);
-      const deadline = Date.now() + RESOLVE_BUDGET_MS;
+      const deadline = Date.now() + (opts.patienceMs ?? RESOLVE_BUDGET_MS);
       for (const cand of shortlist) {
         const remaining = deadline - Date.now();
         if (remaining <= 0) break;

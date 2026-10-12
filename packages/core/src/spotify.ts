@@ -1042,8 +1042,15 @@ export async function getAudioFeatures(trackIds: string[]): Promise<Map<string, 
   const missing: string[] = [];
   for (const id of uniqueIds) {
     const cached = cacheGet<AudioFeatures>(`features:${id}`);
-    if (cached) out.set(id, cached);
-    else missing.push(id);
+    if (cached) {
+      out.set(id, cached);
+      continue;
+    }
+    // Remember recent misses too. Neither Spotify nor the mirror knows every
+    // track, and without this every shuffle re-asked about the same unknown ids —
+    // wasted requests against a rate-limited API for an answer we already had.
+    if (cacheGet<{ miss: true }>(`features-miss:${id}`)) continue;
+    missing.push(id);
   }
   if (missing.length === 0) return out;
   // Try Spotify first for whatever apps still have access; when it 403s (the
@@ -1087,6 +1094,13 @@ export async function getAudioFeatures(trackIds: string[]): Promise<Map<string, 
     for (const [id, af] of rb) {
       out.set(id, af);
       cacheSet(`features:${id}`, af, 7 * 24 * 60 * 60 * 1000);
+    }
+    // Cache what BOTH sources failed to answer, briefly. The mirror's catalog is
+    // partial (~half the queue here), so without this every shuffle re-queried
+    // the same unknowns; a day is long enough to stop the churn and short enough
+    // to pick up a track the mirror adds later.
+    for (const id of stillMissing) {
+      if (!out.has(id)) cacheSet(`features-miss:${id}`, { miss: true }, 24 * 60 * 60 * 1000);
     }
   }
   return out;

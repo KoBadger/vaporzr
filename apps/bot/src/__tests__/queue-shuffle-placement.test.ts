@@ -106,6 +106,20 @@ describe('shuffle placement honours who added the track', () => {
     ]);
   });
 
+  it('shuffleUpcoming reorders only user tracks and leaves filler behind', () => {
+    const q = mk();
+    q.enqueue(track('spotify:track:a', 'A'), 'user');
+    q.setState({ playing: true });
+    for (let i = 0; i < 5; i++) q.enqueue(track(`spotify:track:u${i}`, `U${i}`), 'user');
+    for (let i = 0; i < 5; i++) q.enqueue(track(`spotify:track:ew${i}`, `EW${i}`), 'endless-wave', { keepCursor: true });
+    q.shuffleUpcoming();
+    const uris = q.getSnapshot().tracks.map((t) => t.uri);
+    const userIdx = uris.map((u, i) => (u.includes('track:u') ? i : -1)).filter((i) => i >= 0);
+    const fillerIdx = uris.map((u, i) => (u.includes('track:ew') ? i : -1)).filter((i) => i >= 0);
+    // Auto-play filler must never be shuffled in among the listener's tracks.
+    expect(Math.min(...fillerIdx)).toBeGreaterThan(Math.max(...userIdx));
+  });
+
   it('an endless-wave refill with shuffle ON never lands ahead of a user track', () => {
     for (let run = 0; run < 40; run++) {
       const q = mk();

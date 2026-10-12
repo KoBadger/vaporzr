@@ -231,15 +231,21 @@ export class QueueManager {
     const addedIndex = this.tracks.length;
     const isBackground = requestedBy === 'endless-wave';
     if (this.state.shuffle && this.tracks.length > 0 && !isBackground) {
-      // A user handed us a LIST. Scattering each item at its own random spot
-      // would shuffle the list against itself and destroy the order the user
-      // chose (an album plays out of sequence). Instead pick ONE insertion
-      // point and keep the batch intact there, so the list arrives in order.
-      const start = this.currentIndex === -1 ? 0 : this.currentIndex + 1;
-      const end = this.tracks.length;
-      const at = start + Math.floor(Math.random() * (end - start + 1));
+      // Same placement as a single user add (and insertUserBatch): after the
+      // current track and any already-queued user tracks, but ahead of the first
+      // Endless Wave filler. The batch keeps its internal order, and successive
+      // adds stack up in request order instead of landing at a random point.
+      const afterCurrent = this.currentIndex === -1 ? this.tracks.length : this.currentIndex + 1;
+      let at = afterCurrent;
+      for (let i = afterCurrent; i < this.tracks.length; i++) {
+        if ((this.tracks[i].addedBy ?? '') === 'endless-wave') {
+          at = i;
+          break;
+        }
+        at = i + 1;
+      }
       const items = tracks.map((t) => ({ ...t, addedBy: requestedBy, addedAt: Date.now() }));
-      this.tracks.splice(Math.min(at, end), 0, ...items);
+      this.tracks.splice(at, 0, ...items);
       if (this.currentIndex === -1) this.currentIndex = 0;
       this.totalEnqueued += items.length;
       this.emitQueue();
@@ -319,16 +325,26 @@ export class QueueManager {
     return moved;
   }
 
-  /** Shuffle the upcoming tracks (everything after the current one). */
+  /**
+   * Shuffle the upcoming tracks (everything after the current one).
+   *
+   * Endless Wave filler is deliberately NOT shuffled: it stays behind the user's
+   * tracks, and only the listener's own upcoming tracks are reordered. Shuffling
+   * everything mixed auto-play picks in among the songs someone chose, which is
+   * the same rule the placement code works to maintain everywhere else.
+   */
   shuffleUpcoming(): void {
     if (this.currentIndex < 0) return;
     const start = this.currentIndex + 1;
     const upcoming = this.tracks.slice(start);
-    for (let i = upcoming.length - 1; i > 0; i--) {
+    const isFiller = (t: TrackInfo): boolean => (t.addedBy ?? '') === 'endless-wave';
+    const user = upcoming.filter((t) => !isFiller(t));
+    const filler = upcoming.filter(isFiller);
+    for (let i = user.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
-      [upcoming[i], upcoming[j]] = [upcoming[j], upcoming[i]];
+      [user[i], user[j]] = [user[j], user[i]];
     }
-    this.tracks.splice(start, upcoming.length, ...upcoming);
+    this.tracks.splice(start, upcoming.length, ...user, ...filler);
     this.emitQueue();
   }
 
@@ -361,23 +377,45 @@ export class QueueManager {
     return removed;
   }
 
+  /**
+   * How close two lengths must be for the same title|artist to count as the same
+   * recording. Editions of one song differ by seconds (an upload vs Spotify's
+   * master); genuinely different songs that happen to share a title and lead
+   * artist differ by much more. Without this, `filterNew` silently dropped the
+   * second of two different songs with the same name.
+   */
+  private static sameSongLength(a: number, b: number): boolean {
+    // Unknown length keeps the old behaviour (treat as the same recording) — the
+    // safe direction is to avoid stacking obvious duplicates.
+    if (!a || !b) return true;
+    return Math.abs(a - b) <= 10_000;
+  }
+
   /** The subset of `list` whose uri and title|artist are NOT already waiting in
    *  the current + upcoming queue. Collapses duplicates inside `list` too, so a
    *  paste of the same song twice only queues it once. Already-played tracks are
-   *  ignored, so re-queueing a song you liked still works. */
-  filterNew<T extends { uri?: string; name: string; artists?: string[] }>(list: T[]): T[] {
-    const seen = new Set<string>();
-    for (let i = Math.max(0, this.currentIndex); i < this.tracks.length; i++) {
-      const t = this.tracks[i];
-      if (t.uri) seen.add(`u:${t.uri}`);
+   *  ignored, so re-queueing a song you liked still works.
+   *
+   *  A title|artist match only counts when the LENGTHS agree too: two different
+   *  songs can share a title and lead artist (a self-titled "Intro", a reprise),
+   *  and collapsing those dropped a track the user explicitly asked for. */
+  filterNew<T extends { uri?: string; name: string; artists?: string[]; durationMs?: number }>(list: T[]): T[] {
+    const seenUris = new Set<string>();
+    const seenKeys = new Map<string, number[]>();
+    const remember = (t: { uri?: string; name: string; artists?: string[]; durationMs?: number }): void => {
+      if (t.uri) seenUris.add(`u:${t.uri}`);
       const k = trackKey(t);
-      if (k) seen.add(`k:${k}`);
-    }
+      if (k) seenKeys.set(k, [...(seenKeys.get(k) ?? []), t.durationMs ?? 0]);
+    };
+    for (let i = Math.max(0, this.currentIndex); i < this.tracks.length; i++) remember(this.tracks[i]);
+
     const out: T[] = [];
     for (const t of list) {
-      const keys = [t.uri ? `u:${t.uri}` : '', trackKey(t) ? `k:${trackKey(t)}` : ''].filter(Boolean);
-      if (keys.some((k) => seen.has(k))) continue;
-      for (const k of keys) seen.add(k);
+      if (t.uri && seenUris.has(`u:${t.uri}`)) continue;
+      const k = trackKey(t);
+      const lengths = k ? seenKeys.get(k) : undefined;
+      if (lengths?.some((d) => QueueManager.sameSongLength(d, t.durationMs ?? 0))) continue;
+      remember(t);
       out.push(t);
     }
     return out;
