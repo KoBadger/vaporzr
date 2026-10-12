@@ -1,13 +1,17 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
+import net from 'node:net';
 import {
   apiFlatSearch,
   decidePublish,
   describeBotWall,
+  flatSearch,
   isBotWall,
   isClearlyWrongMatch,
   isProxyError,
   isProxyExhausted,
   parseIsoDuration,
+  probeYoutube,
+  proxyReachable,
   scoreHit,
   shouldRetryYtDlp,
 } from '@vaporzr/core/youtube';
@@ -385,6 +389,99 @@ describe('scoreHit (artist named inside the title parentheses)', () => {
     );
     expect(studio).toBeGreaterThanOrEqual(6);
     expect(studio).toBeGreaterThan(live);
+  });
+});
+
+describe('proxy reachability (bridge down vs flagged exit)', () => {
+  /** A definitely-closed local port, so a connect fails fast instead of timing out. */
+  async function closedPort(): Promise<number> {
+    const server = net.createServer();
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const addr = server.address();
+    const port = typeof addr === 'object' && addr ? addr.port : 0;
+    await new Promise<void>((r) => server.close(() => r()));
+    return port;
+  }
+
+  it('reports a listening socket as reachable and a closed port as not', async () => {
+    const server = net.createServer();
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const addr = server.address();
+    const port = typeof addr === 'object' && addr ? addr.port : 0;
+    expect(await proxyReachable(`http://127.0.0.1:${port}`)).toBe(true);
+    await new Promise<void>((r) => server.close(() => r()));
+    expect(await proxyReachable(`http://127.0.0.1:${port}`, 1500)).toBe(false);
+  });
+
+  it('treats an empty or malformed proxy as unreachable', async () => {
+    expect(await proxyReachable('')).toBe(false);
+    expect(await proxyReachable('not a url')).toBe(false);
+  });
+
+  it('the canary reports "bridge" (not a wall) when the proxy endpoint is down', async () => {
+    const port = await closedPort();
+    const prev = config.youtubeProxy;
+    config.youtubeProxy = `http://127.0.0.1:${port}`;
+    try {
+      // Distinct from 'proxy'/'auth': nothing is wrong with YouTube — the
+      // clean-IP bridge itself is unreachable.
+      expect(await probeYoutube()).toBe('bridge');
+    } finally {
+      config.youtubeProxy = prev;
+    }
+  });
+});
+
+describe('search-result cache (protects the Data API quota)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('serves a repeated query from cache instead of re-spending API units', async () => {
+    const prevKey = config.youtubeApiKey;
+    config.youtubeApiKey = 'test-key';
+    const calls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string | URL) => {
+        const u = String(url);
+        calls.push(u);
+        if (u.includes('/search?')) {
+          return new Response(
+            JSON.stringify({
+              items: [
+                { id: { videoId: 'vid00000001' }, snippet: { title: 'Cached Song', channelTitle: 'Artist' } },
+              ],
+            }),
+            { status: 200 },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: 'vid00000001',
+                snippet: { title: 'Cached Song', channelTitle: 'Artist' },
+                contentDetails: { duration: 'PT3M20S' },
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }),
+    );
+    try {
+      const q = 'cache probe unique query zzq1';
+      const first = await flatSearch(q);
+      const afterFirst = calls.length;
+      const second = await flatSearch(q);
+      expect(first).toEqual(second);
+      expect(first[0]?.title).toBe('Cached Song');
+      // The repeat was served from cache: no extra API traffic at all.
+      expect(calls.length).toBe(afterFirst);
+    } finally {
+      config.youtubeApiKey = prevKey;
+    }
   });
 });
 

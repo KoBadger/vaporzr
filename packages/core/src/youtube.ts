@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { config } from '@vaporzr/core/config';
@@ -134,7 +135,7 @@ function stageCookieCopy(): string | null {
   }
 }
 
-function ytDlpOnce(args: string[], useProxy = true): Promise<string> {
+function ytDlpOnce(args: string[], proxy = ''): Promise<string> {
   return new Promise((resolve, reject) => {
     const noProxyEnv = Object.fromEntries(
       Object.entries(process.env).filter(([k]) => !k.toLowerCase().endsWith('_proxy')),
@@ -147,10 +148,9 @@ function ytDlpOnce(args: string[], useProxy = true): Promise<string> {
     // is baked into the bot image (node is not accepted as the EJS runtime). It
     // also refuses to fetch the remote solver script unless explicitly allowed.
     flags.push('--remote-components', 'ejs:github');
-    // Residential proxy for YouTube: datacenter IPs are SABR-flagged (no
-    // direct stream URLs). The proxy's exit IP resolves the URL AND downloads
-    // it (ffmpeg uses the same proxy — googlevideo URLs are IP-bound).
-    if (config.youtubeProxy && useProxy) flags.push('--proxy', config.youtubeProxy);
+    // The proxy's exit IP resolves the URL AND downloads it (ffmpeg uses the
+    // same proxy — googlevideo URLs are IP-bound). An empty value = direct.
+    if (proxy) flags.push('--proxy', proxy);
     const cookieCopy = stageCookieCopy();
     if (cookieCopy) flags.push('--cookies', cookieCopy);
     execFile(
@@ -201,6 +201,43 @@ export function isProxyExhausted(msg: string): boolean {
   return /TRAFFIC_EXHAUSTED|no (?:traffic|balance) (?:left|remaining)|insufficient (?:traffic|balance|credit)|out of (?:traffic|balance|credit)/i.test(
     msg,
   );
+}
+
+/**
+ * Is the proxy endpoint actually accepting connections?
+ *
+ * This is the one failure a proxy cannot self-report: when the clean-IP bridge
+ * is down (the PC off, asleep, or its tunnel dropped) yt-dlp fails with a
+ * connection error that looks just like a flagged exit. A plain TCP connect
+ * tells the two apart in milliseconds, costs no YouTube quota, and — unlike the
+ * canary — cannot be masked by a direct route that happens to work.
+ */
+export async function proxyReachable(url: string, timeoutMs = 4000): Promise<boolean> {
+  if (!url) return false;
+  let host: string;
+  let port: number;
+  try {
+    const u = new URL(url);
+    host = u.hostname;
+    port = Number(u.port) || (u.protocol === 'https:' ? 443 : 80);
+  } catch {
+    return false;
+  }
+  return new Promise<boolean>((resolve) => {
+    const sock = net.connect({ host, port });
+    const done = (ok: boolean) => {
+      try {
+        sock.destroy();
+      } catch {
+        /* best effort */
+      }
+      resolve(ok);
+    };
+    sock.setTimeout(timeoutMs);
+    sock.once('connect', () => done(true));
+    sock.once('timeout', () => done(false));
+    sock.once('error', () => done(false));
+  });
 }
 
 /** Age of the YouTube cookies file in days (null when unset or missing). */export function cookieAgeDays(): number | null {
@@ -329,37 +366,51 @@ export function shouldRetryYtDlp(
   return false;
 }
 
-/** Run yt-dlp with retries. `route` pins the network path: `false` forces a
- *  direct connection with no proxy fallback, so the health canary can tell a
- *  proxy failure apart from a YouTube-side block. Undefined keeps the normal
- *  proxy-first behaviour. */
+/** Run yt-dlp with retries. `route` pins the network path so the health canary
+ *  can attribute a failure correctly: `false` = a direct connection only;
+ *  `true` = the primary proxy only (no fallback and no direct, otherwise a dead
+ *  bridge would be masked by a direct route that happens to work). Undefined =
+ *  the normal chain: primary proxy → fallback proxy → one direct attempt. */
 async function runYtDlp(args: string[], retries = 2, route?: boolean): Promise<string> {
-  const hasProxy = !!config.youtubeProxy && route !== false;
-  // A rotating residential pool needs a couple more goes to find a clean exit.
-  const maxAttempts = hasProxy ? Math.max(retries, 3) : retries;
   let lastErr: unknown;
-  for (let attempt = 0; attempt <= maxAttempts; attempt++) {
+
+  /** Retry a single network path (`proxy` = '' is a direct connection). */
+  const attemptOn = async (proxy: string, tries: number): Promise<string> => {
+    for (let attempt = 0; attempt <= tries; attempt++) {
+      try {
+        return await ytDlpOnce(args, proxy);
+      } catch (err) {
+        lastErr = err;
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!shouldRetryYtDlp(msg, { attempt, maxAttempts: tries, hasProxy: !!proxy })) break;
+        await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
+      }
+    }
+    throw lastErr;
+  };
+
+  // A rotating residential pool needs a couple more goes to find a clean exit.
+  const proxyTries = Math.max(retries, 3);
+
+  if (route === false) return attemptOn('', retries);
+  if (route === true) return attemptOn(config.youtubeProxy, proxyTries);
+
+  // Normal chain: the clean-IP bridge is the primary; the (intermittently
+  // working) datacenter proxy is the backup, so a bridge outage — the PC off,
+  // asleep, or its tunnel dropped — degrades instead of failing outright.
+  const chain = [config.youtubeProxy, config.youtubeProxyFallback].filter(Boolean);
+  for (const proxy of chain) {
     try {
-      return await ytDlpOnce(args, route ?? true);
-    } catch (err) {
-      lastErr = err;
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!shouldRetryYtDlp(msg, { attempt, maxAttempts, hasProxy })) break;
-      await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
+      return await attemptOn(proxy, proxyTries);
+    } catch {
+      /* fall through to the next route */
     }
   }
-  // With a residential proxy the exits rotate, so a wall is usually one dirty
-  // IP: retry on the proxy first. Then try direct ONCE regardless — YouTube's
-  // IP flagging is dynamic (we have seen direct work and then wall again), and
-  // a dead or exhausted proxy must not take YouTube down when direct does work.
-  if (route !== false && config.youtubeProxy) {
-    try {
-      return await ytDlpOnce(args, false);
-    } catch (err) {
-      lastErr = err;
-    }
-  }
-  throw lastErr;
+  // A direct attempt is still made last: YouTube's IP flagging is dynamic and we
+  // have seen direct work, so a dead proxy must not take YouTube down. With a
+  // proxy configured it is a single attempt (the original behaviour); with none,
+  // it keeps the caller's retry budget.
+  return attemptOn('', chain.length > 0 ? 0 : retries);
 }
 
 /**
@@ -367,7 +418,15 @@ async function runYtDlp(args: string[], retries = 2, route?: boolean): Promise<s
  * JS runtime, PO-token provider) so failures — expired cookies, a dead solver, a
  * broken proxy — are caught by a probe instead of the next song.
  */
-export type YoutubeHealth = 'ok' | 'auth' | 'blocked' | 'proxy' | 'exhausted' | 'down' | 'unknown';
+export type YoutubeHealth =
+  | 'ok'
+  | 'auth'
+  | 'blocked'
+  | 'proxy'
+  | 'exhausted'
+  | 'bridge'
+  | 'down'
+  | 'unknown';
 const CANARY_URL = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ';
 let ytHealth: YoutubeHealth = 'unknown';
 let ytHealthAt = 0;
@@ -428,25 +487,34 @@ export async function probeYoutube(): Promise<YoutubeHealth> {
 
   let status: YoutubeHealth;
   if (config.youtubeProxy) {
-    const proxied = await attempt(true);
-    if (proxied === 'ok') {
-      status = 'ok';
-    } else if (isProxyExhausted(proxied)) {
-      // The proxy is out of traffic. Specific and actionable — and crucially the
-      // DIRECT fallback's anti-bot wall must not relabel this as stale cookies,
-      // which is what sent us chasing the wrong cause when the balance ran out.
-      status = 'exhausted';
-    } else if (isProxyError(proxied)) {
-      // The proxy itself failed (dead, unreachable, 407). Whether or not the
-      // direct route works, the proxy is the actionable cause.
-      status = 'proxy';
+    // Reachability first. An endpoint that refuses connections means the bridge
+    // itself is down (PC off/asleep, tunnel dropped) — a case yt-dlp reports the
+    // same way as a flagged exit, so the canary alone cannot see it. This check
+    // is instant, costs no quota, and yields an actionable status.
+    if (!(await proxyReachable(config.youtubeProxy))) {
+      status = 'bridge';
     } else {
-      // Two routes, four causes: a successful direct attempt means the proxy is
-      // the problem; a wall on either route means YouTube is refusing us.
-      const direct = await attempt(false);
-      if (direct === 'ok') status = 'proxy';
-      else if (isBotWall(proxied) || isBotWall(direct)) status = 'auth';
-      else status = 'down';
+      const proxied = await attempt(true);
+      if (proxied === 'ok') {
+        status = 'ok';
+      } else if (isProxyExhausted(proxied)) {
+        // The proxy is out of traffic. Specific and actionable — and crucially
+        // the DIRECT fallback's anti-bot wall must not relabel this as stale
+        // cookies, which is what sent us chasing the wrong cause when the
+        // balance ran out.
+        status = 'exhausted';
+      } else if (isProxyError(proxied)) {
+        // The proxy itself failed (dead, unreachable, 407). Whether or not the
+        // direct route works, the proxy is the actionable cause.
+        status = 'proxy';
+      } else {
+        // Two routes, four causes: a successful direct attempt means the proxy
+        // is the problem; a wall on either route means YouTube is refusing us.
+        const direct = await attempt(false);
+        if (direct === 'ok') status = 'proxy';
+        else if (isBotWall(proxied) || isBotWall(direct)) status = 'auth';
+        else status = 'down';
+      }
     }
   } else {
     // Without a proxy there is nothing to compare against — but the honest
@@ -745,10 +813,42 @@ interface FlatHit {
   durationSec: number;
 }
 
+/**
+ * Search results are IP-independent metadata — no stream URLs — so unlike a
+ * resolve() output (whose googlevideo URL is bound to the proxy exit that minted
+ * it) they are safe to cache across exits. Caching matters because the Data API
+ * spends ~101 of its 10,000 daily units per search (≈99 searches/day): re-adding
+ * the same tracks, or a retried bulk, would otherwise burn the day's budget.
+ */
+const SEARCH_CACHE_TTL = 6 * 60 * 60 * 1000;
+const SEARCH_CACHE_MAX = 400;
+const searchCache = new Map<string, { at: number; hits: FlatHit[] }>();
+
+function searchCacheKey(query: string): string {
+  return query.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
 /** Fast metadata-only YouTube search (no per-video extraction). Prefers the
  *  keyed Data API — which ignores the search-page IP gate — and falls back to
- *  the yt-dlp scrape when no key is set or the API call fails. */
-async function flatSearch(query: string): Promise<FlatHit[]> {
+ *  the yt-dlp scrape when no key is set or the API call fails. Results are
+ *  cached (see above); only non-empty results are stored, so a transient
+ *  failure is never remembered. */
+export async function flatSearch(query: string): Promise<FlatHit[]> {
+  const key = searchCacheKey(query);
+  const cached = searchCache.get(key);
+  if (cached && Date.now() - cached.at < SEARCH_CACHE_TTL) return cached.hits;
+  const hits = await flatSearchUncached(query);
+  if (hits.length > 0) {
+    searchCache.set(key, { at: Date.now(), hits });
+    if (searchCache.size > SEARCH_CACHE_MAX) {
+      const oldest = [...searchCache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+      if (oldest) searchCache.delete(oldest[0]);
+    }
+  }
+  return hits;
+}
+
+async function flatSearchUncached(query: string): Promise<FlatHit[]> {
   if (config.youtubeApiKey) {
     try {
       const hits = await apiFlatSearch(query);

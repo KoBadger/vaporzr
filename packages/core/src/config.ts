@@ -51,6 +51,13 @@ ytDlpPath: process.env.YT_DLP_PATH ?? path.join(__dirname, '..', '..', '..', 've
     */
    youtubeProxy: process.env.YOUTUBE_PROXY ?? '',
    /**
+    * Optional SECOND proxy, tried when the primary fails (the clean-IP bridge
+    * unreachable, exhausted, or flagged). Lets a PC-bridge outage degrade onto
+    * the old datacenter proxy — which still works intermittently — instead of
+    * dropping straight to a direct connection YouTube blocks outright.
+    */
+   youtubeProxyFallback: process.env.YOUTUBE_PROXY_FALLBACK ?? '',
+   /**
     * HTTP proxy for Suno (the suno.com page fetch + the cdn1.suno.ai audio
     * stream). Suno's CDN blocks datacenter IPs with 403, so routing just Suno
     * through a residential proxy restores playback. Format:

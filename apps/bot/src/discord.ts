@@ -4980,7 +4980,12 @@ export class DiscordBot {
             ? '⚠️ **Vaporzr: the YouTube proxy is failing** — the direct route works but `YOUTUBE_PROXY` does not (dead, exhausted, rejected or unreachable). Resolves still fall back to a direct connection, so playback should continue; renew the proxy or unset it.'
             : status === 'exhausted'
               ? '⚠️ **Vaporzr: the YouTube proxy is OUT OF TRAFFIC** — `YOUTUBE_PROXY` is reachable but has no balance left (DataImpulse answers `407 TRAFFIC_EXHAUSTED`). Top the plan up (DataImpulse → Add GBs) or point `YOUTUBE_PROXY` at another provider. Resolves fall back to a direct connection meanwhile, so some tracks may still work.'
-              : status === 'down'
+              : status === 'bridge'
+                ? '⚠️ **Vaporzr: the YouTube clean-IP bridge is DOWN** — the proxy endpoint is not accepting connections, which means the PC supplying the residential exit is off, asleep, or its tunnel dropped. ' +
+                  (config.youtubeProxyFallback
+                    ? 'Playback is continuing on the backup proxy meanwhile, so some tracks may still work.'
+                    : 'YouTube playback will fail until it is back. Wake the PC, or run install.ps1 in C:\\Users\\joshv\\vaporzr-proxy to restart the bridge.')
+                : status === 'down'
                 ? '⚠️ **Vaporzr: YouTube resolution is failing** — check `/health` (`youtube`) and the network.'
                 : '';
     if (!text) return;
