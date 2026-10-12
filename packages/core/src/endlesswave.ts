@@ -614,7 +614,7 @@ export function markPlayed(
 /** Normalized 0..1 distance between a track's audio features and the reco
  *  target. Each dimension is scaled to a comparable range (tempo/60, duration
  *  /240s) so no single feature dominates; missing sides are ignored. */
-function featureDistance(f: AudioFeatures, t: Partial<RecommendationParams>): number {
+function featureDistance(f: Partial<AudioFeatures>, t: Partial<RecommendationParams>): number {
   let d = 0;
   let n = 0;
   const add = (v: number | undefined, tv: number | undefined, scale: number): void => {
@@ -715,7 +715,7 @@ export function scoreCandidate(
   track: ResolvedTrack,
   targets: Partial<RecommendationParams>,
   recentArtists: string[],
-  features?: AudioFeatures,
+  features?: Partial<AudioFeatures>,
   env?: SessionNeighbourhood,
 ): number {
   return scoreBreakdown(track, targets, recentArtists, features, env).total;
@@ -733,7 +733,7 @@ export function scoreBreakdown(
   track: ResolvedTrack,
   targets: Partial<RecommendationParams>,
   recentArtists: string[],
-  features?: AudioFeatures,
+  features?: Partial<AudioFeatures>,
   env?: SessionNeighbourhood,
   opts: { jitter?: boolean; rng?: () => number } = {},
 ): ScoreBreakdown {
@@ -751,11 +751,19 @@ export function scoreBreakdown(
   }
 
   // Harmonic mixing: prefer keys that blend with the current track (Camelot).
-  if (features && targets.targetKey !== undefined && targets.targetMode !== undefined) {
+  // Only when BOTH keys are actually known — defaulting an unknown key to C major
+  // would score a real harmonic relationship that does not exist.
+  if (
+    features &&
+    features.key !== undefined &&
+    features.mode !== undefined &&
+    targets.targetKey !== undefined &&
+    targets.targetMode !== undefined
+  ) {
     terms.push({
       id: 'key',
       label: 'blends with the key that\u2019s playing',
-      points: harmonicDistance(features.key ?? 0, features.mode ?? 1, targets.targetKey, targets.targetMode) *
+      points: harmonicDistance(features.key, features.mode, targets.targetKey, targets.targetMode) *
         DEFAULT_CONFIG.harmonicWeight,
     });
   }

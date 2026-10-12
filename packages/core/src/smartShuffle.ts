@@ -30,15 +30,15 @@ interface Camelot {
   major: boolean;
 }
 
-function camelot(f: AudioFeatures): Camelot | null {
-  const key = Math.round(f.key);
-  const major = Math.round(f.mode) === 1;
+function camelot(f: Partial<AudioFeatures>): Camelot | null {
+  const key = Math.round(f.key ?? NaN);
+  const major = Math.round(f.mode ?? NaN) === 1;
   if (!Number.isFinite(key) || key < 0 || key > 11) return null;
   return { n: (major ? MAJOR_CAMELOT : MINOR_CAMELOT)[key], major };
 }
 
 /** 0 = identical/relative key, ~0.15 = a clean energy boost/drop, 1 = clashing. */
-export function keyDistance(a: AudioFeatures, b: AudioFeatures): number {
+export function keyDistance(a: Partial<AudioFeatures>, b: Partial<AudioFeatures>): number {
   const ka = camelot(a);
   const kb = camelot(b);
   if (!ka || !kb) return 0.5; // unknown key — neutral, never a blocker
@@ -61,17 +61,38 @@ const WEIGHTS: Record<ShuffleMode, { energy: number; valence: number; tempo: num
   sonic: { energy: 0.5, valence: 0.35, tempo: 0.1, acoustic: 0.05, key: 0.1 },
 };
 
-/** Weighted musical distance in 0..1 (0 = same vibe). */
-export function vibeDistance(a: AudioFeatures, b: AudioFeatures, mode: ShuffleMode = 'flow'): number {
+/** Weighted musical distance in 0..1 (0 = same vibe).
+ *
+ *  Only the dimensions BOTH sides actually carry are compared, and the result is
+ *  normalised by the weight that was used. That matters now that a track can
+ *  carry a partial feature set measured from its own audio: comparing an
+ *  unmeasured dimension (or worse, defaulting it) would add noise and dilute the
+ *  real signal. For two full feature sets this is identical to the old maths. */
+export function vibeDistance(
+  a: Partial<AudioFeatures>,
+  b: Partial<AudioFeatures>,
+  mode: ShuffleMode = 'flow',
+): number {
   const w = WEIGHTS[mode] ?? WEIGHTS.flow;
-  const tempo = Math.min(1, Math.abs(a.tempo - b.tempo) / 60);
-  return (
-    w.energy * Math.abs(a.energy - b.energy) +
-    w.valence * Math.abs(a.valence - b.valence) +
-    w.tempo * tempo +
-    w.acoustic * Math.abs(a.acousticness - b.acousticness) +
-    w.key * keyDistance(a, b)
+  let sum = 0;
+  let used = 0;
+  const add = (weight: number, d: number | null): void => {
+    if (d === null) return;
+    sum += weight * d;
+    used += weight;
+  };
+  const diff = (x?: number, y?: number): number | null =>
+    x === undefined || y === undefined ? null : Math.abs(x - y);
+  add(w.energy, diff(a.energy, b.energy));
+  add(w.valence, diff(a.valence, b.valence));
+  add(
+    w.tempo,
+    a.tempo !== undefined && b.tempo !== undefined ? Math.min(1, Math.abs(a.tempo - b.tempo) / 60) : null,
   );
+  add(w.acoustic, diff(a.acousticness, b.acousticness));
+  // keyDistance already answers "neutral" (0.5) when either key is unknown.
+  add(w.key, keyDistance(a, b));
+  return used > 0 ? sum / used : 0;
 }
 
 /**
@@ -84,10 +105,10 @@ const JITTER = 0.002;
 
 interface Item<T> {
   item: T;
-  f: AudioFeatures;
+  f: Partial<AudioFeatures>;
 }
 
-function greedyOrder<T>(pool: Item<T>[], anchor: AudioFeatures | null, mode: ShuffleMode): Item<T>[] {
+function greedyOrder<T>(pool: Item<T>[], anchor: Partial<AudioFeatures> | null, mode: ShuffleMode): Item<T>[] {
   const left = [...pool];
   const out: Item<T>[] = [];
   let cur = anchor;
@@ -115,7 +136,7 @@ function arcTarget(i: number, n: number): number {
   return t < 0.65 ? 0.35 + (t / 0.65) * 0.5 : 0.85 - ((t - 0.65) / 0.35) * 0.35;
 }
 
-function arcOrder<T>(pool: Item<T>[], anchor: AudioFeatures | null): Item<T>[] {
+function arcOrder<T>(pool: Item<T>[], anchor: Partial<AudioFeatures> | null): Item<T>[] {
   const n = pool.length;
   const left = [...pool];
   const out: Item<T>[] = [];
@@ -127,7 +148,7 @@ function arcOrder<T>(pool: Item<T>[], anchor: AudioFeatures | null): Item<T>[] {
     for (let j = 0; j < left.length; j++) {
       const f = left[j].f;
       const s =
-        Math.abs(f.energy - want) + // sit on the curve
+        Math.abs((f.energy ?? 0.5) - want) + // sit on the curve
         (cur ? vibeDistance(cur, f, 'arc') * 0.6 : 0) + // and still flow
         Math.random() * JITTER;
       if (s < bestScore) {
@@ -168,9 +189,9 @@ const VIBE_FIELDS = [
  */
 export function orderByVibe<T>(
   items: T[],
-  anchor: AudioFeatures | null,
+  anchor: Partial<AudioFeatures> | null,
   mode: ShuffleMode,
-  featOf: (t: T) => AudioFeatures | null,
+  featOf: (t: T) => Partial<AudioFeatures> | null,
   artistOf?: (t: T) => string,
 ): { ordered: T[]; withoutFeatures: number } {
   const withF: Item<T>[] = [];
@@ -194,8 +215,8 @@ export function orderByVibe<T>(
       const a = (artistOf(item) ?? '').toLowerCase().trim();
       const acc = a ? byArtist.get(a) : undefined;
       if (!acc) continue;
-      const avg = { key: -1, mode: 1, time_signature: 4, duration_ms: 0 } as AudioFeatures;
-      const rec = avg as unknown as Record<string, number>;
+      const avg: Partial<AudioFeatures> = {};
+      const rec = avg as Record<string, number>;
       for (const k of VIBE_FIELDS) rec[k] = acc.sum[k] / acc.n;
       withF.push({ item, f: avg });
       featureless.splice(featureless.indexOf(item), 1);

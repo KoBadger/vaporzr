@@ -54,6 +54,25 @@ describe('vibeDistance', () => {
   });
 });
 
+describe('vibeDistance with a partial feature set', () => {
+  // A track measured from its own audio carries only energy/tempo/key. The
+  // distance must compare what BOTH sides have — never invent a missing value
+  // and then compare it, which is what produced noise (and NaN) before.
+  it('compares only the dimensions both sides carry', () => {
+    const partial: Partial<AudioFeatures> = { energy: 0.9, tempo: 128 };
+    const full = feat({ energy: 0.9, tempo: 128, valence: 0.1, acousticness: 0.9, key: 0, mode: 1 });
+    expect(vibeDistance(partial, full, 'flow')).toBeLessThan(0.1);
+  });
+
+  it('still separates two partial tracks by the dimensions they share', () => {
+    expect(vibeDistance({ energy: 0.9 }, { energy: 0.1 }, 'flow')).toBeGreaterThan(0.3);
+  });
+
+  it('never returns NaN for featureless inputs', () => {
+    expect(Number.isFinite(vibeDistance({}, {}, 'flow'))).toBe(true);
+  });
+});
+
 describe('orderByVibe — flow', () => {
   it('never puts two wildly different energies next to each other', () => {
     vi.spyOn(Math, 'random').mockReturnValue(0.5);

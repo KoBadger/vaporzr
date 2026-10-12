@@ -6412,11 +6412,13 @@ export class DiscordBot {
     } catch {
       /* fall back to whatever estimates the queue already carries */
     }
-    const featOf = (t: TrackInfo): AudioFeatures | null => {
+    const featOf = (t: TrackInfo): Partial<AudioFeatures> | null => {
       const id = extractSpotifyId(t.uri);
       const fromApi = id ? features.get(id) : undefined;
       if (fromApi) return fromApi;
-      return (t as { estimatedFeatures?: AudioFeatures }).estimatedFeatures ?? null;
+      // Measured from the track's own audio when the mirror does not know it
+      // (see audioFeatures.ts). Partial: only the fields we actually measured.
+      return (t as { estimatedFeatures?: Partial<AudioFeatures> }).estimatedFeatures ?? null;
     };
     const anchor = anchorId ? (features.get(anchorId) ?? null) : null;
     // Pass the artist so a track the mirror does not know can be ranked by the

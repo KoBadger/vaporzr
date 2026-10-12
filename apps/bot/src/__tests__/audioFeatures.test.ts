@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LocalFeatureCollector, estimateEnergy, estimateKey } from '@vaporzr/core/audioFeatures';
+import { LocalFeatureCollector, estimateEnergy, estimateKey, toAudioFeatures } from '@vaporzr/core/audioFeatures';
 
 const ANALYSIS_RATE = 8000;
 const note = (midi: number): number => 440 * Math.pow(2, (midi - 69) / 12);
@@ -60,6 +60,30 @@ describe('local audio features — energy', () => {
 
   it('is zero for silence', () => {
     expect(estimateEnergy(Buffer.alloc(ANALYSIS_RATE * 2))).toBe(0);
+  });
+});
+
+describe('toAudioFeatures', () => {
+  it('emits only the fields it measured — never an invented neutral', () => {
+    const f = toAudioFeatures({ energy: 0.7, tempo: 128, key: 7, mode: 1 }, 200_000);
+    expect(f.energy).toBe(0.7);
+    expect(f.tempo).toBe(128);
+    expect(f.key).toBe(7);
+    expect(f.mode).toBe(1);
+    // The ordering maths SKIPS what it does not have, so a fabricated 0.5 would
+    // be compared against a real target — adding noise and diluting the signal.
+    expect(f.valence).toBeUndefined();
+    expect(f.danceability).toBeUndefined();
+    expect(f.acousticness).toBeUndefined();
+    expect(f.instrumentalness).toBeUndefined();
+  });
+
+  it('omits an unknown key and an undetected tempo', () => {
+    const f = toAudioFeatures({ energy: 0.4, tempo: 0, key: -1, mode: 1 });
+    expect(f.energy).toBe(0.4);
+    expect(f.key).toBeUndefined();
+    expect(f.mode).toBeUndefined();
+    expect(f.tempo).toBeUndefined();
   });
 });
 

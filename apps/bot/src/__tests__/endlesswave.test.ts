@@ -63,6 +63,7 @@ import {
   isLongFormMix,
   markPlayed,
   scoreCandidate,
+  scoreBreakdown,
   extractSeeds,
   normalizeTrackName,
   pickContext,
@@ -416,6 +417,40 @@ describe('URI dedup', () => {
     expect(s.playedUris.size).toBeLessThanOrEqual(800);
     // The oldest entries should have been trimmed
     expect(s.playedUris.has('spotify:track:0')).toBe(false);
+  });
+});
+
+describe('scoreBreakdown with a locally-measured feature set', () => {
+  // A track measured from its own audio carries energy/tempo (and key when it can
+  // be detected). The wave must score the fit it CAN judge and skip the rest — an
+  // unknown key must never be silently treated as C major.
+  const track = {
+    uri: 'youtube:video:x',
+    name: 'X',
+    artists: ['A'],
+    album: '',
+    durationMs: 200_000,
+    source: 'youtube' as const,
+  };
+
+  it('scores musical fit but skips the key term when no key was measured', () => {
+    const b = scoreBreakdown(track, { targetEnergy: 0.8, targetTempo: 128, targetKey: 7, targetMode: 1 }, [], {
+      energy: 0.8,
+      tempo: 128,
+    });
+    const ids = b.terms.map((t) => t.id);
+    expect(ids).toContain('features');
+    expect(ids).not.toContain('key');
+  });
+
+  it('includes the key term when the key WAS measured', () => {
+    const b = scoreBreakdown(track, { targetEnergy: 0.8, targetTempo: 128, targetKey: 7, targetMode: 1 }, [], {
+      energy: 0.8,
+      tempo: 128,
+      key: 7,
+      mode: 1,
+    });
+    expect(b.terms.map((t) => t.id)).toContain('key');
   });
 });
 

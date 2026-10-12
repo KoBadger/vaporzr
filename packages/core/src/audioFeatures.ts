@@ -51,26 +51,23 @@ export interface LocalFeatures {
 }
 
 /**
- * Spread a local measurement into the full Spotify-shaped object the consumers
- * expect. energy, tempo, key and mode are MEASURED; the rest are the same
- * neutral placeholders the Deezer estimator uses, and the ordering code treats
- * them as uninformative rather than as real data.
+ * The measured subset, shaped like the consumers' feature object.
+ *
+ * ONLY the fields we actually measured are present. The ordering maths skips
+ * fields it does not have, so emitting an invented neutral value instead would be
+ * worse than useless: the wave's `featureDistance` averages over the fields both
+ * sides carry, so a fabricated 0.5 would be compared against a real target and
+ * both add noise and dilute the signal we do have.
  */
-export function toAudioFeatures(est: LocalFeatures, durationMs = 0): AudioFeatures {
-  return {
-    energy: est.energy,
-    tempo: est.tempo > 0 ? est.tempo : 120,
-    key: est.key >= 0 ? est.key : -1, // -1 = undetected; keyDistance treats it as neutral
-    mode: est.mode,
-    valence: 0.5,
-    danceability: 0.5,
-    acousticness: 0.3,
-    instrumentalness: 0.2,
-    liveness: 0.12,
-    speechiness: 0.06,
-    time_signature: 4,
-    duration_ms: durationMs,
-  };
+export function toAudioFeatures(est: LocalFeatures, durationMs = 0): Partial<AudioFeatures> {
+  const out: Partial<AudioFeatures> = { energy: est.energy };
+  if (est.tempo > 0) out.tempo = est.tempo;
+  if (est.key >= 0) {
+    out.key = est.key;
+    out.mode = est.mode;
+  }
+  if (durationMs > 0) out.duration_ms = durationMs;
+  return out;
 }
 
 const clamp01 = (x: number): number => (x < 0 ? 0 : x > 1 ? 1 : x);
