@@ -252,17 +252,34 @@ export function rotateYoutubeProxy(): string {
   return out;
 }
 
-/** Actionable text for the anti-bot wall. It deliberately does NOT claim the
- *  cookies have expired: the same wall appears when YouTube has flagged the
- *  bot's datacenter IP (what the residential proxy exists for) or when the PO
- *  token is missing. Blaming the cookies sent an admin to re-export a perfectly
- *  good cookie file while the real cause was the IP. */
-export function describeBotWall(): string {
+/** Whether the configured proxy is a residential plan. DataImpulse residential
+ *  carries a `sessid` tag in the username; a datacenter plan does not (it is
+ *  sticky by port instead). */
+function proxyIsResidential(url: string): boolean {
+  return /sessid\./i.test(url);
+}
+
+/** Actionable text for the anti-bot wall.
+ *
+ *  A wall is NOT proof of expired cookies: the same text appears when YouTube
+ *  has flagged the exit IP. The decisive difference is whether it also survives
+ *  a DIRECT (no-proxy) attempt — the canary probes both routes, so `auth` means
+ *  the wall held on both and the IP cannot be the common factor, leaving the
+ *  sign-in itself (cookies / PO token). Getting this backwards is expensive:
+ *  the old text told an admin to re-export good cookies while the real cause was
+ *  the IP, and now the reverse — it blamed the IP while a fresh-looking cookie
+ *  file was being rejected. `signInRefused` is overridable for tests. */
+export function describeBotWall(opts: { signInRefused?: boolean } = {}): string {
   const age = cookieAgeDays();
   const ageText = age === null ? '`missing`' : `${age} day${age === 1 ? '' : 's'} old`;
+  const kind = proxyIsResidential(config.youtubeProxy) ? 'residential' : 'datacenter';
+  const signInRefused = opts.signInRefused ?? ytHealth === 'auth';
+  if (signInRefused) {
+    return `YouTube is refusing the bot's sign-in (anti-bot wall) on BOTH the proxy and a direct attempt — so the proxy's IP is not the cause: the cookies are being rejected. They are ${ageText}, but freshness is not validity — a session YouTube has invalidated stays rejected however recently it was exported. Re-upload a fresh cookies.txt with \`/cookie-upload\` (export it from a browser that is still signed in).`;
+  }
   return config.youtubeProxy
-    ? `YouTube refused the request (anti-bot wall). Cookies are ${ageText} and a residential proxy IS configured — so either the proxy's exit IP is flagged too, the cookies are stale, or the PO token is missing. Retrying usually lands on a clean exit; if it keeps happening, refresh the cookies with \`/cookie-upload\`.`
-    : `YouTube refused the request (anti-bot wall) and NO residential proxy is set. Cookies are ${ageText}. A flagged datacenter IP is the usual cause — refreshing cookies alone will not fix that; set YOUTUBE_PROXY in /opt/vaporzr/.env.`;
+    ? `YouTube refused the request (anti-bot wall). Cookies are ${ageText} and a ${kind} proxy IS configured — so either the proxy's exit IP is flagged too, the cookies are stale, or the PO token is missing. Retrying usually lands on a clean exit; if it keeps happening, refresh the cookies with \`/cookie-upload\`.`
+    : `YouTube refused the request (anti-bot wall) and NO proxy is set. Cookies are ${ageText}. A flagged datacenter IP is the usual cause — refreshing cookies alone will not fix that; set YOUTUBE_PROXY in /opt/vaporzr/.env.`;
 }
 
 /**

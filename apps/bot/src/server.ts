@@ -108,7 +108,7 @@ async function serveArtwork(url: URL, res: http.ServerResponse): Promise<void> {
   }
 }
 import { playlistStore } from '@vaporzr/core/playlists';
-import { probeYoutube, youtubeHealth } from '@vaporzr/core/youtube';
+import { cookieAgeDays, probeYoutube, youtubeHealth } from '@vaporzr/core/youtube';
 import { addPushSubscription, pushPublicKey, pushSubscriptionCount, removePushSubscription } from './push.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -171,7 +171,7 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
         spotifyApi: spotifyApiStatus,
         poToken: poTokenStatus,
         youtube: youtubeHealth().status,
-        cookiesAgeDays: cookiesAgeDays(),
+        cookieAgeDays: cookieAgeDays(),
         push: pushSubscriptionCount(),
         memory: {
           heapUsedMb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
@@ -214,7 +214,7 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
   poTimer.unref?.();
 
   // YouTube canary: catch expired cookies / dead solver / dead proxy up front.
-  const cookieAge = cookiesAgeDays();
+  const cookieAge = cookieAgeDays();
   if (cookieAge === null) {
     console.warn('[vaporzr] no YouTube cookies file found — YouTube may hit the bot check. Set YOUTUBE_COOKIES_PATH.');
   } else if (cookieAge > 21) {
@@ -313,18 +313,6 @@ async function readJsonBody(req: http.IncomingMessage, limit = 64 * 1024): Promi
     });
     req.on('error', () => resolve(null));
   });
-}
-
-/** Age of the YouTube cookies file in days (null if unset/missing). */
-function cookiesAgeDays(): number | null {
-  try {
-    const p = config.youtubeCookiesPath;
-    if (!p) return null;
-    const st = fs.statSync(p);
-    return Math.max(0, Math.round((Date.now() - st.mtimeMs) / 86_400_000));
-  } catch {
-    return null;
-  }
 }
 
 /** Delete uploaded files older than `maxAgeDays` so data/uploads can't grow forever. */

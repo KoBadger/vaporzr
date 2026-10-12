@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import {
   decidePublish,
+  describeBotWall,
   isBotWall,
   isClearlyWrongMatch,
   isProxyError,
@@ -8,6 +9,7 @@ import {
   scoreHit,
   shouldRetryYtDlp,
 } from '@vaporzr/core/youtube';
+import { config } from '@vaporzr/core/config';
 import type { ResolvedVideo } from '@vaporzr/core/youtube';
 
 describe('alert confirmation (decidePublish)', () => {
@@ -381,5 +383,32 @@ describe('scoreHit (artist named inside the title parentheses)', () => {
     );
     expect(studio).toBeGreaterThanOrEqual(6);
     expect(studio).toBeGreaterThan(live);
+  });
+});
+
+describe('describeBotWall (honest anti-bot diagnosis)', () => {
+  const prev = config.youtubeProxy;
+  afterEach(() => {
+    config.youtubeProxy = prev;
+  });
+
+  it('names a datacenter proxy as datacenter, not residential', () => {
+    config.youtubeProxy = 'http://acct__cr.us__sessttl.60:pw@gw.dataimpulse.com:10007';
+    const msg = describeBotWall({ signInRefused: false });
+    expect(msg).toContain('datacenter');
+    expect(msg).not.toContain('residential');
+  });
+
+  it('names a residential proxy as residential', () => {
+    config.youtubeProxy = 'http://acct__sessid.abc;sessttl.60:pw@gw.dataimpulse.com:10000';
+    expect(describeBotWall({ signInRefused: false })).toContain('residential');
+  });
+
+  it('blames the cookies, not the IP, when the wall survives the direct attempt', () => {
+    config.youtubeProxy = 'http://acct__cr.us__sessttl.60:pw@gw.dataimpulse.com:10007';
+    const msg = describeBotWall({ signInRefused: true });
+    expect(msg).toContain('/cookie-upload');
+    expect(msg).toContain('cookies are being rejected');
+    expect(msg).toContain('not the cause');
   });
 });
