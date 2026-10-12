@@ -1586,7 +1586,17 @@ export class PlaybackController {
    * locally decoded PCM bytes — no /me/player polling, so no rate-limit drain.
    */
   private startSpotifyProgress(): void {
-    this.stopSpotifyProgress();
+    // Clear only the interval — deliberately NOT via stopSpotifyProgress(), which
+    // zeroes spotifyTrackStartedAt. That timestamp is the wall-clock baseline for
+    // the "position is ahead of real time" guard below, and every caller sets it
+    // immediately before calling this, so zeroing it here disabled the guard
+    // completely. With the guard dead, a librespot feed that had decoded ahead of
+    // the listener made the byte-derived position read as "finished" while audio
+    // was still playing — the song cutting out before its end.
+    if (this.spotifyProgress) {
+      clearInterval(this.spotifyProgress);
+      this.spotifyProgress = null;
+    }
     this.spotifyProgress = setInterval(() => {
       const state = this.queue.getState();
       // Resolve the PLAYING track, not the cursor: they can diverge, and the
