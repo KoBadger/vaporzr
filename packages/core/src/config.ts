@@ -58,6 +58,13 @@ ytDlpPath: process.env.YT_DLP_PATH ?? path.join(__dirname, '..', '..', '..', 've
     */
    youtubeProxyFallback: process.env.YOUTUBE_PROXY_FALLBACK ?? '',
    /**
+    * How to name the clean-IP bridge in alerts — the host that supplies the
+    * residential exit. The bridge has moved once already (PC → phone), so
+    * naming it in code goes stale and misleads whoever reads the alert. Set
+    * YOUTUBE_PROXY_LABEL to whatever is actually running it.
+    */
+   youtubeProxyLabel: process.env.YOUTUBE_PROXY_LABEL ?? 'the clean-IP bridge host',
+   /**
     * HTTP proxy for Suno (the suno.com page fetch + the cdn1.suno.ai audio
     * stream). Suno's CDN blocks datacenter IPs with 403, so routing just Suno
     * through a residential proxy restores playback. Format:
