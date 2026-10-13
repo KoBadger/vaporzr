@@ -21,6 +21,25 @@ const BROADCAST = process.env.VAPORZR_BROADCAST === '1' || process.argv.includes
 const ALWAYS_ON_TOP = process.env.VAPORZR_ALWAYS_ON_TOP === '1' || process.argv.includes('--top');
 /** Bot socket for a bot running on another machine, e.g. wss://host/ws. */
 const WS_URL = process.env.VAPORZR_WS ?? argValue('--ws');
+/** Share key for a keyed bot. A client that does not present it is a GUEST, and
+ *  the bridge silently drops every `cmd` a guest sends — so without this the
+ *  player's own play/seek/theme controls do nothing at all. Set it with
+ *  VAPORZR_KEY or --key=… (the same key as /panel?key=…). */
+const SHARE_KEY = process.env.VAPORZR_KEY ?? argValue('--key');
+/** The socket URL handed to the renderer, with the share key attached. */
+const WS_TARGET = (() => {
+  const base = WS_URL ?? `ws://127.0.0.1:${BOT_PORT}/ws`;
+  if (!SHARE_KEY) return base;
+  try {
+    const u = new URL(base);
+    if (!u.searchParams.has('key')) u.searchParams.set('key', SHARE_KEY);
+    return u.toString();
+  } catch {
+    return base;
+  }
+})();
+/** Socket URL with the key masked, so it is safe to log. */
+const redactWs = (u: string): string => u.replace(/key=[^&]*/, 'key=***');
 /** Broadcast window size (WxH) — keep it fixed so an OBS capture never shifts. */
 const BROADCAST_SIZE = process.env.VAPORZR_SIZE ?? argValue('--size') ?? '1280x720';
 
@@ -81,7 +100,7 @@ function createVisualizerWindow(): void {
   if (BROADCAST) {
     win.setMenuBarVisibility(false);
     console.log(
-      `[player] broadcast mode ${width}x${height} → ${WS_URL ?? `ws://127.0.0.1:${BOT_PORT}/ws`}`,
+      `[player] broadcast mode ${width}x${height} → ${redactWs(WS_TARGET)}`,
     );
   }
   if (DEBUG) {
@@ -99,7 +118,8 @@ function createVisualizerWindow(): void {
     query: {
       port: String(BOT_PORT),
       ...(BROADCAST ? { broadcast: '1' } : {}),
-      ...(WS_URL ? { ws: WS_URL } : {}),
+      // Always pass the resolved target so the renderer inherits the share key.
+      ws: WS_TARGET,
     },
   });
   win.on('closed', () => {
@@ -140,7 +160,12 @@ function createOverlayWindow(screensaver: boolean): void {
   // Click-through by default; Ctrl+Shift+V (or the win-pass button) unlocks it.
   win.setIgnoreMouseEvents(true, { forward: true });
   win.loadFile(path.join(www, 'visualizer.html'), {
-    query: { port: String(BOT_PORT), overlay: '1', screensaver: screensaver ? '1' : '0' },
+    query: {
+      port: String(BOT_PORT),
+      overlay: '1',
+      screensaver: screensaver ? '1' : '0',
+      ws: WS_TARGET,
+    },
   });
   win.on('closed', () => {
     if (overlayWindow === win) overlayWindow = null;

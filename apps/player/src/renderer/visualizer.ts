@@ -71,6 +71,17 @@ const btnSfx = {
 };
 const btnDjToggle = document.getElementById('btn-dj-toggle') as HTMLButtonElement;
 const ctrlVol = document.getElementById('ctrl-vol') as HTMLInputElement;
+// Visual controls (Phase 2 parity with the web visualizer).
+const btnPace = document.getElementById('btn-pace') as HTMLButtonElement;
+const btnCalm = document.getElementById('btn-calm') as HTMLButtonElement;
+const btnLock = document.getElementById('btn-lock') as HTMLButtonElement;
+const btnPresets = document.getElementById('btn-presets') as HTMLButtonElement;
+const sensSlider = document.getElementById('sens') as HTMLInputElement;
+const swatchBar = document.getElementById('swatches') as HTMLSpanElement;
+const guildBar = document.getElementById('guild-bar') as HTMLDivElement;
+const presetPicker = document.getElementById('preset-picker') as HTMLDivElement;
+const presetSearch = document.getElementById('preset-search') as HTMLInputElement;
+const presetList = document.getElementById('preset-list') as HTMLDivElement;
 const winPass = document.getElementById('win-pass') as HTMLButtonElement;
 const winHide = document.getElementById('win-hide') as HTMLButtonElement;
 
@@ -142,17 +153,27 @@ const client = new WsClient({
       setWaveMode(msg.mode ?? (msg.active ? 'smart' : 'off'));
     } else if (msg.type === 'snapshot') {
       setDjEnabled(!!msg.djEnabled);
+      // Apply the server's current theme + reactivity up front. Without this the
+      // player sat on its own defaults until someone happened to change them,
+      // which is part of why it looked different from the web visualizer.
+      if (msg.theme) applyTheme(msg.theme);
+      if (typeof msg.sensitivity === 'number') applySensitivity(msg.sensitivity);
       // A snapshot only ever AUTO-ENABLES the scene (EW is on) — same rule as
       // the web visualizer: only a live 'endlesswave' broadcast may turn it off.
       if (msg.endlesswaveMode) setWaveMode(msg.endlesswaveMode);
       else if (msg.endlesswave === true) handleEndlessWave(true);
       if (typeof msg.presetCycle === 'number') setPresetCycle(msg.presetCycle, false);
+      if (msg.guilds) setGuilds(msg.guilds, msg.primaryGuildId);
     } else if (msg.type === 'dj:update') {
       setDjEnabled(msg.enabled);
     } else if (msg.type === 'audio:pcm') {
       queueBridgePcm(msg.data);
     } else if (msg.type === 'visuals:sensitivity') {
       applySensitivity(msg.multiplier);
+    } else if (msg.type === 'visuals:mood') {
+      // Mood-reactive palette (V@mood). The web visualizer has always honoured
+      // this; the player never handled it, so its colours stayed static.
+      applyMood(msg.on === false ? null : { hue: msg.hue, sat: msg.sat, light: msg.light });
     } else if (msg.type === 'preset:nav') {
       if (msg.action === 'prev') previousPreset(1.2);
       else if (msg.action === 'shuffle') shufflePreset(1.5);
@@ -198,15 +219,24 @@ function applySensitivity(multiplier: number): void {
   const smoothing = SENSITIVITY_CURVE[multiplier] ?? (0.82 - (multiplier - 1) * 0.44);
   if (analyser) analyser.smoothingTimeConstant = smoothing;
   try { localStorage.setItem('vaporzr.sensitivity', String(multiplier)); } catch {}
+  // Keep the slider honest when the value arrives from the bot (snapshot) or
+  // another panel, not just from this window's own drag.
+  if (sensSlider) sensSlider.value = String(multiplier);
   log(`Sensitivity set to ${multiplier.toFixed(2)}x (smoothing ${smoothing.toFixed(2)})`);
 }
+
+/** Lock the current visual: the carousel stops advancing (this viewer only). */
+let presetLocked = false;
 
 /** (Re)start the preset carousel at the configured pace. 0 = manual. */
 function startPresetCycle(): void {
   if (presetCycle) window.clearInterval(presetCycle);
   presetCycle = null;
   if (presetCycleSec <= 0) return;
-  presetCycle = window.setInterval(() => nextPreset(2.5), presetCycleSec * 1000);
+  presetCycle = window.setInterval(() => {
+    // A locked visual stays put — the same rule the web visualizer uses.
+    if (!presetLocked) nextPreset(2.5);
+  }, presetCycleSec * 1000);
 }
 
 /** Panel-driven dwell time — the same global setting the web visualizer uses. */
@@ -214,6 +244,7 @@ function setPresetCycle(secs: number, persist = true): void {
   presetCycleSec = Math.max(0, Math.min(600, Math.round(secs || 0)));
   if (persist) { try { localStorage.setItem('vaporzr.presetCycle', String(presetCycleSec)); } catch {} }
   startPresetCycle();
+  updateVisualButtons();
   log(`Preset pace: ${presetCycleSec > 0 ? `${presetCycleSec}s per visual` : 'manual'}`);
 }
 
@@ -370,6 +401,137 @@ function updateControls(): void {
   btnNext.classList.toggle('disabled', !track);
 }
 
+// ---- Visual controls (theme, reactivity, pace, calm, lock, browser) ----
+//
+// Parity with the web visualizer's dock: the Electron player used to only be a
+// playback controller and could not touch its own visuals. Everything here
+// mirrors apps/bot/public/viz.html — the server-backed bits (theme, reactivity,
+// guild) send commands, the per-viewer bits (pace, calm, lock, browse) stay local.
+
+/** The bot's themes, mirroring apps/bot/src/themes.ts. Swatches only send the
+ *  id; the server resolves it and broadcasts the real palette back. */
+const THEMES: Array<{ id: string; name: string; accent: string; accent2: string }> = [
+  { id: 'vaporzr', name: 'Vaporzr', accent: '#6a5cff', accent2: '#22d3ee' },
+  { id: 'sunset', name: 'Sunset Drive', accent: '#ff8a3d', accent2: '#ff3cac' },
+  { id: 'neon', name: 'Neon Blast', accent: '#ff073a', accent2: '#1ed6ff' },
+  { id: 'midnight', name: 'Midnight Club', accent: '#8a7dff', accent2: '#60a5fa' },
+  { id: 'synthwave', name: 'Synthwave', accent: '#f472b6', accent2: '#fb923c' },
+  { id: 'plasma', name: 'Plasma', accent: '#22d3ee', accent2: '#a78bfa' },
+  { id: 'ultraviolet', name: 'Ultraviolet', accent: '#a855f7', accent2: '#6366f1' },
+  { id: 'marshmallow', name: 'Marshmallow', accent: '#f472b6', accent2: '#e879f9' },
+  { id: 'emerald', name: 'Emerald City', accent: '#34d399', accent2: '#22d3ee' },
+];
+let activeThemeId = 'vaporzr';
+
+function buildSwatches(): void {
+  swatchBar.innerHTML = '';
+  for (const t of THEMES) {
+    const b = document.createElement('button');
+    b.title = t.name;
+    b.style.background = `linear-gradient(135deg, ${t.accent}, ${t.accent2})`;
+    b.classList.toggle('active', t.id === activeThemeId);
+    b.onclick = () => sendCmd('theme', { themeId: t.id });
+    swatchBar.appendChild(b);
+  }
+}
+
+/** Record the active theme (from a click, a broadcast, or the connect snapshot). */
+function setActiveTheme(id: string): void {
+  activeThemeId = id;
+  const kids = Array.from(swatchBar.children);
+  if (!kids.length) return; // swatches not built yet — buildSwatches() reads the id
+  for (const [i, b] of kids.entries()) b.classList.toggle('active', THEMES[i]?.id === id);
+}
+
+/** Preset pace: 15 → 30 → 45 → 60 → 90 → 2 min → manual → back (this viewer). */
+const PACE_STEPS = [15, 30, 45, 60, 90, 120, 0];
+function cyclePace(): void {
+  const i = PACE_STEPS.indexOf(presetCycleSec);
+  setPresetCycle(PACE_STEPS[(i < 0 ? 2 : i + 1) % PACE_STEPS.length], true);
+}
+
+/** Calm mode: gentler brightness and a stricter flash guard, per viewer. */
+let calm = false;
+function applyCalm(): void {
+  document.body.classList.toggle('calm', calm);
+  try { localStorage.setItem('vaporzr.calm', calm ? '1' : '0'); } catch { /* storage unavailable */ }
+  updateVisualButtons();
+  log(calm ? 'Calm mode on — gentler brightness, stricter flash guard' : 'Calm mode off');
+}
+
+function updateVisualButtons(): void {
+  btnPace.textContent = presetCycleSec > 0 ? `⏱${presetCycleSec}` : '⏱∞';
+  btnPace.title = presetCycleSec > 0
+    ? `Preset pace: ${presetCycleSec}s per visual (click to change)`
+    : 'Preset pace: manual — no auto-advance (click to change)';
+  btnCalm.classList.toggle('on', calm);
+  btnCalm.title = calm ? 'Calm mode on — click to disable' : 'Calm mode — gentler brightness, stricter flash guard';
+  btnLock.textContent = presetLocked ? '🔒' : '🔓';
+  btnLock.classList.toggle('on', presetLocked);
+  btnLock.title = presetLocked ? 'Visual locked — click to unlock' : 'Lock the current visual';
+}
+
+/** Browse the loaded library; picking one locks it in (same as the web viz). */
+function renderPresetList(query: string): void {
+  const q = query.trim().toLowerCase();
+  presetList.innerHTML = '';
+  const out: string[] = [];
+  for (const n of presetNames) {
+    if (q && !n.toLowerCase().includes(q)) continue;
+    out.push(n);
+    if (out.length >= 400) break;
+  }
+  for (const n of out) {
+    const b = document.createElement('button');
+    b.textContent = n;
+    b.classList.toggle('cur', presetNames[currentPresetIndex] === n);
+    b.onclick = () => {
+      const i = presetNames.indexOf(n);
+      if (i >= 0) {
+        loadPresetAt(i, 0.8);
+        presetLocked = true;
+        updateVisualButtons();
+      }
+      togglePresetPicker(false);
+    };
+    presetList.appendChild(b);
+  }
+  if (!out.length) {
+    const d = document.createElement('div');
+    d.className = 'empty';
+    d.textContent = presetNames.length ? 'No matches.' : 'Loading the library…';
+    presetList.appendChild(d);
+  }
+}
+
+function togglePresetPicker(force?: boolean): void {
+  const show = force ?? !presetPicker.classList.contains('show');
+  presetPicker.classList.toggle('show', show);
+  if (show) {
+    presetSearch.value = '';
+    renderPresetList('');
+    window.setTimeout(() => presetSearch.focus(), 30);
+  }
+}
+
+/** Guild switcher: shown only when the bot actually serves more than one server
+ *  (a guest is told just "Server", so this stays hidden for anonymous viewers). */
+function setGuilds(list: Array<{ id: string; name: string }>, primaryId?: string): void {
+  guildBar.innerHTML = '';
+  if (list.length < 2) {
+    guildBar.classList.remove('visible');
+    return;
+  }
+  guildBar.classList.add('visible');
+  for (const g of list) {
+    const b = document.createElement('button');
+    b.textContent = g.name;
+    b.classList.toggle('active', g.id === primaryId);
+    b.onclick = () => sendCmd('switchGuild', { guildId: g.id });
+    guildBar.appendChild(b);
+  }
+}
+
 function wireControls(): void {
   btnPlay.addEventListener('click', () => sendCmd('toggle'));
   btnPrev.addEventListener('click', () => sendCmd('previous'));
@@ -406,6 +568,34 @@ function wireControls(): void {
   });
 
   controlsToggle.addEventListener('click', () => setControlsVisible(!controlsVisible));
+
+  // ---- Visual controls ----
+  btnPace.addEventListener('click', cyclePace);
+  btnCalm.addEventListener('click', () => {
+    calm = !calm;
+    applyCalm();
+  });
+  btnLock.addEventListener('click', () => {
+    presetLocked = !presetLocked;
+    updateVisualButtons();
+  });
+  btnPresets.addEventListener('click', (e) => {
+    e.stopPropagation();
+    togglePresetPicker();
+  });
+  sensSlider.addEventListener('change', () => sendCmd('sensitivity', { sensitivity: Number(sensSlider.value) }));
+  presetSearch.addEventListener('input', () => renderPresetList(presetSearch.value));
+  // Click-away closes the browser (but not a click on its own toggle).
+  document.addEventListener('click', (e) => {
+    if (!presetPicker.classList.contains('show')) return;
+    const t = e.target as HTMLElement | null;
+    if (t && (presetPicker.contains(t) || t.id === 'btn-presets')) return;
+    togglePresetPicker(false);
+  });
+  try { calm = localStorage.getItem('vaporzr.calm') === '1'; } catch { /* storage unavailable */ }
+  document.body.classList.toggle('calm', calm);
+  buildSwatches();
+  updateVisualButtons();
 
   window.addEventListener('keydown', (e) => {
     if (!controlsVisible && e.key !== 'c' && e.key !== 'C' && e.key !== 'h' && e.key !== 'H') return;
@@ -445,11 +635,15 @@ function wireControls(): void {
         break;
       case 'ArrowRight':
         e.preventDefault();
-        sendCmd('seek', { positionMs: (latestState.positionMs || 0) + 10000 });
+        // Alt+arrows are the prev/next track shortcuts the tooltips advertise;
+        // bare arrows scrub, which is what people reach for while watching.
+        if (e.altKey) sendCmd('next');
+        else sendCmd('seek', { positionMs: (latestState.positionMs || 0) + 10000 });
         break;
       case 'ArrowLeft':
         e.preventDefault();
-        sendCmd('seek', { positionMs: Math.max(0, (latestState.positionMs || 0) - 10000) });
+        if (e.altKey) sendCmd('previous');
+        else sendCmd('seek', { positionMs: Math.max(0, (latestState.positionMs || 0) - 10000) });
         break;
       case 'c':
       case 'C':
@@ -1124,7 +1318,7 @@ function watchTick(levels: SynthLevels): void {
     if (s > hi) hi = s;
   }
 
-  if (hi < WATCH_BLACK) {
+  if (hi < (calm ? 0.02 : WATCH_BLACK)) {
     blacklistPreset(w.name);
     presetWatch = null;
     nextPreset(0.6);
@@ -1137,7 +1331,7 @@ function watchTick(levels: SynthLevels): void {
   // rather than sailing past the black check.
   let sdHi = -Infinity;
   for (const s of w.sdSamples) if (s > sdHi) sdHi = s;
-  if (levels.energy > 0.07 && sdHi < WATCH_BLANK_SD) {
+  if (levels.energy > 0.07 && sdHi < (calm ? 0.02 : WATCH_BLANK_SD)) {
     blacklistPreset(w.name);
     presetWatch = null;
     nextPreset(0.6);
@@ -1236,6 +1430,29 @@ function applyTheme(t: { accent: string; accent2: string; glow: string }): void 
   root.setProperty('--vz-accent', t.accent);
   root.setProperty('--vz-accent2', t.accent2);
   root.setProperty('--vz-glow', t.glow);
+  // Keep the swatch row in step when the theme changes server-side (or arrives
+  // in the connect snapshot) rather than from this window's own click.
+  const id = (t as { id?: string }).id;
+  if (id) setActiveTheme(id);
+}
+
+/** Mood-reactive palette: the current track's tone, broadcast by the bot while
+ *  `V@mood` is on. Drives the ambient glow the same way the web visualizer does;
+ *  `null` (V@mood off) falls back to the static theme. */
+function applyMood(m: { hue?: number; sat?: number; light?: number } | null): void {
+  const root = document.documentElement.style;
+  if (!m || typeof m.hue !== 'number') {
+    root.removeProperty('--vz-mood');
+    root.removeProperty('--vz-mood-glow');
+    document.body.classList.remove('mood');
+    return;
+  }
+  const sat = Math.round(m.sat ?? 62);
+  const light = Math.round(m.light ?? 52);
+  const hue = Math.round(m.hue);
+  root.setProperty('--vz-mood', `hsl(${hue} ${sat}% ${light}%)`);
+  root.setProperty('--vz-mood-glow', `hsla(${hue}, ${sat}%, ${light}%, 0.45)`);
+  document.body.classList.add('mood');
 }
 
 /** Capture a short WebM clip of the visuals and send it back to the bot (/burst). */

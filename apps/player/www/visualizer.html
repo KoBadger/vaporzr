@@ -59,6 +59,8 @@
   body.chrome-hidden #controls,
   body.chrome-hidden #controls-toggle,
   body.chrome-hidden #status,
+  body.chrome-hidden #guild-bar,
+  body.chrome-hidden #preset-picker,
   body.chrome-hidden #chrome-bar {
     opacity: 0;
     pointer-events: none;
@@ -203,9 +205,12 @@
   /* ---- Theme tint (glow layer over the visuals) ---- */
   #theme-tint {
     position: fixed; inset: 0; z-index: 1; pointer-events: none;
-    background: radial-gradient(ellipse at 30% 25%, var(--vz-glow), transparent 65%);
+    background: radial-gradient(ellipse at 30% 25%, var(--vz-mood-glow, var(--vz-glow)), transparent 65%);
     mix-blend-mode: screen; opacity: .55; transition: opacity .8s;
   }
+  /* V@mood on: the glow follows the track's tone, so the room changes colour
+     with the music the way the web visualizer's does. */
+  body.mood #theme-tint { opacity: .8; }
 
   #win-pass { display: none; }
 
@@ -250,12 +255,80 @@
   body.idle #idle-video { opacity: 1; }
   body.idle #idle-logo { opacity: .9; }
   /* The small overlay goes fully dormant when idle; the screensaver keeps the video. */
-  body.overlay:not(.screensaver).overlay-idle #idle-video,
-  body.overlay:not(.screensaver).overlay-idle #idle-logo { opacity: 0; }
+  /* ---- Calm mode: gentler brightness + a stricter flash guard (per viewer) ---- */
+  body.calm #viz, body.calm #ew { filter: brightness(.82) saturate(.88); }
+  body.calm #theme-tint { opacity: .32; }
+
+  /* ---- Visual controls row (theme / reactivity / pace / calm / lock / browse) ---- */
+  #ctrl-visual {
+    display: flex; align-items: center; gap: 6px; margin-top: 8px;
+    padding-top: 8px; border-top: 1px solid rgba(140,160,255,.15);
+  }
+  #ctrl-visual-label {
+    color: rgba(148,163,184,.7); font-size: 10px; font-weight: 600;
+    letter-spacing: 1px; margin-right: 4px;
+  }
+  #swatches { display: flex; align-items: center; gap: 4px; }
+  #swatches button {
+    width: 16px; height: 16px; border-radius: 50%; cursor: pointer; padding: 0;
+    border: 1px solid rgba(255,255,255,.25); transition: transform .15s;
+  }
+  #swatches button:hover { transform: scale(1.18); }
+  #swatches button.active { box-shadow: 0 0 0 2px rgba(255,255,255,.7); }
+  #ctrl-sens { display: flex; align-items: center; gap: 6px; color: #94a3b8; font-size: 13px; margin-left: 4px; }
+  #ctrl-sens input[type=range] { width: 80px; }
+  .ctrl-btn.on { color: #93c5fd; background: rgba(96,165,250,.25); box-shadow: inset 0 0 0 1px rgba(147,197,253,.5); }
+
+  /* ---- Preset browser (search the loaded library, click to lock one in) ---- */
+  #preset-picker {
+    position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: 150px; z-index: 22; width: min(560px, calc(100vw - 40px));
+    max-height: min(52vh, 460px); display: none; flex-direction: column;
+    border-radius: 14px; overflow: hidden;
+    background: rgba(10,15,30,.78);
+    border: 1px solid color-mix(in srgb, var(--vz-accent) 35%, transparent);
+    box-shadow: 0 8px 40px rgba(0,0,0,.6), 0 0 24px var(--vz-glow);
+    backdrop-filter: blur(14px); font-family: system-ui, sans-serif;
+    transition: opacity .25s;
+  }
+  #preset-picker.show { display: flex; }
+  #preset-search {
+    border: none; outline: none; background: rgba(255,255,255,.06); color: #e2e8f0;
+    padding: 10px 14px; font-size: 13px; font-family: inherit;
+    border-bottom: 1px solid rgba(140,160,255,.2);
+  }
+  #preset-list { overflow-y: auto; padding: 6px; }
+  #preset-list button {
+    display: block; width: 100%; text-align: left; border: none; cursor: pointer;
+    background: transparent; color: #cbd5e1; padding: 6px 10px; border-radius: 8px;
+    font-size: 12px; font-family: inherit;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #preset-list button:hover { background: rgba(148,163,184,.16); color: #e2e8f0; }
+  #preset-list button.cur { background: color-mix(in srgb, var(--vz-accent) 30%, transparent); color: #fff; }
+  #preset-list .empty { padding: 10px 12px; color: #64748b; font-size: 12px; }
+
+  /* ---- Guild switcher (only when the bot serves more than one server) ---- */
+  #guild-bar {
+    position: fixed; top: 38px; left: 12px; z-index: 15; display: none;
+    gap: 6px; flex-wrap: wrap; max-width: min(60vw, 520px);
+    transition: opacity .25s;
+  }
+  #guild-bar.visible { display: flex; }
+  #guild-bar button {
+    border: 1px solid color-mix(in srgb, var(--vz-accent) 35%, transparent);
+    background: rgba(10,15,30,.6); color: #c7d2fe; cursor: pointer;
+    border-radius: 999px; padding: 4px 12px;
+    font-family: system-ui, sans-serif; font-size: 11px;
+    backdrop-filter: blur(10px); transition: background .15s, color .15s;
+  }
+  #guild-bar button:hover { background: rgba(96,165,250,.3); color: #e2e8f0; }
+  #guild-bar button.active { background: color-mix(in srgb, var(--vz-accent) 45%, transparent); color: #fff; }
 </style>
 </head>
 <body class="idle">
   <canvas id="viz"></canvas>
+  <div id="guild-bar"></div>
   <video id="ew-video" loop muted playsinline preload="auto" crossorigin="anonymous"></video>
   <canvas id="ew"></canvas>
   <div id="theme-tint"></div>
@@ -286,6 +359,11 @@
   <div id="preset-toast"></div>
   <div id="status">starting…</div>
 
+  <div id="preset-picker">
+    <input id="preset-search" type="text" placeholder="Search visuals…" autocomplete="off" />
+    <div id="preset-list"></div>
+  </div>
+
   <div id="controls" class="visible">
     <div id="ctrl-track">
       <span id="ctrl-title">Nothing playing</span>
@@ -308,6 +386,15 @@
       <button class="ctrl-btn" id="btn-synth" title="Synthwave road (Endless Wave, E)">🛣</button>
       <span id="ctrl-volume"><span>🔉</span><input id="ctrl-vol" type="range" min="0" max="100" value="50" step="1" /></span>
     </div>
+    <div id="ctrl-visual">
+      <span id="ctrl-visual-label">VISUAL</span>
+      <span id="swatches"></span>
+      <span id="ctrl-sens"><span>🎚</span><input id="sens" type="range" min="0.5" max="1.5" step="0.05" value="1" /></span>
+      <button class="ctrl-btn" id="btn-pace" title="Preset pace — how long each visual stays (this viewer)">⏱</button>
+      <button class="ctrl-btn" id="btn-calm" title="Calm mode — gentler brightness, stricter flash guard">🌙</button>
+      <button class="ctrl-btn" id="btn-lock" title="Lock the current visual">🔓</button>
+      <button class="ctrl-btn" id="btn-presets" title="Browse visuals">🔎</button>
+    </div>
     <div id="ctrl-sfx">
       <button class="ctrl-btn" id="btn-dj-toggle" title="DJ soundboard OFF — click to enable">🎚</button>
       <button class="ctrl-btn" id="btn-sfx-airhorn" title="Air horn">📣</button>
@@ -319,7 +406,7 @@
       <button class="ctrl-btn" id="btn-sfx-applause" title="Applause">👏</button>
       <button class="ctrl-btn" id="btn-sfx-countdown" title="Countdown">🔟</button>
     </div>
-    <div id="ctrl-hint">Space play/pause · S shuffle tracks · P next visual · R shuffle visual · B back · E synthwave · ↑↓ volume · ←→ seek · Esc hide · H chrome</div>
+    <div id="ctrl-hint">Space play/pause · S shuffle tracks · P next visual · R shuffle visual · B back · E synthwave · ↑↓ volume · ←→ seek · Alt+←→ track · Esc hide · H chrome</div>
   </div>
   <button id="controls-toggle" title="Toggle controls (C)">🎛</button>
 
