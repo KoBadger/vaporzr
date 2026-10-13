@@ -65,6 +65,13 @@ ytDlpPath: process.env.YT_DLP_PATH ?? path.join(__dirname, '..', '..', '..', 've
     */
    youtubeProxyLabel: process.env.YOUTUBE_PROXY_LABEL ?? 'the clean-IP bridge host',
    /**
+    * Ceiling on the YouTube audio bitrate to download. Discord re-encodes voice
+    * audio to 64-128 kbps opus, so capping the source a little above that roughly
+    * halves the metered proxy traffic for little audible loss. Raise it (e.g.
+    * 160) when fidelity matters more than bytes on the bridge.
+    */
+   youtubeAudioMaxAbr: Number(process.env.YOUTUBE_AUDIO_MAX_ABR) || 80,
+   /**
     * HTTP proxy for Suno (the suno.com page fetch + the cdn1.suno.ai audio
     * stream). Suno's CDN blocks datacenter IPs with 403, so routing just Suno
     * through a residential proxy restores playback. Format:

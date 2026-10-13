@@ -1001,37 +1001,96 @@ export class VoiceManager implements AudioTransport {
 
   /** Cached undici ProxyAgents, keyed by proxy URL. */
   private proxyAgents = new Map<string, unknown>();
+  /** Cached egress IP per route (key '' = direct), so a googlevideo URL can be
+   *  matched to the route that actually minted it. */
+  private routeIps = new Map<string, Promise<string>>();
+
+  /** fetch() through one specific proxy, reusing a cached ProxyAgent per route. */
+  private async fetchViaProxy(url: string, proxy: string, init: RequestInit): Promise<Response> {
+    let agent = this.proxyAgents.get(proxy);
+    if (!agent) {
+      const { ProxyAgent } = await import('undici');
+      agent = new ProxyAgent(proxy);
+      this.proxyAgents.set(proxy, agent);
+    }
+    const { fetch: uFetch } = await import('undici');
+    return (await uFetch(url, { ...init, dispatcher: agent } as never)) as unknown as Response;
+  }
+
+  /** A route's egress IP ('' = direct), probed once and cached. */
+  private routeIp(proxy: string): Promise<string> {
+    let pending = this.routeIps.get(proxy);
+    if (!pending) {
+      pending = (async () => {
+        try {
+          const res = proxy
+            ? await this.fetchViaProxy('https://api.ipify.org', proxy, {
+                signal: AbortSignal.timeout(6000),
+              })
+            : await fetch('https://api.ipify.org', { signal: AbortSignal.timeout(6000) });
+          return res.ok ? (await res.text()).trim() : '';
+        } catch {
+          return '';
+        }
+      })();
+      this.routeIps.set(proxy, pending);
+    }
+    return pending;
+  }
 
   /**
-   * fetch() for media hosts, routed through the residential proxy when the host
-   * needs it, and always bounded by a stall timeout. googlevideo URLs are minted
-   * against the proxy's exit IP, so fetching them directly returns 403 with ZERO
-   * bytes — and a proxy connection that opens but never delivers used to hang
-   * forever. Both made a track start look like "the bot didn't respond".
+   * fetch() for media hosts, routed through the proxy that can actually serve the
+   * URL, and always bounded by a stall timeout.
+   *
+   * googlevideo binds a stream to the IP that minted it and records that IP in
+   * the URL. Fetching from any other exit returns 403 with zero bytes — so the
+   * route is chosen by matching the URL's `ip=` against each configured route's
+   * egress, NOT by assuming the primary proxy minted it. With the bridge down the
+   * fallback proxy mints the URL, and "retrying direct" for one of those can only
+   * ever 403, which is what left a track playing from broken chunks.
    */
   private async mediaFetch(url: string, init: RequestInit): Promise<Response> {
-    const proxy = config.youtubeProxy && /googlevideo\.com\//.test(url) ? config.youtubeProxy : '';
     // Hard ceiling per request: a stalled socket aborts instead of hanging, and
     // the caller's own signal (ffmpeg exited, track skipped) still wins.
     const stall = AbortSignal.timeout(MEDIA_REQUEST_TIMEOUT_MS);
     const outer = init.signal as AbortSignal | null | undefined;
     const signal = outer ? AbortSignal.any([outer, stall]) : stall;
     const opts = { ...init, signal } as RequestInit & { dispatcher?: unknown };
-    if (!proxy) return fetch(url, opts);
-    try {
-      let agent = this.proxyAgents.get(proxy);
-      if (!agent) {
-        const { ProxyAgent } = await import('undici');
-        agent = new ProxyAgent(proxy);
-        this.proxyAgents.set(proxy, agent);
+
+    if (!/googlevideo\.com\//.test(url)) return fetch(url, opts);
+
+    const mintedIp = /[?&]ip=([^&]+)/.exec(url)?.[1] ?? '';
+    const routes = [config.youtubeProxy, config.youtubeProxyFallback, ''].filter(
+      (r, i, all) => all.indexOf(r) === i,
+    );
+    let route: string | null = null;
+    if (mintedIp) {
+      for (const candidate of routes) {
+        const ip = await this.routeIp(candidate);
+        if (ip && ip === mintedIp) {
+          route = candidate;
+          break;
+        }
       }
-      const { fetch: uFetch } = await import('undici');
-      return (await uFetch(url, { ...opts, dispatcher: agent } as never)) as unknown as Response;
+    }
+    // No route matched (the URL names no IP, or the minting proxy is gone):
+    // prefer the primary, else go direct. A 403 here is survivable — the caller
+    // refreshes the URL, which re-resolves through whatever route works now.
+    if (route === null) route = config.youtubeProxy || '';
+    if (!route) return fetch(url, opts);
+
+    try {
+      return await this.fetchViaProxy(url, route, opts);
     } catch (err) {
-      console.warn(
-        `[voice] proxied media fetch failed (${err instanceof Error ? err.message : err}) — retrying direct`,
-      );
-      return fetch(url, opts);
+      const detail = err instanceof Error ? err.message : err;
+      // Only a URL minted for THIS host can be served directly; anything else is
+      // bound to another exit, so failing fast beats a guaranteed 403 and lets
+      // the refresh path re-resolve instead.
+      if (mintedIp && mintedIp === (await this.routeIp(''))) {
+        console.warn(`[voice] proxied media fetch failed (${detail}) — retrying direct`);
+        return fetch(url, opts);
+      }
+      throw new Error(`proxied media fetch failed (${detail})`);
     }
   }
 

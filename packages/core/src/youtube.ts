@@ -26,14 +26,14 @@ const YT_PLAYLIST_RE = /(?:youtube\.com|music\.youtube\.com)\/playlist\?(?:[^#]*
  * Prefer a LOWER bitrate than plain `bestaudio` would pick. Every YouTube
  * stream is fetched through a metered proxy, and Discord re-encodes to 64-128
  * kbps opus anyway — so downloading itag 251 (opus ~160 kbps) pays the proxy
- * for roughly 2-3x the bytes anyone can actually hear. `bestaudio[abr<=80]`
- * picks the best stream at or under 80 kbps (itag 250, opus ~70 kbps), which is
- * transparent after Discord's re-encode and roughly halves the traffic. The
- * chain falls back to the best audio available when no low-bitrate stream
- * exists, so it can never fail a resolve that used to work.
+ * for roughly 2-3x the bytes anyone can actually hear. The ceiling below picks
+ * the best stream at or under it (80 → itag 250, opus ~61 kbps), which roughly
+ * halves the traffic. The chain falls back to the best audio available when no
+ * stream under the ceiling exists, so it can never fail a resolve that used to
+ * work. Tune it with YOUTUBE_AUDIO_MAX_ABR when fidelity matters more than
+ * bytes on the bridge.
  */
-const AUDIO_FORMAT =
-  'bestaudio[abr<=80]/bestaudio[acodec!=none]/best[acodec!=none]/best';
+const AUDIO_FORMAT = `bestaudio[abr<=${config.youtubeAudioMaxAbr}]/bestaudio[acodec!=none]/best[acodec!=none]/best`;
 
 /** Titles that are plainly not the song: esports/sports highlights, gameplay,
  *  podcasts, reactions, vlogs, news. These match a song name by accident (e.g.
