@@ -7122,10 +7122,51 @@ export class DiscordBot {
       await fs.copyFile(tmp, dest);
       return dest;
     };
-    const ia = await grab(ua, 'a', ra);
-    const ib = await grab(ub, 'b', rb);
-    if (!ia || !ib) return { ok: false, text: 'Could not download one of those tracks.' };
+    const iaFull = await grab(ua, 'a', ra);
+    const ibFull = await grab(ub, 'b', rb);
+    if (!iaFull || !ibFull) return { ok: false, text: 'Could not download one of those tracks.' };
+    // Stem separation cost tracks the input length, but the render only ever
+    // uses the first `dur` seconds (its clamp is 180s). A 7-minute track took
+    // ~4.5 minutes on Replicate to produce stems of which the first 90s were
+    // used, so trim both sides to a small margin above the longest mix first —
+    // the upload, the GPU run and the cached stems all get smaller.
+    const ia = await this.trimForStems(iaFull, dir, 'a', cleanup);
+    const ib = await this.trimForStems(ibFull, dir, 'b', cleanup);
     return { ok: true, ra, rb, ia, ib, dir };
+  }
+
+  /** The longest mix `renderMashupStems` can ask for (it clamps `dur` to 180s). */
+  private static readonly STEM_MAX_SEC = 200;
+
+  /** Cap the audio handed to stem separation. Returns the source unchanged when
+   *  the trim fails, so a missing ffmpeg degrades to the old behaviour rather
+   *  than breaking the mashup. */
+  private async trimForStems(src: string, dir: string, tag: string, cleanup: string[]): Promise<string> {
+    const out = path.join(dir, `stem-${tag}.mp3`);
+    cleanup.push(out);
+    try {
+      await this.runFfmpeg([
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-i',
+        src,
+        '-t',
+        String(DiscordBot.STEM_MAX_SEC),
+        '-c:a',
+        'libmp3lame',
+        '-b:a',
+        '192k',
+        '-y',
+        out,
+      ]);
+      return out;
+    } catch (err) {
+      console.warn(
+        `[mashup] stem trim failed (${err instanceof Error ? err.message : err}) — separating the full track`,
+      );
+      return src;
+    }
   }
 
   private async mashupTuning(ra: ResolvedTrack, rb: ResolvedTrack) {
@@ -7299,6 +7340,17 @@ export class DiscordBot {
     this.mashupBusy.add(guildId);
     const cleanup: string[] = [];
     try {
+      // Stem separation dominates the wall time (minutes, not seconds) and the
+      // finished render arrives as a separate message, so say something now
+      // rather than leaving the channel silent and looking hung.
+      await send({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(this.themeColor())
+            .setDescription('🎛️ Separating stems and mixing — a minute or two (repeat pairs are instant).'),
+        ],
+        files: [],
+      }).catch(() => {});
       const r = await this.renderMashupStems(a, b, 90, cleanup);
       const files = r.files.map((f, i) => new AttachmentBuilder(f, { name: `vaporzr-mashup-${i + 1}.mp3` }));
       await send({ embeds: [this.mashupEmbed(r.text, r.similar)], files }).catch(() => {});
