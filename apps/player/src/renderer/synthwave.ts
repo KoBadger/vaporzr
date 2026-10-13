@@ -16,11 +16,29 @@ export interface SynthLevels {
   kickBoost: number;
   bpm: number;
   energy: number;
+  /** Mood palette (V@mood) for the current track; null/absent = the fixed neon. */
+  mood?: { hue: number; sat: number; light: number } | null;
 }
 
 export interface SynthTrackInfo {
   name: string;
   artists: string;
+}
+
+/** Mood palette → hsla. Shared by the synth overlay and the bar layer so both
+ *  tint identically (the web visualizer uses one moodColor for both). `shift`
+ *  walks the hue for multi-stop gradients and `live` (0..1 energy) breathes the
+ *  saturation/lightness the same way the web visualizer does. */
+export function moodColor(
+  mood: { hue: number; sat: number; light: number },
+  shift: number,
+  alpha: number,
+  live: number,
+): string {
+  const h = (((mood.hue + shift) % 360) + 360) % 360;
+  const s = Math.max(28, Math.min(100, Math.round(mood.sat * (0.78 + 0.42 * live))));
+  const l = Math.max(24, Math.min(80, Math.round(mood.light * (0.82 + 0.42 * live))));
+  return `hsla(${h},${s}%,${l}%,${alpha})`;
 }
 
 interface Ripple {
@@ -45,6 +63,17 @@ export class SynthOverlay {
     this.ctx = ctx;
   }
 
+  /** The web visualizer tints its synth by the mood tone; mirror that so a
+   *  mood-on scene matches. Delegates to the shared helper above. */
+  private moodColor(
+    mood: { hue: number; sat: number; light: number },
+    shift: number,
+    alpha: number,
+    live: number,
+  ): string {
+    return moodColor(mood, shift, alpha, live);
+  }
+
   render(
     nowMs: number,
     lv: SynthLevels,
@@ -61,6 +90,10 @@ export class SynthOverlay {
 
     const kick = reducedMotion ? 0 : lv.kickBoost;
     const energy = reducedMotion ? 0 : lv.energy;
+    // Mood-reactive palette (V@mood). The web visualizer has always tinted its
+    // synth with the track's tone; without this the player stayed pink/cyan.
+    const mood = reducedMotion ? null : (lv.mood ?? null);
+    const live = Math.max(0, Math.min(1, lv.energy ?? 0.5));
 
     /* ---- Base scene: the wallpaper video, chromatically split on a kick ---- */
     if (video && video.readyState >= 2 && video.videoWidth > 0) {
@@ -77,9 +110,17 @@ export class SynthOverlay {
     const glow = kick * 0.16 + lv.bass * 0.09;
     if (glow > 0.004) {
       const gg = c.createRadialGradient(W / 2, H * 0.62, 0, W / 2, H * 0.62, Math.max(W, H) * 0.72);
-      gg.addColorStop(0, 'rgba(255,60,170,' + Math.min(0.34, glow).toFixed(3) + ')');
-      gg.addColorStop(0.55, 'rgba(150,40,220,' + Math.min(0.18, glow * 0.5).toFixed(3) + ')');
-      gg.addColorStop(1, 'rgba(255,60,170,0)');
+      const glowA = Math.min(0.34, glow);
+      const glowB = Math.min(0.18, glow * 0.5);
+      if (mood) {
+        gg.addColorStop(0, this.moodColor(mood, 0, glowA, live));
+        gg.addColorStop(0.55, this.moodColor(mood, 25, glowB, live));
+        gg.addColorStop(1, this.moodColor(mood, 0, 0, live));
+      } else {
+        gg.addColorStop(0, 'rgba(255,60,170,' + glowA.toFixed(3) + ')');
+        gg.addColorStop(0.55, 'rgba(150,40,220,' + glowB.toFixed(3) + ')');
+        gg.addColorStop(1, 'rgba(255,60,170,0)');
+      }
       c.fillStyle = gg;
       c.fillRect(0, 0, W, H);
     }
@@ -106,18 +147,24 @@ export class SynthOverlay {
       const x = i * slot + (slot - barW) / 2;
       const y = baseY - h;
       const g = c.createLinearGradient(0, baseY, 0, baseY - maxH);
-      g.addColorStop(0, 'rgba(255,80,180,0.9)');
-      g.addColorStop(0.7, 'rgba(200,120,255,0.95)');
-      g.addColorStop(1, 'rgba(80,240,255,1)');
+      if (mood) {
+        g.addColorStop(0, this.moodColor(mood, 0, 0.9, live));
+        g.addColorStop(0.7, this.moodColor(mood, 20, 0.95, live));
+        g.addColorStop(1, this.moodColor(mood, 45, 1, live));
+      } else {
+        g.addColorStop(0, 'rgba(255,80,180,0.9)');
+        g.addColorStop(0.7, 'rgba(200,120,255,0.95)');
+        g.addColorStop(1, 'rgba(80,240,255,1)');
+      }
       c.fillStyle = g;
-      c.shadowColor = 'rgba(255,80,180,0.7)';
+      c.shadowColor = mood ? this.moodColor(mood, 0, 0.7, live) : 'rgba(255,80,180,0.7)';
       c.shadowBlur = 10 + 16 * v;
       c.fillRect(x, y, barW, h);
       c.shadowBlur = 0;
       c.globalAlpha = 0.22 * (0.4 + v);
       c.fillRect(x, baseY + 2, barW, Math.max(0, Math.min(h * 0.45, H - baseY - 2)));
       c.globalAlpha = 1;
-      c.fillStyle = 'rgba(230,250,255,0.95)';
+      c.fillStyle = mood ? this.moodColor(mood, 45, 0.95, live) : 'rgba(230,250,255,0.95)';
       c.fillRect(x, y - 2, barW, 2.5);
     }
 

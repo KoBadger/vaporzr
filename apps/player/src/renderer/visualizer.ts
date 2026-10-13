@@ -3,7 +3,7 @@ import butterchurnPresets from 'butterchurn-presets';
 import type { CommandMessage, PlaybackState } from '@vaporzr/shared';
 import { emptyState } from '@vaporzr/shared';
 import { WsClient } from './wsClient';
-import { SynthOverlay, type SynthLevels } from './synthwave';
+import { moodColor, SynthOverlay, type SynthLevels } from './synthwave';
 
 const port = Number(new URLSearchParams(window.location.search).get('port') ?? '4876');
 const OVERLAY = new URLSearchParams(window.location.search).get('overlay') === '1';
@@ -76,12 +76,22 @@ const btnPace = document.getElementById('btn-pace') as HTMLButtonElement;
 const btnCalm = document.getElementById('btn-calm') as HTMLButtonElement;
 const btnLock = document.getElementById('btn-lock') as HTMLButtonElement;
 const btnPresets = document.getElementById('btn-presets') as HTMLButtonElement;
+const btnBars = document.getElementById('btn-bars') as HTMLButtonElement;
 const sensSlider = document.getElementById('sens') as HTMLInputElement;
 const swatchBar = document.getElementById('swatches') as HTMLSpanElement;
 const guildBar = document.getElementById('guild-bar') as HTMLDivElement;
 const presetPicker = document.getElementById('preset-picker') as HTMLDivElement;
 const presetSearch = document.getElementById('preset-search') as HTMLInputElement;
 const presetList = document.getElementById('preset-list') as HTMLDivElement;
+// Bar layer (a scene that needs neither butterchurn nor an audio device).
+const barsCanvas = document.getElementById('bars') as HTMLCanvasElement;
+const barCtx = barsCanvas.getContext('2d');
+/** Bar layer on: the visuals stay alive with no audio coming in at all. */
+let barMode = false;
+/** Bar-layer palette, kept in step with the theme by applyTheme(). */
+let barAccent = '#6a5cff';
+let barAccent2 = '#22d3ee';
+let barGlow = 'rgba(106, 92, 255, 0.45)';
 const winPass = document.getElementById('win-pass') as HTMLButtonElement;
 const winHide = document.getElementById('win-hide') as HTMLButtonElement;
 
@@ -117,6 +127,8 @@ let preloaded: { video: HTMLVideoElement; uri: string } | null = null;
 let loopbackGain: GainNode | null = null;
 let sensitivityGain: GainNode | null = null;
 let currentSensitivity = 1.0;
+/** Latest mood palette from the bot (V@mood), or null for the static theme. */
+let moodPalette: { hue: number; sat: number; light: number } | null = null;
 let bridgePcmActive = false;
 let pcmSilenceTimer: number | null = null;
 let pcmSourceNode: AudioBufferSourceNode | null = null;
@@ -211,18 +223,20 @@ function setDjEnabled(enabled: boolean): void {
 
 // ---- Sensitivity ----
 
+// Base smoothing matches the web visualizer (0.6 at 1.0x) so the two react to
+// the music the same way; the slope just makes higher reactivity snap harder.
 const SENSITIVITY_CURVE: Record<number, number> = {
-  1.0:  0.82,
-  1.10: 0.78,
-  1.15: 0.74,
-  1.25: 0.70,
-  1.50: 0.60,
+  1.0:  0.60,
+  1.10: 0.58,
+  1.15: 0.56,
+  1.25: 0.52,
+  1.50: 0.46,
 };
 
 function applySensitivity(multiplier: number): void {
   currentSensitivity = multiplier;
   if (sensitivityGain) sensitivityGain.gain.value = multiplier;
-  const smoothing = SENSITIVITY_CURVE[multiplier] ?? (0.82 - (multiplier - 1) * 0.44);
+  const smoothing = SENSITIVITY_CURVE[multiplier] ?? (0.60 - (multiplier - 1) * 0.28);
   if (analyser) analyser.smoothingTimeConstant = smoothing;
   try { localStorage.setItem('vaporzr.sensitivity', String(multiplier)); } catch {}
   // Keep the slider honest when the value arrives from the bot (snapshot) or
@@ -324,6 +338,7 @@ function sampleLevels(): SynthLevels {
     kickBoost: synthKickBoost,
     bpm: synthBpm,
     energy: synthEnergy,
+    mood: moodPalette,
   };
 }
 
@@ -475,6 +490,10 @@ function updateVisualButtons(): void {
   btnLock.textContent = presetLocked ? '🔒' : '🔓';
   btnLock.classList.toggle('on', presetLocked);
   btnLock.title = presetLocked ? 'Visual locked — click to unlock' : 'Lock the current visual';
+  btnBars.classList.toggle('on', barMode);
+  btnBars.title = barMode
+    ? 'Bar visuals on — click for MilkDrop'
+    : 'Bar visuals — move with the music even with no audio device';
 }
 
 /** Browse the loaded library; picking one locks it in (same as the web viz). */
@@ -585,6 +604,7 @@ function wireControls(): void {
     presetLocked = !presetLocked;
     updateVisualButtons();
   });
+  btnBars.addEventListener('click', () => setBarMode(!barMode));
   btnPresets.addEventListener('click', (e) => {
     e.stopPropagation();
     togglePresetPicker();
@@ -600,6 +620,7 @@ function wireControls(): void {
   });
   try { calm = localStorage.getItem('vaporzr.calm') === '1'; } catch { /* storage unavailable */ }
   document.body.classList.toggle('calm', calm);
+  try { if (localStorage.getItem('vaporzr.bars') === '1') setBarMode(true); } catch { /* storage unavailable */ }
   buildSwatches();
   updateVisualButtons();
 
@@ -971,7 +992,7 @@ async function initAudio(): Promise<boolean> {
   if (audioContext.state === 'suspended') void audioContext.resume();
   analyser = audioContext.createAnalyser();
   analyser.fftSize = 2048;
-  analyser.smoothingTimeConstant = 0.82;
+  analyser.smoothingTimeConstant = 0.6;
 
   sensitivityGain = audioContext.createGain();
   sensitivityGain.gain.value = 1.0;
@@ -1183,6 +1204,125 @@ function presetAvailable(name: string): boolean {
   return !presetBlacklist.has(name);
 }
 
+// ---- Curated preset library (projectM "cream of the crop") ----
+//
+// The web visualizer streams this library from the bot; the player only ever
+// had the ~100 stock butterchurn-presets, so the two showed visibly different
+// visuals. Fetch the same set (chunks script-loaded during idle time) and keep
+// the bundled pack as the offline fallback.
+
+let curatedNames: Set<string> | null = null;
+let blankNames: Set<string> | null = null;
+
+/** Curation gate, same rules as the web visualizer: presets the offline scan
+ *  proved blank are dropped outright, and once curated.json is known anything
+ *  not listed is ignored. */
+function presetCurated(name: string): boolean {
+  if (blankNames?.has(name)) return false;
+  if (curatedNames && !curatedNames.has(name)) return false;
+  return true;
+}
+
+/** Re-derive the playable list (curation + the watchdog's blacklist), keeping
+ *  the on-screen visual selected by NAME because indices shift as chunks land. */
+function refreshPresetNames(): void {
+  const cur = presetNames[currentPresetIndex];
+  presetNames = Object.keys(presets)
+    .filter((n) => presetCurated(n) && presetAvailable(n))
+    .sort();
+  const i = cur ? presetNames.indexOf(cur) : -1;
+  currentPresetIndex = i >= 0 ? i : presetNames.length ? 0 : -1;
+  // The visit stack is index-based, so it cannot survive a re-sort.
+  presetHistory = currentPresetIndex >= 0 ? [currentPresetIndex] : [];
+}
+
+function idleCallback(fn: () => void): void {
+  const ric = (window as unknown as {
+    requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+  }).requestIdleCallback;
+  if (ric) ric(fn, { timeout: 4000 });
+  else window.setTimeout(fn, 1800);
+}
+
+/** Load one chunk and merge its presets. Resolves false if the chunk failed. */
+function loadPresetChunk(i: number, url: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const s = document.createElement('script');
+    s.src = url;
+    s.async = true;
+    s.onload = () => {
+      const pack = (window as unknown as Record<string, unknown>)[`butterchurnPresetsChunk${i}`] as
+        | { getPresets?: () => Record<string, unknown> }
+        | undefined;
+      if (pack && typeof pack.getPresets === 'function') {
+        try {
+          const next = pack.getPresets();
+          // The curated chunks ARE the library — the web visualizer ships no
+          // third-party packs beside them, so drop the bundled set on the first
+          // chunk rather than diluting the pool with it.
+          if (i === 0) presets = {};
+          Object.assign(presets, next);
+        } catch {
+          /* malformed chunk — keep whatever we already have */
+        }
+      }
+      refreshPresetNames();
+      // First real library in with nothing on screen yet: start one.
+      if (i === 0 && currentPresetIndex < 0 && presetNames.length && visualizer) {
+        loadPresetAt(0, 1.5);
+      }
+      resolve(true);
+    };
+    s.onerror = () => resolve(false);
+    document.head.appendChild(s);
+  });
+}
+
+/** Stream the bot's curated projectM library in, chunk by chunk, while idle.
+ *  Rotation only ever picks from presets that have already landed, so there is
+ *  never a spinner, a black frame or a hard cut. */
+async function loadCuratedPresets(): Promise<void> {
+  const base = `${ASSET_BASE}/vendor/presets`;
+  // Curation first — it decides what the chunks are allowed to contribute.
+  try {
+    const [c, b] = await Promise.all([
+      fetch(`${base}/curated.json`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch(`${base}/blank.json`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+    ]);
+    const cNames = (c as { names?: string[] } | null)?.names;
+    const bNames = (b as { names?: string[] } | null)?.names;
+    if (cNames?.length) curatedNames = new Set(cNames);
+    if (bNames?.length) blankNames = new Set(bNames);
+    if (curatedNames) refreshPresetNames();
+  } catch {
+    /* no curation files — accept everything the chunks provide */
+  }
+
+  let idx: { chunks?: string[] } | null = null;
+  try {
+    idx = (await fetch(`${base}/index.json`).then((r) => (r.ok ? r.json() : null))) as
+      | { chunks?: string[] }
+      | null;
+  } catch {
+    /* offline — the bundled pack stays */
+  }
+  const chunks = idx?.chunks;
+  if (!chunks?.length) {
+    log(`${presetNames.length} bundled visuals (curated library unavailable)`);
+    return;
+  }
+
+  for (let i = 0; i < chunks.length; i++) {
+    const ok = await new Promise<boolean>((resolve) => {
+      idleCallback(() => void loadPresetChunk(i, `${base}/${chunks[i]}`).then(resolve));
+    });
+    // A missing chunk (index.json can list more than the image actually ships)
+    // is skipped rather than fatal — keep whatever loaded.
+    if (!ok) log(`Visual chunk ${i} unavailable — continuing`);
+  }
+  log(`${presetNames.length.toLocaleString()} curated visuals available`);
+}
+
 function loadPresetAt(index: number, blend: number, pushHistory = true): void {
   if (!visualizer || presetNames.length === 0) return;
   if (index < 0 || index >= presetNames.length) return;
@@ -1365,21 +1505,110 @@ function resize(): void {
   // The EW canvas may be hidden (clientWidth 0) — mirror the main canvas size.
   ewCanvas.width = w * dpr;
   ewCanvas.height = h * dpr;
+  barsCanvas.width = w * dpr;
+  barsCanvas.height = h * dpr;
   visualizer?.setRendererSize(w, h, dpr);
+}
+
+/** The bar layer: 24 mirrored bars with a dim floor reflection and a peak cap,
+ *  drawn from the level data above so it needs no butterchurn and no audio
+ *  device. Mirrors drawBars in apps/bot/public/viz.html, including the idle
+ *  travelling wave that keeps a silent scene visibly alive. */
+function drawBars(now: number): void {
+  const c = barCtx;
+  const W = barsCanvas.width;
+  const H = barsCanvas.height;
+  if (!c || W === 0 || H === 0) return;
+  c.clearRect(0, 0, W, H);
+
+  const n = Math.min(24, synthBars.length);
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const baseY = H * 0.70;
+  const maxH = H * 0.52;
+  const slot = W / Math.max(1, n);
+  const barW = Math.min(slot * 0.58, 30 * dpr);
+  const live = Math.max(0, Math.min(1, synthEnergy));
+  const active = synthEnergy > 0.04;
+  const mood = prefersReducedMotion ? null : moodPalette;
+
+  // 1. Background wash that breathes with the music.
+  const bg = c.createLinearGradient(0, 0, 0, H);
+  if (mood) {
+    bg.addColorStop(0, moodColor(mood, 0, 0.1 + 0.12 * live, live));
+    bg.addColorStop(0.55, 'rgba(0,0,0,0)');
+    bg.addColorStop(1, moodColor(mood, 45, 0.03, live));
+  } else {
+    bg.addColorStop(0, barAccent + (live > 0.5 ? '1f' : '14'));
+    bg.addColorStop(0.55, 'rgba(0,0,0,0)');
+    bg.addColorStop(1, barAccent2 + '0a');
+  }
+  c.fillStyle = bg;
+  c.fillRect(0, 0, W, H);
+
+  // 2. Bars around the baseline, each with a reflection and a cap.
+  for (let i = 0; i < n; i++) {
+    // Nothing playing: a slow travelling wave instead of a near-black flatline.
+    const v = active
+      ? Math.max(0, Math.min(1, synthBars[i]))
+      : 0.1 + 0.07 * Math.sin(now / 620 + i * 0.55) + 0.03 * Math.sin(now / 1430 - i * 0.31);
+    const h = Math.max(2 * dpr, v * maxH);
+    const x = i * slot + (slot - barW) / 2;
+    const g = c.createLinearGradient(0, baseY, 0, baseY - h);
+    if (mood) {
+      g.addColorStop(0, moodColor(mood, 0, 0.9, live));
+      g.addColorStop(0.6, moodColor(mood, 20, 0.96, live));
+      g.addColorStop(1, moodColor(mood, 45, 1, live));
+    } else {
+      g.addColorStop(0, barAccent + 'dd');
+      g.addColorStop(0.6, barAccent + 'f0');
+      g.addColorStop(1, barAccent2 + 'f2');
+    }
+    c.fillStyle = g;
+    c.shadowColor = mood ? moodColor(mood, 0, 0.65, live) : barGlow;
+    c.shadowBlur = (12 + 18 * v) * dpr * (active ? 1 : 0.25);
+    c.fillRect(x, baseY - h, barW, h);
+    c.shadowBlur = 0;
+    // Mirror below the baseline — dimmer and shorter, like a wet floor.
+    c.globalAlpha = 0.26;
+    c.fillRect(x, baseY + 1.5 * dpr, barW, Math.max(0, Math.min(h * 0.55, H - baseY - 3 * dpr)));
+    c.globalAlpha = 1;
+    // Peak cap.
+    c.fillStyle = mood ? moodColor(mood, 45, 0.95, live) : 'rgba(246,250,255,0.92)';
+    c.fillRect(x, baseY - h - 2 * dpr, barW, 2.5 * dpr);
+  }
+
+  // 3. Baseline glow.
+  c.fillStyle = mood ? moodColor(mood, 0, 0.3, live) : barAccent + '40';
+  c.fillRect(0, baseY - dpr, W, 1.5 * dpr);
+}
+
+/** Switch the scene between butterchurn and the bar layer. */
+function setBarMode(on: boolean): void {
+  barMode = on;
+  barsCanvas.style.display = on ? 'block' : 'none';
+  canvas.style.display = on ? 'none' : 'block';
+  updateVisualButtons();
+  try { localStorage.setItem('vaporzr.bars', on ? '1' : '0'); } catch { /* storage unavailable */ }
+  log(on ? 'Bar visuals on' : 'Bar visuals off');
 }
 
 function renderLoop(): void {
   const lv = sampleLevels();
+  const now = Date.now();
   if (synthActive && synthOverlay) {
     const t = latestState.track;
     synthOverlay.render(
-      Date.now(),
+      now,
       lv,
       synthBars,
       t ? { name: t.name || '', artists: (t.artists || []).join(', ') } : null,
       prefersReducedMotion,
       ewVideo,
     );
+  } else if (barMode) {
+    // The bar layer renders straight from the level data, so a missing audio
+    // device no longer leaves a flat scene on screen.
+    drawBars(now);
   } else if (visualizer) {
     visualizer.render();
     watchTick(lv);
@@ -1389,7 +1618,8 @@ function renderLoop(): void {
 
 /** Canvas currently on screen — frame forwarding follows the visible scene. */
 function activeCanvas(): HTMLCanvasElement {
-  return synthActive ? ewCanvas : canvas;
+  if (synthActive) return ewCanvas;
+  return barMode ? barsCanvas : canvas;
 }
 
 function sendFrame(): void {
@@ -1436,6 +1666,10 @@ function applyTheme(t: { accent: string; accent2: string; glow: string }): void 
   root.setProperty('--vz-accent', t.accent);
   root.setProperty('--vz-accent2', t.accent2);
   root.setProperty('--vz-glow', t.glow);
+  // The bar layer paints on a canvas, so it needs the colours as values too.
+  barAccent = t.accent;
+  barAccent2 = t.accent2;
+  barGlow = t.glow;
   // Keep the swatch row in step when the theme changes server-side (or arrives
   // in the connect snapshot) rather than from this window's own click.
   const id = (t as { id?: string }).id;
@@ -1448,6 +1682,7 @@ function applyTheme(t: { accent: string; accent2: string; glow: string }): void 
 function applyMood(m: { hue?: number; sat?: number; light?: number } | null): void {
   const root = document.documentElement.style;
   if (!m || typeof m.hue !== 'number') {
+    moodPalette = null;
     root.removeProperty('--vz-mood');
     root.removeProperty('--vz-mood-glow');
     document.body.classList.remove('mood');
@@ -1456,6 +1691,8 @@ function applyMood(m: { hue?: number; sat?: number; light?: number } | null): vo
   const sat = Math.round(m.sat ?? 62);
   const light = Math.round(m.light ?? 52);
   const hue = Math.round(m.hue);
+  // Fed to the Endless Wave overlay so its bars/glow take the same tone.
+  moodPalette = { hue, sat, light };
   root.setProperty('--vz-mood', `hsl(${hue} ${sat}% ${light}%)`);
   root.setProperty('--vz-mood-glow', `hsla(${hue}, ${sat}%, ${light}%, 0.45)`);
   document.body.classList.add('mood');
@@ -1545,6 +1782,9 @@ function init(): void {
   presets = butterchurnPresets.getPresets();
   presetNames = Object.keys(presets).sort();
   log(`Loaded ${presetNames.length} presets`);
+  // Upgrade to the bot's curated projectM library as soon as it is reachable.
+  // Until then the bundled pack above keeps the visuals running.
+  void loadCuratedPresets();
 
   wireControls();
   setControlsVisible(true);

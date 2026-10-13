@@ -6,6 +6,8 @@
 <style>
   html, body { margin: 0; height: 100%; background: #05060f; overflow: hidden; }
   #viz { width: 100%; height: 100%; display: block; }
+  /* Bar layer: the scene shown instead of butterchurn (no audio device needed). */
+  #bars { position: fixed; inset: 0; width: 100%; height: 100%; display: none; }
   /* Endless Wave wallpaper video (real VISUALDON loop) under the #ew overlay. */
   #ew-video { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover;
     display: none; background: #05060f; }
@@ -232,13 +234,14 @@
   body.overlay #win-pass { display: flex; }
   body.overlay #win-hide { display: flex; }
   /* Fade the whole overlay away when nothing has played for a while. */
-  body.overlay-idle #viz { opacity: 0; }
+  body.overlay-idle #viz, body.overlay-idle #bars { opacity: 0; }
   body.overlay-idle #ew-video { opacity: 0; }
   #ew-video { transition: opacity .8s ease; }
   body.overlay-idle #ew { opacity: 0; }
   #ew { transition: opacity .8s ease; }
   body.overlay-idle #theme-tint { opacity: 0; }
   #viz { transition: opacity .8s ease; }
+  #bars { transition: opacity .8s ease; }
 
   /* ---- Idle backdrop (ambient video + logo when nothing is playing) ---- */
   #idle-video {
@@ -256,7 +259,7 @@
   body.idle #idle-logo { opacity: .9; }
   /* The small overlay goes fully dormant when idle; the screensaver keeps the video. */
   /* ---- Calm mode: gentler brightness + a stricter flash guard (per viewer) ---- */
-  body.calm #viz, body.calm #ew { filter: brightness(.82) saturate(.88); }
+  body.calm #viz, body.calm #bars, body.calm #ew { filter: brightness(.82) saturate(.88); }
   body.calm #theme-tint { opacity: .32; }
 
   /* ---- Visual controls row (theme / reactivity / pace / calm / lock / browse) ---- */
@@ -328,6 +331,7 @@
 </head>
 <body class="idle">
   <canvas id="viz"></canvas>
+  <canvas id="bars"></canvas>
   <div id="guild-bar"></div>
   <video id="ew-video" loop muted playsinline preload="auto" crossorigin="anonymous"></video>
   <canvas id="ew"></canvas>
@@ -394,6 +398,7 @@
       <button class="ctrl-btn" id="btn-calm" title="Calm mode — gentler brightness, stricter flash guard">🌙</button>
       <button class="ctrl-btn" id="btn-lock" title="Lock the current visual">🔓</button>
       <button class="ctrl-btn" id="btn-presets" title="Browse visuals">🔎</button>
+      <button class="ctrl-btn" id="btn-bars" title="Bar visuals — move with the music even with no audio device">📊</button>
     </div>
     <div id="ctrl-sfx">
       <button class="ctrl-btn" id="btn-dj-toggle" title="DJ soundboard OFF — click to enable">🎚</button>
