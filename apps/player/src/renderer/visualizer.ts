@@ -223,20 +223,24 @@ function setDjEnabled(enabled: boolean): void {
 
 // ---- Sensitivity ----
 
-// Base smoothing matches the web visualizer (0.6 at 1.0x) so the two react to
-// the music the same way; the slope just makes higher reactivity snap harder.
+// The player keeps a smoother analyser than the web visualizer on purpose: it
+// drives a full-window scene on a desktop GPU, where a lower smoothing constant
+// reads as jitter rather than energy. An earlier change lowered this to match
+// the web visualizer and made the player visibly choppier, so the original
+// curve is restored — parity should flow from the player to the web, not the
+// other way round.
 const SENSITIVITY_CURVE: Record<number, number> = {
-  1.0:  0.60,
-  1.10: 0.58,
-  1.15: 0.56,
-  1.25: 0.52,
-  1.50: 0.46,
+  1.0:  0.82,
+  1.10: 0.78,
+  1.15: 0.74,
+  1.25: 0.70,
+  1.50: 0.60,
 };
 
 function applySensitivity(multiplier: number): void {
   currentSensitivity = multiplier;
   if (sensitivityGain) sensitivityGain.gain.value = multiplier;
-  const smoothing = SENSITIVITY_CURVE[multiplier] ?? (0.60 - (multiplier - 1) * 0.28);
+  const smoothing = SENSITIVITY_CURVE[multiplier] ?? (0.82 - (multiplier - 1) * 0.44);
   if (analyser) analyser.smoothingTimeConstant = smoothing;
   try { localStorage.setItem('vaporzr.sensitivity', String(multiplier)); } catch {}
   // Keep the slider honest when the value arrives from the bot (snapshot) or
@@ -992,7 +996,7 @@ async function initAudio(): Promise<boolean> {
   if (audioContext.state === 'suspended') void audioContext.resume();
   analyser = audioContext.createAnalyser();
   analyser.fftSize = 2048;
-  analyser.smoothingTimeConstant = 0.6;
+  analyser.smoothingTimeConstant = 0.82;
 
   sensitivityGain = audioContext.createGain();
   sensitivityGain.gain.value = 1.0;
@@ -1782,9 +1786,10 @@ function init(): void {
   presets = butterchurnPresets.getPresets();
   presetNames = Object.keys(presets).sort();
   log(`Loaded ${presetNames.length} presets`);
-  // Upgrade to the bot's curated projectM library as soon as it is reachable.
-  // Until then the bundled pack above keeps the visuals running.
-  void loadCuratedPresets();
+  // NOTE: the bot's curated projectM library is deliberately NOT auto-loaded.
+  // It was tried and made the player's visuals worse — the bundled pack is what
+  // the player looked good with. loadCuratedPresets() is still available (and
+  // reachable from the preset browser's "curated" path) if that ever changes.
 
   wireControls();
   setControlsVisible(true);

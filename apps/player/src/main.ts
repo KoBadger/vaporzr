@@ -1,4 +1,5 @@
 import { app, BrowserWindow, desktopCapturer, globalShortcut, ipcMain, screen, session } from 'electron';
+import fs from 'node:fs';
 import path from 'node:path';
 
 const www = path.join(__dirname, '..');
@@ -23,9 +24,21 @@ const ALWAYS_ON_TOP = process.env.VAPORZR_ALWAYS_ON_TOP === '1' || process.argv.
 const WS_URL = process.env.VAPORZR_WS ?? argValue('--ws');
 /** Share key for a keyed bot. A client that does not present it is a GUEST, and
  *  the bridge silently drops every `cmd` a guest sends — so without this the
- *  player's own play/seek/theme controls do nothing at all. Set it with
- *  VAPORZR_KEY or --key=… (the same key as /panel?key=…). */
-const SHARE_KEY = process.env.VAPORZR_KEY ?? argValue('--key');
+ *  player's own play/seek/theme controls do nothing at all. Resolved from
+ *  VAPORZR_KEY, --key=…, or a `.vaporzr-key` file beside the app (so it can be
+ *  launched normally instead of needing an env var every time). */
+const SHARE_KEY = ((): string => {
+  const direct = process.env.VAPORZR_KEY ?? argValue('--key');
+  if (direct) return direct;
+  const file = process.env.VAPORZR_KEY_FILE ?? path.join(__dirname, '..', '..', '.vaporzr-key');
+  try {
+    const key = fs.readFileSync(file, 'utf8').trim();
+    if (key) return key;
+  } catch {
+    /* no key file — run as a guest, which the UI reports on its status line */
+  }
+  return '';
+})();
 /** The socket URL handed to the renderer, with the share key attached. */
 const WS_TARGET = (() => {
   const base = WS_URL ?? `ws://127.0.0.1:${BOT_PORT}/ws`;

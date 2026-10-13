@@ -2131,14 +2131,14 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
   draw();
   pokeDock();
   /* A Discord Activity cannot auto-start MilkDrop: unlockAudio() needs a user
-     gesture and Discord launches the iframe without one, so an Activity that
-     waited for one sat on an empty black canvas. The synthwave scene needs no
-     audio at all (muted wallpaper video + canvas overlay), so boot it there
-     instead — a visitor always sees something moving, and can still switch to
-     MilkDrop or the bars by hand. */
+     gesture and Discord launches the iframe without one. This used to boot the
+     synthwave scene unconditionally so a visitor always saw something moving —
+     which meant the Endless Wave road appeared even when EW was OFF, unlike the
+     desktop player. The bar renderer below needs neither audio nor a gesture, so
+     it is the honest fallback; the road is left to the endlesswave broadcast and
+     the manual toggle, exactly as it works in the player. */
   if(ACTIVITY&&ewVideo){
     try{ewVideo.load()}catch(e){}
-    synthActive=true;$('btn-synth').classList.add('active','ew-revealed');
   }
   /* Mobile: the wallpaper loop is the heaviest thing on screen and a phone GPU
      cannot decode a 720p loop alongside the canvas without cooking itself, so

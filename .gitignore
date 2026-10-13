@@ -18,6 +18,8 @@ vendor/librespot/
 .env
 .env.local
 .env.production
+# Player share key — a secret, read at launch by apps/player/src/main.ts.
+apps/player/.vaporzr-key
 
 # Bot runtime data (queues, librespot cache, tokens)
 apps/bot/data/
