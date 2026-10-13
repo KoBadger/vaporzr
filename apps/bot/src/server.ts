@@ -220,7 +220,12 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
   } else if (cookieAge > 21) {
     console.warn(`[vaporzr] YouTube cookies are ~${cookieAge} days old — they expire soon; refresh /opt/vaporzr/cookies.txt.`);
   }
-  void probeYoutube();
+  // Delay the first probe. Right after boot the PO-token HTTP server is still
+  // coming up, and a transient failure here is reported as `proxy` — which,
+  // with the 15-min interval, is two consecutive probes and therefore a real
+  // owner alert (it fired once while the bridge was actually healthy).
+  const ytBoot = setTimeout(() => void probeYoutube(), 90_000);
+  ytBoot.unref?.();
   const ytTimer = setInterval(() => void probeYoutube(), 15 * 60 * 1000);
   ytTimer.unref?.();
 

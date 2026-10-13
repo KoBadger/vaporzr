@@ -5391,7 +5391,7 @@ export class DiscordBot {
     const track = st.track;
     const mode = EW.modeOf(s.endlessWave);
     const modeLabel = mode === 'smart' ? '🌊 Autoplay: smart' : mode === 'basic' ? '🎵 Autoplay: basic' : 'Autoplay: off';
-    const color = this.moodOn.has(s.guildId) && this.moodColor.has(s.guildId) ? this.moodColor.get(s.guildId)! : this.themeColor();
+    const color = this.panelColor(s.guildId);
     if (!track) {
       return new EmbedBuilder()
         .setColor(color)
@@ -5684,7 +5684,7 @@ export class DiscordBot {
     const statusIcon = st.playing ? '▶️' : '⏸';
     const djEnabled = s.playback.isDjEnabled(s.guildId);
 
-    const embed = new EmbedBuilder().setColor(this.themeColor()).setTimestamp();
+    const embed = new EmbedBuilder().setColor(this.panelColor(s.guildId)).setTimestamp();
     if (this.client.user) {
       embed.setAuthor({ name: 'VAPORZR', iconURL: this.client.user.displayAvatarURL({ extension: 'gif', size: 128 }) });
     }
@@ -5960,6 +5960,14 @@ export class DiscordBot {
   }
 
   // ---- Themes, windows, visuals ----
+
+  /** Embed color for a guild: the mood tone when mood visuals are on, otherwise
+   *  the static theme. One place so the panel, now-playing strip and any other
+   *  "unicolor" surface stay in step as the mood changes each track. */
+  private panelColor(guildId: string | undefined): number {
+    const id = guildId ?? '';
+    return this.moodOn.has(id) && this.moodColor.has(id) ? this.moodColor.get(id)! : this.themeColor();
+  }
 
   private themeColor(): number {
     return this.bridge.getTheme().embedColor;
