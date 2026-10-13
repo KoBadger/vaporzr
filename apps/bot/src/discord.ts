@@ -4855,7 +4855,14 @@ export class DiscordBot {
     // in — so it updates with every song without anyone running /follow.
     // `/npchannel off` (or `/follow off`) sets npAuto=false to stop it.
     if (!this.perms.getNpAuto(guildId)) return;
-    const channelId = this.perms.getNpChannel(guildId) ?? this.lastTextChannel.get(guildId);
+    // Target: the room the bot is actually in first, then an explicit /npchannel
+    // pin, then wherever the room last spoke. Preferring the room is what makes
+    // "follow" follow — with the pin first, /follow pinned whichever channel it
+    // happened to be first run in, so the strip stayed behind in a channel
+    // nobody was looking at and follow appeared to be off.
+    const room = this.sessionFor(guildId)?.voice.getChannelId() ?? null;
+    const channelId =
+      room ?? this.perms.getNpChannel(guildId) ?? this.lastTextChannel.get(guildId);
     if (!channelId) return;
     // A command reply for this exact track is already the visible now-playing —
     // don't also auto-post a strip (that was the "two identical embeds"
@@ -4875,8 +4882,14 @@ export class DiscordBot {
       const channel = await this.client.channels.fetch(channelId);
       if (!channel || !('send' in channel)) return;
       const existing = this.miniNp.get(guildId);
-      if (existing) {
-        const old = await channel.messages.fetch(existing.messageId).catch(() => null);
+      if (existing && existing.channelId !== channelId) {
+        // Following the room into a different channel: clear the old strip first
+        // so it does not linger as an orphan where the music used to be.
+        await this.clearMiniNp(guildId);
+      }
+      const current = this.miniNp.get(guildId);
+      if (current) {
+        const old = await channel.messages.fetch(current.messageId).catch(() => null);
         if (old) {
           // ALWAYS edit the strip we already have — never delete in order to
           // re-post. The delete+repost dance was what let a failed refresh plus
@@ -8423,7 +8436,9 @@ export class DiscordBot {
     return `🎛️ Applied ${applied.length} setting${applied.length === 1 ? '' : 's'}: ${applied.join(' · ')}`;
   }
 
-  /** /follow — pin the live now-playing strip in a channel (same setting as /npchannel). */  private async followNowPlaying(gid: string, channelId: string, off: boolean): Promise<string> {
+  /** /follow — turn the live now-playing strip on or off. It FOLLOWS the room
+   *  (see maybeAutoMiniNp); `/npchannel` is the pin-it-to-one-channel variant. */
+  private async followNowPlaying(gid: string, _channelId: string, off: boolean): Promise<string> {
     if (off) {
       this.perms.setNpAuto(gid, false);
       this.perms.setNpChannel(gid, null);
@@ -8431,13 +8446,17 @@ export class DiscordBot {
       return '🌙 Now-playing strip **off** — it will stop updating. Turn it back on with `V@follow`.';
     }
     this.perms.setNpAuto(gid, true);
-    this.perms.setNpChannel(gid, channelId);
+    // Follow means follow the room, so do NOT pin a channel here. Pinning was
+    // what made the strip stay behind in whatever channel /follow was first run
+    // in — a later rejoin then kept posting to a channel nobody was watching,
+    // which looked exactly like follow being off. Use /npchannel to pin one.
+    this.perms.setNpChannel(gid, null);
     this.miniTrackUri.delete(gid);
     // Post it immediately instead of waiting for the next track change.
     void this.maybeAutoMiniNp(gid, this.sessionFor(gid).queue.getState());
     return (
-      `📌 **Following** — the live now-playing strip will stay in <#${channelId}> and update with every new song.\n` +
-      'Turn it off with `V@follow off`.'
+      '📌 **Following** — the live now-playing strip follows the room and updates with every new song.\n' +
+      'Pin it to one channel with `/npchannel`, or turn it off with `V@follow off`.'
     );
   }
 

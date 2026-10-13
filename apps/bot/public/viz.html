@@ -387,6 +387,11 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
     try{document.documentElement.style.setProperty('--mood',moodColor(0,0.6))}catch(e){}
   }
 
+  function themeById(id){
+    for(var i=0;i<THEMES.length;i++)if(THEMES[i].id===id)return THEMES[i];
+    return null;
+  }
+
   function applyTheme(t){
     theme=t;
     var r=document.documentElement.style;
@@ -444,8 +449,10 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
         case 'snapshot':
           if(msg.guilds){guilds=msg.guilds;primaryGuildId=msg.primaryGuildId||null;renderGuilds()}
           if(msg.state)showState(msg.state);
-          if(msg.theme){for(var i=0;i<THEMES.length;i++)if(THEMES[i].id===msg.theme.id)applyTheme(THEMES[i])}
-          if(typeof msg.sensitivity==='number')setSensitivity(msg.sensitivity,false);
+          if(themeOverride){var _ot=themeById(themeOverride);if(_ot)applyTheme(_ot)}
+          else if(msg.theme){var _st=themeById(msg.theme.id);if(_st)applyTheme(_st)}
+          if(sensOverride!=null)setSensitivity(sensOverride,false);
+          else if(typeof msg.sensitivity==='number')setSensitivity(msg.sensitivity,false);
           if(typeof msg.presetCycle==='number')setPresetCycle(msg.presetCycle,{global:true});
           // A snapshot only ever AUTO-ENABLES synth (EW is on). It must never
           // turn OFF a manually selected synth view — only a live 'endlesswave'
@@ -458,11 +465,13 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
           else if(msg.endlesswave===false)handleEndlessWave({active:false,generated:0,snapshot:true});
           break;
         case 'theme':{
-          var t=msg.theme;if(t)for(var j=0;j<THEMES.length;j++)if(THEMES[j].id===t.id)applyTheme(THEMES[j]);
+          // A theme this viewer picked themselves wins over the server's.
+          if(themeOverride){var _ct=themeById(themeOverride);if(_ct)applyTheme(_ct)}
+          else{var t=msg.theme;if(t)for(var j=0;j<THEMES.length;j++)if(THEMES[j].id===t.id)applyTheme(THEMES[j]);}
           break;
         }
         case 'visuals:sensitivity':
-          setSensitivity(msg.multiplier,false);
+          setSensitivity(sensOverride!=null?sensOverride:msg.multiplier,false);
           break;
         case 'visuals:mood':
           applyMood(msg);
@@ -550,7 +559,14 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
      pick your own pace from the dock it sticks for THIS viewer (localStorage)
      and the global relay no longer overrides it. */
   var paceOverride=false;
-  try{var _pc=parseInt(localStorage.getItem('vzPresetCycle')||'',10);if(_pc>=0&&_pc<=600){presetCycleMs=_pc*1000;paceOverride=true;}}catch(e){}
+  /* Per-viewer theme + reactivity. A viewer without the share key (the Activity
+     always is one — the bridge drops its commands as a guest) had its swatch and
+     slider clicks silently discarded, and the next server broadcast snapped the
+     view straight back. Remember the choice locally and let it win over server
+     updates, exactly like the pace override above. */
+  var themeOverride=null,sensOverride=null;
+  try{var _tid=localStorage.getItem('vzTheme');if(_tid)themeOverride=_tid;}catch(e){}
+  try{var _sv=parseFloat(localStorage.getItem('vzSens')||'');if(_sv>=0.5&&_sv<=1.5)sensOverride=_sv;}catch(e){}
   function startCycle(){
     if(cycleTimer){clearInterval(cycleTimer);cycleTimer=null}
     if(presetCycleMs<=0)return;
@@ -891,7 +907,10 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
     }
   }
   sensSlider.addEventListener('input',function(){
-    setSensitivity(Number(sensSlider.value)/100,true);
+    var _v=Number(sensSlider.value)/100;
+    sensOverride=_v;
+    try{localStorage.setItem('vzSens',String(_v))}catch(e){}
+    setSensitivity(_v,true);
   });
 
   /* ---------- themes UI ---------- */
@@ -904,6 +923,10 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
       b.style.background='linear-gradient(135deg,'+t.accent+','+t.accent2+')';
       b.onclick=function(){
         applyTheme(t);
+        // Remember it for this viewer. A guest's command is dropped by the
+        // bridge, so without a local override the next broadcast reverted it.
+        themeOverride=t.id;
+        try{localStorage.setItem('vzTheme',t.id)}catch(e){}
         if(ws&&ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify({type:'cmd',command:'theme',themeId:t.id}));
       };
       w.appendChild(b);
