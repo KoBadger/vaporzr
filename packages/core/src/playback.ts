@@ -29,16 +29,28 @@ import {
 
 export type SendFn = (msg: CommandMessage) => void;
 
-/** How long before a track ends we try to pre-resolve and buffer the next one. */
-const PRELOAD_LEAD_MS = 30_000;
+/** How long before a track ends we re-resolve the next one. The early warm in
+ *  schedulePreload normally has it done already; this is the backstop for a
+ *  track queued mid-play, so it must outlast a slow proxied resolve. */
+const PRELOAD_LEAD_MS = 45_000;
+/** How long a resolved stream URL stays usable for the NEXT track. Deliberately
+ *  shorter than PLAYBACK_CACHE_TTL_MS: the URL is bound to the proxy exit that
+ *  minted it, so one warmed at the start of a long track can outlive that
+ *  session and 403 on the handoff. Anything older is re-resolved. */
+const PRELOAD_FRESH_MS = 4 * 60 * 1000;
 /** How long a resolved stream URL stays reusable before being re-resolved.
- *  Aligned with YouTube's signed-URL lifetime (~6h) so a stale URL never
- *  lands back in the queue. */
-// googlevideo URLs are bound to the IP that minted them AND carry their own
-// `expire` stamp, so a long-lived cache is a liability: once the proxy session
-// rotates, every cached URL 403s. Kept short enough that a requeue/restart
-// still starts instantly, but stale URLs are re-resolved well before that.
+ *  googlevideo URLs are bound to the IP that minted them AND carry their own
+ *  `expire` stamp, so a long-lived cache is a liability: once the proxy session
+ *  rotates, every cached URL 403s. Kept short enough that a requeue/restart
+ *  still starts instantly, but stale URLs are re-resolved well before that. */
 const PLAYBACK_CACHE_TTL_MS = 25 * 60 * 1000;
+
+/** Is a cached stream URL still fresh enough to hand to the next track?
+ *  `savedAt` is when the URL was RESOLVED, not when it was persisted. */
+export function streamCacheEntryIsFresh(savedAt: number | undefined, now = Date.now()): boolean {
+  if (!savedAt) return false;
+  return now - savedAt < PRELOAD_FRESH_MS;
+}
 /** Debounce before the stream cache is flushed to `stream-cache.json`. */
 export const STREAM_CACHE_SAVE_DEBOUNCE_MS = 4000;
 /** Resample librespot's 44.1 kHz PCM to Discord's 48 kHz, plus R128 loudness
@@ -303,7 +315,12 @@ export class PlaybackController {
    *  instead of serially waiting 5-20s on yt-dlp afterwards. The YouTube
    *  resolver dedupes by query key, so play() reuses this exact resolve. */
   prefetchStream(track: ResolvedTrack | TrackInfo): void {
-    if (this.streamCache.has(track.uri) || (track as ResolvedTrack).streamUrl) return;
+    if ((track as ResolvedTrack).streamUrl) return;
+    // Skip a warm entry, but REFRESH a stale one: the URL is bound to the proxy
+    // exit that minted it, so one resolved long ago can 403 when it finally plays.
+    if (this.streamCache.has(track.uri) && streamCacheEntryIsFresh(this.streamCacheAt.get(track.uri))) {
+      return;
+    }
     const uri = track.uri;
     void (async () => {
       try {
@@ -557,6 +574,13 @@ export class PlaybackController {
     const nextIsSpotifyFallback =
       nextTrack.source === 'spotify' && (config.spotifyPreferYoutube || !this.librespot?.isRunning());
     if (!nextIsYt && !nextIsSpotifyFallback) return;
+    // Warm it NOW rather than only shortly before the handoff. A proxied resolve
+    // routinely takes 20-30s, so starting it at PRELOAD_LEAD_MS often finished
+    // late and the room heard a ~27s gap between tracks (the previous track's
+    // end, then silence, then the next start). Resolving at the start of the
+    // current track leaves minutes of slack, and play() reuses the result
+    // because prefetchStream fills the same streamCache play() reads.
+    this.prefetchStream(nextTrack);
     const remaining = Math.max(0, durationMs - positionMs);
     if (remaining <= 0) return;
     const wait = Math.min(Math.max(remaining - PRELOAD_LEAD_MS, 2000), 6 * 60 * 60 * 1000);
@@ -567,7 +591,11 @@ export class PlaybackController {
   }
 
   private async preloadNextTrack(track: TrackInfo): Promise<void> {
-    if (this.streamCache.has(track.uri)) return;
+    // Nothing to do when the early warm already produced a URL that is still
+    // fresh; re-resolve when it is missing or has aged out.
+    if (this.streamCache.has(track.uri) && streamCacheEntryIsFresh(this.streamCacheAt.get(track.uri))) {
+      return;
+    }
     try {
       if (track.source === 'youtube') {
         const video = await resolveYoutubeVideo(track.uri.replace('youtube:video:', ''));
