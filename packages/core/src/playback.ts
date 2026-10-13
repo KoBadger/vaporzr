@@ -88,6 +88,10 @@ export class PlaybackController {
   private spotifyProgress: NodeJS.Timeout | null = null;
   /** PCM bytes seen on the previous progress tick (genuine-end detection). */
   private lastSpotifyBytes = 0;
+  /** Uri of the Spotify track whose feed we already re-issued once. A second
+   *  stall for the SAME track means the re-issue did not restore audio, so we
+   *  stop re-issuing and play the YouTube match instead of sitting in silence. */
+  private stallReissueUri: string | null = null;
   /** When the current Spotify track started — used to sanity-check the PCM-derived
    *  position against real time (a stale counter can report "past the end" while
    *  the listener is still hearing the song, which used to cut tracks short). */
@@ -731,6 +735,9 @@ export class PlaybackController {
     }
     this.lastPlayUri = current.uri;
     this.lastPlayStartedAt = now;
+    // A re-issue of the SAME track must keep the second-strike marker; a genuine
+    // move to a different track clears it.
+    if (this.stallReissueUri && this.stallReissueUri !== current.uri) this.stallReissueUri = null;
     // Measure this track from scratch (see flushLocalFeatures).
     this.featureCollector.reset();
     const generation = ++this.playGeneration;
@@ -1456,9 +1463,23 @@ export class PlaybackController {
         return;
       }
       if (state.playing && (playing.source ?? 'spotify') === 'spotify' && !this.spotifyFallback) {
+        // Second stall for the same track: the re-issue did not restore the
+        // feed, so re-issuing again would only buy more silence. Play the
+        // YouTube match instead so the song actually comes back.
+        if (this.stallReissueUri === playing.uri) {
+          this.stallReissueUri = null;
+          console.warn(
+            `[playback] Spotify feed stalled again — falling back to YouTube for "${playing.name}"`,
+          );
+          void this.playYoutubeFallback(playing, this.playGeneration).catch((err) => {
+            console.warn(`[playback] stall fallback failed: ${err instanceof Error ? err.message : err}`);
+          });
+          return;
+        }
         const now = Date.now();
         if (!this.lastStallRecoveryAt || now - this.lastStallRecoveryAt > 20_000) {
           this.lastStallRecoveryAt = now;
+          this.stallReissueUri = playing.uri;
           console.warn(`[playback] Spotify feed stalled — re-issuing "${playing.name}"`);
           this.sendVisualizer({ type: 'cmd', command: 'stop' });
           void this.play().catch((err) => {
@@ -1937,6 +1958,13 @@ export class PlaybackController {
       if (this.librespot?.seekMs) void this.librespot.seekMs(positionMs);
     else void spotifySeek(this.spotifyDeviceId, positionMs).catch(() => {});
       this.librespot?.setPositionMs(positionMs);
+      // Rebase the wall-clock baseline too. The progress ticker treats a
+      // position that runs ahead of "wall-clock since the track started" as a
+      // stale byte counter and resyncs it back down — which clobbered this
+      // deliberate seek: a stall restart from 103s got reset to ~2s, so the
+      // panel bar read ~100s low and the end-of-track log reported a false
+      // "CUT SHORT". The guard still catches a genuinely stale counter.
+      this.spotifyTrackStartedAt = Date.now() - positionMs;
       this.queue.setState({ positionMs });
     }
     if (state.playing) this.scheduleEnd(state.durationMs, positionMs);

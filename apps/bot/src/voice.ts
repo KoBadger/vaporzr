@@ -58,6 +58,9 @@ export class VoiceManager implements AudioTransport {
   private bytesSinceLog = 0;
   /** True while the playback feed is expected to push PCM (arm/disarm from playback.ts). */
   private expectingPcm = false;
+  /** Whether the CURRENT feed has ever delivered a PCM chunk. A track that has
+   *  produced nothing never actually started, so it gets a shorter stall window. */
+  private everGotPcm = false;
   /** Optional tap on every PCM chunk (audio:pcm broadcast to visualizer windows). */
   private pcmTap: ((data: Buffer) => void) | null = null;
   /** Dedicated spectrum-analyzer feed — independent of pcmTap so both coexist. */
@@ -102,10 +105,15 @@ export class VoiceManager implements AudioTransport {
   /** Music stays ducked until this timestamp (used over TTS announcements). */
   private duckForceUntil = 0;
 
-  /** True when the voice connection is alive but the audio stream has died
-   *  (ffmpeg crashed, pipe broken, etc.) — resume should re-stream instead of unpause. */
+  /** True when the voice connection is alive but a SERVER-SIDE stream has died
+   *  (ffmpeg crashed, pipe broken, etc.) — resume should re-stream instead of unpause.
+   *
+   *  The Spotify PCM feed has no ffmpeg at all, so `ffmpeg === null` is its
+   *  NORMAL state. Treating that as a stall made every resume() during a Spotify
+   *  track restart the song from the top — heard as a mid-song cut-out and
+   *  replay. Only report a stall when we are NOT on the PCM feed. */
   isStalled(): boolean {
-    return this.isJoined() && !this.paused && this.ffmpeg === null;
+    return this.isJoined() && !this.paused && this.ffmpeg === null && !this.expectingPcm;
   }
 
   /** Auto-leave after this long with nothing playing. */
@@ -431,22 +439,32 @@ export class VoiceManager implements AudioTransport {
         this.bytesSinceLog = 0;
         this.lastChunkAt = Date.now();
         this.stallWarnings = 0;
+        this.everGotPcm = true;
         if (hadStall) {
           console.log(`[voice] streaming OK (recovered) — ${mb} MB since stall`);
         }
       } else if (this.ffmpeg) {
         // Server-side stream: silence is normal between tracks; don't warn.
-      } else if (this.expectingPcm && Date.now() - this.lastChunkAt > 15_000) {
+      } else if (
+        this.expectingPcm &&
+        Date.now() - this.lastChunkAt > (this.everGotPcm ? 15_000 : 8_000)
+      ) {
         // The Spotify FIFO feed has no ffmpeg onEnd and briefly runs dry at
-        // track boundaries; a short gap is normal. Require a sustained ~30s
-        // outage (2 warnings) before re-issuing, so the end-of-track advance
-        // wins instead of being pre-empted by a re-seek.
+        // track boundaries; a short gap is normal once audio has started, so a
+        // track that HAS played waits for a sustained ~30s outage (2 warnings)
+        // before re-issuing — that lets the end-of-track advance win instead of
+        // being pre-empted by a re-seek.
+        //
+        // A track that has produced NOTHING has not started at all (dead
+        // librespot session, unregistered device). Waiting 30s there is just 30s
+        // of silence in the room, so a single 8s window triggers recovery.
+        const windowMs = this.everGotPcm ? 15_000 : 8_000;
         console.warn(
-          '[voice] WARNING: expected audio but no chunks received in 15s — stream may be stalled',
+          `[voice] WARNING: expected audio but no chunks received in ${windowMs / 1000}s — stream may be stalled`,
         );
         this.lastChunkAt = Date.now();
         this.stallWarnings++;
-        if (this.stallWarnings >= 2) {
+        if (this.stallWarnings >= (this.everGotPcm ? 2 : 1)) {
           this.stallWarnings = 0;
           this.onStallRecovery?.();
         }
@@ -464,7 +482,12 @@ export class VoiceManager implements AudioTransport {
   /** Arm/disarm the "audio expected" watchdog, set by the playback feed. */
   setExpectingPcm(expected: boolean): void {
     this.expectingPcm = expected;
-    if (expected) this.lastChunkAt = Date.now();
+    if (expected) {
+      this.lastChunkAt = Date.now();
+      // A freshly armed feed has produced nothing yet — the short stall window
+      // applies until the first chunk lands.
+      this.everGotPcm = false;
+    }
     this.stallWarnings = 0;
   }
 
@@ -501,6 +524,7 @@ export class VoiceManager implements AudioTransport {
     this.stream = stream;
     this.streamStartTime = Date.now();
     this.pausedPositionMs = 0;
+    this.everGotPcm = false;
     const resource = createAudioResource(stream, { inputType: StreamType.Raw, inlineVolume: true });
     this.resource = resource;
     this.applyVolumeToResource();
