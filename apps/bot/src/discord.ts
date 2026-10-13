@@ -3577,17 +3577,45 @@ export class DiscordBot {
 
         case 'mashup': {
           if (!canUse('mashup')) return void (await deny());
-          const parts = args.split(/\s*\|\s*|\s*->\s*/).map((x) => x.trim()).filter(Boolean);
+          const gid = message.guildId ?? '';
+          const raw = args.trim();
+          const sub = (raw.split(/\s+/)[0] ?? '').toLowerCase();
+          const reply = (content: string) => message.reply(content);
+          if (sub === 'list' || sub === 'queue' || sub === 'status') {
+            return void (await this.replyMashupQueue(reply, gid));
+          }
+          if (sub === 'clear') {
+            const had = (this.mashupQueue.get(gid) ?? []).length;
+            this.mashupQueue.delete(gid);
+            return void (
+              await reply(had ? `🧹 Cleared ${had} queued mashup${had === 1 ? '' : 's'}.` : 'The mashup queue is already empty.')
+            );
+          }
+          if (sub === 'remove' || sub === 'cancel' || sub === 'delete') {
+            return void (await this.removeMashupFromQueue(reply, gid, parseInt(raw.split(/\s+/)[1] ?? '', 10)));
+          }
+          if (sub === 'move') {
+            const [, x, y] = raw.split(/\s+/);
+            return void (await this.moveMashupInQueue(reply, gid, parseInt(x ?? '', 10), parseInt(y ?? '', 10)));
+          }
+          if (sub === 'edit' || sub === 'replace') {
+            const rest = raw.replace(/^\S+\s*/, '');
+            const m = /^(\d+)\s+([\s\S]+)$/.exec(rest);
+            const ep = m ? m[2].split(/\s*\|\s*|\s*->\s*/).map((x) => x.trim()).filter(Boolean) : [];
+            if (!m || ep.length < 2) return void (await reply('Usage: `V@mashup edit <n> <song A> | <song B>`'));
+            return void (await this.editMashupInQueue(reply, gid, parseInt(m[1]!, 10), ep[0]!, ep[1]!));
+          }
+          const parts = raw.split(/\s*\|\s*|\s*->\s*/).map((x) => x.trim()).filter(Boolean);
           if (parts.length < 2)
             return void (
-              await message.reply(
-                'Usage: `V@mashup <song A> | <song B>` — separates both songs and cross-layers their stems into 2 downloadable blends + 5 similar songs. Takes a few minutes.',
+              await reply(
+                'Usage: `V@mashup <song A> | <song B>` — separates both songs and cross-layers their stems into 2 downloadable blends + 5 similar songs.\n' +
+                  'Queue: `V@mashup list` · `V@mashup remove <n>` · `V@mashup edit <n> <a> | <b>` · `V@mashup move <n> <m>` · `V@mashup clear`',
               )
             );
           const ch = message.channel;
-          if (!('send' in ch)) return void (await message.reply('Cannot post here.'));
-          await message.reply('🎛️ Rendering stem mashup — separating both songs (this can take several minutes)…');
-          void this.startMashupRender((p) => ch.send(p), message.guildId ?? '', parts[0], parts[1]);
+          if (!('send' in ch)) return void (await reply('Cannot post here.'));
+          void this.startMashupRender((p) => ch.send(p), gid, parts[0]!, parts[1]!, message.author?.username ?? '');
           break;
         }
 
@@ -7325,18 +7353,55 @@ export class DiscordBot {
   }
 
   /** One mashup render per guild at a time; posts the result as a NEW message
-   *  (a render can outlast Discord's interaction window). */
+   *  (a render can outlast Discord's interaction window). Extra requests are
+   *  QUEUED rather than bounced, so several can be lined up at once. */
   private mashupBusy = new Set<string>();
-  private async startMashupRender(send: MashupSend, guildId: string, a: string, b: string): Promise<void> {
+  private mashupQueue = new Map<string, MashupJob[]>();
+  private static readonly MASHUP_QUEUE_MAX = 5;
+
+  /** Enqueue a mashup, or render it now when the guild is idle. */
+  private async startMashupRender(
+    send: MashupSend,
+    guildId: string,
+    a: string,
+    b: string,
+    by = '',
+  ): Promise<void> {
     if (this.mashupBusy.has(guildId)) {
+      const q = this.mashupQueue.get(guildId) ?? [];
+      if (q.length >= DiscordBot.MASHUP_QUEUE_MAX) {
+        await send({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(this.themeColor())
+              .setDescription(
+                `📋 The mashup queue is full (${DiscordBot.MASHUP_QUEUE_MAX}). Free a slot with \`V@mashup remove <n>\` or \`V@mashup clear\`.`,
+              ),
+          ],
+          files: [],
+        }).catch(() => {});
+        return;
+      }
+      q.push({ id: randomBytes(3).toString('hex'), a, b, by, send });
+      this.mashupQueue.set(guildId, q);
       await send({
         embeds: [
-          new EmbedBuilder().setColor(this.themeColor()).setDescription('⏳ Already rendering a mashup here — give it a few minutes.'),
+          new EmbedBuilder()
+            .setColor(this.themeColor())
+            .setDescription(
+              `📋 Queued as **#${q.length}** — ${truncate(a, 40)} × ${truncate(b, 40)}\nUse \`V@mashup list\` to see the queue.`,
+            ),
         ],
         files: [],
       }).catch(() => {});
       return;
     }
+    await this.renderMashupNow(send, guildId, a, b);
+    void this.drainMashupQueue(guildId);
+  }
+
+  /** Render a single mashup; the busy flag is held for its whole duration. */
+  private async renderMashupNow(send: MashupSend, guildId: string, a: string, b: string): Promise<void> {
     this.mashupBusy.add(guildId);
     const cleanup: string[] = [];
     try {
@@ -7367,6 +7432,105 @@ export class DiscordBot {
       this.mashupBusy.delete(guildId);
       for (const f of cleanup) await fs.rm(f, { force: true, recursive: true }).catch(() => {});
     }
+  }
+
+  /** Start the next queued mashup for a guild, if there is one. */
+  private async drainMashupQueue(guildId: string): Promise<void> {
+    if (this.mashupBusy.has(guildId)) return;
+    const q = this.mashupQueue.get(guildId);
+    const job = q?.shift();
+    if (!job) return;
+    if (q && q.length === 0) this.mashupQueue.delete(guildId);
+    await job
+      .send({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(this.themeColor())
+            .setDescription(`▶️ Starting your queued mashup — ${truncate(job.a, 40)} × ${truncate(job.b, 40)}`),
+        ],
+        files: [],
+      })
+      .catch(() => {});
+    await this.renderMashupNow(job.send, guildId, job.a, job.b);
+    void this.drainMashupQueue(guildId);
+  }
+
+  /** `V@mashup list` — what is rendering and what is waiting. */
+  private async replyMashupQueue(reply: (content: string) => Promise<unknown>, guildId: string): Promise<void> {
+    const q = this.mashupQueue.get(guildId) ?? [];
+    const lines: string[] = [
+      this.mashupBusy.has(guildId) ? '🎛️ Rendering now — a slot is busy.' : '😴 Nothing rendering right now.',
+    ];
+    if (q.length === 0) {
+      lines.push('📋 Queue is empty. Add one with `V@mashup <song A> | <song B>`.');
+    } else {
+      lines.push(`📋 Queue (${q.length}/${DiscordBot.MASHUP_QUEUE_MAX}):`);
+      q.forEach((j, i) =>
+        lines.push(`**${i + 1}.** ${truncate(j.a, 40)} × ${truncate(j.b, 40)}${j.by ? ` — by ${j.by}` : ''}`),
+      );
+      lines.push(
+        'Remove: `V@mashup remove <n>` · Replace: `V@mashup edit <n> <a> | <b>` · Reorder: `V@mashup move <n> <m>` · Empty: `V@mashup clear`',
+      );
+    }
+    await reply(lines.join('\n')).catch(() => {});
+  }
+
+  /** Remove entry `n` (1-based) from a guild's mashup queue. */
+  private async removeMashupFromQueue(
+    reply: (content: string) => Promise<unknown>,
+    guildId: string,
+    n: number,
+  ): Promise<void> {
+    const q = this.mashupQueue.get(guildId) ?? [];
+    if (!Number.isInteger(n) || n < 1 || n > q.length) {
+      await reply(
+        q.length ? `Pick a number from 1 to ${q.length} (see \`V@mashup list\`).` : 'The mashup queue is empty.',
+      ).catch(() => {});
+      return;
+    }
+    const [gone] = q.splice(n - 1, 1);
+    if (q.length === 0) this.mashupQueue.delete(guildId);
+    await reply(
+      `🗑️ Removed **#${n}** — ${truncate(gone?.a ?? '', 40)} × ${truncate(gone?.b ?? '', 40)}.${q.length ? ` ${q.length} left.` : ' Queue is now empty.'}`,
+    ).catch(() => {});
+  }
+
+  /** Replace entry `n` (1-based) with a new pair. */
+  private async editMashupInQueue(
+    reply: (content: string) => Promise<unknown>,
+    guildId: string,
+    n: number,
+    a: string,
+    b: string,
+  ): Promise<void> {
+    const q = this.mashupQueue.get(guildId) ?? [];
+    if (!Number.isInteger(n) || n < 1 || n > q.length) {
+      await reply(
+        q.length ? `Pick a number from 1 to ${q.length} (see \`V@mashup list\`).` : 'The mashup queue is empty.',
+      ).catch(() => {});
+      return;
+    }
+    q[n - 1] = { ...q[n - 1]!, a, b };
+    await reply(`✏️ Updated **#${n}** — ${truncate(a, 40)} × ${truncate(b, 40)}.`).catch(() => {});
+  }
+
+  /** Move entry `from` to position `to` (both 1-based). */
+  private async moveMashupInQueue(
+    reply: (content: string) => Promise<unknown>,
+    guildId: string,
+    from: number,
+    to: number,
+  ): Promise<void> {
+    const q = this.mashupQueue.get(guildId) ?? [];
+    if (!Number.isInteger(from) || !Number.isInteger(to) || from < 1 || from > q.length || to < 1 || to > q.length) {
+      await reply(
+        q.length ? `Pick numbers from 1 to ${q.length} (see \`V@mashup list\`).` : 'The mashup queue is empty.',
+      ).catch(() => {});
+      return;
+    }
+    const [item] = q.splice(from - 1, 1);
+    q.splice(to - 1, 0, item!);
+    await reply(`↕️ Moved **#${from}** to **#${to}**.`).catch(() => {});
   }
 
   /** Vote tallies for active mashup games (in-memory; resets on restart). */
@@ -9006,6 +9170,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/hype on|off` · `V@hype` — auto-hype: drop a hit on strong beats',
       '`/mix <a> <b>` · `V@mix <a> | <b>` — crossfade two tracks into one mix',
       '`/mashup <a> <b>` · `V@mashup <a> | <b>` — render a tempo/key-matched blend (downloadable) + 5 similar tracks',
+      '`V@mashup list` · `V@mashup remove <n>` · `V@mashup edit <n> <a> | <b>` · `V@mashup move <n> <m>` · `V@mashup clear` — manage the mashup queue (up to 5 lined up while one renders)',
       '`/mashupgame` · `V@mashupgame` (`V@mg`) — auto-pick two queued songs, render stem blends, vote for the best',
       '`/mashups` · `V@mashups` (`V@mh`) — past mashups + winners',
     ],
@@ -9156,6 +9321,17 @@ interface MashupRecord {
   b: string;
   winner?: 'v1' | 'v2' | 'tie';
   at: number;
+}
+
+/** A mashup waiting its turn in a guild's queue (in-memory; a render takes
+ *  minutes, so several can be lined up rather than bounced with "already
+ *  rendering"). */
+interface MashupJob {
+  id: string;
+  a: string;
+  b: string;
+  by: string;
+  send: MashupSend;
 }
 
 const MASHUP_HISTORY_FILE = (): string => path.join(config.dataDir, 'mashup-history.json');
