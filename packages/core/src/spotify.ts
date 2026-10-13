@@ -377,13 +377,18 @@ const VERSION_MARKER_RE =
 
 /** Strip parenthesized/bracketed segments and trailing dash version markers so
  *  "Nightcall (Emmit Fenn Remix)" reduces to "nightcall". A leading year is
- *  tolerated: " - 2020 Digital Master" counts as a version marker too. */
+ *  tolerated: " - 2020 Digital Master" counts as a version marker too. The dash
+ *  form often names the remixer BEFORE the marker (" - Stanton Warriors Remix"),
+ *  so the marker is allowed to appear anywhere after the dash. */
 function stripVersionSegments(name: string): string {
   return name
     .toLowerCase()
     .replace(/\s*[\(\[][^\)\]]*[\)\]]\s*/g, ' ')
     .replace(/\s*[-–—]\s*(?:\d{4}\s+)?(?:digital\s+)?(?:remastered|remaster|master)\b.*$/g, ' ')
-    .replace(/\s*[-–—]\s*(remix|edit|vip|bootleg|live|acoustic|cover|slowed|sped|version|mix|instrumental|a cappella|radio|extended|clean|explicit|ost|soundtrack|deluxe|demo|unplugged)\b.*$/g, ' ')
+    .replace(
+      /\s*[-–—]\s*.*?\b(remix|edit|vip|bootleg|flip|dub|live|acoustic|cover|slowed|sped|version|mix|instrumental|a cappella|radio|extended|clean|explicit|ost|soundtrack|deluxe|demo|unplugged)\b.*$/g,
+      ' ',
+    )
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -393,14 +398,19 @@ function stripVersionSegments(name: string): string {
  *  movie versions…) when the user didn't ask for one, and boosts tracks whose
  *  artist appears in the query — so "nightcall kavinsky" returns the original,
  *  not a remix. */
-function scorePlayResult(track: ResolvedTrack, query: string): number {
+export function scorePlayResult(track: ResolvedTrack, query: string): number {
   const q = query.toLowerCase().trim();
   const n = track.name.toLowerCase().trim();
   let s = scoreSearchResult(n, q);
   const core = stripVersionSegments(n);
-  if (core && core !== n && VERSION_MARKER_RE.test(n)) {
-    if (!VERSION_MARKER_RE.test(q)) s += 6;       // variant the user didn't ask for
-    else if (q.includes(core) || core.includes(q)) s -= 3; // asked for a variant of THIS song
+  // A variant marker in the NAME is penalized whether or not stripVersionSegments
+  // managed to reduce it. The dash form names the remixer first
+  // ("Feel Good Inc. - Stanton Warriors Remix"), which the strip used to miss, so
+  // the condition `core !== n` never held and Spotify's own ordering handed back
+  // the remix as the top result for a plain "song - artist" query.
+  if (VERSION_MARKER_RE.test(n)) {
+    if (!VERSION_MARKER_RE.test(q)) s += 6; // variant the user didn't ask for
+    else if (core && (q.includes(core) || core.includes(q))) s -= 3; // asked for a variant of THIS song
   }
   if (track.artists.some((a) => a && q.includes(a.toLowerCase().trim()))) s -= 4;
   if (core === q || n === q) s -= 5;
