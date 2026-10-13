@@ -222,14 +222,50 @@ ssh root@<vps> "bash /opt/vps-redeploy.sh"
 2. Overwrite `/opt/vaporzr/cookies.txt` with it.
 3. `bash /opt/vps-redeploy.sh` (recreates the container so the new file mounts).
 
-> Deno (the JS runtime yt-dlp needs to solve YouTube's `n`-signature) and the
-> bgutil PO-token provider are baked into the image — no action needed. For local
-> dev, install Deno (https://deno.land) so yt-dlp behaves like it does on the VPS.
+> Deno (the JS runtime yt-dlp needs to solve YouTube's `n`-signature) IS baked
+> into the image — no action needed. For local dev, install Deno
+> (https://deno.land) so yt-dlp behaves like it does on the VPS.
+
+### PO-token provider (a HOST container — NOT in the image)
+yt-dlp needs a PO token to get playable YouTube streams. The bot reaches the
+bgutil provider over loopback `:4416` (the bot container runs `--network host`,
+so "loopback" there is the host's). It is **not** part of the bot image and
+**not** managed by the deploy workflow — it is a separate container created
+once, by hand:
+
+```sh
+docker run -d --name bgutil-provider --restart unless-stopped --network host \
+  brainicism/bgutil-ytdlp-pot-provider:2.0.2
+```
+
+Keep its tag in step with the plugin pinned in `apps/bot/Dockerfile`
+(`bgutil-ytdlp-pot-provider==2.0.2`). When they drift, every resolve logs:
+
+```
+[pot:bgutil:http] The provider plugin and the HTTP server are on different versions
+```
+
+It keeps working, but you get no support for anything that then goes wrong. To
+bump both: change the pin in the Dockerfile, redeploy, then recreate this
+container with the matching tag. Confirm the running version with:
+
+```sh
+curl -s http://127.0.0.1:4416/ping      # {"server_uptime":…,"version":"2.0.2"}
+```
+
+If this container is absent, `/health` reports `poToken: "down"` and YouTube
+extraction degrades — with no obvious cause, because nothing in the image or in
+the deploy mentions it. (`--restart unless-stopped` keeps it alive across host
+reboots; it is only lost if the host itself is rebuilt.)
 
 ### Proxy
 If `YOUTUBE_PROXY` is set it's used for both yt-dlp resolve and the ffmpeg stream,
 so it must present a **sticky** exit IP (googlevideo URLs are IP-bound). Leave it
-unset to go direct, which works with cookies + the bundled PO-token provider.
+unset to go direct, which works with cookies + the host PO-token provider (above).
+
+With `YOUTUBE_PROXY_FALLBACK` also set, the stream fetch picks whichever route's
+egress matches the `ip=` recorded in the URL, so a URL minted by the fallback is
+fetched *through the fallback* instead of 403ing against a direct fetch.
 
 ### Optional env knobs
 
