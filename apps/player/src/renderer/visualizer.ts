@@ -164,6 +164,12 @@ const client = new WsClient({
       else if (msg.endlesswave === true) handleEndlessWave(true);
       if (typeof msg.presetCycle === 'number') setPresetCycle(msg.presetCycle, false);
       if (msg.guilds) setGuilds(msg.guilds, msg.primaryGuildId);
+      // The bridge tells us when we connected without the share key. A guest has
+      // every `cmd` dropped, so say it out loud instead of failing silently —
+      // that silence is exactly what made the player look like it had no controls.
+      if (msg.guest) {
+        log('Guest mode — the bot is keyed, so controls are ignored. Restart with VAPORZR_KEY=… (or --key=…)');
+      }
     } else if (msg.type === 'dj:update') {
       setDjEnabled(msg.enabled);
     } else if (msg.type === 'audio:pcm') {
