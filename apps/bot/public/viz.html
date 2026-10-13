@@ -650,7 +650,35 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
     if(window.requestIdleCallback){window.requestIdleCallback(fn,{timeout:4000});}
     else{setTimeout(fn,1800);}
   }
+  /* Preset pool. The desktop player's pack is tried FIRST — it is the pool the
+     player looks best with, and the Activity is meant to match it. The curated
+     projectM library below stays as the fallback when the pack is unavailable. */
   function loadPresetChunks(){
+    var s=document.createElement('script');
+    s.src='/vendor/presets/player-pack.min.js';s.async=true;
+    s.onload=function(){
+      try{
+        var P=window.butterchurnPresets;
+        if(P&&typeof P.getPresets==='function'){
+          Object.assign(presetPool,P.getPresets());
+          // The pack is not listed in curated.json, so drop the curation gate for
+          // it (the gate exists to filter the projectM collection, not this pack).
+          curatedNames=null;blankNames=null;
+          libTotal=Object.keys(allPresets()).length;libCurated=libTotal;
+          refreshPresetNames();
+          updatePresetDock();
+          // If MilkDrop is already on and waiting, start it on the new pool.
+          if(presetIdx<0&&presetNames.length&&bcViz)loadPreset(0,1.5);
+          return;
+        }
+      }catch(e){}
+      loadCuratedChunks();
+    };
+    s.onerror=function(){loadCuratedChunks()};
+    document.head.appendChild(s);
+  }
+  /* Fallback: the curated projectM "cream of the crop" chunks, streamed lazily. */
+  function loadCuratedChunks(){
     // Curation list first — it decides what the chunks are allowed to add.
     Promise.all([
       fetch('/vendor/presets/curated.json').then(function(r){return r.ok?r.json():null}).catch(function(){return null}),
@@ -752,7 +780,9 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
       gainNode.gain.value=sensitivity*0.9;
       analyser=actx.createAnalyser();
       analyser.fftSize=2048;
-      analyser.smoothingTimeConstant=0.6;
+      /* Matches the desktop player: a full-window MilkDrop scene reads as jitter
+         at 0.6, so the smoother constant is used here too. */
+      analyser.smoothingTimeConstant=0.82;
       gainNode.connect(analyser); // silent: never routed to speakers
       nextAt=actx.currentTime+0.06;
       initButter();

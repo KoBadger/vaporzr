@@ -52,6 +52,14 @@ COPY apps/spicetify ./apps/spicetify
 
 RUN npm ci --omit=dev
 
+# The desktop player's preset pack, served to the web visualizer so both rotate
+# the same pool — the player's pack is the one that looks best. butterchurn-presets
+# ships a browser-ready UMD build, so it can be served as-is (the vendor route
+# gzips it). Copied after npm ci because that is what installs it.
+RUN cp node_modules/butterchurn-presets/lib/butterchurnPresets.min.js \
+       apps/bot/public/vendor/presets/player-pack.min.js \
+ && node -e "const fs=require('fs');console.log('player pack served:', fs.statSync('apps/bot/public/vendor/presets/player-pack.min.js').size, 'bytes')"
+
 FROM node:20-trixie-slim AS runtime
 
 ARG GIT_SHA=dev
