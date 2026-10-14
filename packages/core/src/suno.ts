@@ -95,6 +95,14 @@ interface SunoClip {
 
 const SUNO_CLIP_API = 'https://studio-api.prod.suno.com/api/clip';
 
+/** Request headers for Suno, plus the session cookie when one is configured.
+ *  Deliberately NOT applied to CDN downloads: the cookie is a credential, and
+ *  the media hosts do not need it. */
+function sunoHeaders(extra: Record<string, string>): Record<string, string> {
+  const cookie = config.sunoCookie;
+  return cookie ? { ...extra, cookie } : extra;
+}
+
 /**
  * Suno's CDN kills long-lived streams mid-track ("Invalid data found" while
  * demuxing), but a clip is only a few MB — so download it once and play it from
@@ -196,7 +204,7 @@ export async function resolveSuno(input: string): Promise<ResolvedVideo> {
     try {
       const res = await proxyFetch(url, {
         redirect: 'follow',
-        headers: { 'user-agent': UA, accept: 'text/html' },
+        headers: sunoHeaders({ 'user-agent': UA, accept: 'text/html' }),
       });
       if (res.ok) html = await res.text();
     } catch {
@@ -210,7 +218,7 @@ export async function resolveSuno(input: string): Promise<ResolvedVideo> {
   let clip: SunoClip | null = null;
   try {
     const res = await proxyFetch(`${SUNO_CLIP_API}/${uuid}/`, {
-      headers: { 'user-agent': UA, accept: 'application/json' },
+      headers: sunoHeaders({ 'user-agent': UA, accept: 'application/json' }),
     });
     if (res.ok) clip = (await res.json()) as SunoClip;
   } catch (err) {

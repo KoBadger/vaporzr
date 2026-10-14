@@ -1893,6 +1893,34 @@ function updateOverlayIdle(playing: boolean): void {
   }, 1000);
 }
 
+/** Merge the bot's "baron" pack into the pool. Fetched rather than bundled so
+ *  the player and the Activity share one pool; its presets are keyed by bare id,
+ *  so they are labelled "Baron #<id>" — the same string the bridge names. */
+function loadBaronPack(): Promise<void> {
+  return new Promise((resolve) => {
+    const s = document.createElement('script');
+    s.src = ASSET_BASE + '/vendor/butterchurnPresetsBaron.min.js';
+    s.async = true;
+    s.onload = () => {
+      try {
+        const P = (window as unknown as Record<string, unknown>).butterchurnPresetsBaron as
+          | { getPresets?: () => Record<string, unknown> }
+          | undefined;
+        const got = P && typeof P.getPresets === 'function' ? P.getPresets() : {};
+        const cur = presetNames[currentPresetIndex];
+        for (const k of Object.keys(got)) presets[`Baron #${k}`] = got[k];
+        presetNames = Object.keys(presets).sort();
+        const i = cur ? presetNames.indexOf(cur) : -1;
+        currentPresetIndex = i >= 0 ? i : presetNames.length ? 0 : -1;
+        log(`${presetNames.length.toLocaleString()} visuals available`);
+      } catch { /* pack unavailable — the bundled set still works */ }
+      resolve();
+    };
+    s.onerror = () => resolve();
+    document.head.appendChild(s);
+  });
+}
+
 function init(): void {
   // The same three packs the Activity streams, so a preset the bridge names
   // resolves here too — with only the base pack the player silently ignored
@@ -1904,6 +1932,10 @@ function init(): void {
   };
   presetNames = Object.keys(presets).sort();
   log(`Loaded ${presetNames.length} presets`);
+  // The bot also serves the "baron" pack (762 Cream-of-the-Crop presets). Fetch
+  // it so both surfaces hold the same pool — the bridge names presets by name,
+  // and a name this player lacked would strand it on the old visual.
+  void loadBaronPack();
   // NOTE: the bot's curated projectM library is deliberately NOT auto-loaded.
   // It was tried and made the player's visuals worse — the bundled pack is what
   // the player looked good with. loadCuratedPresets() is still available (and
