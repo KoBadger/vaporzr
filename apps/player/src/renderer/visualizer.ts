@@ -580,13 +580,21 @@ let jamQrCanvas: HTMLCanvasElement | null = null;
  *  the same base the wallpaper video is fetched from. */
 function renderJamQr(): void {
   if (!jamQrCanvas) {
-    jamQrCanvas = document.createElement('canvas');
-    jamQrCanvas.id = 'jam-qr';
-    jamQrCanvas.style.cssText =
-      'position:fixed;right:16px;bottom:16px;z-index:12;padding:6px;border-radius:10px;' +
-      'background:#fff;box-shadow:0 6px 30px rgba(0,0,0,.55);pointer-events:none;' +
-      'transition:opacity .3s';
-    document.body.appendChild(jamQrCanvas);
+    const cv = document.createElement('canvas');
+    cv.id = 'jam-qr';
+    // Bottom-LEFT and translucent. It used to sit bottom-right, on top of the
+    // control bar's 🎛 toggle, and at full opacity. It brightens on hover (so it
+    // stays scannable) and clicking it hides it.
+    cv.style.cssText =
+      'position:fixed;left:16px;bottom:44px;z-index:12;padding:6px;border-radius:10px;' +
+      'background:#fff;box-shadow:0 6px 30px rgba(0,0,0,.55);cursor:pointer;' +
+      'opacity:.55;transition:opacity .3s';
+    cv.title = 'Jam join code — click to hide';
+    cv.addEventListener('click', () => setJamQr(false));
+    cv.addEventListener('mouseenter', () => { cv.style.opacity = '1'; });
+    cv.addEventListener('mouseleave', () => { cv.style.opacity = '.55'; });
+    document.body.appendChild(cv);
+    jamQrCanvas = cv;
   }
   const show = jamQrOn && !!jamJoinPath;
   jamQrCanvas.style.display = show ? 'block' : 'none';

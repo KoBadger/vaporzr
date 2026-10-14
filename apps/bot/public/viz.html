@@ -656,6 +656,18 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
      pick your own pace from the dock it sticks for THIS viewer (localStorage)
      and the global relay no longer overrides it. */
   var paceOverride=false;
+  /* Restore this viewer's pace choice. It was written to localStorage but never
+     read back, so a chosen pace was lost on every reload. */
+  try{var _pc=parseInt(localStorage.getItem('vzPresetCycle')||'',10);if(!isNaN(_pc)&&_pc>=0&&_pc<=600){paceOverride=true;presetCycleMs=_pc*1000;}}catch(e){}
+  /* Show the pace on the button — "⏱45" — so the gap between visual switches is
+     readable without opening anything. Manual reads "⏱∞". */
+  function updatePaceLabel(){
+    var bp=$('btn-pace');
+    if(!bp)return;
+    var secs=Math.round(presetCycleMs/1000);
+    bp.textContent=secs>0?('\u23F1'+secs):'\u23F1\u221E';
+    bp.title='Preset pace \u2014 '+(secs>0?(secs+'s per visual'):'manual, no auto-advance')+' (this viewer)';
+  }
   /* Per-viewer theme + reactivity. A viewer without the share key (the Activity
      always is one — the bridge drops its commands as a guest) had its swatch and
      slider clicks silently discarded, and the next server broadcast snapped the
@@ -674,11 +686,12 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
   function setPresetCycle(secs,opts){
     opts=opts||{};
     /* A deliberate local choice wins over the global default. */
-    if(opts.global&&paceOverride)return;
+    if(opts.global&&paceOverride){updatePaceLabel();return;}
     secs=Math.max(0,Math.min(600,Math.round(secs||0)));
     presetCycleMs=secs*1000;
     if(opts.local){paceOverride=true;try{localStorage.setItem('vzPresetCycle',String(secs))}catch(e){}}
     startCycle();
+    updatePaceLabel();
     if(presetNameEl){
       presetNameEl.textContent='Pace — '+(secs>0?secs+'s per visual':'manual (no auto-advance)')+(opts.local?' (this viewer)':'');
       presetNameEl.style.opacity='1';
