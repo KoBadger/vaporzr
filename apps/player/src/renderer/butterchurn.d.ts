@@ -23,3 +23,17 @@ declare module 'butterchurn-presets' {
   };
   export default butterchurnPresets;
 }
+
+declare module 'butterchurn-presets/lib/butterchurnPresetsExtra.min.js' {
+  const butterchurnPresetsExtra: {
+    getPresets: () => Record<string, unknown>;
+  };
+  export default butterchurnPresetsExtra;
+}
+
+declare module 'butterchurn-presets/lib/butterchurnPresetsExtra2.min.js' {
+  const butterchurnPresetsExtra2: {
+    getPresets: () => Record<string, unknown>;
+  };
+  export default butterchurnPresetsExtra2;
+}

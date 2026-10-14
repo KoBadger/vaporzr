@@ -1,6 +1,7 @@
 import type http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { WebSocket, WebSocketServer } from 'ws';
 import {
   emptyState,
@@ -50,6 +51,13 @@ export class Bridge {
   private sensitivity = 1.0;
   /** Seconds each visual preset dwells before auto-advancing (panel-controlled). */
   private presetCycleSec = 45;
+  /** Canonical preset list + cursor. The bridge owns the choice so every
+   *  visualizer shows the same preset, instead of each advancing its own pool
+   *  on its own timer — which is what let the player and the Activity drift. */
+  private presetNames: string[] = [];
+  private presetIdx = -1;
+  private presetNamesTried = false;
+  private presetTimer: ReturnType<typeof setInterval> | null = null;
   onBurstData: ((data: string) => void) | null = null;
   librespot: SpotifyBackend;
   /** Routed to the Discord layer when the panel changes autoplay mode. */
@@ -101,6 +109,11 @@ export class Bridge {
       ) as { seconds: number };
       if (c && typeof c.seconds === 'number') this.presetCycleSec = Math.max(5, Math.min(600, Math.round(c.seconds)));
     } catch { /* no saved preset cycle yet */ }
+
+    // Preset ownership: load the canonical list now so an early joiner gets the
+    // current preset in its first snapshot, and start the shared pace timer.
+    this.ensurePresetNames();
+    this.startPresetTimer();
 
     // Backend selection: go-librespot (soloist) or librespot-org (default).
     this.librespot =
@@ -319,6 +332,17 @@ export class Bridge {
    *  panel (or a hijacked socket) from flooding the bot with commands. */
   private cmdBudget = new Map<WebSocket, { tokens: number; last: number; warnedAt: number }>();
 
+  /** Guests may nudge the preset — a visual-only action on the shared canvas —
+   *  because the Activity (always a guest) is where the prev/next/shuffle
+   *  buttons live. Every other command still requires the key. */
+  private guestMaySend(msg: InboundMessage & { type: 'cmd' }): boolean {
+    return (
+      msg.command === 'preset' &&
+      typeof msg.presetAction === 'string' &&
+      typeof msg.presetCycle !== 'number'
+    );
+  }
+
   private allowCommand(socket: WebSocket): boolean {
     const now = Date.now();
     const CAP = 30;
@@ -372,7 +396,7 @@ export class Bridge {
         });
         break;
       case 'cmd':
-        if (!this.isAuthed(socket)) return;
+        if (!this.isAuthed(socket) && !this.guestMaySend(msg)) return;
         if (!this.allowCommand(socket)) return;
         this.handlePanelCommand(msg);
         break;
@@ -413,7 +437,7 @@ export class Bridge {
         break;
       }
       case 'cmd':
-        if (!this.isAuthed(socket)) return;
+        if (!this.isAuthed(socket) && !this.guestMaySend(msg)) return;
         if (!this.allowCommand(socket)) return;
         this.handlePanelCommand(msg);
         break;
@@ -572,7 +596,7 @@ export class Bridge {
           break;
         }
         const action = msg.presetAction ?? 'next';
-        this.broadcast({ type: 'preset:nav', action, guildId: this.primaryGuildId ?? undefined });
+        this.showPreset(action);
         console.log(`[bridge] preset ${action} via panel`);
         break;
       }
@@ -811,6 +835,71 @@ export class Bridge {
       fs.writeFileSync(path.join(config.dataDir, 'preset-cycle.json'), JSON.stringify({ seconds: secs }, null, 2), 'utf8');
     } catch { /* non-fatal */ }
     this.broadcast({ type: 'preset:cycle', seconds: secs, guildId: this.primaryGuildId ?? undefined });
+    // The pace moved to the bridge with the preset choice: restart the timer so
+    // every surface turns the page together.
+    this.startPresetTimer();
+  }
+
+  /** Every preset name the browser packs expose, in a stable order. Read once
+   *  from the same npm packs the visualizers stream — they are UMD builds and
+   *  butterchurn-presets declares no "exports" map, so Node can require them. */
+  private ensurePresetNames(): string[] {
+    if (this.presetNames.length || this.presetNamesTried) return this.presetNames;
+    this.presetNamesTried = true;
+    try {
+      const req = createRequire(import.meta.url);
+      const packs = [
+        'butterchurn-presets/lib/butterchurnPresets.min.js',
+        'butterchurn-presets/lib/butterchurnPresetsExtra.min.js',
+        'butterchurn-presets/lib/butterchurnPresetsExtra2.min.js',
+      ];
+      const seen = new Set<string>();
+      for (const p of packs) {
+        const mod = req(p) as { getPresets?: () => Record<string, unknown> };
+        const got = mod && typeof mod.getPresets === 'function' ? mod.getPresets() : {};
+        for (const n of Object.keys(got)) {
+          if (!seen.has(n)) { seen.add(n); this.presetNames.push(n); }
+        }
+      }
+      console.log(`[bridge] preset library: ${this.presetNames.length} presets`);
+    } catch (err) {
+      console.warn(`[bridge] preset library unavailable: ${err instanceof Error ? err.message : err}`);
+    }
+    return this.presetNames;
+  }
+
+  /** Pick a preset and name it to every visualizer. With no list (packs
+   *  unreadable) it falls back to relaying the bare intent — the old,
+   *  unsynchronised behaviour, so this can never be worse than before. */
+  private showPreset(action: 'next' | 'prev' | 'shuffle' = 'next'): void {
+    const names = this.ensurePresetNames();
+    if (!names.length) {
+      this.broadcast({ type: 'preset:nav', action, guildId: this.primaryGuildId ?? undefined });
+      return;
+    }
+    if (this.presetIdx < 0) this.presetIdx = 0;
+    else if (action === 'shuffle') this.presetIdx = Math.floor(Math.random() * names.length);
+    else if (action === 'prev') this.presetIdx = (this.presetIdx - 1 + names.length) % names.length;
+    else this.presetIdx = (this.presetIdx + 1) % names.length;
+    const name = names[this.presetIdx];
+    this.broadcast({
+      type: 'preset:show',
+      name,
+      index: this.presetIdx,
+      guildId: this.primaryGuildId ?? undefined,
+    });
+  }
+
+  /** The pace timer lives here now, so every surface advances together instead
+   *  of each counting its own seconds. Idles when nobody is watching. */
+  private startPresetTimer(): void {
+    if (this.presetTimer) clearInterval(this.presetTimer);
+    this.presetTimer = null;
+    if (this.presetCycleSec <= 0) return;
+    this.presetTimer = setInterval(() => {
+      if (this.visualizers.size === 0) return;
+      this.showPreset('next');
+    }, this.presetCycleSec * 1000);
   }
 
   getSensitivity(): number { return this.sensitivity; }
@@ -879,6 +968,9 @@ export class Bridge {
       guilds: guildsForClient.length > 0 ? guildsForClient : undefined,
       sensitivity: this.sensitivity,
       presetCycle: this.presetCycleSec,
+      preset: this.presetIdx >= 0 && this.presetNames[this.presetIdx]
+        ? { name: this.presetNames[this.presetIdx], index: this.presetIdx }
+        : undefined,
       guest: config.shareKey ? !authed : undefined,
       endlesswave: primaryEw ? primaryEw.active : undefined,
       endlesswaveMode: primaryEw

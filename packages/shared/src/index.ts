@@ -196,7 +196,7 @@ export type InboundMessage =
   | CommandMessage;
 
 export type OutboundMessage =
-  | { type: 'snapshot'; state: PlaybackState; queue: QueueSnapshot; permissions?: PermissionSnapshot; voice?: { joined: boolean; channelId?: string }; theme?: VaporzrTheme; djEnabled?: boolean; primaryGuildId?: string; guilds?: Array<{ id: string; name: string }>; sensitivity?: number; presetCycle?: number; guest?: boolean; endlesswave?: boolean; endlesswaveMode?: 'off' | 'basic' | 'smart'; ambient?: boolean; voteSkip?: boolean; skipForward?: boolean }
+  | { type: 'snapshot'; state: PlaybackState; queue: QueueSnapshot; permissions?: PermissionSnapshot; voice?: { joined: boolean; channelId?: string }; theme?: VaporzrTheme; djEnabled?: boolean; primaryGuildId?: string; guilds?: Array<{ id: string; name: string }>; sensitivity?: number; presetCycle?: number; preset?: { name: string; index: number }; guest?: boolean; endlesswave?: boolean; endlesswaveMode?: 'off' | 'basic' | 'smart'; ambient?: boolean; voteSkip?: boolean; skipForward?: boolean }
   | { type: 'state:update'; state: PlaybackState; guildId?: string }
   /** Who is in the jam: distinct human names across connected clients, plus the
    *  names already credited on the queue. Generic client names (web-viz-xxxx,
@@ -214,6 +214,10 @@ export type OutboundMessage =
   | { type: 'visuals:sensitivity'; multiplier: number }
   /** Panel-driven preset navigation, relayed to every visualizer. */
   | { type: 'preset:nav'; action: 'next' | 'prev' | 'shuffle'; guildId?: string }
+  /** Authoritative preset selection. The bridge owns the list and the cursor and
+   *  names the exact preset, so every surface shows the same visual instead of
+   *  each advancing its own pool on its own timer. */
+  | { type: 'preset:show'; name: string; index: number; guildId?: string }
   /** Panel-driven preset dwell time (seconds), relayed to every visualizer. */
   | { type: 'preset:cycle'; seconds: number; guildId?: string }
   /** Current preset a visualizer is showing (for the panel's now-showing label). */

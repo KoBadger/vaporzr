@@ -71,7 +71,11 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
 #status-dot{width:6px;height:6px;border-radius:50%;background:#ef4444;transition:background .3s}
 #status-dot.on{background:#22c55e;box-shadow:0 0 8px rgba(34,197,94,.6)}
 
-#guild-bar{position:absolute;top:60px;left:20px;z-index:10;display:flex;gap:6px;flex-wrap:wrap;max-width:70%}
+#guild-bar{position:absolute;top:calc(var(--vz-top) + 88px);left:20px;z-index:10;display:flex;gap:6px;flex-wrap:wrap;max-width:70%}
+/* The jam pill sits between the logo and the guild buttons — a left column with
+   no overlap. Both are anchored off --vz-top so a notch cannot push them into
+   the logo. */
+#jam-pill{top:calc(var(--vz-top) + 44px);left:calc(20px + var(--sail))}
 .guild-btn{padding:5px 14px;border-radius:8px;border:1px solid #1e293b;background:rgba(15,23,42,.7);
   color:#64748b;font-size:11px;font-weight:600;cursor:pointer;transition:all .2s;font-family:inherit}
 .guild-btn:hover{border-color:#334155;color:#94a3b8}
@@ -187,7 +191,7 @@ body.mobile #sens::-moz-range-thumb{width:20px;height:20px}
 body.mobile #swatches{flex-wrap:wrap;justify-content:center}
 body.mobile .swatch{width:22px;height:22px}
 body.mobile .dock-sep{display:none}
-body.mobile #guild-bar{top:calc(52px + var(--sait))}
+body.mobile #guild-bar{top:calc(var(--vz-top) + 88px)}
 body.mobile #preset-picker{bottom:calc(112px + var(--saib));width:min(520px,94vw);max-height:44vh}
 body.mobile #unlock{bottom:calc(112px + var(--saib));right:calc(12px + var(--sair))}
 body.mobile #fps{top:calc(52px + var(--sait))}
@@ -489,7 +493,8 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
       var here=(p&&p.names)||[], who=(p&&p.contributors)||[];
       if(!jamEl){
         jamEl=document.createElement('div');
-        jamEl.style.cssText='position:fixed;top:14px;left:14px;z-index:14;'+
+        jamEl.id='jam-pill';
+        jamEl.style.cssText='position:fixed;z-index:14;'+
           'font:11px/1.5 system-ui,sans-serif;color:#c7d2fe;'+
           'background:rgba(10,15,30,.55);border:1px solid rgba(140,160,255,.3);'+
           'border-radius:999px;padding:5px 12px;backdrop-filter:blur(10px);'+
@@ -509,15 +514,7 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
        Scannable from the stream, and tappable when the Activity is on a phone
        (where scanning your own screen is impossible). The encoder is fetched on
        first use so a viewer who never sees a jam never downloads it. */
-    var jamQrCanvas=null,jamQrLoading=false,jamQrHidden=false;
-    /* Tapping the code hides it. It used to navigate to the jam page, which
-       stranded the Activity on the request form with no way back — the join
-       link is meant to be SCANNED, not clicked. The 📱 dock button toggles it. */
-    function setJamQrHidden(h){
-      jamQrHidden=h;
-      if(jamQrCanvas)jamQrCanvas.style.display=h?'none':'block';
-      var b=$('btn-jamqr');if(b)b.classList.toggle('active',!h);
-    }
+    var jamQrLoading=false;
     function ensureJamQr(path){
       if(window.qrcode&&typeof window.qrcode==='function'){drawJamQr(path);return}
       if(jamQrLoading)return;
@@ -565,6 +562,8 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
           if(msg.state)showState(msg.state);
           if(themeOverride){var _ot=themeById(themeOverride);if(_ot)applyTheme(_ot)}
           else if(msg.theme){var _st=themeById(msg.theme.id);if(_st)applyTheme(_st)}
+          /* A late joiner picks up whatever the bridge is showing right now. */
+          if(msg.preset)showNamedPreset(msg.preset.name,0.6);
           if(sensOverride!=null)setSensitivity(sensOverride,false);
           else if(typeof msg.sensitivity==='number')setSensitivity(msg.sensitivity,false);
           if(typeof msg.presetCycle==='number')setPresetCycle(msg.presetCycle,{global:true});
@@ -637,6 +636,11 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
         case 'preset:nav':
           navPreset(msg.action);
           break;
+        case 'preset:show':
+          /* The bridge owns the preset now: it names the exact one, so every
+             surface shows the same visual. */
+          showNamedPreset(msg.name,2.5);
+          break;
         case 'preset:cycle':
           setPresetCycle(msg.seconds,{global:true});
           break;
@@ -668,6 +672,18 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
   /* ---------- MilkDrop (Butterchurn) + WebAudio pipeline ---------- */
   var actx=null,analyser=null,gainNode=null,nextAt=0,milkOn=false,
       bcViz=null,presetNames=[],presetIdx=-1,presetLocked=false,cycleTimer=null;
+  var bridgeDriven=false;
+  /* Load the preset the bridge named. Returns false when this viewer's pool has
+     no such preset, so the caller can fall back to its own rotation. */
+  function showNamedPreset(name,blend){
+    if(presetLocked)return false;
+    var i=presetNames.indexOf(name);
+    if(i<0)return false;
+    bridgeDriven=true;
+    if(cycleTimer){clearInterval(cycleTimer);cycleTimer=null}
+    loadPreset(i,blend||2.5);
+    return true;
+  }
   /* Seconds each visual stays up before auto-advancing. Panel-controlled and
      global (relayed as preset:cycle), cached locally so a reload keeps the pace.
      0 = never auto-advance. */
@@ -698,6 +714,9 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
   try{var _sv=parseFloat(localStorage.getItem('vzSens')||'');if(_sv>=0.5&&_sv<=1.5)sensOverride=_sv;}catch(e){}
   function startCycle(){
     if(cycleTimer){clearInterval(cycleTimer);cycleTimer=null}
+    /* Once the bridge has named a preset it owns the pace too, so every surface
+       advances together — a local timer here would drift off it again. */
+    if(bridgeDriven)return;
     if(presetCycleMs<=0)return;
     cycleTimer=setInterval(function(){
       if(!presetLocked&&document.visibilityState==='visible')loadPreset(pickIndex(presetIdx+1,1),2.5);
@@ -1034,6 +1053,16 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
     p.classList.toggle('show',show);
     if(show){$('preset-search').value='';renderPresetList('');setTimeout(function(){$('preset-search').focus()},30);}
   }
+  /* ---- Jam join code: state + toggle ----
+     These must live at the top level, not inside connect(): the 📱 dock button
+     is wired here, and a helper scoped inside connect() threw a ReferenceError
+     on click — which is why the code could be hidden but never brought back. */
+  var jamQrCanvas=null,jamQrHidden=false;
+  function setJamQrHidden(h){
+    jamQrHidden=h;
+    if(jamQrCanvas)jamQrCanvas.style.display=h?'none':'block';
+    var b=$('btn-jamqr');if(b)b.classList.toggle('active',!h);
+  }
   $('btn-presets').onclick=function(e){e.stopPropagation();togglePresetPicker();};
   $('preset-search').oninput=function(){renderPresetList(this.value)};
   document.addEventListener('click',function(e){var p=$('preset-picker');if(p&&p.classList.contains('show')&&!e.target.closest('#preset-picker')&&e.target.id!=='btn-presets')togglePresetPicker(false)});
@@ -1047,9 +1076,12 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
     presetNameEl.style.opacity='1';
     showPresetName.t=setTimeout(function(){presetNameEl.style.opacity='0'},3000);
   };
-  $('btn-next').onclick=function(){loadPreset(pickIndex(presetIdx+1,1),1.2)};
-  $('btn-prev').onclick=function(){loadPreset(pickIndex(presetIdx-1,-1),1.2)};
-  $('btn-preset-shuffle').onclick=function(){loadPreset(Math.floor(Math.random()*presetNames.length),1.2)};
+  /* Ask the bridge to pick, so every surface follows this viewer — the bridge
+     answers with preset:show, which loads it here too. */
+  function presetNudge(a){try{ws.send(JSON.stringify({type:'cmd',command:'preset',presetAction:a}))}catch(e){}}
+  $('btn-next').onclick=function(){presetNudge('next')};
+  $('btn-prev').onclick=function(){presetNudge('prev')};
+  $('btn-preset-shuffle').onclick=function(){presetNudge('shuffle')};
   var _bp=$('btn-pace');if(_bp)_bp.onclick=function(){cyclePace()};
   var _jq=$('btn-jamqr');if(_jq)_jq.onclick=function(){setJamQrHidden(!jamQrHidden)};
   $('btn-lock').onclick=function(){

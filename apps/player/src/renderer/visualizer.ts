@@ -1,5 +1,7 @@
 import butterchurn, { type Visualizer } from 'butterchurn';
 import butterchurnPresets from 'butterchurn-presets';
+import butterchurnPresetsExtra from 'butterchurn-presets/lib/butterchurnPresetsExtra.min.js';
+import butterchurnPresetsExtra2 from 'butterchurn-presets/lib/butterchurnPresetsExtra2.min.js';
 import type { CommandMessage, PlaybackState } from '@vaporzr/shared';
 import { emptyState } from '@vaporzr/shared';
 import { WsClient } from './wsClient';
@@ -177,6 +179,8 @@ const client = new WsClient({
       if (msg.endlesswaveMode) setWaveMode(msg.endlesswaveMode);
       else if (msg.endlesswave === true) handleEndlessWave(true);
       if (typeof msg.presetCycle === 'number') setPresetCycle(msg.presetCycle, false);
+      // A late joiner picks up whatever the bridge is showing right now.
+      if (msg.preset) showNamedPreset(msg.preset.name, 0.6);
       if (msg.guilds) setGuilds(msg.guilds, msg.primaryGuildId);
       // The bridge tells us when we connected without the share key. A guest has
       // every `cmd` dropped, so say it out loud instead of failing silently —
@@ -198,6 +202,9 @@ const client = new WsClient({
       if (msg.action === 'prev') previousPreset(1.2);
       else if (msg.action === 'shuffle') shufflePreset(1.5);
       else nextPreset(1.5);
+    } else if (msg.type === 'preset:show') {
+      // The bridge named the preset: everyone loads this exact one.
+      showNamedPreset(msg.name, 2.5);
     } else if (msg.type === 'preset:cycle') {
       setPresetCycle(msg.seconds);
     } else if (msg.type === 'jam:presence') {
@@ -258,10 +265,28 @@ function applySensitivity(multiplier: number): void {
 /** Lock the current visual: the carousel stops advancing (this viewer only). */
 let presetLocked = false;
 
+/** True once the bridge has named a preset: it owns the choice and the pace, so
+ *  this viewer's own carousel stops — otherwise it drifts off the others. */
+let bridgeDriven = false;
+
+/** Load the exact preset the bridge named, so every surface shows the same
+ *  visual. A viewer who locked one keeps it — a deliberate local choice. */
+function showNamedPreset(name: string, blend: number): boolean {
+  if (presetLocked) return false;
+  const i = presetNames.indexOf(name);
+  if (i < 0) return false;
+  bridgeDriven = true;
+  if (presetCycle) { window.clearInterval(presetCycle); presetCycle = null; }
+  loadPresetAt(i, blend);
+  return true;
+}
+
 /** (Re)start the preset carousel at the configured pace. 0 = manual. */
 function startPresetCycle(): void {
   if (presetCycle) window.clearInterval(presetCycle);
   presetCycle = null;
+  // The bridge drives the pace once it owns the preset.
+  if (bridgeDriven) return;
   if (presetCycleSec <= 0) return;
   presetCycle = window.setInterval(() => {
     // A locked visual stays put — the same rule the web visualizer uses.
@@ -621,15 +646,17 @@ function wireControls(): void {
     const next = waveMode === 'off' ? 'basic' : waveMode === 'basic' ? 'smart' : 'off';
     sendCmd('endlesswave', { mode: next });
   });
+  /* Preset navigation goes through the bridge: it owns the choice, so pressing
+     next here moves every other surface to the same visual too. */
   btnPreset.addEventListener('click', (e) => {
     if (e.shiftKey) {
       clearBlacklist();
       return;
     }
-    nextPreset(1.5);
+    sendCmd('preset', { presetAction: 'next' });
   });
-  btnPresetBack.addEventListener('click', () => previousPreset(1.2));
-  btnPresetShuffle.addEventListener('click', () => shufflePreset(1.5));
+  btnPresetBack.addEventListener('click', () => sendCmd('preset', { presetAction: 'prev' }));
+  btnPresetShuffle.addEventListener('click', () => sendCmd('preset', { presetAction: 'shuffle' }));
   btnSynth.addEventListener('click', () => setSynthActive(!synthActive));
   btnDjToggle.addEventListener('click', () => sendCmd('dj', { djEnabled: !djEnabled }));
   for (const [id, btn] of Object.entries(btnSfx)) {
@@ -695,15 +722,15 @@ function wireControls(): void {
         break;
       case 'p':
       case 'P':
-        nextPreset(1.5);
+        sendCmd('preset', { presetAction: 'next' });
         break;
       case 'r':
       case 'R':
-        shufflePreset(1.5);
+        sendCmd('preset', { presetAction: 'shuffle' });
         break;
       case 'b':
       case 'B':
-        previousPreset(1.2);
+        sendCmd('preset', { presetAction: 'prev' });
         break;
       case 'e':
       case 'E':
@@ -1836,7 +1863,14 @@ function updateOverlayIdle(playing: boolean): void {
 }
 
 function init(): void {
-  presets = butterchurnPresets.getPresets();
+  // The same three packs the Activity streams, so a preset the bridge names
+  // resolves here too — with only the base pack the player silently ignored
+  // every Extra preset and drifted off the other surfaces.
+  presets = {
+    ...butterchurnPresets.getPresets(),
+    ...butterchurnPresetsExtra.getPresets(),
+    ...butterchurnPresetsExtra2.getPresets(),
+  };
   presetNames = Object.keys(presets).sort();
   log(`Loaded ${presetNames.length} presets`);
   // NOTE: the bot's curated projectM library is deliberately NOT auto-loaded.
