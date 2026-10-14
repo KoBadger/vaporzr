@@ -184,6 +184,13 @@ export type InboundMessage =
   | { type: 'visuals:preset'; name: string; index?: number; total?: number; guildId?: string }
   | { type: 'state:request' }
   | { type: 'panel:subscribe'; channels: Array<'state' | 'queue' | 'visuals' | 'pcm'>; guildId?: string }
+  /**
+   * Self-reported roster for the jam. The Discord Activity can list who is
+   * connected to its instance, which is the only source of REAL names — every
+   * other client only knows itself. Treated exactly like `hello`'s name:
+   * untrusted, drawn as text, never markup.
+   */
+  | { type: 'jam:roster'; names: string[] }
   /** Base64-encoded WebM clip captured by a visualizer window (/burst). */
   | { type: 'burst:data'; data: string }
   | CommandMessage;

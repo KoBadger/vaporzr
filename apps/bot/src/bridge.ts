@@ -35,6 +35,8 @@ interface Client {
   subscribedPcm: boolean;
   /** Guild this client is interested in (undefined = primary / all). */
   guildId?: string;
+  /** Names this client reports for the jam (the Activity lists its instance). */
+  roster?: string[];
 }
 
 export class Bridge {
@@ -276,6 +278,23 @@ export class Bridge {
       }
       // A new viewer changes the jam roster — tell everyone.
       this.broadcastPresence();
+      return;
+    }
+
+    // The Activity reports who is connected to its instance. This is identity,
+    // not a command, so guests may send it too — the same trust level as the
+    // name in `hello`. Sanitised the same way: control characters stripped,
+    // length capped, and the renderers only ever draw it as text.
+    if (msg.type === 'jam:roster') {
+      const client = this.clientOf(socket);
+      if (client) {
+        client.roster = (Array.isArray(msg.names) ? msg.names : [])
+          .filter((n): n is string => typeof n === 'string')
+          .map((n) => n.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 32))
+          .filter(Boolean)
+          .slice(0, 50);
+        this.broadcastPresence();
+      }
       return;
     }
 
@@ -941,6 +960,8 @@ export class Bridge {
     const people = new Set<string>();
     for (const c of [...this.panels, ...this.visualizers]) {
       if (isPerson(c.name)) people.add(c.name);
+      // The Activity reports its whole instance, so one client can name several.
+      for (const n of c.roster ?? []) if (isPerson(n)) people.add(n);
     }
     const contributors = new Set<string>();
     for (const t of this.queue.getSnapshot().tracks) {

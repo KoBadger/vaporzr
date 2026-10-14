@@ -432,6 +432,35 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
     }
   }
 
+  /* ---- Discord identity (Activity only) ----
+     The Embedded App SDK can list who is connected to the Activity instance, so
+     the jam roster can show REAL people with no OAuth exchange and no client
+     secret. Field names differ between SDK versions, so take the friendliest
+     one that is actually present. */
+  function sendJamRoster(names){
+    if(!ws||ws.readyState!==1||!names.length)return;
+    try{ws.send(JSON.stringify({type:'jam:roster',names:names}))}catch(e){}
+  }
+  function pollInstanceParticipants(){
+    var sdk=window.__VZ_SDK__;
+    if(!sdk||!sdk.commands||typeof sdk.commands.getActivityInstanceConnectedParticipants!=='function')return;
+    var r;
+    try{r=sdk.commands.getActivityInstanceConnectedParticipants()}catch(e){return}
+    if(!r||typeof r.then!=='function')return;
+    r.then(function(res){
+      var ps=(res&&res.participants)||[],names=[];
+      for(var i=0;i<ps.length;i++){
+        var p=ps[i]||{};
+        var n=p.global_name||p.display_name||p.nick||p.username||'';
+        if(n&&names.indexOf(n)<0)names.push(n);
+      }
+      sendJamRoster(names);
+    }).catch(function(){/* not an Activity, or the scope is unavailable */});
+  }
+  /* Polled rather than subscribed: there is no participant-change event, and the
+     instance roster only shifts when someone joins or leaves the Activity. */
+  window.setInterval(pollInstanceParticipants,30000);
+
   function connect(){
     if(ws){ws.onclose=null;ws.close()}
     var wsUrl=window.__VZ_WS__||((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');
@@ -440,13 +469,14 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
       ws.send(JSON.stringify({type:'hello',role:'panel',name:'web-viz-'+Math.random().toString(36).slice(2,6)}));
       ws.send(JSON.stringify({type:'panel:subscribe',channels:['state','queue','visuals','pcm']}));
       ws.send(JSON.stringify({type:'state:request'}));
+      pollInstanceParticipants();
       setConnected(true);
       refreshUnlock();
     };
     /* ---- Jam roster ----
-       Identity-free on purpose: the Activity cannot learn Discord usernames
-       without an OAuth exchange, so this shows the names already credited on the
-       queue (addedBy) — plus any connected client that named itself. */
+       Real names when running as an Activity (the SDK lists its instance, see
+       pollInstanceParticipants), otherwise the names already credited on the
+       queue (addedBy) plus any connected client that named itself. */
     var jamEl=null;
     function renderJam(p){
       var here=(p&&p.names)||[], who=(p&&p.contributors)||[];
