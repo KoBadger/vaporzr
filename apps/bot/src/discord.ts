@@ -855,6 +855,11 @@ export class DiscordBot {
       partials: [Partials.Message, Partials.Channel, Partials.Reaction],
     });
     this.rest = new REST({ version: '10' });
+    // The jam/request page accepts the same input as V@p: direct links,
+    // playlists, Spotify, Suno, Apple Music, SoundCloud, plain searches.
+    // resolvePlayInput lives in this module, so the bridge takes it as a hook
+    // rather than importing it (discord.ts already imports the bridge).
+    bridge.onResolveRequest = resolvePlayInput;
     // Panel toggles Endless Wave through the same machinery as `V@ew on/off`.
     bridge.setEndlessWaveToggle((guildId, mode) => {
       void this.panelSetEndlessWave(guildId, mode).catch((err) => {

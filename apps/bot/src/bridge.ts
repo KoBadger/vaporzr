@@ -23,6 +23,7 @@ import { config } from '@vaporzr/core/config';
 import { DEFAULT_THEME, themeById } from './themes.js';
 import { analyzer } from '@vaporzr/core/analyzer';
 import { searchAndResolveYoutube } from '@vaporzr/core/youtube';
+import type { ResolvedTrack } from '@vaporzr/core/spotify';
 import { secretEquals, socketHasShareKey } from './secretCompare.js';
 import { playlistStore } from '@vaporzr/core/playlists';
 
@@ -690,6 +691,11 @@ export class Bridge {
     }
   }
 
+  /** Wired by the bot at startup to the full V@p resolver. A hook rather than an
+   *  import: discord.ts already imports the bridge, and a cycle back would make
+   *  module init order matter. */
+  onResolveRequest: ((query: string) => Promise<ResolvedTrack[]>) | null = null;
+
   /** Used by the public /request page: resolve a query and queue it (no playback).
    *  `who` is the guest's display name, so a jam credit reads as a person rather
    *  than the `request` origin. Untrusted input: length-capped and stripped of
@@ -704,22 +710,39 @@ export class Bridge {
         .trim()
         .slice(0, 24) || 'request';
     try {
-      const video = await searchAndResolveYoutube(q);
-      if (!video) return { ok: false, error: `No match for "${q}".` };
+      // Same input surface as V@p — direct links, playlists, Spotify, Suno,
+      // Apple Music, SoundCloud, plain searches — when the bot has wired its
+      // resolver in. YouTube search stays as the fallback so the page also works
+      // on its own.
+      let tracks: ResolvedTrack[];
+      if (this.onResolveRequest) {
+        tracks = await this.onResolveRequest(q);
+      } else {
+        const video = await searchAndResolveYoutube(q);
+        tracks = video
+          ? [{
+              uri: video.uri,
+              name: video.name,
+              artists: video.artists,
+              album: video.album,
+              durationMs: video.durationMs,
+              image: video.image,
+              source: 'youtube' as const,
+            }]
+          : [];
+      }
+      if (!tracks.length) return { ok: false, error: `No match for "${q}".` };
+      // A playlist link can resolve to many tracks; cap it so one link cannot
+      // flood the queue, and say so when the cap bites.
+      const capped = tracks.slice(0, 25);
       const s = this.sessions.primary ?? this.fallback;
-      s.queue.enqueue(
-        {
-          uri: video.uri,
-          name: video.name,
-          artists: video.artists,
-          album: video.album,
-          durationMs: video.durationMs,
-          image: video.image,
-          source: 'youtube',
-        },
-        credit,
-      );
-      return { ok: true, name: video.name };
+      for (const t of capped) s.queue.enqueue(t, credit);
+      const extra = tracks.length - capped.length;
+      const name =
+        capped.length === 1
+          ? capped[0].name
+          : `${capped.length} tracks${extra > 0 ? ` (+${extra} more not queued)` : ''}`;
+      return { ok: true, name };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
@@ -952,7 +975,7 @@ export class Bridge {
    *  - the names already credited on the queue via `addedBy`.
    * `request`/`panel` are queue origins, not people, so they are dropped.
    */
-  private presence(): { names: string[]; count: number; contributors: string[]; joinPath: string } {
+  private presence(): { names: string[]; count: number; contributors: string[]; joinPath: string; joinUrl?: string } {
     const isPerson = (n: string): boolean =>
       !!n && !/^web-viz-|^vaporzr-/.test(n) && !/^vz-/.test(n);
     /** Queue origins that are plumbing rather than people. */
@@ -974,7 +997,12 @@ export class Bridge {
     const joinPath = config.requestKey
       ? `/jam?key=${encodeURIComponent(config.requestKey)}`
       : '/jam';
-    return { names, count: names.length, contributors: [...contributors].sort(), joinPath };
+    // A configured public base wins. The bot is loopback-bound behind the
+    // reverse proxy, so a client-derived address only resolves where that
+    // address means something — the tunnel's 127.0.0.1 resolves on a phone to
+    // the phone itself, which is why the QR "never loaded".
+    const joinUrl = config.jamPublicBase ? config.jamPublicBase + joinPath : undefined;
+    return { names, count: names.length, contributors: [...contributors].sort(), joinPath, joinUrl };
   }
 
   /** Broadcast the jam roster. Called on connect, disconnect and queue change. */

@@ -202,6 +202,7 @@ const client = new WsClient({
       setPresetCycle(msg.seconds);
     } else if (msg.type === 'jam:presence') {
       if (msg.joinPath) jamJoinPath = msg.joinPath;
+      jamJoinUrl = msg.joinUrl || '';
       renderJamQr();
     }
   },
@@ -572,6 +573,9 @@ function setGuilds(list: Array<{ id: string; name: string }>, primaryId?: string
 
 // ---- Jam QR (scan to join) ----
 let jamJoinPath = '';
+/** Absolute join URL when the bot has a public base configured; the tunnel's
+ *  127.0.0.1 is meaningless on the phone that scans the code. */
+let jamJoinUrl = '';
 let jamQrOn = true;
 let jamQrCanvas: HTMLCanvasElement | null = null;
 
@@ -598,7 +602,7 @@ function renderJamQr(): void {
   }
   const show = jamQrOn && !!jamJoinPath;
   jamQrCanvas.style.display = show ? 'block' : 'none';
-  if (show) drawQr(jamQrCanvas, ASSET_BASE + jamJoinPath, 104);
+  if (show) drawQr(jamQrCanvas, jamJoinUrl || ASSET_BASE + jamJoinPath, 104);
 }
 
 function setJamQr(on: boolean): void {

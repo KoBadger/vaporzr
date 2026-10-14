@@ -495,7 +495,7 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
       jamEl.textContent='JAM · '+names.length+' · '+names.slice(0,5).join(', ')+
         (names.length>5?' +'+(names.length-5):'');
       jamEl.style.opacity='1';
-      if(p&&p.joinPath)ensureJamQr(p.joinPath);
+      if(p&&(p.joinUrl||p.joinPath))ensureJamQr(p.joinUrl||p.joinPath);
     }
 
     /* ---- Join QR ----
@@ -524,7 +524,7 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
         document.body.appendChild(jamQrCanvas);
       }
       try{
-        var c=window.qrcode(0,'M');c.addData(location.origin+path);c.make();
+        var c=window.qrcode(0,'M');c.addData(/^https?:/i.test(path)?path:(location.origin+path));c.make();
         var n=c.getModuleCount(),quiet=4,total=n+quiet*2;
         var scale=Math.max(1,Math.floor(104/total)),px=total*scale;
         jamQrCanvas.width=px;jamQrCanvas.height=px;

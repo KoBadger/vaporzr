@@ -917,7 +917,7 @@ body.guest #guilds{display:none}
       send({type:'state:request'});
     };
     /* ---- Jam: presence roster + a scan-to-join QR ---- */
-    var jam={names:[],contributors:[],joinPath:''};
+    var jam={names:[],contributors:[],joinPath:'',joinUrl:''};
     var jamQrDrawn=false;
     function ensureQrLib(cb){
       if(window.qrcode)return cb(true);
@@ -936,9 +936,12 @@ body.guest #guilds{display:none}
       var join=document.getElementById('jam-join');
       if(!jam.joinPath){if(join)join.style.display='none';return}
       if(join)join.style.display='block';
-      // The bot is loopback-bound, so it reports an origin-RELATIVE path and the
-      // panel supplies its own origin (same trick the player and Activity use).
-      var url=location.origin+jam.joinPath;
+      // The bot is loopback-bound, so it normally reports an origin-RELATIVE
+      // path and the panel supplies its own origin. With a public base
+      // configured it sends an absolute joinUrl instead — required when this
+      // panel was itself opened through the tunnel, where 127.0.0.1 means
+      // nothing to the phone that scans the code.
+      var url=jam.joinUrl||(location.origin+jam.joinPath);
       var l=document.getElementById('jam-link');
       if(l)l.textContent=url;
       if(jamQrDrawn)return;

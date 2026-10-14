@@ -204,7 +204,7 @@ export type OutboundMessage =
    *  `joinPath` is origin-relative on purpose — the bot is loopback-bound and has
    *  no idea which address a viewer reached it on, so each client prefixes its
    *  own origin to build the join link. */
-  | { type: 'jam:presence'; names: string[]; count: number; contributors: string[]; joinPath?: string }
+  | { type: 'jam:presence'; names: string[]; count: number; contributors: string[]; joinPath?: string; joinUrl?: string }
   | { type: 'queue:update'; queue: QueueSnapshot }
   | { type: 'perm:update'; permissions: PermissionSnapshot }
   | { type: 'dj:update'; enabled: boolean }

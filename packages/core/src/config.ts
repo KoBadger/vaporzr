@@ -72,6 +72,15 @@ ytDlpPath: process.env.YT_DLP_PATH ?? path.join(__dirname, '..', '..', '..', 've
     */
    youtubeAudioMaxAbr: Number(process.env.YOUTUBE_AUDIO_MAX_ABR) || 80,
    /**
+    * Public base URL for the jam join link and its QR code, e.g.
+    * https://vaporzr.duckdns.org. The bot binds to loopback behind a reverse
+    * proxy, so it cannot derive a reachable address for a guest's phone — the
+    * tunnel address (127.0.0.1) only works on the machine holding the tunnel.
+    * When empty the clients fall back to their own origin, which is correct for
+    * the Activity but wrong for the player and the tunnel-opened panel.
+    */
+   jamPublicBase: (process.env.JAM_PUBLIC_BASE ?? '').replace(/\/+$/, ''),
+   /**
     * HTTP proxy for Suno (the suno.com page fetch + the cdn1.suno.ai audio
     * stream). Suno's CDN blocks datacenter IPs with 403, so routing just Suno
     * through a residential proxy restores playback. Format:
