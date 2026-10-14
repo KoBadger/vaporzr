@@ -609,25 +609,55 @@ let jamQrCanvas: HTMLCanvasElement | null = null;
  *  the same base the wallpaper video is fetched from. */
 function renderJamQr(): void {
   if (!jamQrCanvas) {
+    // The wrapper carries the position and holds the URL under the code: a
+    // desktop viewer cannot scan the screen in front of them. Bottom-LEFT and
+    // translucent — bottom-right sat on the control bar's 🎛 toggle. Clicking
+    // the code hides the pair.
+    const wrap = document.createElement('div');
+    wrap.id = 'jam-qr-wrap';
+    wrap.style.cssText =
+      'position:fixed;left:16px;bottom:12px;z-index:12;display:flex;flex-direction:column;' +
+      'align-items:center;gap:5px;cursor:pointer;opacity:.32;transition:opacity .3s';
     const cv = document.createElement('canvas');
     cv.id = 'jam-qr';
-    // Bottom-LEFT and translucent. It used to sit bottom-right, on top of the
-    // control bar's 🎛 toggle, and at full opacity. It brightens on hover (so it
-    // stays scannable) and clicking it hides it.
     cv.style.cssText =
-      'position:fixed;left:16px;bottom:12px;z-index:12;padding:6px;border-radius:10px;' +
-      'background:#fff;box-shadow:0 6px 30px rgba(0,0,0,.55);cursor:pointer;' +
-      'opacity:.32;transition:opacity .3s';
+      'padding:6px;border-radius:10px;background:#fff;box-shadow:0 6px 30px rgba(0,0,0,.55)';
     cv.title = 'Jam join code — click to hide';
     cv.addEventListener('click', () => setJamQr(false));
-    cv.addEventListener('mouseenter', () => { cv.style.opacity = '1'; });
-    cv.addEventListener('mouseleave', () => { cv.style.opacity = '.32'; });
-    document.body.appendChild(cv);
+    wrap.appendChild(cv);
+    const a = document.createElement('a');
+    a.id = 'jam-qr-link';
+    a.style.cssText =
+      'font-size:10px;color:#c7d2fe;text-decoration:none;letter-spacing:.3px;' +
+      'background:rgba(10,15,30,.6);border:1px solid rgba(140,160,255,.3);border-radius:6px;' +
+      'padding:2px 7px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    a.addEventListener('mouseenter', () => { a.style.color = '#fff'; a.style.textDecoration = 'underline'; });
+    a.addEventListener('mouseleave', () => { a.style.color = '#c7d2fe'; a.style.textDecoration = 'none'; });
+    // Handled in the main process: the overlay must never navigate itself, and a
+    // plain link would spawn a stray Electron window.
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      const url = a.dataset.url ?? '';
+      if (url) vaporzrWindow.vaporzr?.openExternal?.(url);
+    });
+    wrap.appendChild(a);
+    wrap.addEventListener('mouseenter', () => { wrap.style.opacity = '1'; });
+    wrap.addEventListener('mouseleave', () => { wrap.style.opacity = '.32'; });
+    document.body.appendChild(wrap);
     jamQrCanvas = cv;
   }
+  const url = jamJoinUrl || ASSET_BASE + jamJoinPath;
+  const wrap = document.getElementById('jam-qr-wrap');
+  const link = document.getElementById('jam-qr-link') as HTMLAnchorElement | null;
+  if (link) {
+    link.dataset.url = url;
+    link.href = url;
+    link.textContent = url.replace(/^https?:\/\//, '');
+  }
   const show = jamQrOn && !!jamJoinPath;
-  jamQrCanvas.style.display = show ? 'block' : 'none';
-  if (show) drawQr(jamQrCanvas, jamJoinUrl || ASSET_BASE + jamJoinPath, 104);
+  if (wrap) wrap.style.display = show ? 'flex' : 'none';
+  if (jamQrCanvas) jamQrCanvas.style.display = show ? 'block' : 'none';
+  if (show && jamQrCanvas) drawQr(jamQrCanvas, url, 104);
 }
 
 function setJamQr(on: boolean): void {
@@ -780,6 +810,7 @@ const vaporzrWindow = window as unknown as {
     setOverlayPassthrough?: (pass: boolean) => void;
     onOverlayPassthrough?: (cb: (pass: boolean) => void) => void;
     hideOverlay?: () => void;
+    openExternal?: (url: string) => void;
   };
 };
 const winMin = document.getElementById('win-min') as HTMLButtonElement;

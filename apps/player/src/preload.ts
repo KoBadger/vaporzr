@@ -14,4 +14,6 @@ contextBridge.exposeInMainWorld('vaporzr', {
   onOverlayPassthrough: (cb: (pass: boolean) => void): void => {
     ipcRenderer.on('overlay:passthrough', (_event, pass: boolean) => cb(pass));
   },
+  /** Open a link in the real browser rather than inside the overlay. */
+  openExternal: (url: string): void => ipcRenderer.send('open:external', url),
 });

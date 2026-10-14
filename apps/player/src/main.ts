@@ -1,4 +1,4 @@
-import { app, BrowserWindow, desktopCapturer, globalShortcut, ipcMain, screen, session } from 'electron';
+import { app, BrowserWindow, desktopCapturer, globalShortcut, ipcMain, screen, session, shell } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -82,6 +82,23 @@ ipcMain.on('overlay:hide', () => {
   overlayWindow?.hide();
 });
 
+/** Open a link in the user's real browser. The overlay is a frameless
+ *  always-on-top window: navigating it would replace the visual, and a plain
+ *  target=_blank would spawn a bare Electron window instead. */
+ipcMain.on('open:external', (_event, url: unknown) => {
+  const s = String(url ?? '');
+  if (!/^https?:\/\//i.test(s)) return; // never hand anything else to the OS
+  void shell.openExternal(s);
+});
+
+/** Never let a renderer spawn an Electron window; send its links to the browser. */
+function hardenLinks(win: BrowserWindow): void {
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
+    return { action: 'deny' };
+  });
+}
+
 function createVisualizerWindow(): void {
   // Broadcast mode pins an exact size so an OBS Window Capture never shifts,
   // and keeps the frame off (nothing but the visual on screen).
@@ -127,6 +144,7 @@ function createVisualizerWindow(): void {
     if (!DEBUG) return;
     console.log('[renderer-visualizer]', JSON.stringify(args).slice(0, 3000));
   });
+  hardenLinks(win);
   win.loadFile(path.join(www, 'visualizer.html'), {
     query: {
       port: String(BOT_PORT),
@@ -172,6 +190,7 @@ function createOverlayWindow(screensaver: boolean): void {
   }
   // Click-through by default; Ctrl+Shift+V (or the win-pass button) unlocks it.
   win.setIgnoreMouseEvents(true, { forward: true });
+  hardenLinks(win);
   win.loadFile(path.join(www, 'visualizer.html'), {
     query: {
       port: String(BOT_PORT),
