@@ -532,6 +532,10 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
       if(!window.qrcode||typeof window.qrcode!=='function')return;
       if(!jamQrCanvas){
         jamQrCanvas=document.createElement('canvas');
+        // The offsets live in the stylesheet (#jam-qr), so the element must
+        // carry that id — without it a fixed element with no offsets parks
+        // itself at the top-left, over the title.
+        jamQrCanvas.id='jam-qr';
         jamQrCanvas.title='Scan to join the jam — tap to hide';
         jamQrCanvas.style.cssText='position:fixed;z-index:14;'+
           'padding:6px;border-radius:10px;background:#fff;box-shadow:0 6px 30px rgba(0,0,0,.55)';
