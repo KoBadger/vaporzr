@@ -127,6 +127,12 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
 .dock-btn:hover{border-color:var(--acc);background:color-mix(in srgb,var(--acc) 18%,transparent)}
 .dock-btn.active{border-color:var(--acc2);color:var(--acc2)}
 .dock-sep{width:1px;height:24px;background:#262f45}
+/* Jam join QR — translucent so it does not fight the visuals, back to full
+   contrast on hover/touch (it stays scannable), and lifted clear of a dock
+   that wraps to two rows on a phone. */
+#jam-qr{right:16px;bottom:16px;cursor:pointer;opacity:.55;transition:opacity .25s}
+#jam-qr:hover,#jam-qr:active{opacity:1}
+body.mobile #jam-qr{right:12px;bottom:calc(112px + var(--saib))}
 #swatches{display:flex;gap:6px;align-items:center}
 .swatch{width:18px;height:18px;border-radius:50%;cursor:pointer;border:2px solid transparent;transition:all .15s}
 .swatch:hover{transform:scale(1.15)}
@@ -518,7 +524,7 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
       if(!jamQrCanvas){
         jamQrCanvas=document.createElement('canvas');
         jamQrCanvas.title='Scan to join the jam';
-        jamQrCanvas.style.cssText='position:fixed;right:16px;bottom:16px;z-index:14;'+
+        jamQrCanvas.style.cssText='position:fixed;z-index:14;'+
           'padding:6px;border-radius:10px;background:#fff;box-shadow:0 6px 30px rgba(0,0,0,.55)';
         jamQrCanvas.onclick=function(){try{location.href=path}catch(e){}};
         document.body.appendChild(jamQrCanvas);
