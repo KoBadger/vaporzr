@@ -23,6 +23,8 @@ export interface SynthLevels {
 export interface SynthTrackInfo {
   name: string;
   artists: string;
+  /** Who queued it — shown on the NOW PLAYING caption when present. */
+  addedBy?: string;
 }
 
 /** Mood palette → hsla. Shared by the synth overlay and the bar layer so both
@@ -181,7 +183,12 @@ export class SynthOverlay {
       c.font = '500 ' + Math.round(capFs * 0.66) + 'px Inter,system-ui,sans-serif';
       c.fillStyle = 'rgba(60,230,255,0.85)';
       c.shadowColor = 'rgba(0,200,255,0.7)';
-      c.fillText(track.artists, 24, H - 20);
+      // Jam attribution rides along on the artist line — the overlay is what ends
+      // up on the OBS stream, so this is where "who asked for it" belongs.
+      const by = track.addedBy && track.addedBy !== 'request' && track.addedBy !== 'panel'
+        ? track.addedBy
+        : '';
+      c.fillText(track.artists + (by ? '  ·  added by ' + by : ''), 24, H - 20);
       c.shadowBlur = 0;
     }
 

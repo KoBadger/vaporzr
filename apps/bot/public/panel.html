@@ -783,6 +783,17 @@ body.guest #guilds{display:none}
       var meta=(t.artists||[]).join(', ')||t.album||(t.source||'');
       var s=document.createElement('span');s.textContent=meta;d.appendChild(s);
       li.appendChild(d);
+      // Jam attribution: who put this on. 'request' and 'panel' are queue
+      // origins, not people, so only real names get a chip.
+      var by=t.addedBy;
+      if(by&&by!=='request'&&by!=='panel'){
+        var who=document.createElement('span');
+        who.textContent=by;
+        who.setAttribute('data-tip','Added by '+by);
+        who.style.cssText='font-size:10px;padding:2px 8px;border-radius:999px;'+
+          'background:rgba(148,163,184,.14);color:#94a3b8;white-space:nowrap;margin-right:6px';
+        li.appendChild(who);
+      }
       var src=(t.source||'').toLowerCase();
       if(SRC_COLORS[src]){var dot=document.createElement('span');dot.className='qsrc';dot.style.color=SRC_COLORS[src];dot.style.background=SRC_COLORS[src];dot.setAttribute('data-tip',src);li.appendChild(dot)}
       var dur=document.createElement('span');dur.className='qdur';dur.textContent=fmt(t.durationMs);

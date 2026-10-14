@@ -1605,7 +1605,7 @@ function renderLoop(): void {
       now,
       lv,
       synthBars,
-      t ? { name: t.name || '', artists: (t.artists || []).join(', ') } : null,
+      t ? { name: t.name || '', artists: (t.artists || []).join(', '), addedBy: t.addedBy } : null,
       prefersReducedMotion,
       ewVideo,
     );

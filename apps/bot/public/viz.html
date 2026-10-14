@@ -443,6 +443,30 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
       setConnected(true);
       refreshUnlock();
     };
+    /* ---- Jam roster ----
+       Identity-free on purpose: the Activity cannot learn Discord usernames
+       without an OAuth exchange, so this shows the names already credited on the
+       queue (addedBy) — plus any connected client that named itself. */
+    var jamEl=null;
+    function renderJam(p){
+      var here=(p&&p.names)||[], who=(p&&p.contributors)||[];
+      if(!jamEl){
+        jamEl=document.createElement('div');
+        jamEl.style.cssText='position:fixed;top:14px;left:14px;z-index:14;'+
+          'font:11px/1.5 system-ui,sans-serif;color:#c7d2fe;'+
+          'background:rgba(10,15,30,.55);border:1px solid rgba(140,160,255,.3);'+
+          'border-radius:999px;padding:5px 12px;backdrop-filter:blur(10px);'+
+          'pointer-events:none;transition:opacity .3s;opacity:0;max-width:60vw;'+
+          'white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+        document.body.appendChild(jamEl);
+      }
+      var names=here.length?here:who;
+      if(!names.length){jamEl.style.opacity='0';return}
+      jamEl.textContent='JAM · '+names.length+' · '+names.slice(0,5).join(', ')+
+        (names.length>5?' +'+(names.length-5):'');
+      jamEl.style.opacity='1';
+    }
+
     ws.onmessage=function(ev){
       var msg;try{msg=JSON.parse(ev.data)}catch(e){return}
       switch(msg.type){
@@ -463,6 +487,9 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
           // indistinguishable here from "turned off". Only a live 'endlesswave'
           // broadcast is trusted to switch it off.
           else if(msg.endlesswave===false)handleEndlessWave({active:false,generated:0,snapshot:true});
+          break;
+        case 'jam:presence':
+          renderJam(msg);
           break;
         case 'theme':{
           // A theme this viewer picked themselves wins over the server's.

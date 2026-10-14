@@ -191,6 +191,10 @@ export type InboundMessage =
 export type OutboundMessage =
   | { type: 'snapshot'; state: PlaybackState; queue: QueueSnapshot; permissions?: PermissionSnapshot; voice?: { joined: boolean; channelId?: string }; theme?: VaporzrTheme; djEnabled?: boolean; primaryGuildId?: string; guilds?: Array<{ id: string; name: string }>; sensitivity?: number; presetCycle?: number; guest?: boolean; endlesswave?: boolean; endlesswaveMode?: 'off' | 'basic' | 'smart'; ambient?: boolean; voteSkip?: boolean; skipForward?: boolean }
   | { type: 'state:update'; state: PlaybackState; guildId?: string }
+  /** Who is in the jam: distinct human names across connected clients, plus the
+   *  names already credited on the queue. Generic client names (web-viz-xxxx,
+   *  vaporzr-visualizer) are plumbing, not people, and are not listed. */
+  | { type: 'jam:presence'; names: string[]; count: number; contributors: string[] }
   | { type: 'queue:update'; queue: QueueSnapshot }
   | { type: 'perm:update'; permissions: PermissionSnapshot }
   | { type: 'dj:update'; enabled: boolean }

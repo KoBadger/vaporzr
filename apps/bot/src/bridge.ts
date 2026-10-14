@@ -202,6 +202,8 @@ export class Bridge {
     const onQueueChanged = (): void => {
       this.lastQueue = { tracks: q.getSnapshot().tracks, currentIndex: q.getSnapshot().currentIndex };
       this.broadcastPanels({ type: 'queue:update', queue: this.lastQueue });
+      // New credits on the queue mean new jam contributors.
+      this.broadcastPresence();
     };
     const onStateChanged = (state: PlaybackState): void => {
       this.lastState = state;
@@ -235,6 +237,8 @@ export class Bridge {
         break;
       }
     }
+    // Someone left the jam — update the roster for everyone still watching.
+    this.broadcastPresence();
   }
 
   private handleMessage(socket: WebSocket, raw: WebSocket.RawData): void {
@@ -270,6 +274,8 @@ export class Bridge {
         console.log(`[bridge] panel connected${client.guildId ? ` (guild ${client.guildId})` : ''}${guest ? ' [guest]' : ''}`);
         this.sendSnapshot(socket);
       }
+      // A new viewer changes the jam roster — tell everyone.
+      this.broadcastPresence();
       return;
     }
 
@@ -909,6 +915,34 @@ export class Bridge {
 
   private broadcastPanels(msg: OutboundMessage): void {
     for (const panel of this.panels) this.sendToSocket(panel.socket, msg);
+  }
+
+  /**
+   * Who is in the jam. Two sources, both already present:
+   *  - connected clients that identify themselves with a real name (the Activity
+   *    sends the Discord display name; generic client names are plumbing),
+   *  - the names already credited on the queue via `addedBy`.
+   * `request`/`panel` are queue origins, not people, so they are dropped.
+   */
+  private presence(): { names: string[]; count: number; contributors: string[] } {
+    const isPerson = (n: string): boolean =>
+      !!n && !/^web-viz-|^vaporzr-/.test(n) && !/^vz-/.test(n);
+    const people = new Set<string>();
+    for (const c of [...this.panels, ...this.visualizers]) {
+      if (isPerson(c.name)) people.add(c.name);
+    }
+    const contributors = new Set<string>();
+    for (const t of this.queue.getSnapshot().tracks) {
+      const by = (t as { addedBy?: string }).addedBy;
+      if (by && by !== 'request' && by !== 'panel') contributors.add(by);
+    }
+    const names = [...people].sort();
+    return { names, count: names.length, contributors: [...contributors].sort() };
+  }
+
+  /** Broadcast the jam roster. Called on connect, disconnect and queue change. */
+  private broadcastPresence(): void {
+    this.broadcast({ type: 'jam:presence', ...this.presence() });
   }
 
   sendToSocket(
