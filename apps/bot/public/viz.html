@@ -465,6 +465,46 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
       jamEl.textContent='JAM · '+names.length+' · '+names.slice(0,5).join(', ')+
         (names.length>5?' +'+(names.length-5):'');
       jamEl.style.opacity='1';
+      if(p&&p.joinPath)ensureJamQr(p.joinPath);
+    }
+
+    /* ---- Join QR ----
+       Scannable from the stream, and tappable when the Activity is on a phone
+       (where scanning your own screen is impossible). The encoder is fetched on
+       first use so a viewer who never sees a jam never downloads it. */
+    var jamQrCanvas=null,jamQrLoading=false;
+    function ensureJamQr(path){
+      if(window.qrcode&&typeof window.qrcode==='function'){drawJamQr(path);return}
+      if(jamQrLoading)return;
+      jamQrLoading=true;
+      var s=document.createElement('script');
+      s.src='/vendor/qrcode.min.js';
+      s.onload=function(){drawJamQr(path)};
+      s.onerror=function(){jamQrLoading=false};
+      document.head.appendChild(s);
+    }
+    function drawJamQr(path){
+      if(!window.qrcode||typeof window.qrcode!=='function')return;
+      if(!jamQrCanvas){
+        jamQrCanvas=document.createElement('canvas');
+        jamQrCanvas.title='Scan to join the jam';
+        jamQrCanvas.style.cssText='position:fixed;right:16px;bottom:16px;z-index:14;'+
+          'padding:6px;border-radius:10px;background:#fff;box-shadow:0 6px 30px rgba(0,0,0,.55)';
+        jamQrCanvas.onclick=function(){try{location.href=path}catch(e){}};
+        document.body.appendChild(jamQrCanvas);
+      }
+      try{
+        var c=window.qrcode(0,'M');c.addData(location.origin+path);c.make();
+        var n=c.getModuleCount(),quiet=4,total=n+quiet*2;
+        var scale=Math.max(1,Math.floor(104/total)),px=total*scale;
+        jamQrCanvas.width=px;jamQrCanvas.height=px;
+        var g=jamQrCanvas.getContext('2d');
+        g.fillStyle='#fff';g.fillRect(0,0,px,px);
+        g.fillStyle='#0b0d18';
+        for(var r=0;r<n;r++)for(var k=0;k<n;k++){
+          if(c.isDark(r,k))g.fillRect((k+quiet)*scale,(r+quiet)*scale,scale,scale);
+        }
+      }catch(e){}
     }
 
     ws.onmessage=function(ev){

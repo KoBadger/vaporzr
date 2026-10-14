@@ -933,7 +933,7 @@ export class Bridge {
    *  - the names already credited on the queue via `addedBy`.
    * `request`/`panel` are queue origins, not people, so they are dropped.
    */
-  private presence(): { names: string[]; count: number; contributors: string[] } {
+  private presence(): { names: string[]; count: number; contributors: string[]; joinPath: string } {
     const isPerson = (n: string): boolean =>
       !!n && !/^web-viz-|^vaporzr-/.test(n) && !/^vz-/.test(n);
     /** Queue origins that are plumbing rather than people. */
@@ -948,7 +948,12 @@ export class Bridge {
       if (by && !ORIGINS.has(by)) contributors.add(by);
     }
     const names = [...people].sort();
-    return { names, count: names.length, contributors: [...contributors].sort() };
+    // The low-privilege request key, not the share key: a jam link grants
+    // exactly "add a song" and nothing else.
+    const joinPath = config.requestKey
+      ? `/jam?key=${encodeURIComponent(config.requestKey)}`
+      : '/jam';
+    return { names, count: names.length, contributors: [...contributors].sort(), joinPath };
   }
 
   /** Broadcast the jam roster. Called on connect, disconnect and queue change. */

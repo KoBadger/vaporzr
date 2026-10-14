@@ -60,6 +60,11 @@ RUN cp node_modules/butterchurn-presets/lib/butterchurnPresets.min.js \
        apps/bot/public/vendor/presets/player-pack.min.js \
  && node -e "const fs=require('fs');console.log('player pack served:', fs.statSync('apps/bot/public/vendor/presets/player-pack.min.js').size, 'bytes')"
 
+# QR encoder for the jam join link. The web visualizer has no bundler, so it is
+# served as the package's UMD build — the same trick as the preset pack above.
+RUN cp node_modules/qrcode-generator/dist/qrcode.js apps/bot/public/vendor/qrcode.min.js \
+ && node -e "const fs=require('fs');console.log('qrcode served:', fs.statSync('apps/bot/public/vendor/qrcode.min.js').size, 'bytes')"
+
 FROM node:20-trixie-slim AS runtime
 
 ARG GIT_SHA=dev

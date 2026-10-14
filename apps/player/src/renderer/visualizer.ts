@@ -4,6 +4,7 @@ import type { CommandMessage, PlaybackState } from '@vaporzr/shared';
 import { emptyState } from '@vaporzr/shared';
 import { WsClient } from './wsClient';
 import { moodColor, SynthOverlay, type SynthLevels } from './synthwave';
+import { drawQr } from './qr';
 
 const port = Number(new URLSearchParams(window.location.search).get('port') ?? '4876');
 const OVERLAY = new URLSearchParams(window.location.search).get('overlay') === '1';
@@ -77,6 +78,7 @@ const btnCalm = document.getElementById('btn-calm') as HTMLButtonElement;
 const btnLock = document.getElementById('btn-lock') as HTMLButtonElement;
 const btnPresets = document.getElementById('btn-presets') as HTMLButtonElement;
 const btnBars = document.getElementById('btn-bars') as HTMLButtonElement;
+const btnJamQr = document.getElementById('btn-jamqr') as HTMLButtonElement;
 const sensSlider = document.getElementById('sens') as HTMLInputElement;
 const swatchBar = document.getElementById('swatches') as HTMLSpanElement;
 const guildBar = document.getElementById('guild-bar') as HTMLDivElement;
@@ -198,6 +200,9 @@ const client = new WsClient({
       else nextPreset(1.5);
     } else if (msg.type === 'preset:cycle') {
       setPresetCycle(msg.seconds);
+    } else if (msg.type === 'jam:presence') {
+      if (msg.joinPath) jamJoinPath = msg.joinPath;
+      renderJamQr();
     }
   },
 });
@@ -498,6 +503,10 @@ function updateVisualButtons(): void {
   btnBars.title = barMode
     ? 'Bar visuals on — click for MilkDrop'
     : 'Bar visuals — move with the music even with no audio device';
+  btnJamQr.classList.toggle('on', jamQrOn);
+  btnJamQr.title = jamQrOn
+    ? 'Jam QR on — viewers can scan to join (click to hide from the stream)'
+    : 'Jam QR hidden — click to show the scan-to-join code';
 }
 
 /** Browse the loaded library; picking one locks it in (same as the web viz). */
@@ -561,6 +570,36 @@ function setGuilds(list: Array<{ id: string; name: string }>, primaryId?: string
   }
 }
 
+// ---- Jam QR (scan to join) ----
+let jamJoinPath = '';
+let jamQrOn = true;
+let jamQrCanvas: HTMLCanvasElement | null = null;
+
+/** Draw the join QR. The bot sends an origin-RELATIVE path (it is loopback-bound
+ *  and cannot know the address a viewer reached it on), so the origin comes from
+ *  the same base the wallpaper video is fetched from. */
+function renderJamQr(): void {
+  if (!jamQrCanvas) {
+    jamQrCanvas = document.createElement('canvas');
+    jamQrCanvas.id = 'jam-qr';
+    jamQrCanvas.style.cssText =
+      'position:fixed;right:16px;bottom:16px;z-index:12;padding:6px;border-radius:10px;' +
+      'background:#fff;box-shadow:0 6px 30px rgba(0,0,0,.55);pointer-events:none;' +
+      'transition:opacity .3s';
+    document.body.appendChild(jamQrCanvas);
+  }
+  const show = jamQrOn && !!jamJoinPath;
+  jamQrCanvas.style.display = show ? 'block' : 'none';
+  if (show) drawQr(jamQrCanvas, ASSET_BASE + jamJoinPath, 104);
+}
+
+function setJamQr(on: boolean): void {
+  jamQrOn = on;
+  renderJamQr();
+  updateVisualButtons();
+  try { localStorage.setItem('vaporzr.jamqr', on ? '1' : '0'); } catch { /* storage unavailable */ }
+}
+
 function wireControls(): void {
   btnPlay.addEventListener('click', () => sendCmd('toggle'));
   btnPrev.addEventListener('click', () => sendCmd('previous'));
@@ -609,6 +648,7 @@ function wireControls(): void {
     updateVisualButtons();
   });
   btnBars.addEventListener('click', () => setBarMode(!barMode));
+  btnJamQr.addEventListener('click', () => setJamQr(!jamQrOn));
   btnPresets.addEventListener('click', (e) => {
     e.stopPropagation();
     togglePresetPicker();
@@ -625,6 +665,7 @@ function wireControls(): void {
   try { calm = localStorage.getItem('vaporzr.calm') === '1'; } catch { /* storage unavailable */ }
   document.body.classList.toggle('calm', calm);
   try { if (localStorage.getItem('vaporzr.bars') === '1') setBarMode(true); } catch { /* storage unavailable */ }
+  try { if (localStorage.getItem('vaporzr.jamqr') === '0') setJamQr(false); } catch { /* storage unavailable */ }
   buildSwatches();
   updateVisualButtons();
 

@@ -193,8 +193,11 @@ export type OutboundMessage =
   | { type: 'state:update'; state: PlaybackState; guildId?: string }
   /** Who is in the jam: distinct human names across connected clients, plus the
    *  names already credited on the queue. Generic client names (web-viz-xxxx,
-   *  vaporzr-visualizer) are plumbing, not people, and are not listed. */
-  | { type: 'jam:presence'; names: string[]; count: number; contributors: string[] }
+   *  vaporzr-visualizer) are plumbing, not people, and are not listed.
+   *  `joinPath` is origin-relative on purpose — the bot is loopback-bound and has
+   *  no idea which address a viewer reached it on, so each client prefixes its
+   *  own origin to build the join link. */
+  | { type: 'jam:presence'; names: string[]; count: number; contributors: string[]; joinPath?: string }
   | { type: 'queue:update'; queue: QueueSnapshot }
   | { type: 'perm:update'; permissions: PermissionSnapshot }
   | { type: 'dj:update'; enabled: boolean }
