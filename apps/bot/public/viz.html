@@ -277,6 +277,7 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
   <button class="dock-btn" id="btn-preset-shuffle" title="Shuffle preset">🎲</button>
   <button class="dock-btn" id="btn-presets" title="Browse presets">🔎</button>
   <button class="dock-btn" id="btn-pace" title="Preset pace — how long each visual stays (this viewer)">⏱</button>
+  <button class="dock-btn" id="btn-jamqr" title="Jam join code — scan to join (tap the code to hide it)">📱</button>
   <div id="preset-lib">
     <span id="preset-count"></span>
     <span id="preset-bar"><i id="preset-fill"></i></span>
@@ -508,7 +509,15 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
        Scannable from the stream, and tappable when the Activity is on a phone
        (where scanning your own screen is impossible). The encoder is fetched on
        first use so a viewer who never sees a jam never downloads it. */
-    var jamQrCanvas=null,jamQrLoading=false;
+    var jamQrCanvas=null,jamQrLoading=false,jamQrHidden=false;
+    /* Tapping the code hides it. It used to navigate to the jam page, which
+       stranded the Activity on the request form with no way back — the join
+       link is meant to be SCANNED, not clicked. The 📱 dock button toggles it. */
+    function setJamQrHidden(h){
+      jamQrHidden=h;
+      if(jamQrCanvas)jamQrCanvas.style.display=h?'none':'block';
+      var b=$('btn-jamqr');if(b)b.classList.toggle('active',!h);
+    }
     function ensureJamQr(path){
       if(window.qrcode&&typeof window.qrcode==='function'){drawJamQr(path);return}
       if(jamQrLoading)return;
@@ -523,12 +532,13 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
       if(!window.qrcode||typeof window.qrcode!=='function')return;
       if(!jamQrCanvas){
         jamQrCanvas=document.createElement('canvas');
-        jamQrCanvas.title='Scan to join the jam';
+        jamQrCanvas.title='Scan to join the jam — tap to hide';
         jamQrCanvas.style.cssText='position:fixed;z-index:14;'+
           'padding:6px;border-radius:10px;background:#fff;box-shadow:0 6px 30px rgba(0,0,0,.55)';
-        jamQrCanvas.onclick=function(){try{location.href=path}catch(e){}};
+        jamQrCanvas.onclick=function(){setJamQrHidden(true)};
         document.body.appendChild(jamQrCanvas);
       }
+      jamQrCanvas.style.display=jamQrHidden?'none':'block';
       try{
         var c=window.qrcode(0,'M');c.addData(/^https?:/i.test(path)?path:(location.origin+path));c.make();
         var n=c.getModuleCount(),quiet=4,total=n+quiet*2;
@@ -1024,6 +1034,7 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
   $('btn-prev').onclick=function(){loadPreset(pickIndex(presetIdx-1,-1),1.2)};
   $('btn-preset-shuffle').onclick=function(){loadPreset(Math.floor(Math.random()*presetNames.length),1.2)};
   var _bp=$('btn-pace');if(_bp)_bp.onclick=function(){cyclePace()};
+  var _jq=$('btn-jamqr');if(_jq)_jq.onclick=function(){setJamQrHidden(!jamQrHidden)};
   $('btn-lock').onclick=function(){
     presetLocked=!presetLocked;
     this.textContent=presetLocked?'🔒':'🔓';
