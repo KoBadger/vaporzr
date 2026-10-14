@@ -863,11 +863,7 @@ export class DiscordBot {
     // The panel's play/resume need a voice channel and cannot supply one (no
     // interaction to read a member from), so the bridge asks the bot to join
     // wherever the listeners are.
-    bridge.onEnsureJoined = async () => {
-      const s = this.sessions.primary;
-      if (!s) return false;
-      return this.joinBusiestVoiceChannel(s);
-    };
+    bridge.onEnsureJoined = () => this.joinWhereListenersAre();
     // Panel toggles Endless Wave through the same machinery as `V@ew on/off`.
     bridge.setEndlessWaveToggle((guildId, mode) => {
       void this.panelSetEndlessWave(guildId, mode).catch((err) => {
@@ -4727,32 +4723,59 @@ export class DiscordBot {
     return true;
   }
 
-  /** The panel has no interaction to read a member's channel from, so join
-   *  wherever the listeners are: the busiest voice channel in the guild.
-   *  Counted from voice STATES, not channel.members — the member cache needs the
-   *  privileged GuildMembers intent, which this bot does not request, so
-   *  channel.members is empty and every channel looked deserted. */
-  private async joinBusiestVoiceChannel(s: Session): Promise<boolean> {
-    if (s.voice.isJoined()) return true;
-    const guild = this.client.guilds.cache.get(s.guildId);
-    if (!guild) return false;
+  /** Join wherever the listeners actually are, across every guild, and make that
+   *  guild primary. The bridge's primary guild drifts to whichever guild last
+   *  played, and after a restart it can point at a guild nobody is sitting in —
+   *  which is exactly why every panel command came back "I'm not in a voice
+   *  channel". Listeners are counted from voice STATES: channel.members needs the
+   *  privileged GuildMembers intent, which this bot does not request. */
+  private async joinWhereListenersAre(preferGuildId?: string): Promise<boolean> {
     const botId = this.client.user?.id;
-    const counts = new Map<string, number>();
-    for (const vs of guild.voiceStates.cache.values()) {
-      if (!vs.channelId || vs.id === botId) continue;
-      counts.set(vs.channelId, (counts.get(vs.channelId) ?? 0) + 1);
+    /** Listeners per channel in one guild. Counted from voice STATES, not
+     *  channel.members: the member cache needs the privileged GuildMembers
+     *  intent this bot does not request, so channel.members is always empty and
+     *  every channel looked deserted. */
+    const listeners = (guildId: string): Map<string, number> => {
+      const per = new Map<string, number>();
+      const guild = this.client.guilds.cache.get(guildId);
+      if (!guild) return per;
+      for (const vs of guild.voiceStates.cache.values()) {
+        if (!vs.channelId || vs.id === botId) continue;
+        per.set(vs.channelId, (per.get(vs.channelId) ?? 0) + 1);
+      }
+      return per;
+    };
+    let best: { guildId: string; channelId: string; size: number } | null = null;
+    // The guild the requesting panel is looking at wins outright, so a busier
+    // guild elsewhere cannot steal the bot out from under the operator.
+    if (preferGuildId) {
+      for (const [channelId, size] of listeners(preferGuildId)) {
+        if (!best || size > best.size) best = { guildId: preferGuildId, channelId, size };
+      }
     }
-    let best: { id: string; size: number } | null = null;
-    for (const [id, size] of counts) {
-      if (!best || size > best.size) best = { id, size };
+    if (!best) {
+      for (const guild of this.client.guilds.cache.values()) {
+        for (const [channelId, size] of listeners(guild.id)) {
+          if (!best || size > best.size) best = { guildId: guild.id, channelId, size };
+        }
+      }
     }
     if (!best) return false;
-    await s.voice.join(guild.id, best.id, guild.voiceAdapterCreator);
+    const s = this.sessions.get(best.guildId);
+    if (!s) return false;
+    if (this.bridge.getPrimaryGuildId() !== best.guildId) {
+      console.log(`[discord] auto-join: primary guild -> ${best.guildId} (listeners there)`);
+      this.bridge.setPrimaryGuildId(best.guildId);
+    }
+    if (s.voice.isJoined()) return true;
+    const guild = this.client.guilds.cache.get(best.guildId);
+    if (!guild) return false;
+    await s.voice.join(guild.id, best.channelId, guild.voiceAdapterCreator);
     const state = s.queue.getState();
     if (state.playing) void s.playback.reattachAfterRejoin();
     this.perms.setNpAuto(s.guildId, true);
     void this.maybeAutoMiniNp(s.guildId, s.queue.getState());
-    console.log(`[discord] panel play: joined ${best.id} (${best.size} listening)`);
+    console.log(`[discord] panel play: joined ${best.channelId} (${best.size} listening)`);
     return true;
   }
 
