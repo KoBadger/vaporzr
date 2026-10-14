@@ -4855,14 +4855,17 @@ export class DiscordBot {
     // in — so it updates with every song without anyone running /follow.
     // `/npchannel off` (or `/follow off`) sets npAuto=false to stop it.
     if (!this.perms.getNpAuto(guildId)) return;
-    // Target: the room the bot is actually in first, then an explicit /npchannel
-    // pin, then wherever the room last spoke. Preferring the room is what makes
-    // "follow" follow — with the pin first, /follow pinned whichever channel it
-    // happened to be first run in, so the strip stayed behind in a channel
-    // nobody was looking at and follow appeared to be off.
+    // Target: where the room last SPOKE first — that is the channel people are
+    // actually looking at, and it moves the moment someone plays from another
+    // channel, which is what "follow" means. Then the room's own voice channel
+    // (usable only when it has a text chat), then an explicit /npchannel pin.
+    //
+    // Preferring the voice channel outright was a mistake: a voice channel is not
+    // reliably postable, and the guard below returned silently, so the strip was
+    // simply never created and follow looked broken in a new way.
     const room = this.sessionFor(guildId)?.voice.getChannelId() ?? null;
     const channelId =
-      room ?? this.perms.getNpChannel(guildId) ?? this.lastTextChannel.get(guildId);
+      this.lastTextChannel.get(guildId) ?? room ?? this.perms.getNpChannel(guildId);
     if (!channelId) return;
     // A command reply for this exact track is already the visible now-playing —
     // don't also auto-post a strip (that was the "two identical embeds"
@@ -4879,8 +4882,13 @@ export class DiscordBot {
     try {
       const uri = st.track.uri;
       if (this.miniTrackUri.get(guildId) === uri && this.miniNp.has(guildId)) return;
-      const channel = await this.client.channels.fetch(channelId);
-      if (!channel || !('send' in channel)) return;
+      const channel = await this.client.channels.fetch(channelId).catch(() => null);
+      if (!channel || !('send' in channel)) {
+        // Never bail silently: an unpostable target is why the strip once just
+        // failed to appear with nothing in the log to explain it.
+        console.warn(`[np] no postable channel for the now-playing strip (target ${channelId})`);
+        return;
+      }
       const existing = this.miniNp.get(guildId);
       if (existing && existing.channelId !== channelId) {
         // Following the room into a different channel: clear the old strip first
