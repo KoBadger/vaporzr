@@ -784,28 +784,41 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
      player looks best with, and the Activity is meant to match it. The curated
      projectM library below stays as the fallback when the pack is unavailable. */
   function loadPresetChunks(){
-    var s=document.createElement('script');
-    s.src='/vendor/presets/player-pack.min.js';s.async=true;
-    s.onload=function(){
-      try{
-        var P=window.butterchurnPresets;
-        if(P&&typeof P.getPresets==='function'){
-          Object.assign(presetPool,P.getPresets());
-          // The pack is not listed in curated.json, so drop the curation gate for
-          // it (the gate exists to filter the projectM collection, not this pack).
-          curatedNames=null;blankNames=null;
-          libTotal=Object.keys(allPresets()).length;libCurated=libTotal;
-          refreshPresetNames();
-          updatePresetDock();
-          // If MilkDrop is already on and waiting, start it on the new pool.
-          if(presetIdx<0&&presetNames.length&&bcViz)loadPreset(0,1.5);
-          return;
-        }
-      }catch(e){}
-      loadCuratedChunks();
-    };
-    s.onerror=function(){loadCuratedChunks()};
-    document.head.appendChild(s);
+    /* The butterchurn package ships several packs, each on its own global. Only
+       the base one used to be served, which is why the pool looked like "100
+       visuals" — Extra and Extra2 were in the image but never loaded. */
+    var packs=[
+      {src:'/vendor/presets/player-pack.min.js',g:'butterchurnPresets'},
+      {src:'/vendor/presets/extra-pack.min.js',g:'butterchurnPresetsExtra'},
+      {src:'/vendor/presets/extra2-pack.min.js',g:'butterchurnPresetsExtra2'}
+    ];
+    var i=0,loadedAny=false;
+    function finish(){
+      if(!loadedAny){loadCuratedChunks();return}
+      /* These packs are not listed in curated.json, so drop the curation gate
+         (the gate exists to filter the projectM collection, not these packs). */
+      curatedNames=null;blankNames=null;
+      libTotal=Object.keys(allPresets()).length;libCurated=libTotal;
+      refreshPresetNames();
+      updatePresetDock();
+      // If MilkDrop is already on and waiting, start it on the new pool.
+      if(presetIdx<0&&presetNames.length&&bcViz)loadPreset(0,1.5);
+    }
+    function step(){
+      if(i>=packs.length){finish();return}
+      var p=packs[i++],s=document.createElement('script');
+      s.src=p.src;s.async=true;
+      s.onload=function(){
+        try{
+          var P=window[p.g];
+          if(P&&typeof P.getPresets==='function'){Object.assign(presetPool,P.getPresets());loadedAny=true}
+        }catch(e){}
+        step();
+      };
+      s.onerror=function(){step()};
+      document.head.appendChild(s);
+    }
+    step();
   }
   /* Fallback: the curated projectM "cream of the crop" chunks, streamed lazily. */
   function loadCuratedChunks(){
