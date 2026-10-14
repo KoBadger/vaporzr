@@ -27,6 +27,18 @@ button:disabled{opacity:.55;cursor:default}
 #msg{margin-top:14px;font-size:13px;min-height:18px}
 #msg.ok{color:#86efac}
 #msg.err{color:#fca5a5}
+/* Queue list: title, artist, and who asked for it. Sized for a phone. */
+#queue{margin-top:18px;border-top:1px solid rgba(140,160,255,.18);padding-top:10px}
+.q-head{font-size:10px;letter-spacing:2px;color:#64748b;font-weight:700;margin:10px 0 4px}
+.q-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid rgba(140,160,255,.08)}
+.q-row:last-child{border-bottom:0}
+.q-art{width:34px;height:34px;border-radius:6px;background:#1e293b;object-fit:cover;flex:0 0 34px}
+.q-meta{min-width:0;flex:1}
+.q-name{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.q-sub{font-size:11px;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.q-by{color:#a5b4fc}
+.q-empty{font-size:12px;color:#64748b}
+#q-now .q-name{color:#22d3ee}
 </style>
 </head>
 <body>
@@ -37,6 +49,10 @@ button:disabled{opacity:.55;cursor:default}
   <input id="q" placeholder="Song, artist, or YouTube query…" autocomplete="off" autofocus />
   <button id="go">＋ Request</button>
   <div id="msg"></div>
+  <div id="queue">
+    <div id="q-now"></div>
+    <div id="q-list"></div>
+  </div>
 </div>
 <script>
 (function () {
@@ -66,6 +82,7 @@ button:disabled{opacity:.55;cursor:default}
           say('Added: ' + res.d.name, 'ok');
           try { localStorage.setItem('vzWho', who.value.trim()); } catch (e) {}
           q.value = '';
+          pollQueue();
         }
         else { say(res.d && res.d.error ? res.d.error : 'Request failed.', 'err'); }
       })
@@ -74,6 +91,42 @@ button:disabled{opacity:.55;cursor:default}
   }
   go.onclick = submit;
   q.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+
+  /* ---- The queue, live ----
+     Read-only: title, artist, and who asked for it. Polled rather than streamed
+     because this page is a plain form on a phone, with no socket. */
+  var qList = document.getElementById('q-list'), qNow = document.getElementById('q-now');
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+  function rowHtml(t) {
+    var art = t.image
+      ? '<img class="q-art" src="' + esc(t.image) + '" alt="" loading="lazy" onerror="this.style.visibility=\'hidden\'">'
+      : '<div class="q-art"></div>';
+    var sub = [esc(t.artists), t.addedBy ? '<span class="q-by">' + esc(t.addedBy) + '</span>' : '']
+      .filter(Boolean).join(' · ');
+    return '<div class="q-row">' + art + '<div class="q-meta"><div class="q-name">' +
+      esc(t.name) + '</div><div class="q-sub">' + sub + '</div></div></div>';
+  }
+  function renderQueue(d) {
+    var now = d && d.playing, tracks = (d && d.tracks) || [];
+    qNow.innerHTML = now ? '<div class="q-head">NOW PLAYING</div>' + rowHtml(now) : '';
+    if (tracks.length) {
+      qList.innerHTML = '<div class="q-head">UP NEXT \u00b7 ' + tracks.length + '</div>' + tracks.map(rowHtml).join('');
+    } else {
+      qList.innerHTML = now ? '' : '<div class="q-head">QUEUE</div><div class="q-empty">Nothing queued yet \u2014 you could be first.</div>';
+    }
+  }
+  function pollQueue() {
+    fetch('/api/queue', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) { if (d) renderQueue(d); })
+      .catch(function () {});
+  }
+  pollQueue();
+  setInterval(pollQueue, 5000);
 })();
 </script>
 </body>

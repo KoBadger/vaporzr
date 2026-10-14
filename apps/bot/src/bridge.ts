@@ -28,6 +28,15 @@ import type { ResolvedTrack } from '@vaporzr/core/spotify';
 import { secretEquals, socketHasShareKey } from './secretCompare.js';
 import { playlistStore } from '@vaporzr/core/playlists';
 
+/** One row of the public jam queue. Plain strings — the page is dumb HTML. */
+interface JamQueueTrack {
+  name: string;
+  artists: string;
+  addedBy: string;
+  durationMs: number;
+  image?: string;
+}
+
 interface Client {
   socket: WebSocket;
   role: 'panel' | 'visualizer';
@@ -771,6 +780,33 @@ export class Bridge {
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
+  }
+
+  /** Read-only view of the queue for the public jam page: what is on now and
+   *  what is next, with who asked for each. Deliberately small and free of
+   *  internal ids — it is served to key-holding guests on a phone. */
+  jamQueue(): { playing: JamQueueTrack | null; tracks: JamQueueTrack[] } {
+    const snap = this.queue.getSnapshot();
+    const map = (t: {
+      name?: string;
+      artists?: string[];
+      addedBy?: string;
+      durationMs?: number;
+      image?: string;
+    }): JamQueueTrack => ({
+      name: t.name || 'Unknown',
+      artists: (t.artists ?? []).join(', '),
+      addedBy: t.addedBy || '',
+      durationMs: t.durationMs ?? 0,
+      image: t.image,
+    });
+    const cur = snap.currentIndex;
+    // The current track lives in the list too, so "up next" starts after it.
+    const start = cur >= 0 ? cur + 1 : 0;
+    return {
+      playing: cur >= 0 && snap.tracks[cur] ? map(snap.tracks[cur]) : null,
+      tracks: snap.tracks.slice(start, start + 30).map(map),
+    };
   }
 
   private primaryGuildId: string | null = null;

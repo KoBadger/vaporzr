@@ -134,9 +134,18 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
 /* Jam join QR — translucent so it does not fight the visuals, back to full
    contrast on hover/touch (it stays scannable), and lifted clear of a dock
    that wraps to two rows on a phone. */
-#jam-qr{right:16px;bottom:10px;cursor:pointer;opacity:.32;transition:opacity .25s}
-#jam-qr:hover,#jam-qr:active{opacity:1}
-body.mobile #jam-qr{right:12px;bottom:calc(112px + var(--saib))}
+/* A wrapper so the join URL can sit under the code. Tapping the code hides the
+   pair; the link is for desktop viewers, who cannot scan the screen in front of
+   them. */
+#jam-qr-wrap{right:16px;bottom:10px;z-index:14;display:flex;flex-direction:column;
+  align-items:center;gap:5px;cursor:pointer;opacity:.32;transition:opacity .25s}
+#jam-qr-wrap:hover,#jam-qr-wrap:active{opacity:1}
+#jam-qr{display:block}
+#jam-qr-link{font-size:10px;color:#c7d2fe;text-decoration:none;letter-spacing:.3px;
+  background:rgba(10,15,30,.6);border:1px solid rgba(140,160,255,.3);border-radius:6px;
+  padding:2px 7px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#jam-qr-link:hover{color:#fff;text-decoration:underline}
+body.mobile #jam-qr-wrap{right:12px;bottom:calc(112px + var(--saib))}
 #swatches{display:flex;gap:6px;align-items:center}
 .swatch{width:18px;height:18px;border-radius:50%;cursor:pointer;border:2px solid transparent;transition:all .15s}
 .swatch:hover{transform:scale(1.15)}
@@ -527,21 +536,31 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
     }
     function drawJamQr(path){
       if(!window.qrcode||typeof window.qrcode!=='function')return;
+      var url=/^https?:/i.test(path)?path:(location.origin+path);
       if(!jamQrCanvas){
+        /* The wrapper carries the position (see #jam-qr-wrap) and holds the
+           clickable URL under the code: a desktop viewer cannot scan the screen
+           they are looking at. Tapping the code hides the pair. */
+        var wrap=document.createElement('div');
+        wrap.id='jam-qr-wrap';
         jamQrCanvas=document.createElement('canvas');
-        // The offsets live in the stylesheet (#jam-qr), so the element must
-        // carry that id — without it a fixed element with no offsets parks
-        // itself at the top-left, over the title.
         jamQrCanvas.id='jam-qr';
         jamQrCanvas.title='Scan to join the jam — tap to hide';
-        jamQrCanvas.style.cssText='position:fixed;z-index:14;'+
-          'padding:6px;border-radius:10px;background:#fff;box-shadow:0 6px 30px rgba(0,0,0,.55)';
+        jamQrCanvas.style.cssText='padding:6px;border-radius:10px;background:#fff;box-shadow:0 6px 30px rgba(0,0,0,.55)';
         jamQrCanvas.onclick=function(){setJamQrHidden(true)};
-        document.body.appendChild(jamQrCanvas);
+        wrap.appendChild(jamQrCanvas);
+        var a=document.createElement('a');
+        a.id='jam-qr-link';
+        a.target='_blank';a.rel='noopener';
+        wrap.appendChild(a);
+        document.body.appendChild(wrap);
       }
-      jamQrCanvas.style.display=jamQrHidden?'none':'block';
+      var w=document.getElementById('jam-qr-wrap');
+      if(w)w.style.display=jamQrHidden?'none':'';
+      var link=document.getElementById('jam-qr-link');
+      if(link){link.href=url;link.textContent=url.replace(/^https?:\/\//,'');}
       try{
-        var c=window.qrcode(0,'M');c.addData(/^https?:/i.test(path)?path:(location.origin+path));c.make();
+        var c=window.qrcode(0,'M');c.addData(url);c.make();
         var n=c.getModuleCount(),quiet=4,total=n+quiet*2;
         var scale=Math.max(1,Math.floor(104/total)),px=total*scale;
         jamQrCanvas.width=px;jamQrCanvas.height=px;
@@ -1060,7 +1079,9 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
   var jamQrCanvas=null,jamQrHidden=false;
   function setJamQrHidden(h){
     jamQrHidden=h;
-    if(jamQrCanvas)jamQrCanvas.style.display=h?'none':'block';
+    // Hide the whole wrapper (code + URL) and restore the stylesheet's display.
+    var w=document.getElementById('jam-qr-wrap');
+    if(w)w.style.display=h?'none':'';
     var b=$('btn-jamqr');if(b)b.classList.toggle('active',!h);
   }
   $('btn-presets').onclick=function(e){e.stopPropagation();togglePresetPicker();};
@@ -2357,6 +2378,22 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
      clients rotate. Discord's ORIENTATION_UPDATE is dispatched as a resize by
      the handshake, and orientationchange covers the browser case. */
   window.addEventListener('orientationchange',function(){setTimeout(function(){resize();resizeSynth()},120)},{passive:true});
+  /* ---- Self-reload on deploy ----
+     Discord keeps the Activity's document alive, so a new build would otherwise
+     leave you on stale code until you reload by hand — no-store does not help,
+     because the client never re-requests. Poll the build the bot reports and
+     refresh when it moves. */
+  (function watchBuild(){
+    var meta=document.querySelector('meta[name="vz-build"]');
+    var mine=meta?meta.getAttribute('content'):'';
+    if(!mine||mine==='dev')return;
+    window.setInterval(function(){
+      fetch('/health',{cache:'no-store'}).then(function(r){return r.json()})
+        .then(function(h){if(h&&h.build&&h.build!==mine)location.reload()})
+        .catch(function(){});
+    },60000);
+  })();
+
   connect();
 })();
 </script>

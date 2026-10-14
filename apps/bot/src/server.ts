@@ -171,6 +171,7 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
         spotifyApi: spotifyApiStatus,
         poToken: poTokenStatus,
         youtube: youtubeHealth().status,
+        build: (process.env.VAPORZR_BUILD ?? 'dev').slice(0, 7),
         cookieAgeDays: cookieAgeDays(),
         push: pushSubscriptionCount(),
         memory: {
@@ -419,7 +420,7 @@ function activityHtml(origin: string): string | null {
       // Assets and the socket keep their normal root-absolute paths. That is the
       // whole point of mapping the Activity's root at the bare origin: there is
       // no path rewriting to reason about, and the same URLs work in a browser.
-      .replace(/<head([^>]*)>/i, (m) => `${m}${handshake}`);
+      .replace(/<head([^>]*)>/i, (m) => `${m}<meta name="vz-build" content="${build}">${handshake}`);
   } catch {
     return null;
   }
@@ -899,6 +900,23 @@ async function handleRoute(
         if (body?.endpoint) removePushSubscription(body.endpoint);
         res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
         res.end(JSON.stringify({ ok: true }));
+        break;
+      }
+
+      case '/api/queue': {
+        if (!hasRequestAccess(req, url)) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'forbidden' }));
+          return;
+        }
+        const bot = bridgeRef();
+        if (!bot) {
+          res.writeHead(503, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'bot offline' }));
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify(bot.jamQueue()));
         break;
       }
 
