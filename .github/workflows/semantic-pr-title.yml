@@ -1,0 +1,28 @@
+name: PR title
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+# The title is read from the event payload, so nothing needs to be checked out.
+permissions:
+  contents: read
+
+jobs:
+  semantic-pr-title:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce Conventional Commits in the PR title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          node -e '
+          const re = /^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([^)]+\))?!?: .+/;
+          const title = process.env.TITLE || "";
+          if (!re.test(title)) {
+            console.error("PR title must follow Conventional Commits, e.g. fix(player): handle the empty queue");
+            console.error("Rejected title: " + JSON.stringify(title));
+            process.exit(1);
+          }
+          console.log("Conventional PR title OK: " + JSON.stringify(title));
+          '
