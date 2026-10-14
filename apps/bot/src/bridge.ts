@@ -671,10 +671,19 @@ export class Bridge {
     }
   }
 
-  /** Used by the public /request page: resolve a query and queue it (no playback). */
-  async requestTrack(query: string): Promise<{ ok: boolean; name?: string; error?: string }> {
+  /** Used by the public /request page: resolve a query and queue it (no playback).
+   *  `who` is the guest's display name, so a jam credit reads as a person rather
+   *  than the `request` origin. Untrusted input: length-capped and stripped of
+   *  control characters. Every renderer draws it as text (textContent / canvas),
+   *  never as HTML. */
+  async requestTrack(query: string, who?: string): Promise<{ ok: boolean; name?: string; error?: string }> {
     const q = query.trim();
     if (!q) return { ok: false, error: 'Type a song to request.' };
+    const credit =
+      (who ?? '')
+        .replace(/[\u0000-\u001f\u007f]/g, '')
+        .trim()
+        .slice(0, 24) || 'request';
     try {
       const video = await searchAndResolveYoutube(q);
       if (!video) return { ok: false, error: `No match for "${q}".` };
@@ -689,7 +698,7 @@ export class Bridge {
           image: video.image,
           source: 'youtube',
         },
-        'request',
+        credit,
       );
       return { ok: true, name: video.name };
     } catch (err) {

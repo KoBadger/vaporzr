@@ -20,6 +20,7 @@ p.sub{margin:0 0 16px;font-size:12px;color:#94a3b8}
 input{width:100%;padding:12px 14px;border-radius:11px;border:1px solid rgba(140,160,255,.3);
   background:rgba(10,14,32,.7);color:#e2e8f0;font-size:15px;outline:none}
 input:focus{border-color:var(--accent)}
+#who{margin-bottom:8px}
 button{margin-top:12px;width:100%;padding:12px;border:none;border-radius:11px;cursor:pointer;
   background:linear-gradient(135deg,var(--accent),var(--accent2));color:#0b1026;font-weight:700;font-size:14px}
 button:disabled{opacity:.55;cursor:default}
@@ -31,7 +32,8 @@ button:disabled{opacity:.55;cursor:default}
 <body>
 <div class="card">
   <h1>VAPORZR</h1>
-  <p class="sub">Request a song — it gets queued for everyone.</p>
+  <p class="sub" id="sub">Request a song — it gets queued for everyone.</p>
+  <input id="who" placeholder="Your name (shows on the queue)" autocomplete="off" maxlength="24" />
   <input id="q" placeholder="Song, artist, or YouTube query…" autocomplete="off" autofocus />
   <button id="go">＋ Request</button>
   <div id="msg"></div>
@@ -39,6 +41,14 @@ button:disabled{opacity:.55;cursor:default}
 <script>
 (function () {
   var q = document.getElementById('q'), go = document.getElementById('go'), msg = document.getElementById('msg');
+  var who = document.getElementById('who');
+  // Remember the name so a guest types it once, not once per song.
+  try { var saved = localStorage.getItem('vzWho'); if (saved) who.value = saved; } catch (e) {}
+  // /jam is this same page with jam framing.
+  if (location.pathname === '/jam') {
+    document.getElementById('sub').textContent = 'Join the jam — your song joins everyone\u2019s queue.';
+    document.title = 'Vaporzr — Join the jam';
+  }
   function say(text, cls) { msg.textContent = text; msg.className = cls || ''; }
   function submit() {
     var v = q.value.trim();
@@ -48,11 +58,15 @@ button:disabled{opacity:.55;cursor:default}
     fetch('/api/request', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: v }),
+      body: JSON.stringify({ query: v, name: who.value.trim() }),
     })
       .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
       .then(function (res) {
-        if (res.ok && res.d.ok) { say('Added: ' + res.d.name, 'ok'); q.value = ''; }
+        if (res.ok && res.d.ok) {
+          say('Added: ' + res.d.name, 'ok');
+          try { localStorage.setItem('vzWho', who.value.trim()); } catch (e) {}
+          q.value = '';
+        }
         else { say(res.d && res.d.error ? res.d.error : 'Request failed.', 'err'); }
       })
       .catch(function () { say('Network error — try again.', 'err'); })

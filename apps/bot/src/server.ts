@@ -924,15 +924,16 @@ async function handleRoute(
           res.end(JSON.stringify({ error: 'Too many requests — try again shortly.' }));
           return;
         }
-        const body = (await readJsonBody(req)) as { query?: string } | null;
-        const result = await bot.requestTrack(String(body?.query ?? ''));
+        const body = (await readJsonBody(req)) as { query?: string; name?: string } | null;
+        const result = await bot.requestTrack(String(body?.query ?? ''), body?.name);
         res.writeHead(result.ok ? 200 : 400, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
         res.end(JSON.stringify(result));
         break;
       }
 
       case '/request':
-      case '/request.html': {
+      case '/request.html':
+      case '/jam': {
         if (!hasRequestAccess(req, url)) {
           res.writeHead(403, { 'Content-Type': 'text/html; charset=utf-8' });
           res.end('<h1 style="font-family:system-ui">Requests are disabled or keyed. Ask the operator for a link.</h1>');
