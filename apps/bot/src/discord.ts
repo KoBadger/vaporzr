@@ -4728,16 +4728,23 @@ export class DiscordBot {
   }
 
   /** The panel has no interaction to read a member's channel from, so join
-   *  wherever the listeners are: the busiest voice channel in the guild. */
+   *  wherever the listeners are: the busiest voice channel in the guild.
+   *  Counted from voice STATES, not channel.members — the member cache needs the
+   *  privileged GuildMembers intent, which this bot does not request, so
+   *  channel.members is empty and every channel looked deserted. */
   private async joinBusiestVoiceChannel(s: Session): Promise<boolean> {
     if (s.voice.isJoined()) return true;
     const guild = this.client.guilds.cache.get(s.guildId);
     if (!guild) return false;
+    const botId = this.client.user?.id;
+    const counts = new Map<string, number>();
+    for (const vs of guild.voiceStates.cache.values()) {
+      if (!vs.channelId || vs.id === botId) continue;
+      counts.set(vs.channelId, (counts.get(vs.channelId) ?? 0) + 1);
+    }
     let best: { id: string; size: number } | null = null;
-    for (const ch of guild.channels.cache.values()) {
-      if (!ch.isVoiceBased()) continue;
-      const size = ch.members.filter((m) => !m.user.bot).size;
-      if (size > 0 && (!best || size > best.size)) best = { id: ch.id, size };
+    for (const [id, size] of counts) {
+      if (!best || size > best.size) best = { id, size };
     }
     if (!best) return false;
     await s.voice.join(guild.id, best.id, guild.voiceAdapterCreator);
