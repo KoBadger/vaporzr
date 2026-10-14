@@ -828,7 +828,11 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
     var packs=[
       {src:'/vendor/presets/player-pack.min.js',g:'butterchurnPresets'},
       {src:'/vendor/presets/extra-pack.min.js',g:'butterchurnPresetsExtra'},
-      {src:'/vendor/presets/extra2-pack.min.js',g:'butterchurnPresetsExtra2'}
+      {src:'/vendor/presets/extra2-pack.min.js',g:'butterchurnPresetsExtra2'},
+      /* The "baron" pack — 762 Cream-of-the-Crop presets that shipped in the
+         image and were never loaded. Keyed by bare id with no name, so they are
+         labelled "Baron #<id>": the same string the bridge names them by. */
+      {src:'/vendor/butterchurnPresetsBaron.min.js',g:'butterchurnPresetsBaron',prefix:'Baron #'}
     ];
     var i=0,loadedAny=false;
     function finish(){
@@ -849,7 +853,14 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
       s.onload=function(){
         try{
           var P=window[p.g];
-          if(P&&typeof P.getPresets==='function'){Object.assign(presetPool,P.getPresets());loadedAny=true}
+          if(P&&typeof P.getPresets==='function'){
+            var got=P.getPresets(),k;
+            for(k in got){
+              if(!Object.prototype.hasOwnProperty.call(got,k))continue;
+              presetPool[(p.prefix||'')+k]=got[k];
+            }
+            loadedAny=true;
+          }
         }catch(e){}
         step();
       };
@@ -931,10 +942,30 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
   function refreshUnlock(){
     var has=butterAvailable();
     unlockPill.style.display=(connected&&!actx&&has)?'flex':'none';
+    if(TOUCH){
+      /* Say the cost before the tap: on a phone the Activity shares Discord's
+         audio session, and a running AudioContext can mute the voice chat. */
+      var sp=unlockPill.querySelector('span');
+      if(sp)sp.textContent='MilkDrop \u2014 may mute voice chat';
+    }
     var mb=$('btn-milk');
     if(mb)mb.style.display=has?'':'none';
   }
   unlockPill.onclick=function(){setMilk(true)};
+
+  /** Give the phone's audio session back to Discord. Suspending (not closing)
+   *  keeps the butterchurn graph intact while releasing the session. Touch-only:
+   *  that is where the muted voice chat was reported. */
+  function releaseAudio(){
+    if(!actx)return;
+    try{if(actx.state==='running')void actx.suspend()}catch(e){}
+  }
+  document.addEventListener('visibilitychange',function(){
+    try{
+      if(document.hidden){if(TOUCH)releaseAudio();}
+      else if(TOUCH&&actx&&milkOn&&actx.state==='suspended')void actx.resume();
+    }catch(e){}
+  });
 
   /** MilkDrop (butterchurn) is opt-in and explicit: never a side effect of a
    *  stray tap. The 🔊 pill and the 🌀 dock button are the only ways in or out. */
@@ -944,6 +975,9 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
       milkOn=true;
     }else{
       milkOn=!!on;
+      // Leaving MilkDrop on a phone must actually release the audio session,
+      // otherwise the voice chat stays muted with nothing on screen explaining it.
+      if(!on&&TOUCH)releaseAudio();
     }
     var b=$('btn-milk');
     if(b)b.classList.toggle('active',milkOn);

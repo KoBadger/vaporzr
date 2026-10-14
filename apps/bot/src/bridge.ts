@@ -2,6 +2,7 @@ import type http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import vm from 'node:vm';
 import { WebSocket, WebSocketServer } from 'ws';
 import {
   emptyState,
@@ -463,6 +464,22 @@ export class Bridge {
     }
   }
 
+  /** Panel commands that need the bot in a voice channel first. Without this the
+   *  play/resume buttons simply failed with "I'm not in a voice channel" — which
+   *  is what made the panel look dead once the bot had been made to leave. */
+  private async ensureVoice(): Promise<boolean> {
+    if (this.voice.isJoined()) return true;
+    if (!this.onEnsureJoined) return false;
+    try {
+      await this.onEnsureJoined();
+    } catch (err) {
+      console.warn(`[bridge] auto-join failed: ${err instanceof Error ? err.message : err}`);
+    }
+    if (this.voice.isJoined()) return true;
+    this.notice('error', 'Not in a voice channel — join one in Discord, then press play.');
+    return false;
+  }
+
   private handlePanelCommand(msg: InboundMessage & { type: 'cmd' }): void {
     switch (msg.command) {
       case 'play':
@@ -480,20 +497,36 @@ export class Bridge {
           // could only go forward, so re-playing an earlier track (the standard
           // way to recover a stuck queue) silently did nothing.
           this.queue.focusUri(msg.uris[0]);
-          void this.playback.play().catch((err) => {
-            console.error('[bridge] play failed:', err instanceof Error ? err.message : String(err));
-            if (before) this.queue.focusUri(before);
-          });
+          void (async () => {
+            // Join first: a panel play is refused outright when the bot is not
+            // in a voice channel, and the panel cannot supply one itself.
+            if (!(await this.ensureVoice())) {
+              if (before) this.queue.focusUri(before);
+              return;
+            }
+            try {
+              await this.playback.play();
+            } catch (err) {
+              console.error('[bridge] play failed:', err instanceof Error ? err.message : String(err));
+              if (before) this.queue.focusUri(before);
+            }
+          })();
         }
         break;
       case 'pause':
         this.playback.pause();
         break;
       case 'resume':
-        void this.playback.resume();
+        void (async () => {
+          if (!(await this.ensureVoice())) return;
+          void this.playback.resume();
+        })();
         break;
       case 'toggle':
-        void this.playback.toggle();
+        void (async () => {
+          if (!(await this.ensureVoice())) return;
+          void this.playback.toggle();
+        })();
         break;
       case 'next':
         this.playback.next();
@@ -655,6 +688,9 @@ export class Bridge {
             );
             this.notice('success', `${playNow ? 'Now playing' : 'Added'}: ${video.name}`);
             if (playNow) {
+              // Join first: without a voice channel the play is refused outright,
+              // which is what made the panel's search-and-play look broken.
+              if (!(await this.ensureVoice())) return;
               // Point the cursor at the fresh track when idle, then start. If it
               // cannot start, put the cursor back so it never diverges from the
               // audio that is actually playing.
@@ -734,6 +770,11 @@ export class Bridge {
    *  import: discord.ts already imports the bridge, and a cycle back would make
    *  module init order matter. */
   onResolveRequest: ((query: string) => Promise<ResolvedTrack[]>) | null = null;
+
+  /** Wired by the bot at startup: put the bot in a voice channel before a panel
+   *  command that needs one. The panel has no channel of its own, so the bot
+   *  joins wherever the listeners are. */
+  onEnsureJoined: (() => Promise<boolean>) | null = null;
 
   /** Used by the public /request page: resolve a query and queue it (no playback).
    *  `who` is the guest's display name, so a jam credit reads as a person rather
@@ -902,11 +943,37 @@ export class Bridge {
           if (!seen.has(n)) { seen.add(n); this.presetNames.push(n); }
         }
       }
+      // The bundled "baron" pack — 762 curated Cream-of-the-Crop presets that
+      // were sitting unused in the image. It is what the visualizers now merge.
+      for (const n of this.baronPresetNames()) {
+        if (!seen.has(n)) { seen.add(n); this.presetNames.push(n); }
+      }
       console.log(`[bridge] preset library: ${this.presetNames.length} presets`);
     } catch (err) {
       console.warn(`[bridge] preset library unavailable: ${err instanceof Error ? err.message : err}`);
     }
     return this.presetNames;
+  }
+
+  /** Names of the bundled "baron" pack (762 Cream-of-the-Crop presets). It is not
+   *  a UMD module — it assigns window.butterchurnPresetsBaron — so it is evaluated
+   *  against a throwaway window. Its presets are keyed by bare id and carry no
+   *  name, so they are labelled "Baron #<id>": the same string the visualizers
+   *  build, which is what lets the sync name them. */
+  private baronPresetNames(): string[] {
+    try {
+      const file = path.join(__dirname, '..', 'public', 'vendor', 'butterchurnPresetsBaron.min.js');
+      const sandbox: { window: Record<string, unknown> } = { window: {} };
+      vm.runInNewContext(fs.readFileSync(file, 'utf8'), sandbox, { timeout: 10_000 });
+      const pack = sandbox.window.butterchurnPresetsBaron as
+        | { getPresets?: () => Record<string, unknown> }
+        | undefined;
+      const got = pack && typeof pack.getPresets === 'function' ? pack.getPresets() : {};
+      return Object.keys(got).map((k) => `Baron #${k}`);
+    } catch (err) {
+      console.warn(`[bridge] baron pack unavailable: ${err instanceof Error ? err.message : err}`);
+      return [];
+    }
   }
 
   /** Pick a preset and name it to every visualizer. With no list (packs

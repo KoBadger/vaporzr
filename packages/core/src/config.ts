@@ -80,6 +80,14 @@ ytDlpPath: process.env.YT_DLP_PATH ?? path.join(__dirname, '..', '..', '..', 've
     * the Activity but wrong for the player and the tunnel-opened panel.
     */
    jamPublicBase: (process.env.JAM_PUBLIC_BASE ?? '').replace(/\/+$/, ''),
+  /**
+   * Optional Suno session cookie (the `__client`/session pair from a logged-in
+   * studio.suno.com). Without it the public clip API answers audio_url with
+   * /api/forbidden for every clip, and restricted clips expose only an
+   * undecodable m4a-opus file. With it the API returns real media URLs again.
+   * Sent to studio-api.prod.suno.com only — never to the CDN.
+   */
+  sunoCookie: (process.env.SUNO_COOKIE ?? '').trim(),
    /**
     * HTTP proxy for Suno (the suno.com page fetch + the cdn1.suno.ai audio
     * stream). Suno's CDN blocks datacenter IPs with 403, so routing just Suno

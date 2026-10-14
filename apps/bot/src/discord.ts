@@ -860,6 +860,14 @@ export class DiscordBot {
     // resolvePlayInput lives in this module, so the bridge takes it as a hook
     // rather than importing it (discord.ts already imports the bridge).
     bridge.onResolveRequest = resolvePlayInput;
+    // The panel's play/resume need a voice channel and cannot supply one (no
+    // interaction to read a member from), so the bridge asks the bot to join
+    // wherever the listeners are.
+    bridge.onEnsureJoined = async () => {
+      const s = this.sessions.primary;
+      if (!s) return false;
+      return this.joinBusiestVoiceChannel(s);
+    };
     // Panel toggles Endless Wave through the same machinery as `V@ew on/off`.
     bridge.setEndlessWaveToggle((guildId, mode) => {
       void this.panelSetEndlessWave(guildId, mode).catch((err) => {
@@ -4716,6 +4724,28 @@ export class DiscordBot {
     // Same as the message path: joining turns the now-playing follow back on.
     this.perms.setNpAuto(s.guildId, true);
     void this.maybeAutoMiniNp(s.guildId, s.queue.getState());
+    return true;
+  }
+
+  /** The panel has no interaction to read a member's channel from, so join
+   *  wherever the listeners are: the busiest voice channel in the guild. */
+  private async joinBusiestVoiceChannel(s: Session): Promise<boolean> {
+    if (s.voice.isJoined()) return true;
+    const guild = this.client.guilds.cache.get(s.guildId);
+    if (!guild) return false;
+    let best: { id: string; size: number } | null = null;
+    for (const ch of guild.channels.cache.values()) {
+      if (!ch.isVoiceBased()) continue;
+      const size = ch.members.filter((m) => !m.user.bot).size;
+      if (size > 0 && (!best || size > best.size)) best = { id: ch.id, size };
+    }
+    if (!best) return false;
+    await s.voice.join(guild.id, best.id, guild.voiceAdapterCreator);
+    const state = s.queue.getState();
+    if (state.playing) void s.playback.reattachAfterRejoin();
+    this.perms.setNpAuto(s.guildId, true);
+    void this.maybeAutoMiniNp(s.guildId, s.queue.getState());
+    console.log(`[discord] panel play: joined ${best.id} (${best.size} listening)`);
     return true;
   }
 
