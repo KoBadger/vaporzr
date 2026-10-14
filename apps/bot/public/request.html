@@ -37,6 +37,7 @@ button:disabled{opacity:.55;cursor:default}
 .q-name{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .q-sub{font-size:11px;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .q-by{color:#a5b4fc}
+.q-dur{color:#64748b}
 .q-empty{font-size:12px;color:#64748b}
 #q-now .q-name{color:#22d3ee}
 </style>
@@ -101,12 +102,19 @@ button:disabled{opacity:.55;cursor:default}
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
     });
   }
+  function fmtMs(ms) {
+    var s = Math.max(0, Math.round((ms || 0) / 1000));
+    var m = Math.floor(s / 60), ss = s % 60;
+    return m + ':' + (ss < 10 ? '0' : '') + ss;
+  }
   function rowHtml(t) {
     var art = t.image
       ? '<img class="q-art" src="' + esc(t.image) + '" alt="" loading="lazy" onerror="this.style.visibility=\'hidden\'">'
       : '<div class="q-art"></div>';
-    var sub = [esc(t.artists), t.addedBy ? '<span class="q-by">' + esc(t.addedBy) + '</span>' : '']
-      .filter(Boolean).join(' · ');
+    var bits = [esc(t.artists)];
+    if (t.addedBy) bits.push('<span class="q-by">' + esc(t.addedBy) + '</span>');
+    if (t.durationMs) bits.push('<span class="q-dur">' + fmtMs(t.durationMs) + '</span>');
+    var sub = bits.filter(Boolean).join(' \u00b7 ');
     return '<div class="q-row">' + art + '<div class="q-meta"><div class="q-name">' +
       esc(t.name) + '</div><div class="q-sub">' + sub + '</div></div></div>';
   }
@@ -114,7 +122,9 @@ button:disabled{opacity:.55;cursor:default}
     var now = d && d.playing, tracks = (d && d.tracks) || [];
     qNow.innerHTML = now ? '<div class="q-head">NOW PLAYING</div>' + rowHtml(now) : '';
     if (tracks.length) {
-      qList.innerHTML = '<div class="q-head">UP NEXT \u00b7 ' + tracks.length + '</div>' + tracks.map(rowHtml).join('');
+      var totalMs = tracks.reduce(function (a, t) { return a + (t.durationMs || 0); }, 0);
+      var total = totalMs ? ' \u00b7 ~' + Math.max(1, Math.round(totalMs / 60000)) + ' min' : '';
+      qList.innerHTML = '<div class="q-head">UP NEXT \u00b7 ' + tracks.length + total + '</div>' + tracks.map(rowHtml).join('');
     } else {
       qList.innerHTML = now ? '' : '<div class="q-head">QUEUE</div><div class="q-empty">Nothing queued yet \u2014 you could be first.</div>';
     }
