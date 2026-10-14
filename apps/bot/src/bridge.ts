@@ -414,7 +414,7 @@ export class Bridge {
       case 'cmd':
         if (!this.isAuthed(socket) && !this.guestMaySend(msg)) return;
         if (!this.allowCommand(socket)) return;
-        this.handlePanelCommand(msg);
+        this.handlePanelCommand(msg, this.clientGuildId(socket));
         break;
       default:
         break;
@@ -455,7 +455,7 @@ export class Bridge {
       case 'cmd':
         if (!this.isAuthed(socket) && !this.guestMaySend(msg)) return;
         if (!this.allowCommand(socket)) return;
-        this.handlePanelCommand(msg);
+        this.handlePanelCommand(msg, this.clientGuildId(socket));
         break;
       case 'state:request':
         this.sendSnapshot(socket);
@@ -467,12 +467,13 @@ export class Bridge {
 
   /** Panel commands that need the bot in a voice channel first. Without this the
    *  play/resume buttons simply failed with "I'm not in a voice channel" — which
-   *  is what made the panel look dead once the bot had been made to leave. */
-  private async ensureVoice(): Promise<boolean> {
+   *  is what made the panel look dead once the bot had been made to leave. The
+   *  client's own guild is preferred, so a busier guild elsewhere cannot win. */
+  private async ensureVoice(guildId?: string): Promise<boolean> {
     if (this.voice.isJoined()) return true;
     if (!this.onEnsureJoined) return false;
     try {
-      await this.onEnsureJoined();
+      await this.onEnsureJoined(guildId);
     } catch (err) {
       console.warn(`[bridge] auto-join failed: ${err instanceof Error ? err.message : err}`);
     }
@@ -481,7 +482,16 @@ export class Bridge {
     return false;
   }
 
-  private handlePanelCommand(msg: InboundMessage & { type: 'cmd' }): void {
+  /** Guild the client behind this socket is looking at (panels subscribe per
+   *  guild; visualizers may not). */
+  private clientGuildId(socket: WebSocket): string | undefined {
+    for (const c of [...this.panels, ...this.visualizers]) {
+      if (c.socket === socket) return c.guildId;
+    }
+    return undefined;
+  }
+
+  private handlePanelCommand(msg: InboundMessage & { type: 'cmd' }, guildId?: string): void {
     switch (msg.command) {
       case 'play':
         if (msg.uris && msg.uris.length > 0) {
@@ -501,7 +511,7 @@ export class Bridge {
           void (async () => {
             // Join first: a panel play is refused outright when the bot is not
             // in a voice channel, and the panel cannot supply one itself.
-            if (!(await this.ensureVoice())) {
+            if (!(await this.ensureVoice(guildId))) {
               if (before) this.queue.focusUri(before);
               return;
             }
@@ -519,13 +529,13 @@ export class Bridge {
         break;
       case 'resume':
         void (async () => {
-          if (!(await this.ensureVoice())) return;
+          if (!(await this.ensureVoice(guildId))) return;
           void this.playback.resume();
         })();
         break;
       case 'toggle':
         void (async () => {
-          if (!(await this.ensureVoice())) return;
+          if (!(await this.ensureVoice(guildId))) return;
           void this.playback.toggle();
         })();
         break;
@@ -691,7 +701,7 @@ export class Bridge {
             if (playNow) {
               // Join first: without a voice channel the play is refused outright,
               // which is what made the panel's search-and-play look broken.
-              if (!(await this.ensureVoice())) return;
+              if (!(await this.ensureVoice(guildId))) return;
               // Point the cursor at the fresh track when idle, then start. If it
               // cannot start, put the cursor back so it never diverges from the
               // audio that is actually playing.
@@ -775,7 +785,7 @@ export class Bridge {
   /** Wired by the bot at startup: put the bot in a voice channel before a panel
    *  command that needs one. The panel has no channel of its own, so the bot
    *  joins wherever the listeners are. */
-  onEnsureJoined: (() => Promise<boolean>) | null = null;
+  onEnsureJoined: ((guildId?: string) => Promise<boolean>) | null = null;
 
   /** Used by the public /request page: resolve a query and queue it (no playback).
    *  `who` is the guest's display name, so a jam credit reads as a person rather
