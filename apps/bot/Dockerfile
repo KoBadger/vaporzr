@@ -35,13 +35,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Cream of the Crop preset library for the web visualizer (~8.5k presets across
-# five chunks, lazily streamed by the browser). Fetched before the source COPYs
-# so this layer stays cached across code changes. Best-effort — the visualizer
-# falls back to its bundled packs if these can't be fetched, and a chunk that
-# can't be fetched is skipped rather than failing the build.
-RUN mkdir -p apps/bot/public/vendor/presets \
- && node -e "(async()=>{const fs=require('fs'),d='apps/bot/public/vendor/presets',b='https://raw.githubusercontent.com/geeks-accelerator/butterchurn/master/presets/full-collection/chunks/butterchurnPresetsAll.chunk-';let ok=0;for(const i of [0,1,2,3,4]){try{const r=await fetch(b+i+'.min.js');if(!r.ok)throw new Error('HTTP '+r.status);fs.writeFileSync(d+'/chunk-'+i+'.min.js',Buffer.from(await r.arrayBuffer()));ok++;console.log('preset chunk',i,'ok')}catch(e){console.warn('preset chunk',i,'skipped:',e.message)}}console.log('preset chunks fetched:',ok,'/ 5')})()"
+# The preset dir is populated AFTER `npm ci`, which is what installs the two
+# browser builds served from it (the player's preset pack and the QR library).
+# The curated projectM chunks used to be fetched here — 135 MB across five
+# chunks — but the web visualizer now rotates the player's pack, so they were
+# dead weight in the image and in every pull.
+RUN mkdir -p apps/bot/public/vendor/presets
 
 COPY package.json package-lock.json ./
 COPY packages/shared ./packages/shared

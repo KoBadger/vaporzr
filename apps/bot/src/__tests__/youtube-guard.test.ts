@@ -28,9 +28,23 @@ describe('alert confirmation (decidePublish)', () => {
   });
 
   it('announces the failure once a second probe agrees', () => {
-    const r = decidePublish('proxy', { published: 'ok', pending: 'proxy' });
-    expect(r.publish).toBe('proxy');
-    expect(r.state.published).toBe('proxy');
+    const r = decidePublish('auth', { published: 'ok', pending: 'auth', pendingCount: 1 });
+    expect(r.publish).toBe('auth');
+    expect(r.state.published).toBe('auth');
+  });
+
+  it('holds a proxy failure to a third probe before announcing it', () => {
+    // 'proxy' is the status that fires on a transient: the bridge can be perfectly
+    // reachable while one proxied resolve happens to fail, and the direct route
+    // still working is not proof the proxy is broken. Two probes agreeing used to
+    // be enough, which produced false "your proxy is failing" pages.
+    const first = decidePublish('proxy', fresh() as never);
+    expect(first.publish).toBeNull();
+    const second = decidePublish('proxy', first.state);
+    expect(second.publish).toBeNull();
+    const third = decidePublish('proxy', second.state);
+    expect(third.publish).toBe('proxy');
+    expect(third.state.published).toBe('proxy');
   });
 
   it('does not repeat a failure that is already being announced', () => {

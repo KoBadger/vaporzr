@@ -431,7 +431,7 @@ const CANARY_URL = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ';
 let ytHealth: YoutubeHealth = 'unknown';
 let ytHealthAt = 0;
 /** Alert bookkeeping for the confirmation rule in decidePublish(). */
-let ytAlert: YoutubeAlertState = { published: 'unknown', pending: null };
+let ytAlert: YoutubeAlertState = { published: 'unknown', pending: null, pendingCount: 0 };
 let ytHealthListener: ((status: YoutubeHealth) => void) | null = null;
 
 export function youtubeHealth(): { status: YoutubeHealth; checkedAt: number } {
@@ -447,6 +447,8 @@ export function setYoutubeHealthListener(cb: ((status: YoutubeHealth) => void) |
 export interface YoutubeAlertState {
   published: YoutubeHealth;
   pending: YoutubeHealth | null;
+  /** How many consecutive probes have reported `pending`. */
+  pendingCount?: number;
 }
 
 /**
@@ -464,14 +466,27 @@ export function decidePublish(
 ): { publish: YoutubeHealth | null; state: YoutubeAlertState } {
   if (status === 'ok') {
     const publish = state.published !== 'ok' && state.published !== 'unknown' ? 'ok' : null;
-    return { publish, state: { published: 'ok', pending: null } };
+    return { publish, state: { published: 'ok', pending: null, pendingCount: 0 } };
   }
   // This exact failure is already being announced — stay quiet.
-  if (state.published === status) return { publish: null, state: { ...state, pending: null } };
-  // First sighting: wait for the next probe to confirm it.
-  if (state.pending !== status) return { publish: null, state: { ...state, pending: status } };
-  // Seen twice in a row: announce it.
-  return { publish: status, state: { published: status, pending: null } };
+  if (state.published === status) {
+    return { publish: null, state: { ...state, pending: null, pendingCount: 0 } };
+  }
+  // How many consecutive probes a status needs before it is announced.
+  //
+  // 'proxy' is the one that fires on a transient: the bridge can be perfectly
+  // reachable while a single proxied resolve happens to fail, and the direct
+  // route still working is NOT proof the proxy is broken. It therefore takes a
+  // third consecutive sighting (three 15-minute probes, so 45 minutes) before
+  // anyone is paged. Every other status is specific enough at two.
+  const needed = status === 'proxy' ? 3 : 2;
+  const count = state.pending === status ? (state.pendingCount ?? 1) + 1 : 1;
+  // Seen fewer times than required: wait for the next probe to confirm it.
+  if (count < needed) {
+    return { publish: null, state: { ...state, pending: status, pendingCount: count } };
+  }
+  // Confirmed: announce it.
+  return { publish: status, state: { published: status, pending: null, pendingCount: 0 } };
 }
 
 export async function probeYoutube(): Promise<YoutubeHealth> {
