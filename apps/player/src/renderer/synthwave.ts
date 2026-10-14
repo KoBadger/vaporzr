@@ -184,10 +184,10 @@ export class SynthOverlay {
       c.fillStyle = 'rgba(60,230,255,0.85)';
       c.shadowColor = 'rgba(0,200,255,0.7)';
       // Jam attribution rides along on the artist line — the overlay is what ends
-      // up on the OBS stream, so this is where "who asked for it" belongs.
-      const by = track.addedBy && track.addedBy !== 'request' && track.addedBy !== 'panel'
-        ? track.addedBy
-        : '';
+      // up on the OBS stream, so this is where "who asked for it" belongs. Queue
+      // origins are plumbing rather than people.
+      const ORIGINS = ['request', 'panel', 'endless-wave', 'autoplay', 'vibe', 'bulk'];
+      const by = track.addedBy && !ORIGINS.includes(track.addedBy) ? track.addedBy : '';
       c.fillText(track.artists + (by ? '  ·  added by ' + by : ''), 24, H - 20);
       c.shadowBlur = 0;
     }

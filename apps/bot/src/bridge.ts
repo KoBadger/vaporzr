@@ -936,6 +936,8 @@ export class Bridge {
   private presence(): { names: string[]; count: number; contributors: string[] } {
     const isPerson = (n: string): boolean =>
       !!n && !/^web-viz-|^vaporzr-/.test(n) && !/^vz-/.test(n);
+    /** Queue origins that are plumbing rather than people. */
+    const ORIGINS = new Set(['request', 'panel', 'endless-wave', 'autoplay', 'vibe', 'bulk']);
     const people = new Set<string>();
     for (const c of [...this.panels, ...this.visualizers]) {
       if (isPerson(c.name)) people.add(c.name);
@@ -943,7 +945,7 @@ export class Bridge {
     const contributors = new Set<string>();
     for (const t of this.queue.getSnapshot().tracks) {
       const by = (t as { addedBy?: string }).addedBy;
-      if (by && by !== 'request' && by !== 'panel') contributors.add(by);
+      if (by && !ORIGINS.has(by)) contributors.add(by);
     }
     const names = [...people].sort();
     return { names, count: names.length, contributors: [...contributors].sort() };

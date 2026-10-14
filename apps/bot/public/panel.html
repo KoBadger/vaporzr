@@ -783,10 +783,11 @@ body.guest #guilds{display:none}
       var meta=(t.artists||[]).join(', ')||t.album||(t.source||'');
       var s=document.createElement('span');s.textContent=meta;d.appendChild(s);
       li.appendChild(d);
-      // Jam attribution: who put this on. 'request' and 'panel' are queue
-      // origins, not people, so only real names get a chip.
+      // Jam attribution: who put this on. Queue origins (request/panel/
+      // endless-wave/…) are plumbing, not people, so only real names get a chip.
+      var ORIGINS=['request','panel','endless-wave','autoplay','vibe','bulk'];
       var by=t.addedBy;
-      if(by&&by!=='request'&&by!=='panel'){
+      if(by&&ORIGINS.indexOf(by)<0){
         var who=document.createElement('span');
         who.textContent=by;
         who.setAttribute('data-tip','Added by '+by);
