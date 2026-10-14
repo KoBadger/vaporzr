@@ -353,6 +353,20 @@ body.guest #guilds{display:none}
       <div class="sub" style="margin-top:8px">Plays the best YouTube match — remixes are skipped unless you ask for them.</div>
     </div>
 
+    <!-- Jam (live session: who is here, and a scan-to-join code) -->
+    <div class="card collapsible" id="jam-card">
+      <div id="queue-info">
+        <span class="section-label">🎉 JAM</span>
+        <span style="font-size:11px;color:var(--muted)"><span id="jam-count">no one yet</span></span>
+      </div>
+      <div id="jam-roster" style="font-size:12px;color:var(--muted);margin:2px 0 6px">Open the visualizer or add a track to appear here.</div>
+      <div id="jam-join" style="display:none">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Scan to join — pick a track and it lands in the queue.</div>
+        <canvas id="jam-qr" width="150" height="150" style="background:#fff;border-radius:8px;padding:6px"></canvas>
+        <div id="jam-link" style="font-size:10px;color:var(--muted);word-break:break-all;margin-top:6px"></div>
+      </div>
+    </div>
+
     <!-- Queue -->
     <div class="card">
       <div id="queue-info">
@@ -902,9 +916,52 @@ body.guest #guilds{display:none}
       send({type:'panel:subscribe',channels:['state','queue','visuals']});
       send({type:'state:request'});
     };
+    /* ---- Jam: presence roster + a scan-to-join QR ---- */
+    var jam={names:[],contributors:[],joinPath:''};
+    var jamQrDrawn=false;
+    function ensureQrLib(cb){
+      if(window.qrcode)return cb(true);
+      var s=document.createElement('script');s.src='/vendor/qrcode.min.js';s.async=true;
+      s.onload=function(){cb(!!window.qrcode)};
+      s.onerror=function(){cb(false)};
+      document.head.appendChild(s);
+    }
+    function renderJam(){
+      var all=[],i;
+      for(i=0;i<jam.names.length;i++)if(all.indexOf(jam.names[i])<0)all.push(jam.names[i]);
+      for(i=0;i<jam.contributors.length;i++)if(all.indexOf(jam.contributors[i])<0)all.push(jam.contributors[i]);
+      var c=document.getElementById('jam-count'),r=document.getElementById('jam-roster');
+      if(c)c.textContent=all.length?(all.length+' here'):'no one yet';
+      if(r)r.textContent=all.length?all.join(' · '):'Open the visualizer or add a track to appear here.';
+      var join=document.getElementById('jam-join');
+      if(!jam.joinPath){if(join)join.style.display='none';return}
+      if(join)join.style.display='block';
+      // The bot is loopback-bound, so it reports an origin-RELATIVE path and the
+      // panel supplies its own origin (same trick the player and Activity use).
+      var url=location.origin+jam.joinPath;
+      var l=document.getElementById('jam-link');
+      if(l)l.textContent=url;
+      if(jamQrDrawn)return;
+      var cv=document.getElementById('jam-qr');
+      if(!cv)return;
+      ensureQrLib(function(ok){
+        if(!ok)return;
+        try{
+          var qr=qrcode(0,'M');qr.addData(url);qr.make();
+          var n=qr.getModuleCount(),ctx=cv.getContext('2d'),px=Math.max(1,Math.floor(cv.width/(n+8)));
+          ctx.fillStyle='#fff';ctx.fillRect(0,0,cv.width,cv.height);
+          ctx.fillStyle='#05060f';
+          for(var y=0;y<n;y++)for(var x=0;x<n;x++)if(qr.isDark(y,x))ctx.fillRect((x+4)*px,(y+4)*px,px,px);
+          jamQrDrawn=true;
+        }catch(e){/* leave the link visible; the code is a convenience */}
+      });
+    }
+
     ws.onmessage=function(ev){
       var msg;try{msg=JSON.parse(ev.data)}catch(e){return}
       switch(msg.type){
+        case 'jam:presence':
+          jam=msg;renderJam();break;
         case 'snapshot':
           state=msg.state;queue=(msg.queue&&msg.queue.tracks)||[];
           if(msg.guest&&!GUEST){GUEST=true;enableGuestMode()}
