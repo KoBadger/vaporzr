@@ -1806,14 +1806,19 @@ export class PlaybackController {
     return Math.min(3600, 60 * 2 ** attempts);
   }
 
+  /** Consecutive stall-restarts of one track; see resume(). */
+  private stallRestartUri: string | null = null;
+  private stallRestartCount = 0;
+
   playAt(index: number): boolean {
     this.clearCrossfadeTimer();
     this.pendingXfadeSeekMs = 0;
     const tracks = this.queue.getSnapshot().tracks;
     if (index < 0 || index >= tracks.length) return false;
-    while (this.queue.getCurrentTrack()?.uri !== tracks[index].uri) {
-      if (!this.queue.next()) break;
-    }
+    // focusUri moves the cursor in EITHER direction. The old forward-only walk
+    // meant "play this row" on anything already passed silently did nothing —
+    // so a stuck queue could not be recovered from the panel at all.
+    if (!this.queue.focusUri(tracks[index].uri)) return false;
     this.safePlay();
     return true;
   }
@@ -1928,6 +1933,21 @@ export class PlaybackController {
       const pos = state.positionMs || this.voice.getPositionMs();
       const track = state.track;
       if (track) {
+        // A stream that dies immediately will keep dying — the source is bad,
+        // not the link. Give up after a few tries and SKIP it. Retrying the
+        // same corpse forever is what left a full queue playing silence.
+        if (this.stallRestartUri === track.uri) this.stallRestartCount++;
+        else {
+          this.stallRestartUri = track.uri;
+          this.stallRestartCount = 1;
+        }
+        if (this.stallRestartCount > 3) {
+          console.warn(`[playback] "${track.name}" failed to start ${this.stallRestartCount} times — skipping it`);
+          this.stallRestartUri = null;
+          this.stallRestartCount = 0;
+          this.next();
+          return;
+        }
         console.log(`[playback] stall detected — restarting "${track.name}" from ${Math.round(pos / 1000)}s`);
         this.sendVisualizer({ type: 'cmd', command: 'stop' });
         try {

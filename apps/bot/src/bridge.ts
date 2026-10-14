@@ -438,9 +438,10 @@ export class Bridge {
           // playback layer then treats it as current while the audio is still on
           // the old track, which silently disables every advance path.
           const before = this.queue.getState().track?.uri ?? '';
-          while (this.queue.getCurrentTrack()?.uri !== msg.uris[0]) {
-            if (!this.queue.next()) break;
-          }
+          // focusUri moves the cursor in either direction; the old next() walk
+          // could only go forward, so re-playing an earlier track (the standard
+          // way to recover a stuck queue) silently did nothing.
+          this.queue.focusUri(msg.uris[0]);
           void this.playback.play().catch((err) => {
             console.error('[bridge] play failed:', err instanceof Error ? err.message : String(err));
             if (before) this.queue.focusUri(before);

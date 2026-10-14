@@ -105,7 +105,14 @@ export async function cachedSunoAudio(uuid: string): Promise<string | null> {
   for (const ext of ['mp4', 'm4a', 'mp3']) {
     const file = path.join(dir, `${uuid}.${ext}`);
     const st = await fs.stat(file).catch(() => null);
-    if (st && st.size > 100_000) return file;
+    if (!st || st.size <= 100_000) continue;
+    // Size is not proof. A download cut short passes the size check but has no
+    // moov atom, and the player then retries the same dead file forever
+    // ("ffmpeg exited with code 183"), wedging the queue. Probe it: a file that
+    // cannot be demuxed is deleted here so the caller re-downloads instead.
+    if (await probePlayable(file)) return file;
+    console.warn(`[suno] cached file is not decodable — discarding ${path.basename(file)}`);
+    await fs.rm(file, { force: true }).catch(() => {});
   }
   return null;
 }
@@ -123,6 +130,13 @@ export async function cacheSunoAudio(uuid: string, url: string): Promise<string>
   const buf = Buffer.from(await res.arrayBuffer());
   if (buf.length < 50_000) throw new Error(`suspiciously small (${buf.length} bytes)`);
   await fs.writeFile(file, buf);
+  // Validate before caching. A partial response writes a file that looks fine
+  // by size but cannot be demuxed; caching it is what turned one interrupted
+  // download into a queue that would not play anything.
+  if (!(await probePlayable(file))) {
+    await fs.rm(file, { force: true }).catch(() => {});
+    throw new Error('downloaded clip is not decodable — discarded');
+  }
   return file;
 }
 
