@@ -219,23 +219,36 @@ export async function resolveSuno(input: string): Promise<ResolvedVideo> {
 
   const media = clip?.media_urls ?? [];
   // Candidate media URLs, most-preferred first, then verified with ffprobe.
+  // Order matters more than it used to. Suno now answers the public clip API
+  // with audio_url=/api/forbidden for EVERY clip, and the "m4a-opus"
+  // progressive file it offers instead is not decodable for newer clips (no
+  // moov atom — and for restricted clips the bytes are not media at all). The
+  // cdn1 video_url mp4 is the only source that still decodes, so it goes first.
   const candidates: string[] = [];
   const push = (u?: string): void => {
     if (u && !/\/forbidden/i.test(u) && !candidates.includes(u)) candidates.push(u);
   };
-  const progressive = media.find((m) => /progressive/i.test(m.delivery ?? '')) ?? media[0];
-  push(progressive?.url);
-  for (const m of media) push(m.url);
   push(clip?.video_url);
+  for (const m of media) push(m.url);
   push(clip?.audio_url);
   push(`https://cdn1.suno.ai/${uuid}.mp3`); // legacy fallback
-  let streamUrl = candidates[0] ?? '';
+
+  let streamUrl = '';
   for (const c of candidates) {
     if (await probePlayable(c)) {
       streamUrl = c;
       break;
     }
     console.warn(`[suno] media URL not playable — trying the next source: ${c}`);
+  }
+  if (!streamUrl) {
+    // Never hand an unverified URL to the downloader. A body that cannot be
+    // demuxed gets cached, fails inside ffmpeg, and wedges the whole queue —
+    // which is exactly how one Suno clip silenced playback. Say so instead.
+    throw new SunoError(
+      'Suno did not offer a playable audio file for this clip (it may be private, ' +
+        'unpublished, or need a signed-in account).',
+    );
   }
 
   const name = clip?.title?.trim() || 'Suno track';
