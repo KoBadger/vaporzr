@@ -2,6 +2,7 @@ import type http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import { WebSocket, WebSocketServer } from 'ws';
 import {
@@ -962,7 +963,9 @@ export class Bridge {
    *  build, which is what lets the sync name them. */
   private baronPresetNames(): string[] {
     try {
-      const file = path.join(__dirname, '..', 'public', 'vendor', 'butterchurnPresetsBaron.min.js');
+      // ESM has no __dirname: derive the bot root from this module's own URL.
+      const here = path.dirname(fileURLToPath(import.meta.url));
+      const file = path.join(here, '..', 'public', 'vendor', 'butterchurnPresetsBaron.min.js');
       const sandbox: { window: Record<string, unknown> } = { window: {} };
       vm.runInNewContext(fs.readFileSync(file, 'utf8'), sandbox, { timeout: 10_000 });
       const pack = sandbox.window.butterchurnPresetsBaron as
