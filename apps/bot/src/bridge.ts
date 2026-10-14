@@ -37,6 +37,11 @@ interface JamQueueTrack {
   image?: string;
 }
 
+/** Queue origins that are plumbing rather than people. The jam roster drops
+ *  them, and the public jam page must not credit "panel" as if it were a
+ *  person who asked for the song. */
+const QUEUE_ORIGINS = new Set(['request', 'panel', 'endless-wave', 'autoplay', 'vibe', 'bulk']);
+
 interface Client {
   socket: WebSocket;
   role: 'panel' | 'visualizer';
@@ -796,7 +801,7 @@ export class Bridge {
     }): JamQueueTrack => ({
       name: t.name || 'Unknown',
       artists: (t.artists ?? []).join(', '),
-      addedBy: t.addedBy || '',
+      addedBy: t.addedBy && !QUEUE_ORIGINS.has(t.addedBy) ? t.addedBy : '',
       durationMs: t.durationMs ?? 0,
       image: t.image,
     });
@@ -1108,7 +1113,7 @@ export class Bridge {
     const isPerson = (n: string): boolean =>
       !!n && !/^web-viz-|^vaporzr-/.test(n) && !/^vz-/.test(n);
     /** Queue origins that are plumbing rather than people. */
-    const ORIGINS = new Set(['request', 'panel', 'endless-wave', 'autoplay', 'vibe', 'bulk']);
+    const ORIGINS = QUEUE_ORIGINS;
     const people = new Set<string>();
     for (const c of [...this.panels, ...this.visualizers]) {
       if (isPerson(c.name)) people.add(c.name);
