@@ -590,13 +590,13 @@ function renderJamQr(): void {
     // control bar's 🎛 toggle, and at full opacity. It brightens on hover (so it
     // stays scannable) and clicking it hides it.
     cv.style.cssText =
-      'position:fixed;left:16px;bottom:30px;z-index:12;padding:6px;border-radius:10px;' +
+      'position:fixed;left:16px;bottom:12px;z-index:12;padding:6px;border-radius:10px;' +
       'background:#fff;box-shadow:0 6px 30px rgba(0,0,0,.55);cursor:pointer;' +
-      'opacity:.55;transition:opacity .3s';
+      'opacity:.32;transition:opacity .3s';
     cv.title = 'Jam join code — click to hide';
     cv.addEventListener('click', () => setJamQr(false));
     cv.addEventListener('mouseenter', () => { cv.style.opacity = '1'; });
-    cv.addEventListener('mouseleave', () => { cv.style.opacity = '.55'; });
+    cv.addEventListener('mouseleave', () => { cv.style.opacity = '.32'; });
     document.body.appendChild(cv);
     jamQrCanvas = cv;
   }
