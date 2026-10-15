@@ -24,6 +24,7 @@ export const V_ALIASES: Record<string, string> = {
   j: 'join', join: 'join',
   l: 'leave', leave: 'leave',
   pan: 'panel', panel: 'panel', key: 'key',
+  jam: 'jam', share: 'jam',
   sc: 'screensaver', screensaver: 'screensaver',
   th: 'theme', theme: 'theme',
   wave: 'wave',

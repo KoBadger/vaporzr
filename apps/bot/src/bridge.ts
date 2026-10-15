@@ -30,6 +30,16 @@ import type { ResolvedTrack } from '@vaporzr/core/spotify';
 import { secretEquals, socketHasShareKey } from './secretCompare.js';
 import { playlistStore } from '@vaporzr/core/playlists';
 
+/** The jam page's guest URL: built from the LOW-privilege request key, not the
+ *  share key — a jam link grants exactly "add a song" and nothing else.
+ *  `joinUrl` stays undefined until JAM_PUBLIC_BASE names a reachable public
+ *  host: the bot is loopback-bound behind the reverse proxy, so a client-derived
+ *  address only resolves on the machine holding the tunnel. */
+export function jamJoinLinks(): { joinPath: string; joinUrl: string | undefined } {
+  const joinPath = config.requestKey ? `/jam?key=${encodeURIComponent(config.requestKey)}` : '/jam';
+  return { joinPath, joinUrl: config.jamPublicBase ? config.jamPublicBase + joinPath : undefined };
+}
+
 /** One row of the public jam queue. Plain strings — the page is dumb HTML. */
 interface JamQueueTrack {
   name: string;
@@ -555,6 +565,23 @@ export class Bridge {
       case 'seek':
         if (msg.positionMs != null) this.playback.seek(msg.positionMs);
         break;
+      case 'share-jam': {
+        void (async () => {
+          if (!this.onShareJam) {
+            this.notice('error', 'Sharing is not available on this instance.');
+            return;
+          }
+          const r = await this.onShareJam(guildId).catch(
+            (err): { ok: boolean; where?: string; error?: string } => ({
+              ok: false,
+              error: err instanceof Error ? err.message : String(err),
+            }),
+          );
+          if (r.ok) this.notice('success', `📱 Jam card posted${r.where ? ` in ${r.where}` : ''} — scan or tap to join.`);
+          else this.notice('error', r.error ?? 'Could not post the jam card.');
+        })();
+        break;
+      }
       case 'volume':
         if (msg.volume != null) this.playback.volume(msg.volume);
         break;
@@ -826,6 +853,11 @@ export class Bridge {
    *  command that needs one. The panel has no channel of its own, so the bot
    *  joins wherever the listeners are. */
   onEnsureJoined: ((guildId?: string) => Promise<boolean>) | null = null;
+
+  /** Wired by the bot at startup: post the jam invite card (link + QR) into the
+   *  panel's text channel. A hook rather than an import for the same reason as
+   *  onEnsureJoined — everything channel-facing lives in discord.ts. */
+  onShareJam: ((guildId?: string) => Promise<{ ok: boolean; where?: string; error?: string }>) | null = null;
 
   /** Used by the public /request page: resolve a query and queue it (no playback).
    *  `who` is the guest's display name, so a jam credit reads as a person rather
@@ -1297,15 +1329,11 @@ export class Bridge {
     }
     const names = [...people].sort();
     // The low-privilege request key, not the share key: a jam link grants
-    // exactly "add a song" and nothing else.
-    const joinPath = config.requestKey
-      ? `/jam?key=${encodeURIComponent(config.requestKey)}`
-      : '/jam';
-    // A configured public base wins. The bot is loopback-bound behind the
-    // reverse proxy, so a client-derived address only resolves where that
-    // address means something — the tunnel's 127.0.0.1 resolves on a phone to
-    // the phone itself, which is why the QR "never loaded".
-    const joinUrl = config.jamPublicBase ? config.jamPublicBase + joinPath : undefined;
+    // exactly "add a song" and nothing else. `joinUrl` needs a configured
+    // public base — a client-derived address only resolves where that address
+    // means something (the tunnel's 127.0.0.1 resolves on a phone to the phone
+    // itself, which is why the QR "never loaded").
+    const { joinPath, joinUrl } = jamJoinLinks();
     return { names, count: names.length, contributors: [...contributors].sort(), joinPath, joinUrl };
   }
 

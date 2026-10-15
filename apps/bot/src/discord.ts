@@ -76,7 +76,7 @@ import { PermissionsManager } from './permissions.js';
 import { analyzer } from '@vaporzr/core/analyzer';
 import { vizTunnel } from './tunnel.js';
 import { renderPanelIconPng, PANEL_ICON_FALLBACKS } from './panelIcons.js';
-import type { Bridge } from './bridge.js';
+import { jamJoinLinks, type Bridge } from './bridge.js';
 import type { PermissionLevel, TrackInfo, PlaybackState } from '@vaporzr/shared';
 import * as EW from '@vaporzr/core/endlesswave';
 import { playlistStore } from '@vaporzr/core/playlists';
@@ -92,6 +92,7 @@ import { separateStemsReplicate, replicateStemsEnabled } from '@vaporzr/core/ste
 import { estimateTempo, beatAlignLagMs } from '@vaporzr/core/tempo';
 import { renderRadarGif, type RadarMetric } from '@vaporzr/core/images';
 import { parseVibe, vibeIsSteerable, type ParsedVibe } from '@vaporzr/core/vibe';
+import { buildJamInviteCard, type JamInviteInfo } from './jamInvite.js';
 
 /** First non-internal IPv4 address of this machine — reachable from the LAN. */
 function localIp(): string {
@@ -307,6 +308,7 @@ const COMMANDS = [
         ),
     ),
   new SlashCommandBuilder().setName('invite').setDescription('Get a link to add Vaporzr to your server'),
+  new SlashCommandBuilder().setName('jam').setDescription('Post the jam invite card — QR + link so guests can request songs from their phones'),
   new SlashCommandBuilder().setName('stats').setDescription('Show bot statistics'),
   new SlashCommandBuilder()
     .setName('sensitivity')
@@ -865,6 +867,11 @@ export class DiscordBot {
     // interaction to read a member from), so the bridge asks the bot to join
     // wherever the listeners are.
     bridge.onEnsureJoined = () => this.joinWhereListenersAre();
+    // The web panel's Share button posts the jam card through the same path as
+    // /jam. The panel has no channel of its own, so the bot resolves one (the
+    // panel's channel, else the last text channel it heard from).
+    bridge.onShareJam = (guildId) =>
+      this.shareJamCard(guildId ?? this.client.guilds.cache.first()?.id ?? '', null);
     // Panel toggles Endless Wave through the same machinery as `V@ew on/off`.
     bridge.setEndlessWaveToggle((guildId, mode) => {
       void this.panelSetEndlessWave(guildId, mode).catch((err) => {
@@ -1185,6 +1192,8 @@ export class DiscordBot {
     if (interaction.isButton()) {
       if (interaction.customId.startsWith('lyrics_karaoke:')) {
         await this.startLyricsKaraoke(interaction);
+      } else if (interaction.customId.startsWith('jampin:')) {
+        await this.handleJamPin(interaction);
       } else if (interaction.customId.startsWith('mashvote:')) {
         await this.handleMashVote(interaction);
       } else if (interaction.customId.startsWith('mashreveal:')) {
@@ -2728,6 +2737,29 @@ export class DiscordBot {
         break;
       }
 
+      case 'jam': {
+        if (!interaction.inGuild()) {
+          await interaction.reply({ content: 'Must be used inside a server.', flags: MessageFlags.Ephemeral });
+          break;
+        }
+        const ch = interaction.channel;
+        if (!ch || !ch.isTextBased()) {
+          await interaction.reply({ content: 'I cannot post in this channel.', flags: MessageFlags.Ephemeral });
+          break;
+        }
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        const r = await this.shareJamCard(interaction.guildId!, ch as GuildTextBasedChannel);
+        if (!r.ok) {
+          await interaction.editReply({ content: r.error ?? 'Could not post the jam card.' });
+          break;
+        }
+        await interaction.editReply({
+          content: `📱 Jam card posted in ${r.where ?? 'this channel'}. Anyone in here can scan it — requests only, no playback control.`,
+          components: r.pinRow ? [r.pinRow] : [],
+        });
+        break;
+      }
+
       case 'stats': {
         await interaction.reply({ embeds: [this.statsEmbed()], flags: MessageFlags.Ephemeral });
         break;
@@ -3822,6 +3854,22 @@ export class DiscordBot {
           // Re-post at the bottom of the channel (old copy deleted) so it's
           // visible without scrolling back up.
           await this.repostPanel(guildId, message.channel as GuildTextBasedChannel);
+          break;
+        }
+
+        case 'jam': {
+          if (!canUse('jam')) return void (await deny());
+          if (!message.inGuild()) return void (await message.reply('Must be used inside a server.'));
+          const r = await this.shareJamCard(message.guildId!, message.channel as GuildTextBasedChannel);
+          if (!r.ok) {
+            await message.reply(r.error ?? 'Could not post the jam card.');
+            break;
+          }
+          const notice = await message.reply({
+            content: '📱 Jam card posted — anyone in here can scan it to request songs.',
+            components: r.pinRow ? [r.pinRow] : [],
+          });
+          this.autoExpireNotice(notice);
           break;
         }
 
@@ -6172,6 +6220,124 @@ export class DiscordBot {
     const sent = await channel.send(this.panelPayload(s));
     this.panels.set(guildId, { channelId: sent.channelId, messageId: sent.id });
     this.scheduleSavePanels();
+  }
+
+  /** Post the jam invite card (link + QR) so guests can join from their phones.
+   *  Used by `/jam`, `V@jam`, and the web panel's Share button (bridge hook).
+   *  A null `channel` means "find one" — the panel has no channel of its own. */
+  private async shareJamCard(
+    guildId: string,
+    channel: GuildTextBasedChannel | null,
+  ): Promise<{ ok: boolean; where?: string; error?: string; pinRow?: ActionRowBuilder<ButtonBuilder> }> {
+    const { joinUrl } = jamJoinLinks();
+    if (!joinUrl) {
+      return {
+        ok: false,
+        error:
+          "⚠️ Sharing needs `JAM_PUBLIC_BASE` set to this bot's public URL (e.g. https://vaporzr.duckdns.org) — then restart.",
+      };
+    }
+    const target = channel ?? (await this.panelShareChannel(guildId));
+    if (!target) {
+      return {
+        ok: false,
+        error: '📭 No channel to post in yet — run `/panel` here first, or use `/jam` in a text channel.',
+      };
+    }
+    let card: Awaited<ReturnType<typeof buildJamInviteCard>>;
+    try {
+      card = await buildJamInviteCard(this.jamInviteInfo(guildId, joinUrl));
+    } catch (err) {
+      return { ok: false, error: `Could not build the jam card: ${err instanceof Error ? err.message : String(err)}` };
+    }
+    try {
+      const sent = await target.send({ embeds: card.embeds, files: card.files, components: card.components });
+      return {
+        ok: true,
+        where: `#${target.name}`,
+        pinRow: new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`jampin:${sent.channelId}:${sent.id}`)
+            .setLabel('📌 Pin it')
+            .setStyle(ButtonStyle.Secondary),
+        ),
+      };
+    } catch (err) {
+      return { ok: false, error: `Discord refused the post: ${err instanceof Error ? err.message : String(err)}` };
+    }
+  }
+
+  /** The live numbers on the jam card. Room count = humans in the bot's voice
+   *  channel (bots excluded, so it reads as listeners). */
+  private jamInviteInfo(guildId: string, joinUrl: string): JamInviteInfo {
+    const s = this.sessionFor(guildId);
+    const state = s.queue.getState();
+    const snap = s.queue.getSnapshot();
+    const vc = this.client.guilds.cache.get(guildId)?.members.me?.voice?.channel;
+    const inRoom = vc ? vc.members.filter((m) => !m.user.bot).size : undefined;
+    const current = state.track;
+    return {
+      joinUrl,
+      inRoom,
+      now: current ? { name: current.name, artists: current.artists ?? [] } : null,
+      upNext: Math.max(0, snap.tracks.length - (snap.currentIndex + 1)),
+      color: this.themeColor(),
+    };
+  }
+
+  /** Where a channel-less share lands: the panel's channel first (the Share
+   *  button lives there), else the last text channel the bot heard from, else
+   *  the welcome channel (system channel or first writable). */
+  private async panelShareChannel(guildId: string): Promise<GuildTextBasedChannel | null> {
+    const fetchWritable = async (id: string | undefined): Promise<GuildTextBasedChannel | null> => {
+      if (!id) return null;
+      const ch = await this.client.channels.fetch(id).catch(() => null);
+      return ch && ch.isTextBased() && !ch.isDMBased() ? (ch as GuildTextBasedChannel) : null;
+    };
+    const fromPanel = await fetchWritable(this.panels.get(guildId)?.channelId);
+    if (fromPanel) return fromPanel;
+    const fromLast = await fetchWritable(this.lastTextChannel.get(guildId));
+    if (fromLast) return fromLast;
+    const guild = this.client.guilds.cache.get(guildId);
+    return guild ? this.welcomeChannel(guild) : null;
+  }
+
+  /** 📌 Toggle the pin on a posted jam card. customId holds
+   *  `jampin:<channelId>:<messageId>` so it survives restarts. */
+  private async handleJamPin(interaction: ButtonInteraction): Promise<void> {
+    const [, channelId, messageId] = interaction.customId.split(':');
+    const build = (pinned: boolean): ActionRowBuilder<ButtonBuilder> =>
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(interaction.customId)
+          .setLabel(pinned ? '📍 Unpin' : '📌 Pin it')
+          .setStyle(ButtonStyle.Secondary),
+      );
+    const ch = await this.client.channels.fetch(channelId).catch(() => null);
+    if (!ch || !ch.isTextBased() || ch.isDMBased()) {
+      return void (await interaction.reply({ content: 'That channel is gone.', flags: MessageFlags.Ephemeral }));
+    }
+    const msg = await (ch as GuildTextBasedChannel).messages.fetch(messageId).catch(() => null);
+    if (!msg) {
+      return void (await interaction.reply({
+        content: 'That card was deleted — run `/jam` again to post a fresh one.',
+        flags: MessageFlags.Ephemeral,
+      }));
+    }
+    try {
+      if (msg.pinned) {
+        await msg.unpin();
+        await interaction.update({ content: '📍 Unpinned — the jam card can scroll away.', components: [build(false)] });
+      } else {
+        await msg.pin();
+        await interaction.update({ content: '📌 Pinned — the jam card stays at the top of the channel.', components: [build(true)] });
+      }
+    } catch {
+      await interaction.update({
+        content: '⚠️ I need **Manage Messages** in that channel to pin — a mod can also pin it manually.',
+        components: [build(msg.pinned)],
+      });
+    }
   }
 
   /** Shared reference for both `/viz` and `V@viz`. Secure link first when the tunnel is up. */
@@ -9325,6 +9491,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
     blurb: 'panels, themes and the MilkDrop visualizer',
     lines: [
       '`/panel` · `V@pan` — post the control panel',
+      '`/jam` · `V@jam` · `V@share` — post the jam invite card (QR + link) so guests can request songs from their phones',
       '`/viz` · `V@viz` — open the web visualizer (MilkDrop)',
       '`/theme` · `V@th` — pick a color mood',
       '`/wave` — waveform snapshot · `/burst` — animated clip',
