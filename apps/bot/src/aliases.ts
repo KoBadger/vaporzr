@@ -76,7 +76,12 @@ export const V_ALIASES: Record<string, string> = {
   games: 'games',
 };
 
-/** Extra dispatch-only spellings (not shown as shortcuts in help). */
+/** Aliases whose spelling has no `case` of its own in the prefix switch: each
+ *  one is rewritten to its canonical command before dispatch. Without an entry
+ *  here the alias only shared a cooldown bucket with the real command and fell
+ *  through to "Unknown command" (that's why V@dd / V@share / V@st did nothing).
+ *  Subcommand shortcuts (save / load / del / pl) keep their own case and read
+ *  `args`, so they are deliberately not listed here. */
 export const V_DISPATCH_ALIASES: Record<string, string> = {
   boost: 'bassboost',
   msh: 'mashup',
@@ -85,4 +90,14 @@ export const V_DISPATCH_ALIASES: Record<string, string> = {
   dedup: 'dedupe',
   dd: 'dedupe',
   xfade: 'crossfade',
+  share: 'jam',
+  preset: 'eq',
+  loud: 'norm',
+  loudness: 'norm',
+  wrap: 'wrapped',
+  fol: 'follow',
+  st: 'stump',
+  dl: 'duel',
+  roll: 'roulette',
+  rl: 'roulette',
 };
