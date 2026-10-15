@@ -67,11 +67,13 @@ describe('syncConfiguredCookies', () => {
   });
 
   it('is a no-op once the live jar has been refreshed', () => {
-    mount(JAR, 0);
+    const from = mount(JAR, 0);
     live('stale stripped jar\n', 60_000);
 
     expect(syncConfiguredCookies()).not.toBeNull();
-    // The copy stamps a fresh mtime, so the mount is no longer "newer".
+    // The copy is re-stamped with our own fine-grained clock, so the mount is
+    // no longer "newer" — even when the kernel's coarse file clock lags.
+    expect(fs.statSync(liveCookiesPath()).mtimeMs).toBeGreaterThanOrEqual(fs.statSync(from).mtimeMs);
     expect(syncConfiguredCookies()).toBeNull();
   });
 
