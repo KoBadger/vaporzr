@@ -43,32 +43,42 @@ ytDlpPath: process.env.YT_DLP_PATH ?? path.join(__dirname, '..', '..', '..', 've
     *  avoid most 403s and throttling that cause mid-track stream cuts. */
    youtubeCookiesPath: process.env.YOUTUBE_COOKIES_PATH ?? '',
    /**
-    * HTTP proxy for YouTube traffic (yt-dlp resolve + the googlevideo stream
-    * fetch). Datacenter IPs get SABR-flagged by YouTube (no direct stream
-    * URLs regardless of cookies/PO tokens); routing just YouTube through a
-    * residential proxy restores resolution AND playback. Format:
-    * http://[user:pass@]host:port — empty = direct.
+    * Optional FIRST proxy hop for YouTube traffic (yt-dlp resolve + the
+    * googlevideo stream fetch), tried only after a direct attempt fails — the
+    * VPS leaves it empty, but the old clean-IP bridge can still fill it. The
+    * direct route needs a clean host IP plus cookies + PO tokens; when it is
+    * walled, YOUTUBE_PROXY_ALT takes over first. Format:
+    * http://[user:pass@]host:port — empty = skipped.
     */
    youtubeProxy: process.env.YOUTUBE_PROXY ?? '',
    /**
-    * Optional SECOND proxy, tried when the primary fails (the clean-IP bridge
-    * unreachable, exhausted, or flagged). Lets a PC-bridge outage degrade onto
-    * the old datacenter proxy — which still works intermittently — instead of
-    * dropping straight to a direct connection YouTube blocks outright.
+    * Second proxy hop, tried when direct AND the first hop fail. The intended
+    * deployment is Cloudflare WARP running locally on the bot host (`warp-cli
+    * mode proxy`, default port 40000): free, unlimited, and a DIFFERENT egress
+    * than the host — so it covers a host IP YouTube has flagged without
+    * touching the metered fallback. Format: http://[user:pass@]host:port.
+    */
+   youtubeProxyAlt: process.env.YOUTUBE_PROXY_ALT ?? '',
+   /**
+    * Last-resort proxy hop, reached only when the direct route and every free
+    * hop fail. DataImpulse residential here: metered and pay-per-GB, so it
+    * spends its balance only on a real block, and on an `auth` alert its sticky
+    * session is rotated to land the retry on a fresh exit. Format:
+    * http://[user:pass@]host:port — empty = skipped.
     */
    youtubeProxyFallback: process.env.YOUTUBE_PROXY_FALLBACK ?? '',
    /**
-    * How to name the clean-IP bridge in alerts — the host that supplies the
-    * residential exit. The bridge has moved once already (PC → phone), so
-    * naming it in code goes stale and misleads whoever reads the alert. Set
-    * YOUTUBE_PROXY_LABEL to whatever is actually running it.
+    * How to name the FIRST proxy hop (YOUTUBE_PROXY) in the hop-down alert.
+    * Alerts name the WARP and metered hops with fixed wording; only the primary
+    * hop is free-form, because it has moved (PC → phone) without a code change:
+    * set YOUTUBE_PROXY_LABEL to whatever is actually running it.
     */
-   youtubeProxyLabel: process.env.YOUTUBE_PROXY_LABEL ?? 'the clean-IP bridge host',
+   youtubeProxyLabel: process.env.YOUTUBE_PROXY_LABEL ?? 'the primary YouTube proxy hop',
    /**
     * Ceiling on the YouTube audio bitrate to download. Discord re-encodes voice
     * audio to 64-128 kbps opus, so capping the source a little above that roughly
     * halves the metered proxy traffic for little audible loss. Raise it (e.g.
-    * 160) when fidelity matters more than bytes on the bridge.
+    * 160) when fidelity matters more than bytes on the metered hops.
     */
    youtubeAudioMaxAbr: Number(process.env.YOUTUBE_AUDIO_MAX_ABR) || 80,
    /**

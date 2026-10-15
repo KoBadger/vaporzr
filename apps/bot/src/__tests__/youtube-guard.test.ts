@@ -1,7 +1,10 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
 import {
   apiFlatSearch,
+  classifyYoutubeProbe,
   decidePublish,
   describeBotWall,
   flatSearch,
@@ -14,6 +17,7 @@ import {
   proxyReachable,
   scoreHit,
   shouldRetryYtDlp,
+  youtubeProxyHops,
 } from '@vaporzr/core/youtube';
 import { config } from '@vaporzr/core/config';
 import type { ResolvedVideo } from '@vaporzr/core/youtube';
@@ -68,15 +72,24 @@ describe('alert confirmation (decidePublish)', () => {
 });
 
 describe('yt-dlp retry policy', () => {
-  const opts = (over: Partial<{ attempt: number; maxAttempts: number; hasProxy: boolean }> = {}) => ({
+  const opts = (
+    over: Partial<{ attempt: number; maxAttempts: number; hasProxy: boolean; rotating: boolean }> = {},
+  ) => ({
     attempt: 0,
     maxAttempts: 3,
     hasProxy: true,
     ...over,
   });
 
-  it('retries a wall when a rotating proxy is configured (a fresh exit usually works)', () => {
-    expect(shouldRetryYtDlp("Sign in to confirm you're not a bot", opts())).toBe(true);
+  it('retries a wall when the route rotates exits (a fresh one usually works)', () => {
+    expect(shouldRetryYtDlp("Sign in to confirm you're not a bot", opts({ rotating: true }))).toBe(true);
+  });
+
+  it('does NOT retry a wall on a fixed route — its address cannot change', () => {
+    // The direct connection and a local WARP proxy keep the same egress across
+    // attempts, so a wall there falls through to the next tier instead of
+    // burning the request timeout.
+    expect(shouldRetryYtDlp("Sign in to confirm you're not a bot", opts({ rotating: false }))).toBe(false);
   });
 
   it('does NOT retry a wall without a proxy — the datacenter IP is the problem', () => {
@@ -432,17 +445,148 @@ describe('proxy reachability (bridge down vs flagged exit)', () => {
     expect(await proxyReachable('not a url')).toBe(false);
   });
 
-  it('the canary reports "bridge" (not a wall) when the proxy endpoint is down', async () => {
+  it('the canary reports "bridge" (not a wall) when a hop endpoint is down', async () => {
     const port = await closedPort();
-    const prev = config.youtubeProxy;
-    config.youtubeProxy = `http://127.0.0.1:${port}`;
+    const prevAlt = config.youtubeProxyAlt;
+    const prevFallback = config.youtubeProxyFallback;
+    const prevYtDlp = config.ytDlpPath;
+    config.youtubeProxyAlt = `http://127.0.0.1:${port}`;
+    config.youtubeProxyFallback = '';
+    // A missing yt-dlp makes the direct attempt fail instantly (spawn ENOENT)
+    // instead of hitting the network — the verdict must come from the hop
+    // reachability check regardless.
+    config.ytDlpPath = path.join(os.tmpdir(), `missing-yt-dlp-${process.pid}`);
     try {
-      // Distinct from 'proxy'/'auth': nothing is wrong with YouTube — the
-      // clean-IP bridge itself is unreachable.
+      // Distinct from 'proxy'/'auth': nothing is wrong with YouTube — the hop
+      // itself is unreachable (WARP down, or the old bridge's tunnel dropped).
       expect(await probeYoutube()).toBe('bridge');
     } finally {
-      config.youtubeProxy = prev;
+      config.youtubeProxyAlt = prevAlt;
+      config.youtubeProxyFallback = prevFallback;
+      config.ytDlpPath = prevYtDlp;
     }
+  });
+});
+
+describe('canary classification (classifyYoutubeProbe)', () => {
+  const WALL = "Sign in to confirm you're not a bot";
+  const BOOM = 'yt-dlp failed: some transient mess';
+
+  it('is ok whenever the direct attempt resolves', () => {
+    expect(classifyYoutubeProbe({ direct: 'ok', hops: [] })).toBe('ok');
+  });
+
+  it('without hops, a wall is a blocked IP and anything else is a genuine outage', () => {
+    expect(classifyYoutubeProbe({ direct: WALL, hops: [] })).toBe('blocked');
+    expect(classifyYoutubeProbe({ direct: BOOM, hops: [] })).toBe('down');
+  });
+
+  it('is silently ok when a FREE hop carries playback', () => {
+    // Direct walled, WARP works: the intended degradation, no alert.
+    expect(classifyYoutubeProbe({ direct: WALL, hops: [{ name: 'alt', result: 'ok' }] })).toBe('ok');
+  });
+
+  it('flags the metered fallback carrying playback', () => {
+    // Direct + WARP failing means the balance is being spent — worth a page.
+    expect(
+      classifyYoutubeProbe({
+        direct: WALL,
+        hops: [
+          { name: 'alt', result: WALL },
+          { name: 'fallback', result: 'ok' },
+        ],
+      }),
+    ).toBe('proxy');
+  });
+
+  it('reports an empty balance as exhausted, not as a wall', () => {
+    expect(
+      classifyYoutubeProbe({
+        direct: WALL,
+        hops: [
+          { name: 'alt', result: 'unreachable' },
+          { name: 'fallback', result: 'ProxyError 407 TRAFFIC_EXHAUSTED' },
+        ],
+      }),
+    ).toBe('exhausted');
+  });
+
+  it('reports a refused hop as bridge', () => {
+    expect(
+      classifyYoutubeProbe({
+        direct: WALL,
+        hops: [
+          { name: 'alt', result: 'unreachable' },
+          { name: 'fallback', result: WALL },
+        ],
+      }),
+    ).toBe('bridge');
+  });
+
+  it('reports a wall that survives every route as auth (the sign-in is rejected)', () => {
+    expect(
+      classifyYoutubeProbe({
+        direct: WALL,
+        hops: [
+          { name: 'alt', result: WALL },
+          { name: 'fallback', result: WALL },
+        ],
+      }),
+    ).toBe('auth');
+  });
+
+  it('reports a reachable-but-rejecting hop as proxy when nothing worked', () => {
+    expect(
+      classifyYoutubeProbe({
+        direct: BOOM,
+        hops: [{ name: 'alt', result: 'ProxyError 407 auth failed' }],
+      }),
+    ).toBe('proxy');
+  });
+
+  it('reports unclassifiable failures as down', () => {
+    expect(
+      classifyYoutubeProbe({
+        direct: BOOM,
+        hops: [{ name: 'alt', result: 'yt-dlp failed: something odd' }],
+      }),
+    ).toBe('down');
+  });
+});
+
+describe('youtubeProxyHops (shared route order)', () => {
+  const original = {
+    p: config.youtubeProxy,
+    a: config.youtubeProxyAlt,
+    f: config.youtubeProxyFallback,
+  };
+  afterEach(() => {
+    config.youtubeProxy = original.p;
+    config.youtubeProxyAlt = original.a;
+    config.youtubeProxyFallback = original.f;
+  });
+
+  it('lists primary → alt → fallback, skipping empties', () => {
+    config.youtubeProxy = 'http://primary:1';
+    config.youtubeProxyAlt = 'http://alt:2';
+    config.youtubeProxyFallback = 'http://fallback:3';
+    expect(youtubeProxyHops()).toEqual(['http://primary:1', 'http://alt:2', 'http://fallback:3']);
+    config.youtubeProxy = '';
+    expect(youtubeProxyHops()).toEqual(['http://alt:2', 'http://fallback:3']);
+  });
+
+  it('never repeats a URL configured in two slots', () => {
+    config.youtubeProxy = '';
+    config.youtubeProxyAlt = 'http://same:2';
+    config.youtubeProxyFallback = 'http://same:2';
+    expect(youtubeProxyHops()).toEqual(['http://same:2']);
+  });
+
+  it('is empty when nothing is configured', () => {
+    config.youtubeProxy = '';
+    config.youtubeProxyAlt = '';
+    config.youtubeProxyFallback = '';
+    expect(youtubeProxyHops()).toEqual([]);
   });
 });
 
@@ -500,29 +644,43 @@ describe('search-result cache (protects the Data API quota)', () => {
 });
 
 describe('describeBotWall (honest anti-bot diagnosis)', () => {
-  const prev = config.youtubeProxy;
+  const original = {
+    p: config.youtubeProxy,
+    a: config.youtubeProxyAlt,
+    f: config.youtubeProxyFallback,
+  };
   afterEach(() => {
-    config.youtubeProxy = prev;
+    config.youtubeProxy = original.p;
+    config.youtubeProxyAlt = original.a;
+    config.youtubeProxyFallback = original.f;
   });
 
-  it('names a datacenter proxy as datacenter, not residential', () => {
-    config.youtubeProxy = 'http://acct__cr.us__sessttl.60:pw@gw.dataimpulse.com:10007';
+  it('counts the configured hops so the wall text stays honest', () => {
+    config.youtubeProxy = '';
+    config.youtubeProxyAlt = 'http://127.0.0.1:40000';
+    config.youtubeProxyFallback = 'http://acct:pw@gw.dataimpulse.com:10007';
     const msg = describeBotWall({ signInRefused: false });
-    expect(msg).toContain('datacenter');
-    expect(msg).not.toContain('residential');
+    expect(msg).toContain('2 proxy hops ARE configured');
   });
 
-  it('names a residential proxy as residential', () => {
-    config.youtubeProxy = 'http://acct__sessid.abc;sessttl.60:pw@gw.dataimpulse.com:10000';
-    expect(describeBotWall({ signInRefused: false })).toContain('residential');
+  it('says NO hop is set when none are configured', () => {
+    config.youtubeProxy = '';
+    config.youtubeProxyAlt = '';
+    config.youtubeProxyFallback = '';
+    const msg = describeBotWall({ signInRefused: false });
+    expect(msg).toContain('NO proxy hop is set');
+    expect(msg).toContain('YOUTUBE_PROXY_ALT');
   });
 
-  it('blames the cookies, not the IP, when the wall survives the direct attempt', () => {
-    config.youtubeProxy = 'http://acct__cr.us__sessttl.60:pw@gw.dataimpulse.com:10007';
+  it('blames the cookies, not the IP, when the wall survives every route', () => {
+    config.youtubeProxy = '';
+    config.youtubeProxyAlt = 'http://127.0.0.1:40000';
+    config.youtubeProxyFallback = 'http://acct:pw@gw.dataimpulse.com:10007';
     const msg = describeBotWall({ signInRefused: true });
     expect(msg).toContain('/cookie-upload');
+    expect(msg).toContain('no single exit IP is the cause');
     expect(msg).toContain('cookies are being rejected');
-    expect(msg).toContain('not the cause');
+    expect(msg).toContain('all 2 proxy hops');
   });
 });
 

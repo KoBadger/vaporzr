@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { config } from '@vaporzr/core/config';
+import { youtubeProxyHops } from '@vaporzr/core/youtube';
 
 /**
  * Download an http(s) media stream to a temp file using Node's fetch (Range
@@ -26,25 +26,73 @@ class RetryableUrlError extends Error {}
 
 /** Cached undici ProxyAgents, keyed by proxy URL (mirrors VoiceManager.mediaFetch). */
 const proxyAgents = new Map<string, unknown>();
+/** Cached egress IP per route+family (mirrors VoiceManager.routeIp). */
+const routeIps = new Map<string, Promise<string>>();
+
+/** fetch() through one specific hop ('' = direct), reusing a cached agent. */
+async function fetchViaProxy(url: string, proxy: string, init: RequestInit): Promise<Response> {
+  if (!proxy) return fetch(url, init);
+  let agent = proxyAgents.get(proxy);
+  if (!agent) {
+    const { ProxyAgent } = await import('undici');
+    agent = new ProxyAgent(proxy);
+    proxyAgents.set(proxy, agent);
+  }
+  const { fetch: uFetch } = await import('undici');
+  return (await uFetch(url, { ...init, dispatcher: agent } as never)) as unknown as Response;
+}
+
+/** A route's egress IP ('' = direct) for one address family, probed once. */
+async function egressIp(proxy: string, family: 4 | 6): Promise<string> {
+  const key = `${proxy}|${family}`;
+  let pending = routeIps.get(key);
+  if (!pending) {
+    pending = (async () => {
+      try {
+        const res = await fetchViaProxy(
+          family === 6 ? 'https://api64.ipify.org' : 'https://api.ipify.org',
+          proxy,
+          { signal: AbortSignal.timeout(6000) },
+        );
+        return res.ok ? (await res.text()).trim() : '';
+      } catch {
+        return '';
+      }
+    })();
+    routeIps.set(key, pending);
+  }
+  return pending;
+}
 
 /**
- * Fetch a media URL, routing googlevideo through the residential proxy when one
- * is configured. googlevideo URLs are signed against the proxy exit IP that
- * minted them, so fetching them directly returns 403 with ZERO bytes — the same
- * reason the playback path routes through a pooled ProxyAgent.
+ * Fetch a media URL, routing googlevideo through the hop that minted it.
+ * googlevideo URLs are signed against the exit IP that minted them, so
+ * fetching one from a different egress returns a redirect with ZERO bytes —
+ * the same reason the playback path matches routes by the URL's `ip=`. Both
+ * address families are probed: a WARP egress records an IPv6 `ip=` even when
+ * the resolve forced IPv4.
  */
 async function mediaFetch(url: string, init: RequestInit): Promise<Response> {
-  const proxy = config.youtubeProxy && /googlevideo\.com\//.test(url) ? config.youtubeProxy : '';
-  if (!proxy) return fetch(url, init);
-  try {
-    let agent = proxyAgents.get(proxy);
-    if (!agent) {
-      const { ProxyAgent } = await import('undici');
-      agent = new ProxyAgent(proxy);
-      proxyAgents.set(proxy, agent);
+  if (!/googlevideo\.com\//.test(url)) return fetch(url, init);
+  const mintedIp = decodeURIComponent(/[?&]ip=([^&]+)/.exec(url)?.[1] ?? '');
+  const family: 4 | 6 = mintedIp.includes(':') ? 6 : 4;
+  const hops = youtubeProxyHops();
+  let route: string | null = null;
+  if (mintedIp) {
+    for (const candidate of [...hops, '']) {
+      const ip = await egressIp(candidate, family);
+      if (ip && ip === mintedIp) {
+        route = candidate;
+        break;
+      }
     }
-    const { fetch: uFetch } = await import('undici');
-    return (await uFetch(url, { ...init, dispatcher: agent } as never)) as unknown as Response;
+  }
+  // No route matched (the URL names no IP, or the minting hop is gone): prefer
+  // the first configured hop, else go direct. A 403 afterwards is survivable —
+  // the caller refreshes the URL, which re-resolves through whatever works now.
+  if (route === null) route = hops[0] ?? '';
+  try {
+    return await fetchViaProxy(url, route, init);
   } catch {
     return fetch(url, init);
   }
