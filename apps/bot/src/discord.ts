@@ -52,13 +52,14 @@ import {
   resolveGenericMediaUrl,
   resolveYoutubePlaylist,
   resolveYoutubeVideo,
-  rotateYoutubeProxy,
+  rotateYoutubeFallbackProxy,
   searchAndResolveYoutube,
   searchYoutube,
   setYoutubeHealthListener,
   youtubeHealth,
   YoutubeError,
   type YoutubeHealth,
+  type YoutubeHealthContext,
 } from '@vaporzr/core/youtube';
 import { isSunoUrl, resolveSuno } from '@vaporzr/core/suno';
 import { isAppleMusicUrl, resolveAppleMusicUrl } from '@vaporzr/core/apple';
@@ -984,7 +985,7 @@ export class DiscordBot {
       // Remove now-playing strips in channels that never opted in (see /npchannel).
       await this.cleanupMiniNp();
       // Alert the owner if the YouTube canary flips to a broken state.
-      setYoutubeHealthListener((status) => void this.alertYoutubeHealth(status));
+      setYoutubeHealthListener((status, context) => void this.alertYoutubeHealth(status, context));
       if (!config.ownerId) {
           // Auto-detect owner from the application record. This fetch can fail
           // on a flaky network at boot, so retry with backoff, then keep
@@ -5084,32 +5085,48 @@ export class DiscordBot {
   }
 
   /** DM the owner when the YouTube canary flips to a broken state. */
-  private async alertYoutubeHealth(status: YoutubeHealth): Promise<void> {
+  private async alertYoutubeHealth(status: YoutubeHealth, context: YoutubeHealthContext = {}): Promise<void> {
+    // The hop that refused connections is concrete and actionable — say which
+    // one it is. ('bridge' has per-hop wording of its own below, so no note.)
+    const hopNote =
+      context.unreachableHop === 'alt'
+        ? '\n\n⚠️ The local WARP hop (`YOUTUBE_PROXY_ALT`) is not accepting connections — check `warp-cli status` / `systemctl status warp-svc` on the VPS.'
+        : context.unreachableHop === 'primary'
+          ? `\n\n⚠️ The first proxy hop is not accepting connections — ${config.youtubeProxyLabel} is off, asleep, or its tunnel dropped.`
+          : context.unreachableHop === 'fallback'
+            ? '\n\n⚠️ The residential fallback (`YOUTUBE_PROXY_FALLBACK`) is not accepting connections — check its credentials at the provider.'
+            : '';
     let text =
       status === 'auth'
-        ? '⚠️ **Vaporzr: YouTube is refusing the bot** — the anti-bot wall persisted even through the residential proxy, so the cookies are stale or the PO token is missing. Check `/health` (`youtube`) and refresh the cookies with `/cookie-upload` if they are old.'
+        ? '⚠️ **Vaporzr: YouTube is refusing the bot** — the anti-bot wall persisted across every route (the direct connection plus all configured proxy hops), so no single exit IP is the cause: the cookies are stale or the PO token is missing. Check `/health` (`youtube`) and refresh the cookies with `/cookie-upload` if they are old.'
         : status === 'blocked'
-          ? '⚠️ **Vaporzr: YouTube is blocking the bot\'s IP** — no residential proxy is configured (`YOUTUBE_PROXY` in `/opt/vaporzr/.env`), which is the usual cause for a datacenter address. Refreshing cookies alone will not fix this.'
+          ? '⚠️ **Vaporzr: YouTube is blocking the bot\'s IP** — no proxy hops are configured (`YOUTUBE_PROXY_ALT` / `YOUTUBE_PROXY_FALLBACK` in `/opt/vaporzr/.env`), which is the usual cause for a datacenter address. Refreshing cookies alone will not fix this.'
           : status === 'proxy'
-            ? '⚠️ **Vaporzr: the YouTube proxy is failing** — the direct route works but `YOUTUBE_PROXY` does not (dead, exhausted, rejected or unreachable). Resolves still fall back to a direct connection, so playback should continue; renew the proxy or unset it.'
+            ? context.carryingHop === 'fallback'
+              ? '⚠️ **Vaporzr: YouTube is running on the metered residential proxy** — every free route is failing, so playback is being carried by `YOUTUBE_PROXY_FALLBACK` and spending its balance. Investigate why the free routes are blocked, and check the balance before it runs dry.'
+              : '⚠️ **Vaporzr: a YouTube proxy hop is failing** — a hop is reachable but rejecting requests (dead, out of balance, or 407), and the other routes failed too, so resolves are failing. Repair or renew the hop.'
             : status === 'exhausted'
-              ? '⚠️ **Vaporzr: the YouTube proxy is OUT OF TRAFFIC** — `YOUTUBE_PROXY` is reachable but has no balance left (DataImpulse answers `407 TRAFFIC_EXHAUSTED`). Top the plan up (DataImpulse → Add GBs) or point `YOUTUBE_PROXY` at another provider. Resolves fall back to a direct connection meanwhile, so some tracks may still work.'
+              ? '⚠️ **Vaporzr: the residential fallback is OUT OF TRAFFIC** — `YOUTUBE_PROXY_FALLBACK` is reachable but has no balance left (DataImpulse answers `407 TRAFFIC_EXHAUSTED`). Top the plan up (DataImpulse → Add GBs) or point `YOUTUBE_PROXY_FALLBACK` at another provider.'
               : status === 'bridge'
-                ? `⚠️ **Vaporzr: the YouTube clean-IP bridge is DOWN** — the proxy endpoint is not accepting connections, which means ${config.youtubeProxyLabel} is off, asleep, offline, or its tunnel dropped. ` +
-                  (config.youtubeProxyFallback
-                    ? 'Playback is continuing on the backup proxy meanwhile, so some tracks may still work.'
-                    : 'YouTube playback will fail until it is back — restart the bridge on that host.')
+                ? context.unreachableHop === 'alt'
+                  ? '⚠️ **Vaporzr: the local WARP hop is DOWN** — the proxy at `YOUTUBE_PROXY_ALT` is not accepting connections, and the other routes failed too. Restart it on the VPS (`warp-cli connect` / `systemctl restart warp-svc`) — playback will fail until a route is healthy.'
+                  : context.unreachableHop === 'primary'
+                    ? `⚠️ **Vaporzr: the first YouTube proxy hop is DOWN** — ${config.youtubeProxyLabel} is off, asleep, offline, or its tunnel dropped, and the other routes failed too. Playback will fail until a route is healthy.`
+                    : context.unreachableHop === 'fallback'
+                      ? '⚠️ **Vaporzr: the residential fallback is DOWN** — `YOUTUBE_PROXY_FALLBACK` is not accepting connections and the other routes failed too. Playback will fail until a route is healthy.'
+                      : '⚠️ **Vaporzr: a YouTube proxy hop is DOWN** — a configured hop is not accepting connections, and no other route could resolve. Playback will fail until a route is healthy.'
                 : status === 'down'
                 ? '⚠️ **Vaporzr: YouTube resolution is failing** — check `/health` (`youtube`) and the network.'
                 : '';
     if (!text) return;
+    if (hopNote && status !== 'bridge') text += hopNote;
     // The residential proxy is STICKY (DataImpulse holds one exit for `sessttl`
     // minutes), so a flagged exit otherwise sticks for up to an hour. On the wall,
     // rotate the session to a fresh exit and re-probe shortly after.
     if (status === 'auth') {
-      const rotated = rotateYoutubeProxy();
+      const rotated = rotateYoutubeFallbackProxy();
       if (rotated) {
-        text += '\n\n🔄 Rotated the residential proxy exit — re-checking in ~30s.';
+        text += '\n\n🔄 Rotated the residential fallback\'s exit — re-checking in ~30s.';
         const t = setTimeout(() => void probeYoutube(), 30_000);
         t.unref?.();
       }
@@ -6244,7 +6261,7 @@ export class DiscordBot {
           name: 'YouTube',
           value:
             `canary \`${yt}\` · cookies ${cookieAge === null ? '`missing`' : `\`${cookieAge}d\``}` +
-            ` · proxy ${config.youtubeProxy ? '`set`' : '`NONE`'}`,
+            ` · route \`${['direct', config.youtubeProxy ? 'primary' : '', config.youtubeProxyAlt ? 'alt' : '', config.youtubeProxyFallback ? 'fallback' : ''].filter(Boolean).join('→')}\``,
           inline: true,
         },
         {

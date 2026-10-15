@@ -290,16 +290,22 @@ export async function proxyReachable(url: string, timeoutMs = 4000): Promise<boo
 }
 
 /**
- * Rotate the residential proxy's sticky session so the next requests land on a
+ * Rotate the metered fallback's sticky session so the next requests land on a
  * different exit IP. DataImpulse picks the sticky exit with a `sessid` param in
  * the username and its sticky ports hold one IP for `sessttl` minutes — so a
  * flagged exit otherwise sticks around for up to an hour. Returns the new proxy
- * URL (also updating config); returns the current one unchanged when no proxy is
- * set or it can't be parsed.
+ * URL (also updating config); returns '' when no fallback is configured or its
+ * URL has no rotating syntax — a fixed endpoint cannot change its exit by
+ * rewriting the string, and mangling it (appending `;sessid.x` to a plain
+ * user:pass) would break the hop entirely.
  */
-export function rotateYoutubeProxy(): string {
-  const cur = config.youtubeProxy;
+export function rotateYoutubeFallbackProxy(): string {
+  const cur = config.youtubeProxyFallback;
   if (!cur) return '';
+  // Only DataImpulse-style rotating pools understand the `;sessid.X` syntax
+  // (residential: tagged in the username) or the sticky-port dance (datacenter:
+  // sticky by port). Anything else is treated as a fixed endpoint.
+  if (!/sessid\./i.test(cur) && !/dataimpulse/i.test(cur)) return '';
   const sess = Math.random().toString(36).slice(2, 10);
   // The username carries the session tag (DataImpulse residential:
   // `acct__sessid.X;sessttl.N`). A URL round-trip would drop the `;sessttl`
@@ -323,38 +329,47 @@ export function rotateYoutubeProxy(): string {
       out = cur.replace(/^(https?:\/\/)([^:@/]+)/i, (_m, scheme: string, user: string) => `${scheme}${user};sessid.${sess}`);
     }
   }
-  config.youtubeProxy = out;
+  config.youtubeProxyFallback = out;
   return out;
 }
 
-/** Whether the configured proxy is a residential plan. DataImpulse residential
- *  carries a `sessid` tag in the username; a datacenter plan does not (it is
- *  sticky by port instead). */
-function proxyIsResidential(url: string): boolean {
-  return /sessid\./i.test(url);
+/** The configured proxy hops in trial order: primary → alt → metered fallback.
+ *  The DIRECT route is always tried first and is not part of this list. The
+ *  resolver (runYtDlp) and the stream fetchers (voice.ts, mediaDownload.ts) all
+ *  derive their route lists from here so they cannot drift: a googlevideo URL is
+ *  IP-bound to the egress that minted it, and a fetch that picks a different
+ *  route gets a redirect with zero bytes instead of audio. */
+export function youtubeProxyHops(): string[] {
+  const hops = [config.youtubeProxy, config.youtubeProxyAlt, config.youtubeProxyFallback];
+  return hops.filter((v, i) => !!v && hops.indexOf(v) === i);
 }
 
 /** Actionable text for the anti-bot wall.
  *
  *  A wall is NOT proof of expired cookies: the same text appears when YouTube
  *  has flagged the exit IP. The decisive difference is whether it also survives
- *  a DIRECT (no-proxy) attempt — the canary probes both routes, so `auth` means
- *  the wall held on both and the IP cannot be the common factor, leaving the
- *  sign-in itself (cookies / PO token). Getting this backwards is expensive:
- *  the old text told an admin to re-export good cookies while the real cause was
- *  the IP, and now the reverse — it blamed the IP while a fresh-looking cookie
- *  file was being rejected. `signInRefused` is overridable for tests. */
+ *  a DIRECT (no-proxy) attempt — the canary probes every route on its own, so
+ *  `auth` means the wall held everywhere and no single exit IP is the common
+ *  factor, leaving the sign-in itself (cookies / PO token). Getting this
+ *  backwards is expensive: the old text told an admin to re-export good cookies
+ *  while the real cause was the IP, and now the reverse — it blamed the IP while
+ *  a fresh-looking cookie file was being rejected. `signInRefused` is
+ *  overridable for tests. */
 export function describeBotWall(opts: { signInRefused?: boolean } = {}): string {
   const age = cookieAgeDays();
   const ageText = age === null ? '`missing`' : `${age} day${age === 1 ? '' : 's'} old`;
-  const kind = proxyIsResidential(config.youtubeProxy) ? 'residential' : 'datacenter';
+  const hopCount = youtubeProxyHops().length;
   const signInRefused = opts.signInRefused ?? ytHealth === 'auth';
   if (signInRefused) {
-    return `YouTube is refusing the bot's sign-in (anti-bot wall) on BOTH the proxy and a direct attempt — so the proxy's IP is not the cause: the cookies are being rejected. They are ${ageText}, but freshness is not validity — a session YouTube has invalidated stays rejected however recently it was exported. Re-upload a fresh cookies.txt with \`/cookie-upload\` (export it from a browser that is still signed in).`;
+    const routesText =
+      hopCount === 0
+        ? 'the direct attempt (no proxy hops are configured)'
+        : `the direct attempt and all ${hopCount} proxy hop${hopCount === 1 ? '' : 's'}`;
+    return `YouTube is refusing the bot's sign-in (anti-bot wall) on EVERY route — ${routesText} — so no single exit IP is the cause: the cookies are being rejected. They are ${ageText}, but freshness is not validity — a session YouTube has invalidated stays rejected however recently it was exported. Re-upload a fresh cookies.txt with \`/cookie-upload\` (export it from a browser that is still signed in).`;
   }
-  return config.youtubeProxy
-    ? `YouTube refused the request (anti-bot wall). Cookies are ${ageText} and a ${kind} proxy IS configured — so either the proxy's exit IP is flagged too, the cookies are stale, or the PO token is missing. Retrying usually lands on a clean exit; if it keeps happening, refresh the cookies with \`/cookie-upload\`.`
-    : `YouTube refused the request (anti-bot wall) and NO proxy is set. Cookies are ${ageText}. A flagged datacenter IP is the usual cause — refreshing cookies alone will not fix that; set YOUTUBE_PROXY in /opt/vaporzr/.env.`;
+  return hopCount > 0
+    ? `YouTube refused the request (anti-bot wall). Cookies are ${ageText} and ${hopCount} proxy hop${hopCount === 1 ? '' : 's'} ARE configured — so either the exits are flagged too, the cookies are stale, or the PO token is missing. Retrying usually lands on a cleaner exit when the hop rotates; if it keeps happening, refresh the cookies with \`/cookie-upload\`.`
+    : `YouTube refused the request (anti-bot wall) and NO proxy hop is set. Cookies are ${ageText}. A flagged datacenter IP is the usual cause — refreshing cookies alone will not fix that; set YOUTUBE_PROXY_ALT (e.g. a local Cloudflare WARP) in /opt/vaporzr/.env.`;
 }
 
 /**
@@ -381,22 +396,22 @@ const TRANSIENT_YTDLP_ERRORS = [
 /**
  * Whether a failed yt-dlp attempt is worth repeating.
  *
- * With a residential proxy configured, a wall usually means the rotating exit
- * IP is flagged rather than the cookies being dead — another attempt lands on a
- * different exit and normally succeeds. Retrying DIRECT cannot help when the
- * datacenter IP is itself what YouTube objects to, which is why the direct
- * fallback only applies when no proxy is configured.
+ * On a ROTATING route (`rotating`), a wall usually means the exit IP is
+ * flagged rather than the cookies being dead — another attempt lands on a
+ * different exit and normally succeeds. A FIXED route — the direct connection,
+ * a local WARP proxy — keeps its address across attempts, so retrying a wall
+ * there cannot help; the attempt falls through to the next tier instead.
  */
 export function shouldRetryYtDlp(
   msg: string,
-  opts: { attempt: number; maxAttempts: number; hasProxy: boolean },
+  opts: { attempt: number; maxAttempts: number; hasProxy: boolean; rotating?: boolean },
 ): boolean {
   if (opts.attempt >= opts.maxAttempts) return false;
   if (TRANSIENT_YTDLP_ERRORS.some((t) => msg.includes(t))) return true;
   if (!opts.hasProxy) return false;
   // A wall is usually a dirty exit from the rotating pool — another go picks a
-  // different IP and normally succeeds.
-  if (isBotWall(msg)) return true;
+  // different IP and normally succeeds. Fixed exits get no wall retry.
+  if (isBotWall(msg)) return opts.rotating ?? true;
   // A proxy-side failure gets ONE retry (the next exit may be healthy) before
   // falling back to a direct connection, so a genuinely dead proxy fails fast
   // instead of burning the request timeout.
@@ -405,22 +420,22 @@ export function shouldRetryYtDlp(
 }
 
 /** Run yt-dlp with retries. `route` pins the network path so the health canary
- *  can attribute a failure correctly: `false` = a direct connection only;
- *  `true` = the primary proxy only (no fallback and no direct, otherwise a dead
- *  bridge would be masked by a direct route that happens to work). Undefined =
- *  the normal chain: primary proxy → fallback proxy → one direct attempt. */
-async function runYtDlp(args: string[], retries = 2, route?: boolean): Promise<string> {
+ *  can attribute a failure correctly: `''` = a direct connection only; a proxy
+ *  URL = that hop only (no fallback, no direct — otherwise a dead hop would be
+ *  masked by a route that happens to work). Undefined = the normal chain:
+ *  direct first, then every configured proxy hop in trial order. */
+async function runYtDlp(args: string[], retries = 2, route?: string): Promise<string> {
   let lastErr: unknown;
 
   /** Retry a single network path (`proxy` = '' is a direct connection). */
-  const attemptOn = async (proxy: string, tries: number): Promise<string> => {
+  const attemptOn = async (proxy: string, tries: number, rotating = false): Promise<string> => {
     for (let attempt = 0; attempt <= tries; attempt++) {
       try {
         return await ytDlpOnce(args, proxy);
       } catch (err) {
         lastErr = err;
         const msg = err instanceof Error ? err.message : String(err);
-        if (!shouldRetryYtDlp(msg, { attempt, maxAttempts: tries, hasProxy: !!proxy })) break;
+        if (!shouldRetryYtDlp(msg, { attempt, maxAttempts: tries, hasProxy: !!proxy, rotating })) break;
         await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
       }
     }
@@ -430,25 +445,32 @@ async function runYtDlp(args: string[], retries = 2, route?: boolean): Promise<s
   // A rotating residential pool needs a couple more goes to find a clean exit.
   const proxyTries = Math.max(retries, 3);
 
-  if (route === false) return attemptOn('', retries);
-  if (route === true) return attemptOn(config.youtubeProxy, proxyTries);
+  if (route !== undefined) {
+    return attemptOn(route, retries, route === config.youtubeProxyFallback);
+  }
 
-  // Normal chain: the clean-IP bridge is the primary; the (intermittently
-  // working) datacenter proxy is the backup, so a bridge outage — the PC off,
-  // asleep, or its tunnel dropped — degrades instead of failing outright.
-  const chain = [config.youtubeProxy, config.youtubeProxyFallback].filter(Boolean);
-  for (const proxy of chain) {
+  // Normal chain. DIRECT is tier 1: with cookies + PO tokens it is the normal
+  // path on a clean host, costs nothing, and has no hop that can go down on its
+  // own. A wall or a flagged host IP therefore no longer takes YouTube down —
+  // the proxy hops are tried after it, in trial order: the free alt hop (a
+  // local WARP proxy) covers a flagged host IP, and the metered residential
+  // fallback is reached only when both free routes fail, so its balance is
+  // spent only on a real block. Fixed hops get a single retry for transient
+  // hiccups; the rotating fallback gets more, because each try is a new exit.
+  try {
+    return await attemptOn('', retries);
+  } catch {
+    /* fall through to the proxy hops */
+  }
+  for (const hop of youtubeProxyHops()) {
+    const rotating = hop === config.youtubeProxyFallback;
     try {
-      return await attemptOn(proxy, proxyTries);
+      return await attemptOn(hop, rotating ? proxyTries : 1, rotating);
     } catch {
-      /* fall through to the next route */
+      /* fall through to the next hop */
     }
   }
-  // A direct attempt is still made last: YouTube's IP flagging is dynamic and we
-  // have seen direct work, so a dead proxy must not take YouTube down. With a
-  // proxy configured it is a single attempt (the original behaviour); with none,
-  // it keeps the caller's retry budget.
-  return attemptOn('', chain.length > 0 ? 0 : retries);
+  throw lastErr;
 }
 
 /**
@@ -465,19 +487,34 @@ export type YoutubeHealth =
   | 'bridge'
   | 'down'
   | 'unknown';
+
+/** How a configured proxy hop is named in alerts, by position in the chain. */
+export type YoutubeHopName = 'primary' | 'alt' | 'fallback';
+
+/** Extra findings from the last probe, for alert wording. */
+export interface YoutubeHealthContext {
+  /** A configured hop that refused connections during the last probe — the
+   *  actionable part of a `bridge` status, and a useful note on the others. */
+  unreachableHop?: YoutubeHopName;
+  /** The hop that resolved when direct did not (the canary is degraded onto
+   *  it). Absent when direct succeeded or nothing worked. */
+  carryingHop?: YoutubeHopName;
+}
+
 const CANARY_URL = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ';
 let ytHealth: YoutubeHealth = 'unknown';
 let ytHealthAt = 0;
+let ytHealthContext: YoutubeHealthContext = {};
 /** Alert bookkeeping for the confirmation rule in decidePublish(). */
 let ytAlert: YoutubeAlertState = { published: 'unknown', pending: null, pendingCount: 0 };
-let ytHealthListener: ((status: YoutubeHealth) => void) | null = null;
+let ytHealthListener: ((status: YoutubeHealth, context: YoutubeHealthContext) => void) | null = null;
 
 export function youtubeHealth(): { status: YoutubeHealth; checkedAt: number } {
   return { status: ytHealth, checkedAt: ytHealthAt };
 }
 
 /** Register a callback fired only when the status actually changes. */
-export function setYoutubeHealthListener(cb: ((status: YoutubeHealth) => void) | null): void {
+export function setYoutubeHealthListener(cb: ((status: YoutubeHealth, context: YoutubeHealthContext) => void) | null): void {
   ytHealthListener = cb;
 }
 
@@ -512,9 +549,10 @@ export function decidePublish(
   }
   // How many consecutive probes a status needs before it is announced.
   //
-  // 'proxy' is the one that fires on a transient: the bridge can be perfectly
-  // reachable while a single proxied resolve happens to fail, and the direct
-  // route still working is NOT proof the proxy is broken. It therefore takes a
+  // 'proxy' is the one that fires on a transient: every hop can be perfectly
+  // reachable while one resolve happens to fail — and it now pages when the
+  // METERED fallback is carrying playback, so a blip there must not be
+  // reported as "balance is being spent" until it holds. It therefore takes a
   // third consecutive sighting (three 15-minute probes, so 45 minutes) before
   // anyone is paged. Every other status is specific enough at two.
   const needed = status === 'proxy' ? 3 : 2;
@@ -527,54 +565,89 @@ export function decidePublish(
   return { publish: status, state: { published: status, pending: null, pendingCount: 0 } };
 }
 
+/** Names a hop by its position in the chain (by URL identity, since that is
+ *  what the fetchers route on). */
+function hopName(hop: string): YoutubeHopName {
+  if (hop === config.youtubeProxy) return 'primary';
+  if (hop === config.youtubeProxyAlt) return 'alt';
+  return 'fallback';
+}
+
+/** Per-route outcomes of a canary probe, in trial order. */
+export interface YoutubeProbeResults {
+  /** 'ok' or the error text of the direct attempt. */
+  direct: string;
+  /** Each hop examined after direct failed: 'ok', 'unreachable' (the endpoint
+   *  refused connections, checked before yt-dlp), or the error text. */
+  hops: { name: YoutubeHopName; result: string }[];
+}
+
+/**
+ * Classify a canary probe into a health status. Pure, so the whole matrix —
+ * including the cases that used to be misread (a flagged IP vs. expired
+ * cookies vs. a dead hop vs. an empty balance) — is unit-tested without a
+ * network. Trial order: direct → primary → alt (WARP) → fallback (metered).
+ */
+export function classifyYoutubeProbe(r: YoutubeProbeResults): YoutubeHealth {
+  if (r.direct === 'ok') return 'ok';
+  // No hops configured: the old reading stands — a wall means the host IP is
+  // blocked, anything else is a genuine outage.
+  if (r.hops.length === 0) return isBotWall(r.direct) ? 'blocked' : 'down';
+  const last = r.hops[r.hops.length - 1];
+  if (last.result === 'ok') {
+    // Playback works. Through a free hop that is the intended degradation
+    // (silent); through the metered fallback it means both free routes are
+    // refusing us and the balance is being spent — worth an alert.
+    return last.name === 'fallback' ? 'proxy' : 'ok';
+  }
+  // Nothing got through: pick the most actionable cause. An empty balance is
+  // checked first — it is specific, it stops playback entirely, and it must
+  // not be misread as a wall (which is what sent us chasing the wrong cause
+  // when the balance ran out).
+  if (r.hops.some((h) => isProxyExhausted(h.result))) return 'exhausted';
+  // A hop that refuses connections is a fact yt-dlp cannot see; it is reported
+  // before the softer interpretations below.
+  if (r.hops.some((h) => h.result === 'unreachable')) return 'bridge';
+  if (isBotWall(r.direct) || r.hops.some((h) => isBotWall(h.result))) return 'auth';
+  if (r.hops.some((h) => isProxyError(h.result))) return 'proxy';
+  return 'down';
+}
+
 export async function probeYoutube(): Promise<YoutubeHealth> {
   const args = ['--no-playlist', '--get-url', '-f', AUDIO_FORMAT, CANARY_URL];
-  const attempt = async (useProxy: boolean): Promise<string> => {
+  const attempt = async (route: string): Promise<string> => {
     try {
-      await runYtDlp(args, 0, useProxy);
+      await runYtDlp(args, 0, route);
       return 'ok';
     } catch (err) {
       return err instanceof Error ? err.message : String(err);
     }
   };
 
-  let status: YoutubeHealth;
-  if (config.youtubeProxy) {
-    // Reachability first. An endpoint that refuses connections means the bridge
-    // itself is down (PC off/asleep, tunnel dropped) — a case yt-dlp reports the
-    // same way as a flagged exit, so the canary alone cannot see it. This check
-    // is instant, costs no quota, and yields an actionable status.
-    if (!(await proxyReachable(config.youtubeProxy))) {
-      status = 'bridge';
-    } else {
-      const proxied = await attempt(true);
-      if (proxied === 'ok') {
-        status = 'ok';
-      } else if (isProxyExhausted(proxied)) {
-        // The proxy is out of traffic. Specific and actionable — and crucially
-        // the DIRECT fallback's anti-bot wall must not relabel this as stale
-        // cookies, which is what sent us chasing the wrong cause when the
-        // balance ran out.
-        status = 'exhausted';
-      } else if (isProxyError(proxied)) {
-        // The proxy itself failed (dead, unreachable, 407). Whether or not the
-        // direct route works, the proxy is the actionable cause.
-        status = 'proxy';
-      } else {
-        // Two routes, four causes: a successful direct attempt means the proxy
-        // is the problem; a wall on either route means YouTube is refusing us.
-        const direct = await attempt(false);
-        if (direct === 'ok') status = 'proxy';
-        else if (isBotWall(proxied) || isBotWall(direct)) status = 'auth';
-        else status = 'down';
+  // Every route is probed ON ITS OWN — no fallback inside a probe — so a
+  // failure is attributed to the route that actually broke instead of being
+  // masked by a route that happens to work. Direct goes first (it is tier 1);
+  // the proxy hops are only reached when it fails. An endpoint that refuses
+  // connections is recorded as `unreachable` before yt-dlp runs: yt-dlp
+  // reports that case the same way as a flagged exit, so the canary cannot
+  // see it from the error alone, and the check is instant and costs no quota.
+  const results: YoutubeProbeResults = { direct: await attempt(''), hops: [] };
+  if (results.direct !== 'ok') {
+    for (const hop of youtubeProxyHops()) {
+      if (!(await proxyReachable(hop))) {
+        results.hops.push({ name: hopName(hop), result: 'unreachable' });
+        continue;
       }
+      const result = await attempt(hop);
+      results.hops.push({ name: hopName(hop), result });
+      if (result === 'ok') break;
     }
-  } else {
-    // Without a proxy there is nothing to compare against — but the honest
-    // reading of a wall here is "the IP is blocked", not "the cookies expired".
-    const direct = await attempt(false);
-    status = direct === 'ok' ? 'ok' : isBotWall(direct) ? 'blocked' : 'down';
   }
+  const status = classifyYoutubeProbe(results);
+  ytHealthContext = {
+    unreachableHop: results.hops.find((h) => h.result === 'unreachable')?.name,
+    carryingHop: results.direct !== 'ok' ? results.hops.find((h) => h.result === 'ok')?.name : undefined,
+  };
 
   ytHealth = status;
   ytHealthAt = Date.now();
@@ -582,7 +655,7 @@ export async function probeYoutube(): Promise<YoutubeHealth> {
   ytAlert = decided.state;
   if (decided.publish && ytHealthListener) {
     try {
-      ytHealthListener(decided.publish);
+      ytHealthListener(decided.publish, ytHealthContext);
     } catch {
       /* listener errors must not break the probe */
     }

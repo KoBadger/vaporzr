@@ -259,13 +259,20 @@ the deploy mentions it. (`--restart unless-stopped` keeps it alive across host
 reboots; it is only lost if the host itself is rebuilt.)
 
 ### Proxy
-If `YOUTUBE_PROXY` is set it's used for both yt-dlp resolve and the ffmpeg stream,
-so it must present a **sticky** exit IP (googlevideo URLs are IP-bound). Leave it
-unset to go direct, which works with cookies + the host PO-token provider (above).
+YouTube tries its routes in order: **direct first** (cookies + the host PO-token
+provider — free, and the normal path for a clean host IP), then `YOUTUBE_PROXY_ALT`
+(a free second egress — the intended deployment is a local Cloudflare WARP proxy:
+`warp-cli mode proxy` → `YOUTUBE_PROXY_ALT=http://127.0.0.1:40000`), then
+`YOUTUBE_PROXY_FALLBACK` (metered residential — reached only when both free routes
+fail, so its balance is spent only on a real block). `YOUTUBE_PROXY` is an optional
+first hop kept for the old clean-IP bridge; the VPS leaves it unset.
 
-With `YOUTUBE_PROXY_FALLBACK` also set, the stream fetch picks whichever route's
-egress matches the `ip=` recorded in the URL, so a URL minted by the fallback is
-fetched *through the fallback* instead of 403ing against a direct fetch.
+Every route that mints a googlevideo URL must present a **sticky** exit IP (the URLs
+are IP-bound), and the stream fetch picks whichever route's egress matches the `ip=`
+recorded in the URL — in both address families, because a WARP egress records an
+IPv6 `ip=` even when the resolve forced IPv4. The health canary probes each route on
+its own (so a failure is attributed to the route that broke), and on an `auth` alert
+it rotates the residential session onto a fresh exit and re-probes in 30s.
 
 ### Optional env knobs
 

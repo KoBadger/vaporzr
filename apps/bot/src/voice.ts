@@ -18,6 +18,7 @@ import { Readable, Transform } from 'node:stream';
 import { config } from '@vaporzr/core/config';
 import { tailFadeSeconds } from '@vaporzr/core/crossfade';
 import type { AudioTransport } from '@vaporzr/core/transport';
+import { youtubeProxyHops } from '@vaporzr/core/youtube';
 
 /**
  * User-Agent used when the bot itself (Node fetch) pulls a media stream.
@@ -1001,8 +1002,8 @@ export class VoiceManager implements AudioTransport {
 
   /** Cached undici ProxyAgents, keyed by proxy URL. */
   private proxyAgents = new Map<string, unknown>();
-  /** Cached egress IP per route (key '' = direct), so a googlevideo URL can be
-   *  matched to the route that actually minted it. */
+  /** Cached egress IP per route+family (key `${proxy}|${family}`, '' = direct),
+   *  so a googlevideo URL can be matched to the route that actually minted it. */
   private routeIps = new Map<string, Promise<string>>();
 
   /** fetch() through one specific proxy, reusing a cached ProxyAgent per route. */
@@ -1017,37 +1018,42 @@ export class VoiceManager implements AudioTransport {
     return (await uFetch(url, { ...init, dispatcher: agent } as never)) as unknown as Response;
   }
 
-  /** A route's egress IP ('' = direct), probed once and cached. */
-  private routeIp(proxy: string): Promise<string> {
-    let pending = this.routeIps.get(proxy);
+  /** A route's egress IP ('' = direct) for one address family, probed once and
+   *  cached per route+family. Both families are checked because the minting hop
+   *  records ITS egress in the URL: a WARP proxy egresses over IPv6 even when
+   *  yt-dlp resolved with --force-ipv4, so a WARP-minted URL carries an IPv6
+   *  `ip=` that a v4-only probe would never match. */
+  private routeIp(proxy: string, family: 4 | 6): Promise<string> {
+    const key = `${proxy}|${family}`;
+    let pending = this.routeIps.get(key);
     if (!pending) {
       pending = (async () => {
         try {
+          const probeUrl = family === 6 ? 'https://api64.ipify.org' : 'https://api.ipify.org';
           const res = proxy
-            ? await this.fetchViaProxy('https://api.ipify.org', proxy, {
+            ? await this.fetchViaProxy(probeUrl, proxy, {
                 signal: AbortSignal.timeout(6000),
               })
-            : await fetch('https://api.ipify.org', { signal: AbortSignal.timeout(6000) });
+            : await fetch(probeUrl, { signal: AbortSignal.timeout(6000) });
           return res.ok ? (await res.text()).trim() : '';
         } catch {
           return '';
         }
       })();
-      this.routeIps.set(proxy, pending);
+      this.routeIps.set(key, pending);
     }
     return pending;
   }
 
   /**
-   * fetch() for media hosts, routed through the proxy that can actually serve the
+   * fetch() for media hosts, routed through the hop that can actually serve the
    * URL, and always bounded by a stall timeout.
    *
    * googlevideo binds a stream to the IP that minted it and records that IP in
    * the URL. Fetching from any other exit returns 403 with zero bytes — so the
    * route is chosen by matching the URL's `ip=` against each configured route's
-   * egress, NOT by assuming the primary proxy minted it. With the bridge down the
-   * fallback proxy mints the URL, and "retrying direct" for one of those can only
-   * ever 403, which is what left a track playing from broken chunks.
+   * egress (both address families), NOT by assuming a particular hop minted it.
+   * The trial order mirrors the resolver's: direct, then the configured hops.
    */
   private async mediaFetch(url: string, init: RequestInit): Promise<Response> {
     // Hard ceiling per request: a stalled socket aborts instead of hanging, and
@@ -1059,24 +1065,25 @@ export class VoiceManager implements AudioTransport {
 
     if (!/googlevideo\.com\//.test(url)) return fetch(url, opts);
 
-    const mintedIp = /[?&]ip=([^&]+)/.exec(url)?.[1] ?? '';
-    const routes = [config.youtubeProxy, config.youtubeProxyFallback, ''].filter(
-      (r, i, all) => all.indexOf(r) === i,
-    );
+    // Address families differ: the `ip=` param can be URL-encoded IPv6.
+    const mintedIp = decodeURIComponent(/[?&]ip=([^&]+)/.exec(url)?.[1] ?? '');
+    const family: 4 | 6 = mintedIp.includes(':') ? 6 : 4;
+    const hops = youtubeProxyHops();
     let route: string | null = null;
     if (mintedIp) {
-      for (const candidate of routes) {
-        const ip = await this.routeIp(candidate);
+      for (const candidate of [...hops, '']) {
+        const ip = await this.routeIp(candidate, family);
         if (ip && ip === mintedIp) {
           route = candidate;
           break;
         }
       }
     }
-    // No route matched (the URL names no IP, or the minting proxy is gone):
-    // prefer the primary, else go direct. A 403 here is survivable — the caller
-    // refreshes the URL, which re-resolves through whatever route works now.
-    if (route === null) route = config.youtubeProxy || '';
+    // No route matched (the URL names no IP, or the minting hop is gone):
+    // prefer the first configured hop, else go direct. A 403 here is
+    // survivable — the caller refreshes the URL, which re-resolves through
+    // whatever route works now.
+    if (route === null) route = hops[0] ?? '';
     if (!route) return fetch(url, opts);
 
     try {
@@ -1086,7 +1093,7 @@ export class VoiceManager implements AudioTransport {
       // Only a URL minted for THIS host can be served directly; anything else is
       // bound to another exit, so failing fast beats a guaranteed 403 and lets
       // the refresh path re-resolve instead.
-      if (mintedIp && mintedIp === (await this.routeIp(''))) {
+      if (mintedIp && mintedIp === (await this.routeIp('', family))) {
         console.warn(`[voice] proxied media fetch failed (${detail}) — retrying direct`);
         return fetch(url, opts);
       }
