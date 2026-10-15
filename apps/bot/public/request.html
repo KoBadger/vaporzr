@@ -17,6 +17,14 @@ body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:c
 h1{margin:0 0 4px;font-size:16px;letter-spacing:3px;
   background:linear-gradient(90deg,var(--accent2),var(--accent));-webkit-background-clip:text;background-clip:text;color:transparent}
 p.sub{margin:0 0 16px;font-size:12px;color:#94a3b8}
+.jam-head{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+.jam-logo{width:54px;height:54px;flex:0 0 54px;border-radius:12px;
+  box-shadow:0 0 0 1px rgba(140,160,255,.25),0 8px 22px rgba(106,92,255,.35)}
+.jam-title{min-width:0}
+.jam-title h1{margin:0 0 3px}
+.jam-title p.sub{margin:0}
+#bars{width:100%;height:56px;display:block;border-radius:10px;margin:2px 0 14px;
+  background:rgba(10,14,32,.55);border:1px solid rgba(140,160,255,.16)}
 input{width:100%;padding:12px 14px;border-radius:11px;border:1px solid rgba(140,160,255,.3);
   background:rgba(10,14,32,.7);color:#e2e8f0;font-size:15px;outline:none}
 input:focus{border-color:var(--accent)}
@@ -73,8 +81,14 @@ button:disabled{opacity:.55;cursor:default}
 </head>
 <body>
 <div class="card">
-  <h1>VAPORZR</h1>
-  <p class="sub" id="sub">Request a song — it gets queued for everyone.</p>
+  <div class="jam-head">
+    <img class="jam-logo" src="/logo.gif" alt="Vaporzr" />
+    <div class="jam-title">
+      <h1>VAPORZR</h1>
+      <p class="sub" id="sub">Request a song — it gets queued for everyone.</p>
+    </div>
+  </div>
+  <canvas id="bars" aria-hidden="true"></canvas>
   <input id="who" placeholder="Your name (shows on the queue)" autocomplete="off" maxlength="24" />
   <input id="q" placeholder="Song, artist, or YouTube query…" autocomplete="off" autofocus />
   <button id="go">＋ Request</button>
@@ -258,6 +272,94 @@ button:disabled{opacity:.55;cursor:default}
     }
   }
 
+  /* ---- Mini live bars: the same 8 fps spectrum feed the panel and /viz draw.
+     Connects as a read-only guest — the `vz-` name prefix keeps it out of the
+     jam roster, and guests can watch but never command. Falls back to the idle
+     travelling wave whenever nothing is playing. ---- */
+  var barsEl = document.getElementById('bars'), bctx = barsEl ? barsEl.getContext('2d') : null;
+  var bTarget = null, bDisp = [], bPeaks = [], bLast = 0, bWS = null;
+  var bDpr = Math.min(2, window.devicePixelRatio || 1);
+  function sizeBars() {
+    if (!barsEl) return;
+    var r = barsEl.getBoundingClientRect();
+    barsEl.width = Math.max(1, Math.round(r.width * bDpr));
+    barsEl.height = Math.max(1, Math.round(r.height * bDpr));
+  }
+  function initDisp(n) {
+    bDisp = []; bPeaks = [];
+    for (var i = 0; i < n; i++) { bDisp.push(0); bPeaks.push(0); }
+  }
+  function bRound(c, x, y, w, h, rad) {
+    c.beginPath();
+    c.moveTo(x + rad, y);
+    c.arcTo(x + w, y, x + w, y + h, rad);
+    c.arcTo(x + w, y + h, x, y + h, rad);
+    c.arcTo(x, y + h, x, y, rad);
+    c.arcTo(x, y, x + w, y, rad);
+    c.closePath();
+    c.fill();
+  }
+  function drawBars(now) {
+    if (bctx && !document.hidden) {
+      var W = barsEl.width, H = barsEl.height;
+      bctx.clearRect(0, 0, W, H);
+      var N = bDisp.length || 48;
+      if (!bDisp.length) initDisp(N);
+      var active = bLast > 0 && now - bLast < 2000;
+      var baseY = H * 0.72, maxH = H * 0.52, slot = W / N;
+      var barW = Math.max(2 * bDpr, Math.min(slot * 0.55, 8 * bDpr));
+      for (var i = 0; i < N; i++) {
+        var tv = active && bTarget ? (bTarget[i] || 0) : 0;
+        bDisp[i] += (tv - bDisp[i]) * 0.35;
+        if (active && tv > bPeaks[i]) bPeaks[i] = tv;
+        else bPeaks[i] = Math.max(bDisp[i], bPeaks[i] - 0.006);
+        var v = active
+          ? bDisp[i]
+          : (0.10 + 0.07 * Math.sin(now / 620 + i * 0.55) + 0.03 * Math.sin(now / 1430 - i * 0.31));
+        var h = Math.max(2 * bDpr, v * maxH), x = i * slot + (slot - barW) / 2;
+        var g = bctx.createLinearGradient(0, baseY, 0, baseY - h);
+        g.addColorStop(0, 'rgba(106,92,255,.95)');
+        g.addColorStop(1, 'rgba(0,240,255,.95)');
+        bctx.fillStyle = g;
+        bRound(bctx, x, baseY - h, barW, h, barW / 2);
+        bctx.fillStyle = 'rgba(246,250,255,.9)';
+        bctx.fillRect(x, baseY - h - 2 * bDpr, barW, 2 * bDpr);
+      }
+    }
+    requestAnimationFrame(drawBars);
+  }
+  function connectBars() {
+    if (bWS || document.hidden || !barsEl) return;
+    var url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
+    try { bWS = new WebSocket(url); } catch (e) { bWS = null; return; }
+    bWS.onopen = function () {
+      try {
+        bWS.send(JSON.stringify({ type: 'hello', role: 'panel', name: 'vz-jam' }));
+        bWS.send(JSON.stringify({ type: 'panel:subscribe', channels: ['visuals'] }));
+      } catch (e) {}
+    };
+    bWS.onmessage = function (ev) {
+      var m;
+      try { m = JSON.parse(ev.data); } catch (e) { return; }
+      if (m.type === 'visuals:bars' && m.bars && m.bars.length) {
+        if (bDisp.length !== m.bars.length) initDisp(m.bars.length);
+        bTarget = m.bars;
+        bLast = nowMs();
+      }
+    };
+    bWS.onclose = function () { bWS = null; if (!document.hidden) setTimeout(connectBars, 4000); };
+    bWS.onerror = function () { try { bWS.close(); } catch (e) {} };
+  }
+  function nowMs() { return window.performance && performance.now ? performance.now() : Date.now(); }
+  function initBars() {
+    if (!barsEl) return;
+    sizeBars();
+    initDisp(48);
+    requestAnimationFrame(drawBars);
+    window.addEventListener('resize', sizeBars);
+    connectBars();
+  }
+
   function pollQueue() {
     if (document.hidden) return; // no point polling a tab nobody is looking at
     fetch('/api/queue', { cache: 'no-store' })
@@ -267,8 +369,13 @@ button:disabled{opacity:.55;cursor:default}
   }
   pollQueue();
   setInterval(pollQueue, 5000);
-  // Coming back to the tab should not show a 5 s stale queue.
-  document.addEventListener('visibilitychange', function () { if (!document.hidden) pollQueue(); });
+  initBars();
+  // Coming back to the tab should not show a 5 s stale queue — and the bars
+  // socket (already closed while hidden to save a phone's battery) reconnects.
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) { pollQueue(); connectBars(); }
+    else if (bWS) { try { bWS.close(); } catch (e) {} bWS = null; }
+  });
 })();
 </script>
 </body>

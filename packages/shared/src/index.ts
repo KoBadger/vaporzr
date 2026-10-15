@@ -118,7 +118,8 @@ export type CommandName =
   | 'ambient'
   | 'voteskip'
   | 'dedupe'
-  | 'skipto';
+  | 'skipto'
+  | 'share-jam';
 
 export interface CommandMessage {
   type: 'cmd';
