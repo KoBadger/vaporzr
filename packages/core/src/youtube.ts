@@ -100,9 +100,47 @@ export function liveCookiesPath(): string {
   return path.join(config.dataDir, 'youtube-cookies.txt');
 }
 
+/**
+ * Copy the configured (mounted) jar over the live jar when the mount is newer,
+ * so dropping a fresh cookies.txt on the host actually takes effect.
+ *
+ * Without this the live jar wins forever: `activeCookiesPath()` prefers it, so
+ * replacing YOUTUBE_COOKIES_PATH changed nothing and the bot kept running on
+ * whatever jar was in the data volume — even a stale one whose auth cookies had
+ * been dropped. `/health` reports the age of the ACTIVE jar, so it looked fine.
+ *
+ * Only ever runs when the live jar already exists and is strictly older. A jar
+ * written through the bot (Discord `/cookie-upload`, `refreshYoutubeCookies`)
+ * is newer than the mount by definition, so those are never clobbered. The copy
+ * stamps a fresh mtime, which makes repeated calls no-ops.
+ */
+export function syncConfiguredCookies(): { from: string; to: string; bytes: number } | null {
+  const configured = config.youtubeCookiesPath;
+  if (!configured) return null;
+  const live = liveCookiesPath();
+  // Dev runs often point YOUTUBE_COOKIES_PATH straight at the live path.
+  if (path.resolve(configured) === path.resolve(live)) return null;
+  try {
+    // With no live jar the configured path is already in effect — nothing to do.
+    if (!fs.existsSync(live) || !fs.existsSync(configured)) return null;
+    if (fs.statSync(configured).mtimeMs <= fs.statSync(live).mtimeMs) return null;
+    fs.copyFileSync(configured, live);
+    const bytes = fs.statSync(live).size;
+    console.log(
+      `[youtube] live cookie jar refreshed from ${configured} (${bytes} bytes) — the mounted jar was newer`,
+    );
+    return { from: configured, to: live, bytes };
+  } catch {
+    return null;
+  }
+}
+
 /** The cookie jar actually in effect: the uploaded/live one if it exists, else
  *  the configured (mounted) path. Null when neither is available. */
 function activeCookiesPath(): string | null {
+  // Cheap (two stats) and idempotent, so a replaced mount is picked up by the
+  // next resolve instead of waiting for a container restart.
+  syncConfiguredCookies();
   try {
     const live = liveCookiesPath();
     if (fs.existsSync(live)) return live;
