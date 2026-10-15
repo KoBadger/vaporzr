@@ -34,9 +34,12 @@ import { playlistStore } from '@vaporzr/core/playlists';
 interface JamQueueTrack {
   name: string;
   artists: string;
+  album: string;
   addedBy: string;
   durationMs: number;
   image?: string;
+  /** Source key for the row's colour dot / art fallback glyph. */
+  source?: string;
 }
 
 /** Queue origins that are plumbing rather than people. The jam roster drops
@@ -897,28 +900,52 @@ export class Bridge {
    *  `playing` is the row at the cursor, which exists even while playback is
    *  idle ("starts with this"), so it is NOT the same as audio actually
    *  coming out. `playingNow` carries the truthful flag — the page must not
-   *  print "NOW PLAYING" over a silent queue. */
-  jamQueue(): { playing: JamQueueTrack | null; playingNow: boolean; tracks: JamQueueTrack[] } {
+   *  print "NOW PLAYING" over a silent queue. The progress fields describe the
+   *  cursor row too; the page interpolates `positionMs` from its LOCAL receipt
+   *  time, so client/server clock skew cannot bend the bar. */
+  jamQueue(): {
+    playing: JamQueueTrack | null;
+    playingNow: boolean;
+    ended: boolean;
+    positionMs: number;
+    durationMs: number;
+    updatedAt: number;
+    queueTotal: number;
+    tracks: JamQueueTrack[];
+  } {
     const snap = this.queue.getSnapshot();
     const map = (t: {
       name?: string;
       artists?: string[];
+      album?: string;
       addedBy?: string;
       durationMs?: number;
       image?: string;
+      source?: string;
     }): JamQueueTrack => ({
       name: t.name || 'Unknown',
       artists: (t.artists ?? []).join(', '),
+      album: t.album || '',
       addedBy: t.addedBy && !QUEUE_ORIGINS.has(t.addedBy) ? t.addedBy : '',
       durationMs: t.durationMs ?? 0,
       image: t.image,
+      source: t.source,
     });
     const cur = snap.currentIndex;
+    const current = cur >= 0 ? snap.tracks[cur] : undefined;
     // The current track lives in the list too, so "up next" starts after it.
     const start = cur >= 0 ? cur + 1 : 0;
     return {
-      playing: cur >= 0 && snap.tracks[cur] ? map(snap.tracks[cur]) : null,
+      playing: current ? map(current) : null,
       playingNow: cur >= 0 && snap.state.playing === true,
+      ended: this.queue.isPlayedThrough(),
+      // Raw position, playing or not: a PAUSED track renders its frozen bar
+      // from it. A leftover position on an ended queue is handled by the page
+      // (it checks `ended` first and never animates from a stale value).
+      positionMs: snap.state.positionMs ?? 0,
+      durationMs: snap.state.durationMs || current?.durationMs || 0,
+      updatedAt: snap.state.updatedAt ?? 0,
+      queueTotal: snap.tracks.length,
       tracks: snap.tracks.slice(start, start + 30).map(map),
     };
   }

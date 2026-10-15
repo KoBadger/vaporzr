@@ -90,3 +90,59 @@ describe('Bridge.requestTrack (jam page) duplicate handling', () => {
     expect(q.totalEnqueued).toBe(2);
   });
 });
+
+describe('Bridge.jamQueue (jam page payload)', () => {
+  it('does not claim NOW PLAYING over a silent queue, and keeps the cursor row', () => {
+    // The cursor sits on the first track the moment it is queued — long before
+    // play is pressed. The page must be able to tell that apart from audio.
+    const q = new QueueManager();
+    const b = bridgeWith(q, []);
+    q.enqueue(yt('youtube:video:a', 'A'), 'Nova');
+    const snap = b.jamQueue();
+    expect(snap.playing?.name).toBe('A');
+    expect(snap.playingNow).toBe(false);
+    expect(snap.ended).toBe(false);
+  });
+
+  it('reports live progress while playing and freezes it on pause', () => {
+    const q = new QueueManager();
+    const b = bridgeWith(q, []);
+    q.enqueue(yt('youtube:video:a', 'A'), 'Nova');
+    q.setState({ playing: true, positionMs: 12_000, durationMs: 200_000 });
+    let snap = b.jamQueue();
+    expect(snap.playingNow).toBe(true);
+    expect(snap.positionMs).toBe(12_000);
+    expect(snap.durationMs).toBe(200_000);
+    expect(snap.updatedAt).toBeGreaterThan(0);
+
+    // Pause keeps the position — a frozen bar needs it — and leaves `ended`
+    // false, which is what the page uses to pick PAUSED over QUEUE FINISHED.
+    q.setState({ playing: false });
+    snap = b.jamQueue();
+    expect(snap.playingNow).toBe(false);
+    expect(snap.positionMs).toBe(12_000);
+    expect(snap.ended).toBe(false);
+  });
+
+  it('distinguishes a finished queue from an idle one', () => {
+    const q = new QueueManager();
+    const b = bridgeWith(q, []);
+    q.enqueue(yt('youtube:video:a', 'A'), 'Nova');
+    q.markPlayedThrough();
+    expect(b.jamQueue().ended).toBe(true);
+  });
+
+  it('shows only what plays after the cursor, with the full queue size and row sources', () => {
+    const q = new QueueManager();
+    const b = bridgeWith(q, []);
+    q.enqueue(yt('youtube:video:a', 'A'), 'request'); // machine origin — no chip
+    q.enqueue(yt('youtube:video:b', 'B'), 'Nova');
+    q.enqueue(yt('youtube:video:c', 'C'), 'Iris');
+    const snap = b.jamQueue();
+    expect(snap.queueTotal).toBe(3);
+    expect(snap.tracks.map((t) => t.name)).toEqual(['B', 'C']);
+    expect(snap.tracks[0].addedBy).toBe('Nova');
+    expect(snap.tracks[0].source).toBe('youtube');
+    expect(snap.tracks[0].album).toBe('YouTube');
+  });
+});

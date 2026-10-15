@@ -12,7 +12,7 @@
 body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
   font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#e2e8f0;
   background:#0b1026}
-.card{width:min(440px,92vw);background:rgba(16,22,46,.85);border:1px solid rgba(140,160,255,.22);
+.card{width:min(460px,94vw);background:rgba(16,22,46,.85);border:1px solid rgba(140,160,255,.22);
   border-radius:18px;padding:26px 22px;box-shadow:0 20px 60px rgba(0,0,0,.5)}
 h1{margin:0 0 4px;font-size:16px;letter-spacing:3px;
   background:linear-gradient(90deg,var(--accent2),var(--accent));-webkit-background-clip:text;background-clip:text;color:transparent}
@@ -27,19 +27,48 @@ button:disabled{opacity:.55;cursor:default}
 #msg{margin-top:14px;font-size:13px;min-height:18px}
 #msg.ok{color:#86efac}
 #msg.err{color:#fca5a5}
-/* Queue list: title, artist, and who asked for it. Sized for a phone. */
+/* Queue: read-only for everyone — title, artist, who asked, and how long to wait. */
 #queue{margin-top:18px;border-top:1px solid rgba(140,160,255,.18);padding-top:10px}
-.q-head{font-size:10px;letter-spacing:2px;color:#64748b;font-weight:700;margin:10px 0 4px}
+.q-head{font-size:10px;letter-spacing:2px;color:#64748b;font-weight:700;margin:10px 0 4px;
+  display:flex;align-items:center;gap:6px}
 .q-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid rgba(140,160,255,.08)}
 .q-row:last-child{border-bottom:0}
-.q-art{width:34px;height:34px;border-radius:6px;background:#1e293b;object-fit:cover;flex:0 0 34px}
+.q-num{width:16px;flex:0 0 16px;text-align:right;font-size:11px;color:#64748b}
+.q-art{position:relative;width:34px;height:34px;border-radius:6px;background:#1e293b;
+  object-fit:cover;flex:0 0 34px;display:flex;align-items:center;justify-content:center;overflow:hidden}
+.q-art.big{width:56px;height:56px;flex-basis:56px;border-radius:10px}
+.q-art .glyph{font-size:14px;color:var(--sc,#94a3b8);opacity:.85}
+.q-art.big .glyph{font-size:20px}
+.q-art img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.q-art .dot{position:absolute;right:0;top:0;width:8px;height:8px;border-radius:50%;
+  background:var(--sc,#64748b);box-shadow:0 0 0 2px rgba(10,14,32,.85)}
+.q-art.big .dot{display:none}
 .q-meta{min-width:0;flex:1}
 .q-name{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.q-sub{font-size:11px;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.q-sub{font-size:11px;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
 .q-by{color:#a5b4fc}
 .q-dur{color:#64748b}
+.q-est{color:#67e8f9}
+.q-badge{font-size:9px;font-weight:700;letter-spacing:1px;border:1px solid var(--sc,#64748b);
+  color:var(--sc,#94a3b8);border-radius:4px;padding:1px 4px;margin-left:6px;vertical-align:1px}
 .q-empty{font-size:12px;color:#64748b}
-#q-now .q-name{color:#22d3ee}
+.now-label{font-size:10px;letter-spacing:2px;font-weight:700;margin:10px 0 6px;color:#22d3ee;
+  display:flex;align-items:center;gap:6px}
+.now-label.paused{color:#fbbf24}
+.now-label.idle{color:#64748b}
+.now-card{display:flex;gap:12px;align-items:flex-start;background:rgba(12,18,40,.6);
+  border:1px solid rgba(34,211,238,.22);border-radius:14px;padding:10px}
+.now-card.paused{border-color:rgba(251,191,36,.25)}
+.now-card.idle{border-color:rgba(140,160,255,.16)}
+.bar{margin-top:8px;height:4px;border-radius:3px;background:rgba(140,160,255,.18);overflow:hidden}
+.bar-fill{height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:3px}
+.trow{display:flex;justify-content:space-between;font-size:10px;color:#7c8aa5;margin-top:4px}
+.eq{display:inline-flex;gap:2px;align-items:flex-end;height:11px}
+.eq i{width:2px;background:currentColor;border-radius:1px;height:4px;
+  animation:eq .9s ease-in-out infinite}
+.eq i:nth-child(2){animation-delay:.15s}
+.eq i:nth-child(3){animation-delay:.3s}
+@keyframes eq{0%,100%{height:3px}50%{height:11px}}
 </style>
 </head>
 <body>
@@ -68,9 +97,7 @@ button:disabled{opacity:.55;cursor:default}
   }
   function say(text, cls) { msg.textContent = text; msg.className = cls || ''; }
   function submit() {
-    // A request is already in flight — the Enter handler bypasses the
-    // disabled button, so guard here or a double-tap posts twice.
-    if (go.disabled) return;
+    if (go.disabled) return; // Enter + click double-fire guard
     var v = q.value.trim();
     if (!v) { q.focus(); return; }
     go.disabled = true;
@@ -97,9 +124,23 @@ button:disabled{opacity:.55;cursor:default}
   q.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
 
   /* ---- The queue, live ----
-     Read-only: title, artist, and who asked for it. Polled rather than streamed
-     because this page is a plain form on a phone, with no socket. */
+     Read-only: what is on now, what is next, who asked, and roughly how long
+     until each song starts. Polled rather than streamed because this page is a
+     plain form on a phone, with no socket; the progress bar interpolates
+     locally between polls so it still moves smoothly. */
   var qList = document.getElementById('q-list'), qNow = document.getElementById('q-now');
+
+  // Source colours and fallback glyphs — same palette as the panel.
+  var SRC = {
+    youtube:    { c: '#ff4d5e', g: '\u25b6' },
+    spotify:    { c: '#1db954', g: '\u266a' },
+    soundcloud: { c: '#ff7700', g: '\u2601' },
+    apple:      { c: '#fa57c7', g: '\u266b' },
+    suno:       { c: '#8b5cf6', g: '\u273a' },
+    local:      { c: '#38bdf8', g: '\u2302' }
+  };
+  function srcOf(s) { return SRC[String(s || '')] || { c: '#64748b', g: '\u266b' }; }
+
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
@@ -110,29 +151,115 @@ button:disabled{opacity:.55;cursor:default}
     var m = Math.floor(s / 60), ss = s % 60;
     return m + ':' + (ss < 10 ? '0' : '') + ss;
   }
-  function rowHtml(t) {
-    var art = t.image
-      ? '<img class="q-art" src="' + esc(t.image) + '" alt="" loading="lazy" onerror="this.style.visibility=\'hidden\'">'
-      : '<div class="q-art"></div>';
-    var bits = [esc(t.artists)];
+  function mins(ms) { return Math.max(1, Math.round(ms / 60000)); }
+
+  // Artwork goes through the same relay the panel uses (handles CORS/expiry).
+  function artSrc(u) { return u && /^https?:\/\//.test(u) ? '/art?u=' + encodeURIComponent(u) : null; }
+  function artHtml(t, big) {
+    var s = srcOf(t.source), img = artSrc(t.image);
+    return '<div class="q-art' + (big ? ' big' : '') + '" style="--sc:' + s.c + '">' +
+      '<span class="glyph">' + s.g + '</span>' +
+      (img ? '<img src="' + esc(img) + '" alt="" loading="lazy" onerror="this.remove()">' : '') +
+      '<span class="dot"></span></div>';
+  }
+  function subHtml(t, extraBits) {
+    var bits = [esc(t.artists) || esc(t.album)];
     if (t.addedBy) bits.push('<span class="q-by">' + esc(t.addedBy) + '</span>');
     if (t.durationMs) bits.push('<span class="q-dur">' + fmtMs(t.durationMs) + '</span>');
-    var sub = bits.filter(Boolean).join(' \u00b7 ');
-    return '<div class="q-row">' + art + '<div class="q-meta"><div class="q-name">' +
-      esc(t.name) + '</div><div class="q-sub">' + sub + '</div></div></div>';
+    (extraBits || []).forEach(function (b) { bits.push(b); });
+    return bits.filter(Boolean).join(' \u00b7 ');
   }
+  function badgeHtml(t) {
+    return t.source ? '<span class="q-badge" style="--sc:' + srcOf(t.source).c + '">' +
+      esc(String(t.source).toUpperCase()) + '</span>' : '';
+  }
+
+  // The now-playing bar: interpolated locally from the last poll, so it keeps
+  // moving between the 5 s updates. Only the bar animates — never on pause.
+  var bar = null;
+  function tickBar() {
+    if (!bar) return;
+    var fill = document.getElementById('bar-fill'), txt = document.getElementById('t-cur');
+    if (!fill || !txt) return;
+    var pos = bar.pos;
+    if (bar.playing) pos = Math.min(bar.pos + (Date.now() - bar.at), Math.max(bar.dur - 500, 0));
+    var pct = bar.dur > 0 ? Math.max(0, Math.min(100, (pos / bar.dur) * 100)) : 0;
+    fill.style.width = pct + '%';
+    txt.textContent = fmtMs(pos);
+  }
+  setInterval(tickBar, 1000);
+
   function renderQueue(d) {
     var now = d && d.playing, tracks = (d && d.tracks) || [];
-    qNow.innerHTML = now ? '<div class="q-head">NOW PLAYING</div>' + rowHtml(now) : '';
-    if (tracks.length) {
-      var totalMs = tracks.reduce(function (a, t) { return a + (t.durationMs || 0); }, 0);
-      var total = totalMs ? ' \u00b7 ~' + Math.max(1, Math.round(totalMs / 60000)) + ' min' : '';
-      qList.innerHTML = '<div class="q-head">UP NEXT \u00b7 ' + tracks.length + total + '</div>' + tracks.map(rowHtml).join('');
+    var playingNow = !!(d && d.playingNow), ended = !!(d && d.ended);
+    var pos = (d && d.positionMs) || 0, dur = (d && d.durationMs) || 0;
+    var total = (d && d.queueTotal) || 0;
+
+    // The cursor row exists even while nothing is playing, so its label tells
+    // the truth about what is (or is not) coming out of the speakers.
+    var paused = !playingNow && !ended && now && pos > 0 && dur > pos + 2000;
+    var label = playingNow ? 'NOW PLAYING' : paused ? 'PAUSED' : ended ? 'QUEUE FINISHED' : now ? 'UP NEXT' : '';
+    var cls = playingNow ? '' : paused ? ' paused' : ' idle';
+
+    qNow.innerHTML = now ? (
+      '<div class="now-label' + cls + '">' +
+        (playingNow ? '<span class="eq"><i></i><i></i><i></i></span>' : '') +
+        label + '</div>' +
+      '<div class="now-card' + cls + '">' +
+        artHtml(now, true) +
+        '<div class="q-meta">' +
+          '<div class="q-name">' + esc(now.name) + badgeHtml(now) + '</div>' +
+          '<div class="q-sub">' + subHtml(now) + '</div>' +
+          (playingNow || paused ? (
+            '<div class="bar"><div class="bar-fill" id="bar-fill"></div></div>' +
+            '<div class="trow"><span id="t-cur">' + fmtMs(pos) + '</span>' +
+            '<span>' + (dur > 0 ? fmtMs(dur) : '') + '</span></div>'
+          ) : '') +
+        '</div>' +
+      '</div>'
+    ) : '';
+    bar = (now && (playingNow || paused) && dur > 0)
+      ? { pos: Math.min(pos, dur), dur: dur, playing: playingNow, at: Date.now() }
+      : null;
+    tickBar();
+
+    // "starts in ~N min" walks the queue: the current track's remaining time
+    // plus every song ahead of the row. Shown only while every duration in the
+    // chain is known — a gap would quietly understate the wait.
+    var acc = ended ? null : (now ? (playingNow || paused ? Math.max(0, dur - pos) : now.durationMs || 0) : 0);
+    if (acc === 0 && now) acc = null; // durations unknown — no estimates
+
+    var rows = tracks.map(function (t, i) {
+      var est = null;
+      if (acc !== null) {
+        est = '<span class="q-est">in ~' + mins(acc) + ' min</span>';
+        acc = t.durationMs > 0 ? acc + t.durationMs : null;
+      }
+      return '<div class="q-row">' +
+        '<span class="q-num">' + (i + 1) + '</span>' +
+        artHtml(t, false) +
+        '<div class="q-meta"><div class="q-name">' + esc(t.name) + '</div>' +
+        '<div class="q-sub">' + subHtml(t, est ? [est] : []) + '</div></div></div>';
+    }).join('');
+
+    if (rows) {
+      var known = tracks.filter(function (t) { return t.durationMs > 0; });
+      var totalMs = known.reduce(function (a, t) { return a + t.durationMs; }, 0);
+      if (now && !ended) totalMs += playingNow || paused ? Math.max(0, dur - pos) : now.durationMs || 0;
+      var head = 'UP NEXT \u00b7 ' + tracks.length + (totalMs > 0 ? ' \u00b7 ~' + mins(totalMs) + ' min' : '');
+      if (total > tracks.length) head += ' \u00b7 showing ' + tracks.length + ' of ' + total;
+      qList.innerHTML = '<div class="q-head">' + head + '</div>' + rows;
     } else {
-      qList.innerHTML = now ? '' : '<div class="q-head">QUEUE</div><div class="q-empty">Nothing queued yet \u2014 you could be first.</div>';
+      qList.innerHTML = !now
+        ? '<div class="q-head">QUEUE</div><div class="q-empty">Nothing queued yet \u2014 you could be first.</div>'
+        : ended
+          ? '<div class="q-empty" style="padding-top:8px">That\u2019s the whole queue \u2014 request the next one.</div>'
+          : '';
     }
   }
+
   function pollQueue() {
+    if (document.hidden) return; // no point polling a tab nobody is looking at
     fetch('/api/queue', { cache: 'no-store' })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (d) { if (d) renderQueue(d); })
@@ -140,6 +267,8 @@ button:disabled{opacity:.55;cursor:default}
   }
   pollQueue();
   setInterval(pollQueue, 5000);
+  // Coming back to the tab should not show a 5 s stale queue.
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) pollQueue(); });
 })();
 </script>
 </body>
