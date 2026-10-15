@@ -222,6 +222,10 @@ export class Bridge {
     s.setVisualizerSink((msg) => this.broadcastVisualizers(msg));
     s.voice.setOnVoiceChange((joined, channelId) => {
       this.broadcastPanels({ type: 'voice:update', joined, channelId: channelId ?? undefined });
+      // Joining starts a fresh jam. The roster belongs to the session, and the
+      // pill was carrying names over from the previous one — the same way the
+      // queue starts clean on a join.
+      if (joined) this.resetJamPresence();
     });
     const gid = this.primaryGuildId || '__primary__';
     s.setPcmSink((data: Buffer) => {
@@ -868,6 +872,10 @@ export class Bridge {
 
   private primaryGuildId: string | null = null;
 
+  /** Cut-off for jam attribution, reset when the bot joins a voice channel, so
+   *  the roster describes the session in progress rather than the last one. */
+  private jamEpoch = 0;
+
   getPrimaryGuildId(): string | null {
     return this.primaryGuildId;
   }
@@ -1203,7 +1211,9 @@ export class Bridge {
     const contributors = new Set<string>();
     for (const t of this.queue.getSnapshot().tracks) {
       const by = (t as { addedBy?: string }).addedBy;
-      if (by && !ORIGINS.has(by)) contributors.add(by);
+      // Ignore anything credited before the current voice session began.
+      const at = (t as { addedAt?: number }).addedAt ?? 0;
+      if (by && !ORIGINS.has(by) && at >= this.jamEpoch) contributors.add(by);
     }
     const names = [...people].sort();
     // The low-privilege request key, not the share key: a jam link grants
@@ -1222,6 +1232,17 @@ export class Bridge {
   /** Broadcast the jam roster. Called on connect, disconnect and queue change. */
   private broadcastPresence(): void {
     this.broadcast({ type: 'jam:presence', ...this.presence() });
+  }
+
+  /** Forget who was in the jam. Called when the bot joins a voice channel: the
+   *  client rosters are dropped and the attribution cut-off moves, so the pill
+   *  shows this session rather than the last one. Viewers re-announce themselves
+   *  (the Activity re-reports its participants every 30s). */
+  private resetJamPresence(): void {
+    this.jamEpoch = Date.now();
+    for (const c of [...this.panels, ...this.visualizers]) c.roster = undefined;
+    console.log('[bridge] jam roster reset (joined a voice channel)');
+    this.broadcastPresence();
   }
 
   sendToSocket(
