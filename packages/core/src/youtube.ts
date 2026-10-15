@@ -112,7 +112,9 @@ export function liveCookiesPath(): string {
  * Only ever runs when the live jar already exists and is strictly older. A jar
  * written through the bot (Discord `/cookie-upload`, `refreshYoutubeCookies`)
  * is newer than the mount by definition, so those are never clobbered. The copy
- * stamps a fresh mtime, which makes repeated calls no-ops.
+ * is re-stamped with a fresh mtime from our own clock, which makes repeated
+ * calls no-ops — the kernel's file timestamps come from a coarser clock than
+ * Date.now(), so the copy's own mtime can lag a utimes-set mount by a tick.
  */
 export function syncConfiguredCookies(): { from: string; to: string; bytes: number } | null {
   const configured = config.youtubeCookiesPath;
@@ -125,6 +127,12 @@ export function syncConfiguredCookies(): { from: string; to: string; bytes: numb
     if (!fs.existsSync(live) || !fs.existsSync(configured)) return null;
     if (fs.statSync(configured).mtimeMs <= fs.statSync(live).mtimeMs) return null;
     fs.copyFileSync(configured, live);
+    // Re-stamp with our fine-grained clock: copyFileSync lets the kernel stamp
+    // the destination from its coarse (jiffy) clock, which can read as OLDER
+    // than the mount when both happen within one tick — then this call would
+    // copy again on every resolve forever.
+    const now = new Date();
+    fs.utimesSync(live, now, now);
     const bytes = fs.statSync(live).size;
     console.log(
       `[youtube] live cookie jar refreshed from ${configured} (${bytes} bytes) — the mounted jar was newer`,
