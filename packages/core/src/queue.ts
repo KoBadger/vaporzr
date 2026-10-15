@@ -11,6 +11,11 @@ export interface QueueListener {
 export function trackKey(t: { name?: string; artists?: string[] }): string {
   const norm = (x: string): string => x.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   const name = norm(t.name ?? '')
+    // Multi-word phrases run FIRST: "official music video" has to disappear as a
+    // unit or the word-wise strip below would leave the "music" behind, and the
+    // same song from a music-video upload ("Song (Official Music Video)") would
+    // never collide with the clean title ("Song").
+    .replace(/\b(?:music|lyric|visuali[sz]er)\s+videos?\b/g, ' ')
     .replace(/\b(official|audio|lyric|lyrics|video|visuali[sz]er|hd|hq|remaster|remastered|mv)\b/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();

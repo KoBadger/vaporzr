@@ -68,6 +68,9 @@ button:disabled{opacity:.55;cursor:default}
   }
   function say(text, cls) { msg.textContent = text; msg.className = cls || ''; }
   function submit() {
+    // A request is already in flight — the Enter handler bypasses the
+    // disabled button, so guard here or a double-tap posts twice.
+    if (go.disabled) return;
     var v = q.value.trim();
     if (!v) { q.focus(); return; }
     go.disabled = true;
