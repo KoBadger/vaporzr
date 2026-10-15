@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { emptyState } from '@vaporzr/shared';
-import { QueueManager } from '@vaporzr/core/queue';
+import { QueueManager, trackKey } from '@vaporzr/core/queue';
 
 function track(uri: string, name = uri): { uri: string; name: string; artists: string[]; album: string; durationMs: number } {
   return { uri, name, artists: ['Artist'], album: '', durationMs: 200_000 };
@@ -51,6 +51,38 @@ describe('QueueManager.filterNew', () => {
       durationMs: 201_000,
     };
     expect(q.filterNew([other])).toHaveLength(0);
+  });
+});
+
+describe('QueueManager duplicate keys (music-video titles)', () => {
+  it('trackKey strips "music video"/"lyric video" as phrases, not just words', () => {
+    const key = (name: string): string => trackKey({ name, artists: ['Kredo'] });
+    // Word-wise stripping alone left the "music" behind ("song music"), so the
+    // same song from a music-video upload never collided with the clean title.
+    expect(key('Mikado (Official Music Video)')).toBe(key('Mikado'));
+    expect(key('Mikado (Lyric Video)')).toBe(key('Mikado'));
+    expect(key('Mikado — Official Music Video')).toBe(key('Mikado'));
+    expect(key('Mikado (Official Visualizer)')).toBe(key('Mikado'));
+  });
+
+  it('filterNew drops a music-video variant of a queued song', () => {
+    const q = new QueueManager();
+    q.enqueue({ ...track('spotify:track:a', 'Mikado'), artists: ['Kredo'] }, 'user');
+    const other = {
+      ...track('youtube:video:x', 'Mikado (Official Music Video)'),
+      artists: ['Kredo'],
+      durationMs: 201_000,
+    };
+    expect(q.filterNew([other])).toHaveLength(0);
+  });
+
+  it('dedupe() catches the music-video variant too', () => {
+    const q = new QueueManager();
+    q.setState({ playing: true });
+    q.enqueue({ ...track('youtube:video:x', 'Fix It'), artists: ['Kredo'] }, 'u');
+    q.enqueue({ ...track('youtube:video:y', 'Fix It (Official Music Video)'), artists: ['Kredo'] }, 'u');
+    expect(q.dedupe()).toBe(1);
+    expect(q.getSnapshot().tracks).toHaveLength(1);
   });
 });
 

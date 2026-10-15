@@ -15,7 +15,7 @@ import {
   type VaporzrTheme,
   type MediaSource,
 } from '@vaporzr/shared';
-import { QueueManager } from '@vaporzr/core/queue';
+import { QueueManager, trackKey } from '@vaporzr/core/queue';
 import { PlaybackController } from '@vaporzr/core/playback';
 import { PermissionsManager } from './permissions.js';
 import { VoiceManager } from './voice.js';
@@ -689,6 +689,28 @@ export class Bridge {
               this.notice('error', `No YouTube match for "${q}"`);
               return;
             }
+            const fresh = this.queue.filterNew([video]);
+            if (fresh.length === 0) {
+              // Already waiting — never stack a second copy. A "play now" for a
+              // duplicate should play the copy that is already there (matching
+              // by uri or the normalised title|artist key).
+              this.notice('info', `"${video.name}" is already in the queue.`);
+              if (playNow) {
+                const existing = this.queue
+                  .getSnapshot()
+                  .tracks.find((t) => t.uri === video.uri || (trackKey(t) !== '' && trackKey(t) === trackKey(video)));
+                if (existing && (await this.ensureVoice(guildId))) {
+                  const before = this.queue.getState().track?.uri ?? '';
+                  this.queue.focusUri(existing.uri);
+                  void this.playback.play().catch((err) => {
+                    console.error('[bridge] playSearch playback failed:', err instanceof Error ? err.message : err);
+                    this.notice('error', `Playback failed: ${err instanceof Error ? err.message : err}`);
+                    if (before) this.queue.focusUri(before);
+                  });
+                }
+              }
+              return;
+            }
             this.queue.enqueue(
               {
                 uri: video.uri,
@@ -761,7 +783,9 @@ export class Bridge {
           this.notice('error', `No saved vibe "${name}".`);
           break;
         }
-        s.queue.enqueueMany(
+        // Loading a vibe that is (partly) already queued must not stack a
+        // second copy of everything — same duplicate rule as the add paths.
+        const fresh = s.queue.filterNew(
           pl.tracks.map((t) => ({
             uri: t.uri,
             name: t.name,
@@ -771,9 +795,18 @@ export class Bridge {
             source: t.source as MediaSource,
             image: t.image,
           })),
-          'vibe',
         );
-        this.notice('success', `Loaded "${pl.name}" (${pl.tracks.length} tracks)`);
+        if (fresh.length === 0) {
+          this.notice('info', `"${pl.name}" is already in the queue.`);
+          break;
+        }
+        s.queue.enqueueMany(fresh, 'vibe');
+        const dropped = pl.tracks.length - fresh.length;
+        this.notice(
+          'success',
+          `Loaded "${pl.name}" (${fresh.length} track${fresh.length === 1 ? '' : 's'}` +
+            `${dropped > 0 ? ` · ${dropped} already queued` : ''})`,
+        );
         break;
       }
       default:
@@ -831,12 +864,26 @@ export class Bridge {
       // flood the queue, and say so when the cap bites.
       const capped = tracks.slice(0, 25);
       const s = this.sessions.primary ?? this.fallback;
-      for (const t of capped) s.queue.enqueue(t, credit);
+      // Never stack a song that's already waiting. The Discord add paths refuse
+      // duplicates, and the jam page has the highest chance of them: several
+      // guests ask for the same song, or one guest double-taps a slow resolve.
+      // Without this filter every repeat landed as another queue entry.
+      const fresh = s.queue.filterNew(capped);
+      if (fresh.length === 0) {
+        const label = capped.length === 1 ? `"${capped[0].name}" is` : 'Those tracks are';
+        return { ok: false, error: `${label} already in the queue.` };
+      }
+      const skipped = capped.length - fresh.length;
+      // One placement decision for the whole batch (same rule the Discord bulk
+      // add uses), so the request's internal order survives whatever the
+      // shuffle state is.
+      s.queue.enqueueMany(fresh, credit);
       const extra = tracks.length - capped.length;
       const name =
-        capped.length === 1
-          ? capped[0].name
-          : `${capped.length} tracks${extra > 0 ? ` (+${extra} more not queued)` : ''}`;
+        fresh.length === 1
+          ? fresh[0].name
+          : `${fresh.length} tracks${extra > 0 ? ` (+${extra} more not queued)` : ''}` +
+            (skipped > 0 ? ` · ${skipped} already queued` : '');
       return { ok: true, name };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -845,8 +892,13 @@ export class Bridge {
 
   /** Read-only view of the queue for the public jam page: what is on now and
    *  what is next, with who asked for each. Deliberately small and free of
-   *  internal ids — it is served to key-holding guests on a phone. */
-  jamQueue(): { playing: JamQueueTrack | null; tracks: JamQueueTrack[] } {
+   *  internal ids — it is served to key-holding guests on a phone.
+   *
+   *  `playing` is the row at the cursor, which exists even while playback is
+   *  idle ("starts with this"), so it is NOT the same as audio actually
+   *  coming out. `playingNow` carries the truthful flag — the page must not
+   *  print "NOW PLAYING" over a silent queue. */
+  jamQueue(): { playing: JamQueueTrack | null; playingNow: boolean; tracks: JamQueueTrack[] } {
     const snap = this.queue.getSnapshot();
     const map = (t: {
       name?: string;
@@ -866,6 +918,7 @@ export class Bridge {
     const start = cur >= 0 ? cur + 1 : 0;
     return {
       playing: cur >= 0 && snap.tracks[cur] ? map(snap.tracks[cur]) : null,
+      playingNow: cur >= 0 && snap.state.playing === true,
       tracks: snap.tracks.slice(start, start + 30).map(map),
     };
   }
