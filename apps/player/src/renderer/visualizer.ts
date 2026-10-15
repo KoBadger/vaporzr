@@ -51,6 +51,7 @@ const controls = document.getElementById('controls') as HTMLDivElement;
 const controlsToggle = document.getElementById('controls-toggle') as HTMLButtonElement;
 const ctrlTitle = document.getElementById('ctrl-title') as HTMLSpanElement;
 const ctrlMeta = document.getElementById('ctrl-meta') as HTMLSpanElement;
+const ctrlNext = document.getElementById('ctrl-next') as HTMLDivElement;
 const ctrlSeek = document.getElementById('ctrl-seek') as HTMLInputElement;
 const ctrlTime = document.getElementById('ctrl-time') as HTMLSpanElement;
 const btnPlay = document.getElementById('btn-play') as HTMLButtonElement;
@@ -165,10 +166,17 @@ const client = new WsClient({
       handleCmd(msg as CommandMessage);
     } else if (msg.type === 'state:update') {
       handleState(msg.state);
+    } else if (msg.type === 'queue:update') {
+      latestQueue = msg.queue;
+      updateNextLine();
     } else if (msg.type === 'endlesswave') {
       setWaveMode(msg.mode ?? (msg.active ? 'smart' : 'off'));
     } else if (msg.type === 'snapshot') {
       setDjEnabled(!!msg.djEnabled);
+      if (msg.queue) {
+        latestQueue = msg.queue;
+        updateNextLine();
+      }
       // Apply the server's current theme + reactivity up front. Without this the
       // player sat on its own defaults until someone happened to change them,
       // which is part of why it looked different from the web visualizer.
@@ -414,6 +422,36 @@ function setWaveMode(mode: 'off' | 'basic' | 'smart'): void {
 // ---- Controls overlay ----
 
 let latestState: PlaybackState = emptyState();
+
+/** The queue cursor the bridge broadcasts — just enough for the up-next line. */
+interface QueueLite {
+  tracks: Array<{ name?: string; artists?: string[] }>;
+  currentIndex: number;
+}
+let latestQueue: QueueLite | null = null;
+
+/**
+ * "Up next" under the now-playing controls — same rule as the web visualizer
+ * and the bot's queue: the first waiting row is currentIndex + 1 (row 0 when
+ * nothing has started yet). Hidden while the queue is empty or finished.
+ */
+function updateNextLine(): void {
+  const q = latestQueue;
+  let next: { name?: string; artists?: string[] } | undefined;
+  if (q && q.tracks.length > 0) {
+    let i = (typeof q.currentIndex === 'number' ? q.currentIndex : -1) + 1;
+    if (i < 0) i = 0;
+    next = q.tracks[i];
+  }
+  if (next?.name) {
+    ctrlNext.textContent =
+      next.name + (next.artists && next.artists.length > 0 ? ` — ${next.artists.join(', ')}` : '');
+    ctrlNext.classList.remove('hidden');
+  } else {
+    ctrlNext.textContent = '';
+    ctrlNext.classList.add('hidden');
+  }
+}
 let controlsVisible = true;
 let controlsTimer: number | null = null;
 

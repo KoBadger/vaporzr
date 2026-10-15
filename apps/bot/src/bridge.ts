@@ -251,6 +251,8 @@ export class Bridge {
     const onQueueChanged = (): void => {
       this.lastQueue = { tracks: q.getSnapshot().tracks, currentIndex: q.getSnapshot().currentIndex };
       this.broadcastPanels({ type: 'queue:update', queue: this.lastQueue });
+      // The desktop player (role 'visualizer') renders the same up-next line.
+      this.broadcastVisualizers({ type: 'queue:update', queue: this.lastQueue });
       // New credits on the queue mean new jam contributors.
       this.broadcastPresence();
     };

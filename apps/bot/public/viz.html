@@ -92,6 +92,11 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
 #artists{font-size:13px;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
 #badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;letter-spacing:1px;
   background:color-mix(in srgb,var(--acc) 20%,transparent);color:var(--acc);margin-top:6px}
+/* Up-next line under the LIVE badge — the mini infographic the jam page and the
+   player card share: what plays now (title/artists above) and what waits next. */
+#next{font-size:11px;color:#94a3b8;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#next.hidden{display:none}
+#next::before{content:'⏭ UP NEXT';color:var(--acc);font-weight:700;font-size:9px;letter-spacing:.08em;margin-right:7px;vertical-align:1px}
 #meta{flex:1;min-width:0}
 
 #fps{position:absolute;top:60px;right:170px;z-index:10;padding:4px 10px;border-radius:6px;
@@ -103,7 +108,11 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
   background:rgba(15,23,42,.85);border:1px solid var(--acc);font-size:12px;font-weight:600;color:#e2e8f0;
   box-shadow:0 0 18px var(--glow,rgba(99,102,241,.35));animation:pulse 2s infinite}
 @keyframes pulse{50%{box-shadow:0 0 28px var(--glow,rgba(99,102,241,.55))}}
-#preset-name{position:absolute;bottom:96px;left:24px;z-index:11;font-size:11px;color:#64748b;
+/* The preset toast sits ABOVE the track card, not beside it: the card grows
+   with the up-next line, and at its old bottom:96px it painted straight over
+   the LIVE badge (preset bylines are long). Clear of the 88px overlay padding
+   plus the ~83px card row. */
+#preset-name{position:absolute;bottom:182px;left:24px;z-index:11;font-size:11px;color:#64748b;
   max-width:40%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0;transition:opacity .5s}
 #preset-lib{display:flex;flex-direction:column;gap:5px;min-width:186px}
 #preset-picker{position:absolute;bottom:74px;left:50%;transform:translateX(-50%);width:min(520px,92vw);max-height:56vh;z-index:16;display:none;flex-direction:column;background:rgba(8,10,26,.97);border:1px solid #1e293b;border-radius:14px;overflow:hidden;box-shadow:0 24px 60px rgba(0,0,0,.6)}
@@ -236,7 +245,8 @@ body.mini #art{width:40px;height:40px;border-radius:6px}
 body.mini #title{font-size:13px}
 body.mini #artists{font-size:11px;margin-top:1px}
 body.mini #badge{margin-top:4px;font-size:9px;padding:1px 6px}
-body.mini #preset-name{bottom:60px;left:12px;font-size:10px;max-width:60%}
+body.mini #preset-name{bottom:132px;left:12px;font-size:10px;max-width:60%}
+body.mini #next{font-size:10px;margin-top:4px}
 body.mini #dock{bottom:calc(8px + var(--saib));gap:6px;padding:6px 10px;border-radius:12px}
 body.mini .dock-btn{width:32px;height:32px;font-size:14px;border-radius:9px}
 body.mini #preset-lib,body.mini .sens-wrap{display:none}
@@ -323,6 +333,7 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
       <div id="title">Waiting for stream...</div>
       <div id="artists"></div>
       <div id="badge">LIVE</div>
+      <div id="next" class="hidden"></div>
     </div>
   </div>
 </div>
@@ -335,7 +346,7 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
 (function(){
   var $=function(id){return document.getElementById(id)},
       bcCanvas=$('bc'),barsCanvas=$('canvas'),ctx=barsCanvas.getContext('2d'),
-      viz=$('viz'),art=$('art'),title=$('title'),artists=$('artists'),
+      viz=$('viz'),art=$('art'),title=$('title'),artists=$('artists'),nextEl=$('next'),
       overlay=$('overlay'),statusDot=$('status-dot'),statusText=$('status-text'),
       connecting=$('connecting'),noFrames=$('no-frames'),
       guildBar=$('guild-bar'),fpsEl=$('fps'),trustText=$('trust-text'),
@@ -584,6 +595,7 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
         case 'snapshot':
           if(msg.guilds){guilds=msg.guilds;primaryGuildId=msg.primaryGuildId||null;renderGuilds()}
           if(msg.state)showState(msg.state);
+          if(msg.queue)showNext(msg.queue);
           if(themeOverride){var _ot=themeById(themeOverride);if(_ot)applyTheme(_ot)}
           else if(msg.theme){var _st=themeById(msg.theme.id);if(_st)applyTheme(_st)}
           /* A late joiner picks up whatever the bridge is showing right now. */
@@ -618,6 +630,9 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
           break;
         case 'state:update':
           showState(msg.state);
+          break;
+        case 'queue:update':
+          showNext(msg.queue);
           break;
         case 'audio:pcm':
           markVisual();
@@ -2291,6 +2306,26 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
     }else{
       overlay.className='hidden';
       synthTrack=null;
+    }
+  }
+  /**
+   * The "up next" infographic line under the LIVE badge. The bridge broadcasts
+   * the queue cursor: row `currentIndex` is on air, so the first waiting track
+   * is currentIndex+1 (row 0 while nothing has started). Hidden at queue end.
+   */
+  function showNext(q){
+    var t=null;
+    if(q&&q.tracks&&q.tracks.length){
+      var i=(typeof q.currentIndex==='number'?q.currentIndex:-1)+1;
+      if(i<0)i=0;
+      t=q.tracks[i]||null;
+    }
+    if(t&&t.name){
+      nextEl.textContent=t.name+(t.artists&&t.artists.length?' \u2014 '+t.artists.join(', '):'');
+      nextEl.className='';
+    }else{
+      nextEl.textContent='';
+      nextEl.className='hidden';
     }
   }
   /**
