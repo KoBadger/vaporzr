@@ -139,6 +139,14 @@
   #ctrl-title { overflow: hidden; text-overflow: ellipsis; }
   #ctrl-meta { color: #94a3b8; font-weight: 400; font-size: 11px; }
 
+  /* Up-next captions, mirroring the web visualizer's card line. */
+  #ctrl-next {
+    display: block; margin-bottom: 6px; color: #94a3b8;
+    font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #ctrl-next::before { content: '⏭ UP NEXT'; color: var(--vz-accent2, #a78bfa); font-weight: 700; font-size: 9px; letter-spacing: .08em; margin-right: 6px; vertical-align: 1px; }
+  #ctrl-next.hidden { display: none; }
+
   #ctrl-progress { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
   #ctrl-progress input[type=range] { flex: 1; }
   #ctrl-time { color: #94a3b8; font-size: 10px; font-variant-numeric: tabular-nums; min-width: 84px; text-align: right; }
@@ -373,6 +381,7 @@
       <span id="ctrl-title">Nothing playing</span>
       <span id="ctrl-meta"></span>
     </div>
+    <div id="ctrl-next" class="hidden"></div>
     <div id="ctrl-progress">
       <input id="ctrl-seek" type="range" min="0" max="1000" value="0" step="1" />
       <span id="ctrl-time">0:00 / 0:00</span>
