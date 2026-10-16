@@ -6735,6 +6735,17 @@ export class DiscordBot {
     // average vibe of that artist's other tracks in the queue, instead of being
     // left unranked — which is why smart shuffle only ever moved part of a queue.
     const { ordered, withoutFeatures } = orderByVibe(upcoming, anchor, mode, featOf, (t) => (t.artists ?? [])[0] ?? '');
+    // Ranking needs at least two tracks with real features. When nothing has
+    // any, the old code fell through to "already in the best order" over an
+    // unchanged queue — a no-op that looked like success. Say what happened.
+    const rankable = upcoming.length - withoutFeatures;
+    if (rankable < 2) {
+      return {
+        skipReason:
+          `🔀 Can't rank these — only ${rankable} of ${upcoming.length} tracks have audio features ` +
+          '(they build up as tracks play, or come from the Spotify mirror). `V@shuffle` still shuffles randomly.',
+      };
+    }
     const moved = s.queue.reorderUpcoming(ordered.map((t) => t.uri));
     const embed = new EmbedBuilder()
       .setTitle(`🔀 Smart shuffle — ${SHUFFLE_MODE_LABEL[mode]}`)
