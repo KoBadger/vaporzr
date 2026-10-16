@@ -526,6 +526,39 @@ export function setYoutubeHealthListener(cb: ((status: YoutubeHealth, context: Y
   ytHealthListener = cb;
 }
 
+let ytDlpVersionValue = 'unknown';
+
+/** yt-dlp version reported by `--version`, or 'unknown' until probed. */
+export function ytDlpVersion(): string {
+  return ytDlpVersionValue;
+}
+
+/**
+ * Probe `yt-dlp --version` once at boot so /health shows exactly which
+ * extractor build is running. YouTube breaks when yt-dlp goes stale, and
+ * "unknown" here is the first thing to check when resolves start failing.
+ */
+export function probeYtDlpVersion(): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (): void => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    try {
+      execFile(config.ytDlpPath, ['--version'], { timeout: 5000, windowsHide: true }, (err, stdout) => {
+        // A missing binary and a killed timeout both land here.
+        ytDlpVersionValue = err ? 'unknown' : String(stdout).trim().split('\n')[0] || 'unknown';
+        done();
+      });
+    } catch {
+      ytDlpVersionValue = 'unknown';
+      done();
+    }
+  });
+}
+
 /** Alert bookkeeping: what was last announced, plus a failure awaiting confirmation. */
 export interface YoutubeAlertState {
   published: YoutubeHealth;

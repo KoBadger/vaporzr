@@ -108,7 +108,7 @@ async function serveArtwork(url: URL, res: http.ServerResponse): Promise<void> {
   }
 }
 import { playlistStore } from '@vaporzr/core/playlists';
-import { cookieAgeDays, probeYoutube, youtubeHealth } from '@vaporzr/core/youtube';
+import { cookieAgeDays, probeYtDlpVersion, probeYoutube, ytDlpVersion, youtubeHealth } from '@vaporzr/core/youtube';
 import { addPushSubscription, pushPublicKey, pushSubscriptionCount, removePushSubscription } from './push.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -119,10 +119,25 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  * "unknown" until the first probe lands.
  */
 let poTokenStatus: 'up' | 'down' | 'unknown' = 'unknown';
+let poTokenVersion = 'unknown';
 function probePoTokenProvider(): void {
   const req = http.get({ host: '127.0.0.1', port: 4416, path: '/ping', timeout: 1500 }, (res) => {
-    res.resume();
-    poTokenStatus = res.statusCode === 200 ? 'up' : 'down';
+    let body = '';
+    res.setEncoding('utf8');
+    res.on('data', (chunk: string) => {
+      body += chunk;
+    });
+    res.on('end', () => {
+      poTokenStatus = res.statusCode === 200 ? 'up' : 'down';
+      // /ping answers {"server_uptime":…,"version":…} — keep the version so
+      // /health shows when the provider image has gone stale.
+      try {
+        const v = (JSON.parse(body) as { version?: unknown }).version;
+        if (typeof v === 'string' && v) poTokenVersion = v;
+      } catch {
+        /* non-JSON ping — version stays unknown */
+      }
+    });
   });
   req.on('timeout', () => {
     poTokenStatus = 'down';
@@ -170,7 +185,9 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
         librespot: librespotStatus,
         spotifyApi: spotifyApiStatus,
         poToken: poTokenStatus,
+        poTokenVersion,
         youtube: youtubeHealth().status,
+        ytdlp: ytDlpVersion(),
         build: (process.env.VAPORZR_BUILD ?? 'dev').slice(0, 7),
         cookieAgeDays: cookieAgeDays(),
         push: pushSubscriptionCount(),
@@ -213,6 +230,9 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
   probePoTokenProvider();
   const poTimer = setInterval(probePoTokenProvider, 30_000);
   poTimer.unref?.();
+
+  // One-shot: the yt-dlp version only changes when the image does.
+  void probeYtDlpVersion();
 
   // YouTube canary: catch expired cookies / dead solver / dead proxy up front.
   const cookieAge = cookieAgeDays();
