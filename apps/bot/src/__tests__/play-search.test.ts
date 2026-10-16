@@ -136,4 +136,30 @@ describe('Bridge.playSearch (panel search box)', () => {
     await run(h.b, 'mikado', false);
     expect(names(h.q)).toEqual(['YT mikado']);
   });
+
+  it('toasts the socket that asked when it is not a panel (the player add box)', async () => {
+    // The desktop player connects as a visualizer, so a panels-only broadcast
+    // would leave its add box silent; the bridge copies the toast to it.
+    const h = harness([track(1)]);
+    const socket = {};
+    const direct: Array<{ level: string; text: string }> = [];
+    Object.assign(h.b, {
+      panels: new Set(),
+      sendToSocket: (_s: unknown, m: { level: string; text: string }) => direct.push(m),
+    });
+    const call = (q: string): Promise<void> =>
+      (h.b as unknown as { playSearch(q: string, now: boolean, gid?: string, requester?: unknown): Promise<void> }).playSearch(
+        q,
+        false,
+        undefined,
+        socket,
+      );
+    await call('mikado');
+    expect(direct.at(-1)?.text).toBe('Added: Track 1');
+    // A panel requester is already toasted by the broadcast — no duplicate.
+    const sent = direct.length;
+    Object.assign(h.b, { panels: new Set([{ socket }]) });
+    await call('mikado two');
+    expect(direct.length).toBe(sent);
+  });
 });

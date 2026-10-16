@@ -433,7 +433,7 @@ export class Bridge {
       case 'cmd':
         if (!this.isAuthed(socket) && !this.guestMaySend(msg)) return;
         if (!this.allowCommand(socket)) return;
-        this.handlePanelCommand(msg, this.clientGuildId(socket));
+        this.handlePanelCommand(socket, msg, this.clientGuildId(socket));
         break;
       default:
         break;
@@ -474,7 +474,7 @@ export class Bridge {
       case 'cmd':
         if (!this.isAuthed(socket) && !this.guestMaySend(msg)) return;
         if (!this.allowCommand(socket)) return;
-        this.handlePanelCommand(msg, this.clientGuildId(socket));
+        this.handlePanelCommand(socket, msg, this.clientGuildId(socket));
         break;
       case 'state:request':
         this.sendSnapshot(socket);
@@ -510,7 +510,7 @@ export class Bridge {
     return undefined;
   }
 
-  private handlePanelCommand(msg: InboundMessage & { type: 'cmd' }, guildId?: string): void {
+  private handlePanelCommand(socket: WebSocket, msg: InboundMessage & { type: 'cmd' }, guildId?: string): void {
     switch (msg.command) {
       case 'play':
         if (msg.uris && msg.uris.length > 0) {
@@ -713,7 +713,7 @@ export class Bridge {
       case 'playSearch': {
         const q = (msg.query ?? '').trim();
         if (!q) break;
-        void this.playSearch(q, msg.now !== false, guildId);
+        void this.playSearch(q, msg.now !== false, guildId, socket);
         break;
       }
       case 'saveVibe': {
@@ -788,7 +788,7 @@ export class Bridge {
    *  YouTube search kept as the fallback so the bridge still works on its own.
    *  "Play now" starts the first fresh track; anything else a playlist-style
    *  resolve produced queues behind it. */
-  private async playSearch(q: string, playNow: boolean, guildId?: string): Promise<void> {
+  private async playSearch(q: string, playNow: boolean, guildId?: string, requester?: WebSocket): Promise<void> {
     try {
       let tracks: ResolvedTrack[];
       if (this.onResolveRequest) {
@@ -808,7 +808,7 @@ export class Bridge {
           : [];
       }
       if (!tracks.length) {
-        this.notice('error', `No match for "${q}" — try a link (YouTube, Spotify, Suno…) or different words.`);
+        this.noticeTo(requester, 'error', `No match for "${q}" — try a link (YouTube, Spotify, Suno…) or different words.`);
         return;
       }
       // A playlist link can resolve to many tracks; cap it the same way the
@@ -820,7 +820,7 @@ export class Bridge {
         // duplicate plays the copy that is already there (matching by uri or
         // the normalised title|artist key).
         const label = capped.length === 1 ? `"${capped[0].name}" is` : 'Those tracks are';
-        this.notice('info', `${label} already in the queue.`);
+        this.noticeTo(requester, 'info', `${label} already in the queue.`);
         if (playNow) {
           const existing = this.queue
             .getSnapshot()
@@ -832,7 +832,7 @@ export class Bridge {
             this.queue.focusUri(existing.uri);
             void this.playback.play().catch((err) => {
               console.error('[bridge] playSearch playback failed:', err instanceof Error ? err.message : err);
-              this.notice('error', `Playback failed: ${err instanceof Error ? err.message : err}`);
+              this.noticeTo(requester, 'error', `Playback failed: ${err instanceof Error ? err.message : err}`);
               if (before) this.queue.focusUri(before);
             });
           }
@@ -849,7 +849,7 @@ export class Bridge {
           ? fresh[0].name
           : `${fresh.length} tracks${extra > 0 ? ` (+${extra} more not queued)` : ''}` +
             (skipped > 0 ? ` · ${skipped} already queued` : '');
-      this.notice('success', `${playNow ? 'Now playing' : 'Added'}: ${label}`);
+      this.noticeTo(requester, 'success', `${playNow ? 'Now playing' : 'Added'}: ${label}`);
       if (playNow) {
         // Join first: without a voice channel the play is refused outright,
         // which is what made the panel's search-and-play look broken.
@@ -861,13 +861,13 @@ export class Bridge {
         this.queue.focusUri(fresh[0].uri);
         void this.playback.play().catch((err) => {
           console.error('[bridge] playSearch playback failed:', err instanceof Error ? err.message : err);
-          this.notice('error', `Playback failed: ${err instanceof Error ? err.message : err}`);
+          this.noticeTo(requester, 'error', `Playback failed: ${err instanceof Error ? err.message : err}`);
           if (before) this.queue.focusUri(before);
         });
       }
     } catch (err) {
       console.error('[bridge] playSearch failed:', err);
-      this.notice('error', `Search failed: ${err instanceof Error ? err.message : err}`);
+      this.noticeTo(requester, 'error', `Search failed: ${err instanceof Error ? err.message : err}`);
     }
   }
 
@@ -1034,6 +1034,16 @@ export class Bridge {
   /** Toast-style feedback to every connected panel. */
   notice(level: 'info' | 'success' | 'error', text: string): void {
     this.broadcastPanels({ type: 'panel:notice', level, text });
+  }
+
+  /** Toast panels, plus a direct copy to the socket that asked: the desktop
+   *  player connects as a visualizer, so a panels-only broadcast would leave
+   *  its add box silent on successes and failures alike. */
+  private noticeTo(requester: WebSocket | undefined, level: 'info' | 'success' | 'error', text: string): void {
+    this.notice(level, text);
+    if (!requester) return;
+    for (const p of this.panels) if (p.socket === requester) return; // already toasted
+    this.sendToSocket(requester, { type: 'panel:notice', level, text });
   }
 
   /** Broadcast a message to all connected panels and visualizers. */

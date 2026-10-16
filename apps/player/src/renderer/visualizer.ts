@@ -75,6 +75,9 @@ const btnSfx = {
 };
 const btnDjToggle = document.getElementById('btn-dj-toggle') as HTMLButtonElement;
 const ctrlVol = document.getElementById('ctrl-vol') as HTMLInputElement;
+const addInput = document.getElementById('add-input') as HTMLInputElement;
+const btnAdd = document.getElementById('btn-add') as HTMLButtonElement;
+const btnAddPlay = document.getElementById('btn-add-play') as HTMLButtonElement;
 // Visual controls (Phase 2 parity with the web visualizer).
 const btnPace = document.getElementById('btn-pace') as HTMLButtonElement;
 const btnCalm = document.getElementById('btn-calm') as HTMLButtonElement;
@@ -195,6 +198,7 @@ const client = new WsClient({
       // that silence is exactly what made the player look like it had no controls.
       if (msg.guest) {
         log('Guest mode — the bot is keyed, so controls are ignored. Restart with VAPORZR_KEY=… (or --key=…)');
+        setGuestMode();
       }
     } else if (msg.type === 'dj:update') {
       setDjEnabled(msg.enabled);
@@ -219,6 +223,12 @@ const client = new WsClient({
       if (msg.joinPath) jamJoinPath = msg.joinPath;
       jamJoinUrl = msg.joinUrl || '';
       renderJamQr();
+    } else if (msg.type === 'panel:notice') {
+      // Feedback for the add row: the bridge copies its panel toasts to the
+      // socket that asked, so a failed search is visible right here. The
+      // connect-time guest notice is handled by the snapshot instead.
+      const extra = msg as { notice?: string };
+      if (extra.notice !== 'guest') showPresetName(msg.text);
     }
   },
 });
@@ -705,6 +715,15 @@ function setJamQr(on: boolean): void {
   try { localStorage.setItem('vaporzr.jamqr', on ? '1' : '0'); } catch { /* storage unavailable */ }
 }
 
+/** Connected without the share key: the bridge drops every command, so the add
+ *  row says it is view-only instead of silently doing nothing. */
+function setGuestMode(): void {
+  for (const el of [addInput, btnAdd, btnAddPlay]) el.disabled = true;
+  addInput.placeholder = 'View-only — restart with VAPORZR_KEY to add songs';
+  btnAdd.title = 'View-only: no share key, commands are ignored';
+  btnAddPlay.title = btnAdd.title;
+}
+
 function wireControls(): void {
   btnPlay.addEventListener('click', () => sendCmd('toggle'));
   btnPrev.addEventListener('click', () => sendCmd('previous'));
@@ -740,6 +759,29 @@ function wireControls(): void {
 
   ctrlVol.addEventListener('input', () => {
     if (latestState.track) sendCmd('volume', { volume: Number(ctrlVol.value) });
+  });
+
+  // ---- Add a song — the same resolver as the panel search and the jam page ----
+  const doAdd = (playNow: boolean): void => {
+    const q = addInput.value.trim();
+    if (!q) {
+      log('Type a song name or a link to add.');
+      addInput.focus();
+      return;
+    }
+    sendCmd('playSearch', { query: q, now: playNow });
+    log(playNow ? `Adding & playing “${q}”…` : `Adding “${q}”…`);
+    addInput.value = '';
+  };
+  btnAdd.addEventListener('click', () => doAdd(false));
+  btnAddPlay.addEventListener('click', () => doAdd(true));
+  addInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      doAdd(e.shiftKey);
+    } else if (e.key === 'Escape') {
+      addInput.blur();
+    }
   });
 
   controlsToggle.addEventListener('click', () => setControlsVisible(!controlsVisible));
@@ -803,6 +845,11 @@ function wireControls(): void {
       case 'e':
       case 'E':
         setSynthActive(!synthActive);
+        break;
+      case '/':
+        // Same reflex as the control panel: slash jumps to the add box.
+        e.preventDefault();
+        addInput.focus();
         break;
       case 'ArrowUp':
         e.preventDefault();
