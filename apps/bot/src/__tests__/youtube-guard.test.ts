@@ -13,11 +13,13 @@ import {
   isProxyError,
   isProxyExhausted,
   parseIsoDuration,
+  probeYtDlpVersion,
   probeYoutube,
   proxyReachable,
   scoreHit,
   shouldRetryYtDlp,
   youtubeProxyHops,
+  ytDlpVersion,
 } from '@vaporzr/core/youtube';
 import { config } from '@vaporzr/core/config';
 import type { ResolvedVideo } from '@vaporzr/core/youtube';
@@ -464,6 +466,31 @@ describe('proxy reachability (bridge down vs flagged exit)', () => {
       config.youtubeProxyAlt = prevAlt;
       config.youtubeProxyFallback = prevFallback;
       config.ytDlpPath = prevYtDlp;
+    }
+  });
+});
+
+describe('yt-dlp version probe', () => {
+  it('reports the version printed by the configured binary', async () => {
+    const prev = config.ytDlpPath;
+    // `node --version` is a portable stand-in for any --version-capable binary.
+    config.ytDlpPath = process.execPath;
+    try {
+      await probeYtDlpVersion();
+      expect(ytDlpVersion()).toMatch(/^v\d+\./);
+    } finally {
+      config.ytDlpPath = prev;
+    }
+  });
+
+  it('reports "unknown" when the binary is missing', async () => {
+    const prev = config.ytDlpPath;
+    config.ytDlpPath = path.join(os.tmpdir(), `missing-yt-dlp-version-${process.pid}`);
+    try {
+      await probeYtDlpVersion();
+      expect(ytDlpVersion()).toBe('unknown');
+    } finally {
+      config.ytDlpPath = prev;
     }
   });
 });
