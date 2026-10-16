@@ -307,8 +307,10 @@ export class QueueManager {
   /** Replace the upcoming slice with the same tracks in a new order (matched by
    *  uri; anything unlisted keeps its old position). Returns how many moved. */
   reorderUpcoming(orderedUris: string[]): number {
-    const from = this.currentIndex + 1;
-    if (from <= 0 || from >= this.tracks.length) return 0;
+    // currentIndex -1 means nothing is loaded: the whole queue is upcoming, so
+    // reorder from the top (smart shuffle must work before playback starts).
+    const from = this.currentIndex < 0 ? 0 : this.currentIndex + 1;
+    if (from >= this.tracks.length) return 0;
     const upcoming = this.tracks.slice(from);
     const next: TrackInfo[] = [];
     const used = new Set<TrackInfo>();
