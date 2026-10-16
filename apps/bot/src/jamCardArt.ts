@@ -1,12 +1,14 @@
 /**
  * The `/jam` invite card: a 560×260 vaporwave postcard — striped sunset over a
- * neon perspective grid, with the join QR on a light panel — drawn in pure Node
+ * neon perspective grid, with the join QR on a tinted panel — drawn in pure Node
  * on top of the shared PNG encoder. No image dependencies, so it renders
  * anywhere the bot runs and the whole thing stays unit-testable.
  *
- * The QR keeps dark-on-light, an integer module scale and a 4-module quiet
- * zone; the art is confined to the background and margins so nothing ever
- * intrudes on scannability.
+ * The QR is styled, not plain: near-black purple dots on a dim lavender panel,
+ * square finder eyes, and a small JAM chip over the centre. It stays
+ * dark-on-light with an integer module scale and a 4-module quiet zone, and
+ * error correction is Q so the chip's ~7×7 modules are recoverable — a strict
+ * QR reader (jsQR) decodes the rendered card in the tests.
  */
 import QRCode from 'qrcode';
 import { encodePng } from './png.js';
@@ -25,8 +27,10 @@ const QR_QUIET = 4;
 /** Horizontal centre of the right-hand text zone. */
 const TX = 398;
 
-const INK: Rgba = [0x16, 0x08, 0x3c, 255]; // QR dark
-const PAPER: Rgba = [0xfd, 0xfc, 0xff, 255]; // QR light
+const INK_TOP: Rgba = [0x3c, 0x0d, 0x74, 255]; // QR dots, top of the gradient
+const INK_BOTTOM: Rgba = [0x18, 0x03, 0x38, 255]; // QR dots, bottom
+const PAPER_TOP: Rgba = [0xb3, 0xa2, 0xe8, 255]; // QR panel (dim lavender), top
+const PAPER_BOTTOM: Rgba = [0x96, 0x82, 0xd2, 255]; // QR panel, bottom
 const PINK: Rgba = [0xff, 0x2f, 0xd6, 255]; // neon pink
 const CYAN: Rgba = [0x2e, 0xf3, 0xff, 255]; // neon cyan
 const OUTLINE: Rgba = [0x14, 0x03, 0x34, 255]; // text backdrop ink
@@ -258,6 +262,8 @@ export interface JamCardQr {
   modules: number;
   /** Quiet-zone modules on each side. */
   quiet: number;
+  /** Pixel box the centre chip paints over (dark face plus pink rim). */
+  chip: { x0: number; y0: number; x1: number; y1: number };
 }
 
 export interface JamCardArt {
@@ -330,7 +336,15 @@ export function renderJamCardRgba(url: string): JamCardArt {
     () => PINK,
     0.12,
   );
-  paint(buf, px0 - 8, py0 - 8, px1 + 8, py1 + 8, (x, y) => roundInside(x, y, px0, py0, px1, py1, PANEL.r), () => PAPER);
+  paint(
+    buf,
+    px0 - 8,
+    py0 - 8,
+    px1 + 8,
+    py1 + 8,
+    (x, y) => roundInside(x, y, px0, py0, px1, py1, PANEL.r),
+    (_, y) => mix(PAPER_TOP, PAPER_BOTTOM, (y - py0) / PANEL.h),
+  );
   paint(
     buf,
     px0 - 4,
@@ -341,23 +355,60 @@ export function renderJamCardRgba(url: string): JamCardArt {
     () => PINK,
   );
 
-  // The QR itself: crisp integer-scale modules, dark on light.
-  const qr = QRCode.create(url, { errorCorrectionLevel: 'M' });
+  // The QR itself: integer-scale modules, dark on light. Data modules are dots
+  // (~84% coverage — well past what a scanner needs), the finder eyes stay
+  // square so the alignment features read clean, and the ink fades down the
+  // panel. Error correction is Q to pay for the centre chip.
+  const qr = QRCode.create(url, { errorCorrectionLevel: 'Q' });
   const n = qr.modules.size;
   const scale = Math.max(2, Math.floor((PANEL.w - PANEL.pad * 2) / (n + QR_QUIET * 2)));
   const size = (n + QR_QUIET * 2) * scale;
   const qx = PANEL.x + Math.floor((PANEL.w - size) / 2);
   const qy = PANEL.y + Math.floor((PANEL.h - size) / 2);
+  const inFinder = (row: number, col: number) =>
+    (row < 7 && col < 7) || (row < 7 && col >= n - 7) || (row >= n - 7 && col < 7);
   for (let row = 0; row < n; row++) {
     for (let col = 0; col < n; col++) {
       if (!qr.modules.get(row, col)) continue;
       const mx = qx + (col + QR_QUIET) * scale;
       const my = qy + (row + QR_QUIET) * scale;
-      for (let dy = 0; dy < scale; dy++) {
-        for (let dx = 0; dx < scale; dx++) put(buf, mx + dx, my + dy, INK);
+      const ink = mix(INK_TOP, INK_BOTTOM, (my + scale / 2 - qy) / size);
+      if (inFinder(row, col)) {
+        for (let dy = 0; dy < scale; dy++) {
+          for (let dx = 0; dx < scale; dx++) put(buf, mx + dx, my + dy, ink);
+        }
+      } else {
+        const cx = mx + scale / 2;
+        const cy = my + scale / 2;
+        const r = scale * 0.42;
+        paint(
+          buf,
+          mx,
+          my,
+          mx + scale,
+          my + scale,
+          (x, y) => (x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r,
+          () => ink,
+        );
       }
     }
   }
+
+  // The JAM chip hides ~7×7 centre modules; Q-level correction recovers them.
+  const chipCx = qx + (QR_QUIET + n / 2) * scale;
+  const chipCy = qy + (QR_QUIET + n / 2) * scale;
+  const chipHalf = 3.5 * scale;
+  const chipX0 = Math.round(chipCx - chipHalf);
+  const chipY0 = Math.round(chipCy - chipHalf);
+  const chipX1 = Math.round(chipCx + chipHalf);
+  const chipY1 = Math.round(chipCy + chipHalf);
+  paint(buf, chipX0 - 4, chipY0 - 4, chipX1 + 4, chipY1 + 4, (x, y) => roundInside(x, y, chipX0 - 2.5, chipY0 - 2.5, chipX1 + 2.5, chipY1 + 2.5, 7), () => PINK);
+  paint(buf, chipX0 - 4, chipY0 - 4, chipX1 + 4, chipY1 + 4, (x, y) => roundInside(x, y, chipX0, chipY0, chipX1, chipY1, 5), () => OUTLINE);
+  drawText(buf, 'JAM', Math.round(chipCx - textWidth('JAM', 1) / 2), Math.round(chipCy - 3.5), 1, {
+    fill: rgba(0xffffff),
+  });
+  // Everything the chip paints over (rim included), so tests can skip it.
+  const chip = { x0: chipX0 - 3, y0: chipY0 - 3, x1: chipX1 + 3, y1: chipY1 + 3 };
 
   // The right-hand text block.
   const vaporzr = 'VAPORZR';
@@ -418,7 +469,7 @@ export function renderJamCardRgba(url: string): JamCardArt {
     }
   }
 
-  return { rgba: buf, width: CARD_W, height: CARD_H, qr: { x: qx, y: qy, scale, modules: n, quiet: QR_QUIET } };
+  return { rgba: buf, width: CARD_W, height: CARD_H, qr: { x: qx, y: qy, scale, modules: n, quiet: QR_QUIET, chip } };
 }
 
 /** The card as a PNG, ready to attach to the Discord message. */
