@@ -178,6 +178,20 @@ export class VoiceManager implements AudioTransport {
     return this.connection !== null && this.connection.state.status !== VoiceConnectionStatus.Destroyed;
   }
 
+  /** True only when the link is Ready — the state that can carry audio. A
+   *  Disconnected/Connecting link still passes `isJoined()` (the auto-resume
+   *  poll needs that), but it must never satisfy an "already in voice" check:
+   *  doing so made V@p reply "Added to queue" while a dead link swallowed the
+   *  join and the bot never appeared in the channel. */
+  isConnectionReady(): boolean {
+    return this.connection?.state.status === VoiceConnectionStatus.Ready;
+  }
+
+  /** Current link state name for logs and /diag ('none' without a connection). */
+  connectionStatus(): string {
+    return this.connection?.state.status ?? 'none';
+  }
+
   getChannelId(): string | null {
     return this.channelId;
   }
