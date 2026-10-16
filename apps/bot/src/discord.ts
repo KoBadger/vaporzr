@@ -41,6 +41,7 @@ import { generateDependencyReport } from '@discordjs/voice';
 import { config } from '@vaporzr/core/config';
 import { getCrossfadeMs, setCrossfadeMs } from './crossfadeStore.js';
 import { getRecommendations, resolveTracks, searchCandidates, searchTracks, SpotifyError, getAudioFeatures, extractSpotifyId, type AudioFeatures, type RecommendationParams, type ResolvedTrack } from '@vaporzr/core/spotify';
+import { getMeasuredFeatures } from '@vaporzr/core/featureStore';
 import { orderByVibe, orderBySonic, SHUFFLE_MODE_LABEL, type ShuffleMode } from '@vaporzr/core/smartShuffle';
 import { cosineEnabled, cosineSimilarScores, cosineSimilarCandidates, cosineRoomFit } from '@vaporzr/core/cosine';
 import { THEMES, themeById } from './themes.js';
@@ -6728,7 +6729,12 @@ export class DiscordBot {
       if (fromApi) return fromApi;
       // Measured from the track's own audio when the mirror does not know it
       // (see audioFeatures.ts). Partial: only the fields we actually measured.
-      return (t as { estimatedFeatures?: Partial<AudioFeatures> }).estimatedFeatures ?? null;
+      // The queue copy is live-only; the store keeps measurements across
+      // restarts so key/arc shuffle does not forget them.
+      return (
+        (t as { estimatedFeatures?: Partial<AudioFeatures> }).estimatedFeatures ??
+        getMeasuredFeatures(t.uri)
+      );
     };
     const anchor = anchorId ? (features.get(anchorId) ?? null) : null;
     // Pass the artist so a track the mirror does not know can be ranked by the
@@ -6739,6 +6745,9 @@ export class DiscordBot {
     // any, the old code fell through to "already in the best order" over an
     // unchanged queue — a no-op that looked like success. Say what happened.
     const rankable = upcoming.length - withoutFeatures;
+    console.log(
+      `[shuffle] mode=${mode} upcoming=${upcoming.length} rankable=${rankable} withoutFeatures=${withoutFeatures}`,
+    );
     if (rankable < 2) {
       return {
         skipReason:
@@ -6747,6 +6756,7 @@ export class DiscordBot {
       };
     }
     const moved = s.queue.reorderUpcoming(ordered.map((t) => t.uri));
+    console.log(`[shuffle] ${SHUFFLE_MODE_LABEL[mode]}: reordered ${moved}/${ordered.length}`);
     const embed = new EmbedBuilder()
       .setTitle(`🔀 Smart shuffle — ${SHUFFLE_MODE_LABEL[mode]}`)
       .setDescription(
