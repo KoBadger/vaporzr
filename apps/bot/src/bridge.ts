@@ -713,71 +713,7 @@ export class Bridge {
       case 'playSearch': {
         const q = (msg.query ?? '').trim();
         if (!q) break;
-        const playNow = msg.now !== false;
-        void (async () => {
-          try {
-            const video = await searchAndResolveYoutube(q);
-            if (!video) {
-              this.notice('error', `No YouTube match for "${q}"`);
-              return;
-            }
-            const fresh = this.queue.filterNew([video]);
-            if (fresh.length === 0) {
-              // Already waiting — never stack a second copy. A "play now" for a
-              // duplicate should play the copy that is already there (matching
-              // by uri or the normalised title|artist key).
-              this.notice('info', `"${video.name}" is already in the queue.`);
-              if (playNow) {
-                const existing = this.queue
-                  .getSnapshot()
-                  .tracks.find((t) => t.uri === video.uri || (trackKey(t) !== '' && trackKey(t) === trackKey(video)));
-                if (existing && (await this.ensureVoice(guildId))) {
-                  const before = this.queue.getState().track?.uri ?? '';
-                  this.queue.focusUri(existing.uri);
-                  void this.playback.play().catch((err) => {
-                    console.error('[bridge] playSearch playback failed:', err instanceof Error ? err.message : err);
-                    this.notice('error', `Playback failed: ${err instanceof Error ? err.message : err}`);
-                    if (before) this.queue.focusUri(before);
-                  });
-                }
-              }
-              return;
-            }
-            this.queue.enqueue(
-              {
-                uri: video.uri,
-                name: video.name,
-                artists: video.artists,
-                album: video.album,
-                durationMs: video.durationMs,
-                image: video.image,
-                source: 'youtube',
-              },
-              'panel',
-            );
-            this.notice('success', `${playNow ? 'Now playing' : 'Added'}: ${video.name}`);
-            if (playNow) {
-              // Join first: without a voice channel the play is refused outright,
-              // which is what made the panel's search-and-play look broken.
-              if (!(await this.ensureVoice(guildId))) return;
-              // Point the cursor at the fresh track when idle, then start. If it
-              // cannot start, put the cursor back so it never diverges from the
-              // audio that is actually playing.
-              const before = this.queue.getState().track?.uri ?? '';
-              while (this.queue.getCurrentTrack()?.uri !== video.uri) {
-                if (!this.queue.next()) break;
-              }
-              void this.playback.play().catch((err) => {
-                console.error('[bridge] playSearch playback failed:', err instanceof Error ? err.message : err);
-                this.notice('error', `Playback failed: ${err instanceof Error ? err.message : err}`);
-                if (before) this.queue.focusUri(before);
-              });
-            }
-          } catch (err) {
-            console.error('[bridge] playSearch failed:', err);
-            this.notice('error', `Search failed: ${err instanceof Error ? err.message : err}`);
-          }
-        })();
+        void this.playSearch(q, msg.now !== false, guildId);
         break;
       }
       case 'saveVibe': {
@@ -843,6 +779,95 @@ export class Bridge {
       }
       default:
         break;
+    }
+  }
+
+  /** The panel's search box: the same input surface as V@p and the jam page —
+   *  direct links (YouTube, Spotify, SoundCloud, Apple, Suno…), playlists and
+   *  plain searches — through the resolver the bot wires in at startup, with
+   *  YouTube search kept as the fallback so the bridge still works on its own.
+   *  "Play now" starts the first fresh track; anything else a playlist-style
+   *  resolve produced queues behind it. */
+  private async playSearch(q: string, playNow: boolean, guildId?: string): Promise<void> {
+    try {
+      let tracks: ResolvedTrack[];
+      if (this.onResolveRequest) {
+        tracks = await this.onResolveRequest(q);
+      } else {
+        const video = await searchAndResolveYoutube(q);
+        tracks = video
+          ? [{
+              uri: video.uri,
+              name: video.name,
+              artists: video.artists,
+              album: video.album,
+              durationMs: video.durationMs,
+              image: video.image,
+              source: 'youtube' as const,
+            }]
+          : [];
+      }
+      if (!tracks.length) {
+        this.notice('error', `No match for "${q}" — try a link (YouTube, Spotify, Suno…) or different words.`);
+        return;
+      }
+      // A playlist link can resolve to many tracks; cap it the same way the
+      // jam page does, so one paste cannot flood the queue.
+      const capped = tracks.slice(0, 25);
+      const fresh = this.queue.filterNew(capped);
+      if (fresh.length === 0) {
+        // Already waiting — never stack a second copy. A "play now" for a
+        // duplicate plays the copy that is already there (matching by uri or
+        // the normalised title|artist key).
+        const label = capped.length === 1 ? `"${capped[0].name}" is` : 'Those tracks are';
+        this.notice('info', `${label} already in the queue.`);
+        if (playNow) {
+          const existing = this.queue
+            .getSnapshot()
+            .tracks.find((t) =>
+              capped.some((c) => t.uri === c.uri || (trackKey(t) !== '' && trackKey(t) === trackKey(c))),
+            );
+          if (existing && (await this.ensureVoice(guildId))) {
+            const before = this.queue.getState().track?.uri ?? '';
+            this.queue.focusUri(existing.uri);
+            void this.playback.play().catch((err) => {
+              console.error('[bridge] playSearch playback failed:', err instanceof Error ? err.message : err);
+              this.notice('error', `Playback failed: ${err instanceof Error ? err.message : err}`);
+              if (before) this.queue.focusUri(before);
+            });
+          }
+        }
+        return;
+      }
+      // One placement decision for the whole batch (the same rule the Discord
+      // bulk add uses), so the resolve's internal order survives shuffle state.
+      this.queue.enqueueMany(fresh, 'panel');
+      const skipped = capped.length - fresh.length;
+      const extra = tracks.length - capped.length;
+      const label =
+        fresh.length === 1
+          ? fresh[0].name
+          : `${fresh.length} tracks${extra > 0 ? ` (+${extra} more not queued)` : ''}` +
+            (skipped > 0 ? ` · ${skipped} already queued` : '');
+      this.notice('success', `${playNow ? 'Now playing' : 'Added'}: ${label}`);
+      if (playNow) {
+        // Join first: without a voice channel the play is refused outright,
+        // which is what made the panel's search-and-play look broken.
+        if (!(await this.ensureVoice(guildId))) return;
+        // Point the cursor at the first fresh track, then start. If it cannot
+        // start, put the cursor back so it never diverges from the audio that
+        // is actually playing.
+        const before = this.queue.getState().track?.uri ?? '';
+        this.queue.focusUri(fresh[0].uri);
+        void this.playback.play().catch((err) => {
+          console.error('[bridge] playSearch playback failed:', err instanceof Error ? err.message : err);
+          this.notice('error', `Playback failed: ${err instanceof Error ? err.message : err}`);
+          if (before) this.queue.focusUri(before);
+        });
+      }
+    } catch (err) {
+      console.error('[bridge] playSearch failed:', err);
+      this.notice('error', `Search failed: ${err instanceof Error ? err.message : err}`);
     }
   }
 
