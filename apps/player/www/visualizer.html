@@ -168,6 +168,25 @@
   #ctrl-volume { display: flex; align-items: center; gap: 6px; color: #94a3b8; font-size: 13px; }
   #ctrl-volume input[type=range] { width: 90px; }
 
+  /* ---- Add a song (same resolver as the panel + jam page) ---- */
+  #ctrl-add {
+    display: flex; align-items: center; gap: 6px; margin-top: 8px;
+    padding-top: 8px; border-top: 1px solid rgba(140,160,255,.15);
+  }
+  #add-input {
+    flex: 1; min-width: 0; height: 30px; padding: 0 10px; border-radius: 8px;
+    border: 1px solid rgba(140,160,255,.25); background: rgba(15,23,42,.6);
+    color: #e2e8f0; font-size: 12px; outline: none; font-family: inherit;
+  }
+  #add-input:focus {
+    border-color: color-mix(in srgb, var(--vz-accent) 60%, transparent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--vz-accent) 18%, transparent);
+  }
+  #add-input::placeholder { color: rgba(148,163,184,.55); }
+  #add-input:disabled { opacity: .5; cursor: not-allowed; }
+  #ctrl-add .ctrl-btn { width: 30px; height: 30px; font-size: 13px; }
+  #ctrl-add .ctrl-btn:disabled { opacity: .35; pointer-events: none; }
+
   input[type=range] {
     -webkit-appearance: none; height: 4px; border-radius: 2px;
     background: rgba(148,163,184,.3); outline: none; cursor: pointer;
@@ -399,6 +418,11 @@
       <button class="ctrl-btn" id="btn-synth" title="Synthwave road (Endless Wave, E)">🛣</button>
       <span id="ctrl-volume"><span>🔉</span><input id="ctrl-vol" type="range" min="0" max="100" value="50" step="1" /></span>
     </div>
+    <div id="ctrl-add">
+      <input id="add-input" type="text" placeholder="Add a song — name, or a Spotify / YouTube / Suno / SoundCloud link…" autocomplete="off" />
+      <button class="ctrl-btn" id="btn-add" title="Add to the queue (Enter)">➕</button>
+      <button class="ctrl-btn" id="btn-add-play" title="Add and play it now (Shift+Enter)">⚡</button>
+    </div>
     <div id="ctrl-visual">
       <span id="ctrl-visual-label">VISUAL</span>
       <span id="swatches"></span>
@@ -421,7 +445,7 @@
       <button class="ctrl-btn" id="btn-sfx-applause" title="Applause">👏</button>
       <button class="ctrl-btn" id="btn-sfx-countdown" title="Countdown">🔟</button>
     </div>
-    <div id="ctrl-hint">Space play/pause · S shuffle tracks · P next visual · R shuffle visual · B back · E synthwave · ↑↓ volume · ←→ seek · Alt+←→ track · Esc hide · H chrome</div>
+    <div id="ctrl-hint">Space play/pause · S shuffle tracks · P next visual · R shuffle visual · B back · E synthwave · ↑↓ volume · ←→ seek · Alt+←→ track · / add song · ⏎ add · ⇧⏎ play · Esc hide · H chrome</div>
   </div>
   <button id="controls-toggle" title="Toggle controls (C)">🎛</button>
 
