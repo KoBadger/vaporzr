@@ -43,6 +43,11 @@ function throwIfSpotifyCooling(): void {
   throw new SpotifyError(`Spotify is rate-limited — pausing requests for ${wait}s.`, 429, wait);
 }
 
+/** Seconds until the shared Spotify cooldown expires (0 when not cooling). */
+export function spotifyCooldownRemainingSec(): number {
+  return Math.max(0, Math.ceil((spotifyCooldownUntil - Date.now()) / 1000));
+}
+
 function basicAuth(): string {
   return Buffer.from(`${config.spotifyClientId}:${config.spotifyClientSecret}`).toString('base64');
 }
@@ -1004,8 +1009,14 @@ export interface AudioFeatures {
  * returns 403 for this endpoint on most apps since Nov 2024, so without this the
  * queue's tracks carry no features and smart shuffle has nothing to rank by.
  */
-async function reccoBeatsFeatures(ids: string[]): Promise<Map<string, AudioFeatures>> {
-  const out = new Map<string, AudioFeatures>();
+async function reccoBeatsFeatures(
+  ids: string[],
+): Promise<{ found: Map<string, AudioFeatures>; answered: Set<string> }> {
+  const found = new Map<string, AudioFeatures>();
+  // Ids from chunks the mirror actually responded to. Only those are safe to
+  // record as "the mirror does not know this" — a 500 or a timeout must not
+  // mark its chunk, or one mirror hiccup hides those tracks for a day.
+  const answered = new Set<string>();
   const RECCO_MAX = 40; // the mirror caps ids per request
   for (let i = 0; i < ids.length; i += RECCO_MAX) {
     const chunk = ids.slice(i, i + RECCO_MAX);
@@ -1015,13 +1026,14 @@ async function reccoBeatsFeatures(ids: string[]): Promise<Map<string, AudioFeatu
         { headers: { Accept: 'application/json' } },
       );
       if (!res.ok) continue;
+      for (const id of chunk) answered.add(id);
       const data = (await res.json()) as {
         content?: Array<Partial<AudioFeatures> & { href?: string; id?: string }>;
       };
       for (const f of data.content ?? []) {
         const sid = f.href?.match(/track\/([A-Za-z0-9]{22})/)?.[1];
         if (!sid) continue;
-        out.set(sid, {
+        found.set(sid, {
           danceability: f.danceability ?? 0.5,
           energy: f.energy ?? 0.5,
           valence: f.valence ?? 0.5,
@@ -1040,7 +1052,7 @@ async function reccoBeatsFeatures(ids: string[]): Promise<Map<string, AudioFeatu
       /* mirror unavailable — leave these featureless */
     }
   }
-  return out;
+  return { found, answered };
 }
 
 /** Batch-fetch audio features for up to 100 Spotify track IDs. */
@@ -1065,6 +1077,10 @@ export async function getAudioFeatures(trackIds: string[]): Promise<Map<string, 
   if (missing.length === 0) return out;
   // Try Spotify first for whatever apps still have access; when it 403s (the
   // endpoint is retired for most apps) backfill the rest from the mirror below.
+  // This leg must NEVER throw: it used to rethrow a 429 and take every cache
+  // hit down with it, so during any Spotify cooldown smart shuffle saw an
+  // empty feature map and reported "0 of N tracks have audio features" for
+  // hours. Now a rate-limit just skips this leg and the mirror still answers.
   try {
     throwIfSpotifyCooling();
     const token = await getAccessToken();
@@ -1076,8 +1092,9 @@ export async function getAudioFeatures(trackIds: string[]): Promise<Map<string, 
         { headers: { Authorization: `Bearer ${token}` } },
       );
       if (res.status === 429) {
-        const wait = noteSpotifyRateLimit(res);
-        throw new SpotifyError(`Spotify API rate-limited — try again in about ${Math.max(1, Math.ceil(wait / 60))} min.`, 429, wait);
+        noteSpotifyRateLimit(res);
+        console.warn('[spotify] /audio-features rate-limited — skipping the Spotify leg, using the mirror');
+        break;
       }
       if (res.status === 403) {
         console.warn('[spotify] /audio-features returned 403 (retired for this app) — falling back to ReccoBeats');
@@ -1093,24 +1110,23 @@ export async function getAudioFeatures(trackIds: string[]): Promise<Map<string, 
         }
       }
     }
-  } catch (err) {
-    // A genuine rate-limit must surface; anything else (no token, network) just
-    // means we fall through to the mirror.
-    if (err instanceof SpotifyError && err.status === 429) throw err;
+  } catch {
+    /* cooling, no token, or a network blip — the mirror below still answers */
   }
   const stillMissing = missing.filter((id) => !out.has(id));
   if (stillMissing.length > 0) {
-    const rb = await reccoBeatsFeatures(stillMissing);
-    for (const [id, af] of rb) {
+    const { found, answered } = await reccoBeatsFeatures(stillMissing);
+    for (const [id, af] of found) {
       out.set(id, af);
       cacheSet(`features:${id}`, af, 7 * 24 * 60 * 60 * 1000);
     }
-    // Cache what BOTH sources failed to answer, briefly. The mirror's catalog is
-    // partial (~half the queue here), so without this every shuffle re-queried
-    // the same unknowns; a day is long enough to stop the churn and short enough
-    // to pick up a track the mirror adds later.
+    // Cache what the mirror ANSWERED but does not know, briefly. Only ids from
+    // chunks with a successful response: recording a failed chunk's ids would
+    // hide those tracks for a day over a transient mirror error. A day is long
+    // enough to stop the re-query churn and short enough to pick up a track
+    // the mirror adds later.
     for (const id of stillMissing) {
-      if (!out.has(id)) cacheSet(`features-miss:${id}`, { miss: true }, 24 * 60 * 60 * 1000);
+      if (!out.has(id) && answered.has(id)) cacheSet(`features-miss:${id}`, { miss: true }, 24 * 60 * 60 * 1000);
     }
   }
   return out;

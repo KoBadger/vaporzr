@@ -5,7 +5,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { config } from '@vaporzr/core/config';
-import { buildAuthorizeUrl, exchangeCode, getAccessToken, SpotifyError, spotifyCacheSize } from '@vaporzr/core/spotify';
+import { buildAuthorizeUrl, exchangeCode, getAccessToken, SpotifyError, spotifyCacheSize, spotifyCooldownRemainingSec } from '@vaporzr/core/spotify';
 import { tokenStore } from '@vaporzr/core/tokenStore';
 import { Bridge } from './bridge.js';
 import { SessionManager } from './session.js';
@@ -173,9 +173,10 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
       const all = sessions.all();
       const bridgeInstance: Bridge | null = bridge;
       const librespotStatus = bridgeInstance?.librespot.isRunning() ? 'running' : 'stopped';
-      // spotifyCooldownUntil is not exported; report healthy (failures surface
-      // per-command). Kept as a string so probes can key off it later.
-      const spotifyApiStatus = 'healthy';
+      // Live Spotify cooldown so an active rate-limit is visible from outside
+      // instead of only surfacing per-command hours later.
+      const spotifyCooldownSec = spotifyCooldownRemainingSec();
+      const spotifyApiStatus = spotifyCooldownSec > 0 ? 'rate-limited' : 'healthy';
       const body = JSON.stringify({
         ok: true,
         uptimeSec: Math.round(process.uptime()),
@@ -184,6 +185,7 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
         sessions: all.length,
         librespot: librespotStatus,
         spotifyApi: spotifyApiStatus,
+        spotifyCooldownSec,
         poToken: poTokenStatus,
         poTokenVersion,
         youtube: youtubeHealth().status,

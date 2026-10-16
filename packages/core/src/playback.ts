@@ -13,6 +13,7 @@ import { librespotDeviceId, type SpotifyBackend } from '@vaporzr/core/librespot'
 import { config } from '@vaporzr/core/config';
 import { analyzer } from './analyzer.js';
 import { LocalFeatureCollector, toAudioFeatures } from './audioFeatures.js';
+import { rememberMeasuredFeatures } from './featureStore.js';
 import { buildAudioFxChain, isEqPreset } from './audiofx.js';
 import { canCrossfade, fadeInPcm, planCrossfade, tempoMatchRatio } from './crossfade.js';
 import * as EW from '@vaporzr/core/endlesswave';
@@ -708,7 +709,13 @@ export class PlaybackController {
     const est = this.featureCollector.estimate();
     this.featureCollector.reset();
     if (!est || !track) return;
-    this.queue.attachEstimatedFeatures(track.uri, toAudioFeatures(est, track.durationMs ?? 0));
+    const feats = toAudioFeatures(est, track.durationMs ?? 0);
+    this.queue.attachEstimatedFeatures(track.uri, feats);
+    // Also keep it on disk, keyed by uri: smart shuffle's key/arc modes read
+    // measured features for tracks the mirror does not know, and without this
+    // the measurement died with the process — every restart re-asked the
+    // mirror and got nothing again.
+    rememberMeasuredFeatures(track.uri, feats);
     console.log(
       `[features] measured "${track.name}" — energy ${est.energy.toFixed(2)} · ` +
         `${Math.round(est.tempo)} BPM · key ${est.key < 0 ? 'unknown' : `${est.key}${est.mode === 1 ? ' major' : ' minor'}`}`,
