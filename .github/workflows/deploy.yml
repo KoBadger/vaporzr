@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       sha:
-        description: 'Image tag to deploy (rollback: a previous build sha; leave blank to build and deploy master)'
+        description: 'Image tag to deploy (rollback: a previous build sha — short shas resolve automatically; leave blank to build and deploy master)'
         required: false
         default: ''
 
@@ -104,6 +104,21 @@ jobs:
       (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
     environment: production
     steps:
+      - name: Resolve rollback sha
+        id: sha
+        # /health reports a 7-char build sha; accept short shas by resolving them
+        # to the full commit sha the image tag was built from.
+        if: github.event.inputs.sha
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHA="${{ github.event.inputs.sha }}"
+          if [ "${#SHA}" -lt 40 ]; then
+            SHA=$(gh api "repos/${{ github.repository }}/commits/$SHA" --jq .sha)
+            echo "Resolved short sha ${{ github.event.inputs.sha }} -> $SHA"
+          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
       - name: Deploy to VPS via SSH
         uses: appleboy/ssh-action@v1.2.5
         with:
@@ -112,12 +127,13 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
             set -e
-            echo "Deploying ${{ env.IMAGE }}:${{ env.DEPLOY_SHA }}"
+            SHA="${{ steps.sha.outputs.sha || env.DEPLOY_SHA }}"
+            echo "Deploying ${{ env.IMAGE }}:$SHA"
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             # Abort before touching the running container if the tag does not exist
             # (a typo'd rollback sha changes nothing).
-            docker pull ${{ env.IMAGE }}:${{ env.DEPLOY_SHA }} || {
-              echo "ERROR: ${{ env.IMAGE }}:${{ env.DEPLOY_SHA }} not found in GHCR — nothing was changed."; exit 1; }
+            docker pull ${{ env.IMAGE }}:$SHA || {
+              echo "ERROR: ${{ env.IMAGE }}:$SHA not found in GHCR — nothing was changed."; exit 1; }
 
             # YouTube PO-token provider (host loopback :4416). Persists across
             # deploys; start it here if the VPS was rebuilt from scratch.
@@ -136,7 +152,7 @@ jobs:
 
             # Smoke-test the freshly built image BEFORE touching the running
             # container, so a broken build aborts here and prod keeps serving.
-            docker run --rm ${{ env.IMAGE }}:${{ env.DEPLOY_SHA }} \
+            docker run --rm ${{ env.IMAGE }}:$SHA \
               sh -c "cd /app/apps/bot && tsx smoke-persist.ts"
 
             docker stop vaporzr || true
@@ -148,7 +164,7 @@ jobs:
               -e BIND_ADDRESS=127.0.0.1 \
               -v vaporzr-data:/app/data \
               $COOKIE_MOUNT \
-              ${{ env.IMAGE }}:${{ env.DEPLOY_SHA }}
+              ${{ env.IMAGE }}:$SHA
             docker image prune -f
             # Keep the 6 newest bot images (current + a few rollback targets);
             # the VPS disk fills fast at ~1.4 GB per tag otherwise.

@@ -2,14 +2,17 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Vaporzr — Request a song</title>
 <link rel="icon" type="image/png" href="/favicon.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta name="theme-color" content="#6a5cff">
 <style>
 :root{--accent:#6a5cff;--accent2:#00f0ff}
 *{box-sizing:border-box}
-body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+html{-webkit-text-size-adjust:100%}
+body{margin:0;min-height:100vh;min-height:100dvh;display:flex;align-items:center;justify-content:center;
+  padding:calc(14px + env(safe-area-inset-top)) 14px calc(14px + env(safe-area-inset-bottom));
   font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#e2e8f0;
   background:#0b1026}
 .card{width:min(460px,94vw);background:rgba(16,22,46,.85);border:1px solid rgba(140,160,255,.22);
@@ -26,10 +29,10 @@ p.sub{margin:0 0 16px;font-size:12px;color:#94a3b8}
 #bars{width:100%;height:56px;display:block;border-radius:10px;margin:2px 0 14px;
   background:rgba(10,14,32,.55);border:1px solid rgba(140,160,255,.16)}
 input{width:100%;padding:12px 14px;border-radius:11px;border:1px solid rgba(140,160,255,.3);
-  background:rgba(10,14,32,.7);color:#e2e8f0;font-size:15px;outline:none}
+  background:rgba(10,14,32,.7);color:#e2e8f0;font-size:16px;outline:none}
 input:focus{border-color:var(--accent)}
 #who{margin-bottom:8px}
-button{margin-top:12px;width:100%;padding:12px;border:none;border-radius:11px;cursor:pointer;
+button{margin-top:12px;width:100%;min-height:46px;padding:12px;border:none;border-radius:11px;cursor:pointer;
   background:linear-gradient(135deg,var(--accent),var(--accent2));color:#0b1026;font-weight:700;font-size:14px}
 button:disabled{opacity:.55;cursor:default}
 #msg{margin-top:14px;font-size:13px;min-height:18px}
@@ -77,9 +80,15 @@ button:disabled{opacity:.55;cursor:default}
 .eq i:nth-child(2){animation-delay:.15s}
 .eq i:nth-child(3){animation-delay:.3s}
 @keyframes eq{0%,100%{height:3px}50%{height:11px}}
+/* Opening splash: the animated badge until the bars socket is up (or 1.6s). */
+#splash{position:fixed;inset:0;z-index:200;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:#0b1026;transition:opacity .45s ease}
+#splash.hide{opacity:0;pointer-events:none}
+#splash img{width:112px;height:112px;border-radius:26px;box-shadow:0 0 0 1px rgba(140,160,255,.25),0 18px 60px rgba(106,92,255,.45)}
+#splash span{font-size:12px;letter-spacing:6px;font-weight:800;padding-left:6px;background:linear-gradient(90deg,var(--accent2),var(--accent));-webkit-background-clip:text;background-clip:text;color:transparent}
 </style>
 </head>
 <body>
+<div id="splash" aria-hidden="true"><img src="/logo.gif" alt=""><span>VAPORZR</span></div>
 <div class="card">
   <div class="jam-head">
     <img class="jam-logo" src="/logo.gif" alt="Vaporzr" />
@@ -100,6 +109,17 @@ button:disabled{opacity:.55;cursor:default}
 </div>
 <script>
 (function () {
+  /* Splash: the animated badge shows until the bars socket is up (or 1.6s,
+     whichever first) so a guest never stares at a blank page. */
+  var splash = document.getElementById('splash');
+  var splashGone = false;
+  function hideSplash() {
+    if (splashGone || !splash) return;
+    splashGone = true;
+    splash.classList.add('hide');
+    setTimeout(function () { if (splash.parentNode) splash.parentNode.removeChild(splash); }, 600);
+  }
+  setTimeout(hideSplash, 1600);
   var q = document.getElementById('q'), go = document.getElementById('go'), msg = document.getElementById('msg');
   var who = document.getElementById('who');
   // Remember the name so a guest types it once, not once per song.
@@ -333,6 +353,7 @@ button:disabled{opacity:.55;cursor:default}
     var url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
     try { bWS = new WebSocket(url); } catch (e) { bWS = null; return; }
     bWS.onopen = function () {
+      hideSplash();
       try {
         bWS.send(JSON.stringify({ type: 'hello', role: 'panel', name: 'vz-jam' }));
         bWS.send(JSON.stringify({ type: 'panel:subscribe', channels: ['visuals'] }));
