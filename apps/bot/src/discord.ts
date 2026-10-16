@@ -4617,12 +4617,32 @@ export class DiscordBot {
       .catch(() => {});
   }
 
+  /** Error note for an auto-join that can't run (no voice channel visible). */
+  private joinFailedError(): Error {
+    return new Error("I couldn't join a voice channel — make sure you're in one, then try again.");
+  }
+
   /** Auto-join the author's voice channel before playback (message-command variant). */
   private async ensureJoinedForMessage(message: Message, s: Session): Promise<boolean> {
-    if (s.voice.isJoined()) return true;
-    if (!message.inGuild()) return false;
+    // Only a Ready link can carry audio. The old `isJoined()` check also
+    // accepted Disconnected/Connecting links, so a dead one silently skipped
+    // the rejoin — V@p replied "Added to queue" and the bot never joined.
+    if (s.voice.isConnectionReady()) {
+      const requester = message.member?.voice?.channel;
+      const current = s.voice.getChannelId();
+      if (requester && current && requester.id !== current)
+        console.log(
+          `[discord] auto-join skipped: already in ${current}, requester in ${requester.id} (use V@join to move)`,
+        );
+      return true;
+    }
+    if (s.voice.isJoined()) console.warn(`[discord] auto-join: voice link is \`${s.voice.connectionStatus()}\` — rejoining`);
+    if (!message.inGuild()) throw this.joinFailedError();
     const channel = message.member?.voice?.channel;
-    if (!channel) return false;
+    if (!channel) {
+      console.warn('[discord] auto-join: requester is not in a voice channel');
+      throw this.joinFailedError();
+    }
     try {
       await s.voice.join(message.guild!.id, channel.id, message.guild!.voiceAdapterCreator);
     } catch (err) {
@@ -4757,12 +4777,18 @@ export class DiscordBot {
     interaction: ChatInputCommandInteraction | StringSelectMenuInteraction,
     s: Session,
   ): Promise<boolean> {
-    if (s.voice.isJoined()) return true;
-    if (!interaction.inGuild()) return false;
+    // Same Ready-only rule as the message variant — a non-Ready link must not
+    // satisfy "already joined" or the join gets silently skipped.
+    if (s.voice.isConnectionReady()) return true;
+    if (s.voice.isJoined()) console.warn(`[discord] auto-join: voice link is \`${s.voice.connectionStatus()}\` — rejoining`);
+    if (!interaction.inGuild()) throw this.joinFailedError();
     const member = interaction.member;
-    if (!member || !('voice' in member)) return false;
+    if (!member || !('voice' in member)) throw this.joinFailedError();
     const channel = member.voice.channel;
-    if (!channel) return false;
+    if (!channel) {
+      console.warn('[discord] auto-join: requester is not in a voice channel');
+      throw this.joinFailedError();
+    }
     await s.voice.join(interaction.guild!.id, channel.id, interaction.guild!.voiceAdapterCreator);
     const state = s.queue.getState();
     if (state.playing) void s.playback.reattachAfterRejoin();
@@ -4817,7 +4843,7 @@ export class DiscordBot {
       console.log(`[discord] auto-join: primary guild -> ${best.guildId} (listeners there)`);
       this.bridge.setPrimaryGuildId(best.guildId);
     }
-    if (s.voice.isJoined()) return true;
+    if (s.voice.isConnectionReady()) return true; // Only a Ready link can carry audio — see ensureJoinedForMessage.
     const guild = this.client.guilds.cache.get(best.guildId);
     if (!guild) return false;
     await s.voice.join(guild.id, best.channelId, guild.voiceAdapterCreator);
@@ -6390,11 +6416,15 @@ export class DiscordBot {
 
     const sessions = this.sessions.all();
     const s = guildId ? this.sessions.get(guildId) : this.sessions.primary;
-    const joined = !!s?.voice.isJoined();
-    const chanId = joined ? s?.voice.getChannelId() : null;
-    const voiceLine = joined
+    // "Connected" means Ready — a Disconnected/Connecting link still passes
+    // isJoined() but can't carry audio; hiding that made voice bugs read as
+    // "connected" in /diag.
+    const ready = !!s?.voice.isConnectionReady();
+    const chanId = ready ? s?.voice.getChannelId() : null;
+    const linkNote = s && !ready && s.voice.isJoined() ? ` (link \`${s.voice.connectionStatus()}\`)` : '';
+    const voiceLine = ready
       ? `connected${chanId ? ` · <#${chanId}>` : ''}`
-      : 'not connected';
+      : `not connected${linkNote}`;
     const dev = this.bridge.librespot.getDeviceInfo();
     const up = process.uptime();
     const uptime = `${Math.floor(up / 3600)}h ${Math.floor((up % 3600) / 60)}m`;

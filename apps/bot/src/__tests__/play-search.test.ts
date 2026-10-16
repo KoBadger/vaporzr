@@ -65,7 +65,7 @@ function harness(resolved: FakeTrack[], opts: { wired?: boolean } = {}): Harness
             playCalls.n += 1;
           },
         },
-        voice: { isJoined: () => true },
+        voice: { isJoined: () => true, isConnectionReady: () => true, connectionStatus: () => 'ready' },
       },
     },
     onResolveRequest: opts.wired === false ? null : async (): Promise<FakeTrack[]> => resolved,

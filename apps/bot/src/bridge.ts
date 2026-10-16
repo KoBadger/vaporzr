@@ -489,15 +489,18 @@ export class Bridge {
    *  is what made the panel look dead once the bot had been made to leave. The
    *  client's own guild is preferred, so a busier guild elsewhere cannot win. */
   private async ensureVoice(guildId?: string): Promise<boolean> {
-    if (this.voice.isJoined()) return true;
+    // Only a Ready link can carry audio — isJoined() also accepts a dead
+    // Disconnected/Connecting link, which silently skipped the rejoin and made
+    // the panel's play button do nothing while claiming success.
+    if (this.voice.isConnectionReady()) return true;
     if (!this.onEnsureJoined) return false;
     try {
       await this.onEnsureJoined(guildId);
     } catch (err) {
       console.warn(`[bridge] auto-join failed: ${err instanceof Error ? err.message : err}`);
     }
-    if (this.voice.isJoined()) return true;
-    this.notice('error', 'Not in a voice channel — join one in Discord, then press play.');
+    if (this.voice.isConnectionReady()) return true;
+    this.notice('error', "Couldn't join a voice channel — join one in Discord, then press play.");
     return false;
   }
 
