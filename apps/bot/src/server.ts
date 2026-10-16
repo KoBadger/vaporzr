@@ -481,6 +481,7 @@ async function handleRoute(
       '/icon-192.png': 'image/png',
       '/icon-512.png': 'image/png',
       '/icon-maskable.png': 'image/png',
+      '/apple-touch-icon.png': 'image/png',
     };
     const brandType = BRAND_ASSETS[url.pathname];
     if (brandType) {
