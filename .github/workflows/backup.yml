@@ -1,0 +1,68 @@
+name: Backup
+
+# Weekly encrypted snapshot of the vaporzr-data volume. The archive is
+# encrypted on the VPS before it goes anywhere (the repo is public, so the
+# off-host copy must never leave in the clear), stored as a workflow artifact,
+# and kept as rotated encrypted copies on the VPS itself.
+on:
+  schedule:
+    # Sundays 09:00 UTC (2 AM US Pacific).
+    - cron: '0 9 * * 0'
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  # Deterministic per-run name so the download step knows what to fetch.
+  BACKUP_NAME: vaporzr-data-${{ github.run_id }}.tgz.enc
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Archive + encrypt the data volume on the VPS
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: BACKUP_NAME
+          script: |
+            set -e
+            DATA=/var/lib/docker/volumes/vaporzr-data/_data
+            DEST=/opt/vaporzr/backups
+            ARCHIVE="$DEST/$BACKUP_NAME"
+            mkdir -p "$DEST"
+            # Rebuildable caches (go-librespot/cache ~1 GB, stems, hf, torch) are
+            # excluded; uploads, presets, suno, queues, tokens and cookies stay.
+            tar -czf "${ARCHIVE%.enc}" -C "$DATA" \
+              --exclude='go-librespot/cache' \
+              --exclude='stems' \
+              --exclude='hf' \
+              --exclude='torch' \
+              .
+            openssl enc -aes-256-cbc -pbkdf2 -salt \
+              -pass file:/opt/vaporzr/backup-passphrase.txt \
+              -in "${ARCHIVE%.enc}" -out "$ARCHIVE"
+            rm -f "${ARCHIVE%.enc}"
+            ls -lh "$ARCHIVE"
+            # Rotate: keep the 4 newest encrypted copies on the VPS.
+            ls -1t "$DEST"/vaporzr-data-*.tgz.enc | tail -n +5 | xargs -r rm -f
+
+      - name: Download the encrypted archive
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          install -m 600 /dev/null vps_key
+          printf '%s\n' "$VPS_SSH_KEY" > vps_key
+          scp -i vps_key -o StrictHostKeyChecking=accept-new \
+            "$VPS_USER@$VPS_HOST:/opt/vaporzr/backups/$BACKUP_NAME" "$BACKUP_NAME"
+          ls -lh "$BACKUP_NAME"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-${{ github.run_id }}
+          path: ${{ env.BACKUP_NAME }}
+          retention-days: 90
