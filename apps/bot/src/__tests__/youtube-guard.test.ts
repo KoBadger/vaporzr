@@ -20,6 +20,7 @@ import {
   shouldRetryYtDlp,
   youtubeProxyHops,
   ytDlpVersion,
+  YOUTUBE_BUSY_TEXT,
 } from '@vaporzr/core/youtube';
 import { config } from '@vaporzr/core/config';
 import type { ResolvedVideo } from '@vaporzr/core/youtube';
@@ -708,6 +709,15 @@ describe('describeBotWall (honest anti-bot diagnosis)', () => {
     expect(msg).toContain('no single exit IP is the cause');
     expect(msg).toContain('cookies are being rejected');
     expect(msg).toContain('all 2 proxy hops');
+  });
+});
+
+describe('YOUTUBE_BUSY_TEXT (public anti-bot-wall line)', () => {
+  it('never leaks cookies/proxy internals into public channels', () => {
+    expect(YOUTUBE_BUSY_TEXT).not.toMatch(/cookie|proxy|hop|PO token|\.env|anti-bot/i);
+    expect(YOUTUBE_BUSY_TEXT).toMatch(/try again/i);
+    expect(YOUTUBE_BUSY_TEXT).toMatch(/Spotify/i);
+    expect(YOUTUBE_BUSY_TEXT.length).toBeLessThan(140);
   });
 });
 

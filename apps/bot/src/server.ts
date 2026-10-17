@@ -987,7 +987,10 @@ async function handleRoute(
           );
         }
         try {
-          const file = fs.readFileSync(path.join(__dirname, '..', 'public', 'request.html'), 'utf8');
+          const build = (process.env.VAPORZR_BUILD ?? 'dev').slice(0, 7);
+          const file = fs
+            .readFileSync(path.join(__dirname, '..', 'public', 'request.html'), 'utf8')
+            .replace(/\{\{BUILD\}\}/g, build);
           res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
           res.end(file);
         } catch {
@@ -1011,8 +1014,10 @@ async function handleRoute(
 
       case '/sw.js': {
         try {
-          const file = fs.readFileSync(path.join(__dirname, '..', 'public', 'sw.js'));
-          res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-cache' });
+          const build = (process.env.VAPORZR_BUILD ?? 'dev').slice(0, 7);
+          const raw = fs.readFileSync(path.join(__dirname, '..', 'public', 'sw.js'), 'utf8');
+          const file = `/* build: ${build} */\n${raw}`;
+          res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-store' });
           res.end(file);
         } catch {
           res.writeHead(404);

@@ -58,6 +58,7 @@ import {
   searchYoutube,
   setYoutubeHealthListener,
   youtubeHealth,
+  YoutubeBusyError,
   YoutubeError,
   type YoutubeHealth,
   type YoutubeHealthContext,
@@ -115,6 +116,8 @@ function friendlyPlayError(err: unknown): string {
     return `SoundCloud error: ${msg}`;
   }
   if (err instanceof YoutubeError) {
+    // Already public-ready (the anti-bot wall's soft line): no wrapping, no internals.
+    if (err instanceof YoutubeBusyError) return msg;
     if (/search failed/i.test(msg)) return 'Could not find that on YouTube.';
     if (/yt-dlp failed/i.test(msg)) return 'YouTube extraction failed — the video may be private or region-locked.';
     return `YouTube error: ${msg}`;
