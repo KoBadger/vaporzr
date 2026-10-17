@@ -71,7 +71,7 @@ import {
   resolveSoundcloudVideo,
   SoundcloudError,
 } from '@vaporzr/core/soundcloud';
-import { Session, SessionManager } from './session.js';
+import { Session, SessionManager, type RestoredPlayingInfo } from './session.js';
   import { fetchLyrics, type LyricsResult, type SyncedLine } from '@vaporzr/core/lyrics';
 import { PermissionsManager } from './permissions.js';
 import { analyzer } from '@vaporzr/core/analyzer';
@@ -879,6 +879,10 @@ export class DiscordBot {
         console.warn(`[autoplay] panel set failed: ${err instanceof Error ? err.message : err}`);
       });
     });
+    // A queue that was mid-playback when the bot restarted gets one chance to
+    // resume seamlessly: rejoin the channel it was streaming into and start the
+    // restored current track (never earlier, already-played ones).
+    sessions.onRestoredPlaying((s, info) => this.scheduleRestartResume(s, info));
     // Every per-guild session refreshes that server's control panel on changes.
     sessions.onSessionCreated((s) => {
       s.queue.subscribe({
@@ -992,6 +996,10 @@ export class DiscordBot {
       await this.loadPanelRegistrations();
       // Remove now-playing strips in channels that never opted in (see /npchannel).
       await this.cleanupMiniNp();
+      // Create every guild's session up front so queue restores (and the
+      // seamless restart resume) run at boot instead of waiting for the first
+      // event in that guild.
+      for (const g of this.client.guilds.cache.values()) this.sessions.get(g.id);
       // Alert the owner if the YouTube canary flips to a broken state.
       setYoutubeHealthListener((status, context) => void this.alertYoutubeHealth(status, context));
       if (!config.ownerId) {
@@ -4694,6 +4702,78 @@ export class DiscordBot {
     }, 1500);
     t.unref?.();
     this.autoResumeTimers.set(key, t);
+  }
+
+  /** Guards the boot-time restart resume so a session only tries it once. */
+  private restartResumed = new Set<string>();
+
+  /**
+   * After a restart, a queue that was mid-playback gets one chance to resume
+   * seamlessly: rejoin the voice channel it was streaming into and start the
+   * restored current track. Anything unexpected (channel gone, nobody left, a
+   * stale interruption) skips the resume and leaves the queue queued — this
+   * never walks back through tracks that already played.
+   */
+  private scheduleRestartResume(s: Session, info: RestoredPlayingInfo): void {
+    const key = s.guildId || '__dm__';
+    if (this.restartResumed.has(key)) return;
+    // Only resume a recent interruption — a deploy or crash, not a bot that was
+    // down for hours (its old queue would just replay stale music).
+    const maxAgeMs = 15 * 60 * 1000;
+    const ageMs = info.fileMtimeMs > 0 ? Date.now() - info.fileMtimeMs : Number.POSITIVE_INFINITY;
+    if (ageMs > maxAgeMs) {
+      console.log(
+        `[discord] restart resume skipped for guild ${s.guildId} — last session ended ${Math.round(ageMs / 60000)}m ago`,
+      );
+      return;
+    }
+    if (!info.voiceChannelId) {
+      console.log(`[discord] restart resume skipped for guild ${s.guildId} — no voice channel on record`);
+      return;
+    }
+    this.restartResumed.add(key);
+    // Let the gateway finish populating channel caches before reading members.
+    const channelId = info.voiceChannelId;
+    const t = setTimeout(() => void this.tryRestartResume(s, channelId), 3000);
+    t.unref?.();
+  }
+
+  private async tryRestartResume(s: Session, channelId: string): Promise<void> {
+    let joined = false;
+    try {
+      const guild = this.client.guilds.cache.get(s.guildId);
+      const channel = guild?.channels.cache.get(channelId);
+      if (!guild || !channel || !channel.isVoiceBased()) {
+        console.log(`[discord] restart resume skipped for guild ${s.guildId} — channel ${channelId} is gone`);
+        return;
+      }
+      if (!channel.members.some((m) => !m.user.bot)) {
+        console.log(`[discord] restart resume skipped for guild ${s.guildId} — nobody is in ${channel.name}`);
+        return;
+      }
+      const track = s.queue.getCurrentTrack();
+      if (!track) return; // finished queue — nothing to pick back up
+      await s.voice.join(guild.id, channel.id, guild.voiceAdapterCreator);
+      // join() resolves only once the link is Ready, so audio can flow.
+      joined = true;
+      this.perms.setNpAuto(s.guildId, true);
+      await s.playback.play();
+      console.log(`[discord] restart resume: rejoined ${channel.name} and resumed "${track.name}"`);
+      void this.maybeAutoMiniNp(s.guildId, s.queue.getState());
+    } catch (err) {
+      console.warn(
+        `[discord] restart resume failed for guild ${s.guildId}: ${err instanceof Error ? err.message : err}`,
+      );
+      // Don't squat in the channel with nothing playing — the queue stays
+      // queued, and a later V@p picks it back up.
+      if (joined) {
+        try {
+          s.voice.leave();
+        } catch {
+          /* ignore */
+        }
+      }
+    }
   }
 
   private async insertToQueue(interaction: ChatInputCommandInteraction, tracks: ResolvedTrack[]): Promise<void> {
