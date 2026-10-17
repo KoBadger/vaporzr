@@ -9,6 +9,14 @@ import { getCrossfadeMs } from './crossfadeStore.js';
 import type { PlaybackState, TrackInfo } from '@vaporzr/shared';
 import * as EW from '@vaporzr/core/endlesswave';
 
+/** Details for a queue restored while it was mid-playback (see onRestoredPlaying). */
+export interface RestoredPlayingInfo {
+  /** Voice channel the bot was streaming into when it went down, when known. */
+  voiceChannelId?: string;
+  /** mtime of the queue file — how long ago the interruption happened (0 = unknown). */
+  fileMtimeMs: number;
+}
+
 /**
  * One guild's isolated playback: its own queue, voice connection, and playback
  * controller. Every server the bot serves gets a Session, so any number of
@@ -91,6 +99,7 @@ export class SessionManager {
   private librespot: SpotifyBackend | null = null;
   private createdHooks: Array<(s: Session) => void> = [];
   private primaryHooks: Array<(s: Session | null) => void> = [];
+  private restoredPlayingHooks: Array<(s: Session, info: RestoredPlayingInfo) => void> = [];
   private saveTimers = new Map<string, NodeJS.Timeout>();
 
   /** Called once the bot's librespot instance exists (sessions are created after). */
@@ -118,7 +127,10 @@ export class SessionManager {
     }
     try {
       fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, JSON.stringify({ ...data, endlessWave: ew }, null, 2));
+      fs.writeFileSync(
+        file,
+        JSON.stringify({ ...data, endlessWave: ew, voiceChannelId: s.voice.getChannelId() ?? undefined }, null, 2),
+      );
     } catch (err) {
       console.warn(`[vaporzr] could not persist queue for ${guildId}:`, err instanceof Error ? err.message : err);
     }
@@ -157,6 +169,7 @@ export class SessionManager {
         state: PlaybackState;
         playedThrough?: boolean;
         endlessWave?: unknown;
+        voiceChannelId?: string;
       };
       s.queue.restore(data);
       // Re-adopt persisted audio settings so a redeploy keeps the session's
@@ -191,6 +204,19 @@ export class SessionManager {
           console.log(`[vaporzr] restored Endless Wave for guild ${guildId} (${s.endlessWave.generated} generated)`);
         }
       }
+      // A queue that was mid-playback gets a chance to resume seamlessly (the
+      // bot rejoins the channel it was streaming into and picks the current
+      // track back up). Fire-and-forget: the consumer decides whether the
+      // interruption is recent enough and the channel is still worth joining.
+      if (wasPlaying) {
+        let fileMtimeMs = 0;
+        try {
+          fileMtimeMs = fs.statSync(file).mtimeMs;
+        } catch {
+          /* ignore — unknown age just means the resume age gate can't run */
+        }
+        for (const cb of this.restoredPlayingHooks) cb(s, { voiceChannelId: data.voiceChannelId, fileMtimeMs });
+      }
     } catch (err) {
       console.warn(`[vaporzr] could not restore queue for ${guildId}:`, err instanceof Error ? err.message : err);
     }
@@ -202,6 +228,11 @@ export class SessionManager {
 
   onPrimaryChanged(cb: (s: Session | null) => void): void {
     this.primaryHooks.push(cb);
+  }
+
+  /** Fires when a queue is restored while it was mid-playback (restart resume). */
+  onRestoredPlaying(cb: (s: Session, info: RestoredPlayingInfo) => void): void {
+    this.restoredPlayingHooks.push(cb);
   }
 
   /** The guild id the desktop/browser panels act on. */
