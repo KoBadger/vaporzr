@@ -1,26 +1,26 @@
 import { describe, expect, it } from 'vitest';
 import { canCrossfade, crossfadePcm, equalPowerIn, equalPowerOut, fadeInPcm, linearIn, planCrossfade, tailFadeSeconds, tempoMatchRatio } from '@vaporzr/core/crossfade';
 
-describe('canCrossfade (the overlap gate)', () => {
-  it('schedules a blend whenever we generate the audio ourselves', () => {
-    expect(canCrossfade(true, 6000)).toBe(true);
-    expect(canCrossfade(true, 2500)).toBe(true);
+describe('canCrossfade (the schedule gate)', () => {
+  it('schedules whenever a non-zero crossfade is set, regardless of source', () => {
+    // Scheduling is always safe — startCrossfade falls back to a sequential
+    // volume fade when the incoming track has no decodable URL (Spotify→Spotify).
+    expect(canCrossfade(6000)).toBe(true);
+    expect(canCrossfade(2500)).toBe(true);
+    expect(canCrossfade(1)).toBe(true);
   });
 
-  it('refuses when the crossfade is off or the audio is not ours to mix into', () => {
-    // A raw Spotify (librespot -> PulseAudio) capture has no mix point.
-    expect(canCrossfade(false, 6000)).toBe(false);
-    expect(canCrossfade(true, 0)).toBe(false);
-    expect(canCrossfade(false, 0)).toBe(false);
+  it('refuses only when the crossfade is off (zero)', () => {
+    expect(canCrossfade(0)).toBe(false);
+    expect(canCrossfade(-1)).toBe(false);
   });
 
-  it('takes no source and no URL argument — the gate must not depend on either', () => {
-    // Regression (twice over): gating on `source === 'spotify'` disabled the
-    // blend for every track in YouTube-first mode, and gating on a pre-resolved
-    // URL made it skip every time because this runs at the START of the current
-    // track, when the next stream is not resolved yet. Both left only the baked
-    // fade-out, so songs went quiet seconds early.
-    expect(canCrossfade.length).toBe(2);
+  it('takes only the crossfade length — no source, no URL argument', () => {
+    // The gate must not depend on the queue `source` (gating on 'spotify'
+    // disabled the blend in YouTube-first mode) or a pre-resolved URL (this runs
+    // at the START of the current track, when the next stream isn't resolved
+    // yet). Both left only the baked fade-out, so songs went quiet seconds early.
+    expect(canCrossfade.length).toBe(1);
   });
 });
 

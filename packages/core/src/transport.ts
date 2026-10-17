@@ -47,6 +47,13 @@ export interface AudioTransport {
   setVolume(volumePercent: number): void;
   setStreamOffset(ms: number): void;
   queueSfxPcm(data: Buffer): void;
+  /**
+   * Sequential fade-out of the active resource's volume to zero over `ms`.
+   * Used when a true overlap crossfade can't run (no decodable blend URL for
+   * the incoming track — Spotify→Spotify via librespot). The next track fades
+   * in when play() starts its own resource.
+   */
+  fadeOutResource(ms: number): void;
   suppressCurrentTailFade(minRemainingMs: number): void;
   decodeHeadPcm(url: string, ms: number, tempo?: number): Promise<Buffer | null>;
 

@@ -468,10 +468,11 @@ export class PlaybackController {
     this.clearCrossfadeTimer();
     // Runtime, per-guild setting (0 = off). The env vars only seed the default.
     const xfadeMs = this.xfadeMs;
-    // We can only blend into audio we are generating ourselves — the bot's own
-    // ffmpeg stream. A raw Spotify (go-librespot -> PulseAudio) capture has no
-    // mix point, so it keeps the fade-out half only.
-    if (!canCrossfade(this.usingServerStream(), xfadeMs)) return;
+    // Scheduling is always safe — a true overlap blend fires when the incoming
+    // track has a decodable URL (YouTube/local/etc.); otherwise startCrossfade
+    // falls back to a sequential volume fade (Spotify→Spotify via librespot,
+    // which plays one track at a time and has no second stream to blend in).
+    if (!canCrossfade(xfadeMs)) return;
     const snapshot = this.queue.getSnapshot();
     const next = snapshot.tracks[snapshot.currentIndex + 1];
     if (!next) return;
@@ -519,7 +520,12 @@ export class PlaybackController {
   private async startCrossfade(outgoingUri: string | null, next: TrackInfo, xfadeMs: number): Promise<void> {
     const url = await this.resolveBlendUrl(outgoingUri, next);
     if (!url) {
-      console.log(`[playback] crossfade skipped — no stream for "${next.name}" (fade only)`);
+      // No decodable incoming stream (Spotify→Spotify via librespot plays one
+      // track at a time, so there's no second stream to blend in). Fall back to a
+      // sequential fade: ramp the outgoing volume to zero over xfadeMs so the
+      // handoff isn't a hard cut, and the next track fades in when play() starts.
+      console.log(`[playback] crossfade: sequential fade for "${next.name}" (no blend stream)`);
+      this.voice.fadeOutResource(xfadeMs);
       return;
     }
     if (!outgoingUri) return;

@@ -55,19 +55,17 @@ export function planCrossfade(
 /**
  * Whether a crossfade should be SCHEDULED for an upcoming hand-off.
  *
- * Deliberately NOT the queue's `source` field: in YouTube-first mode a `spotify`
- * queue entry resolves to a YouTube stream that IS decodable, so gating on
- * `source` silently disabled the blend and left only the baked fade-out — songs
- * went quiet seconds before their end, which reads as "cutting off instead of
- * fading".
+ * Scheduling is always safe — `startCrossfade` handles an incoming track with no
+ * decodable URL (Spotify→Spotify via librespot, which plays one track at a time)
+ * by falling back to a sequential volume fade instead of a true overlap blend.
+ * The only reason not to schedule is a zero crossfade length.
  *
  * The incoming track's URL is resolved at BLEND time, not here: this runs at the
  * start of the current track, when the next stream is usually not resolved yet
  * (checking here made every attempt skip).
  */
-export function canCrossfade(usingServerStream: boolean, xfadeMs: number): boolean {
-  if (xfadeMs <= 0) return false;
-  return usingServerStream;
+export function canCrossfade(xfadeMs: number): boolean {
+  return xfadeMs > 0;
 }
 
 /** Linear ramp in [0,1]. */
