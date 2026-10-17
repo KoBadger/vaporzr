@@ -58,6 +58,7 @@ import {
   searchYoutube,
   setYoutubeHealthListener,
   youtubeHealth,
+  YoutubeBusyError,
   YoutubeError,
   type YoutubeHealth,
   type YoutubeHealthContext,
@@ -115,6 +116,8 @@ function friendlyPlayError(err: unknown): string {
     return `SoundCloud error: ${msg}`;
   }
   if (err instanceof YoutubeError) {
+    // Already public-ready (the anti-bot wall's soft line): no wrapping, no internals.
+    if (err instanceof YoutubeBusyError) return msg;
     if (/search failed/i.test(msg)) return 'Could not find that on YouTube.';
     if (/yt-dlp failed/i.test(msg)) return 'YouTube extraction failed — the video may be private or region-locked.';
     return `YouTube error: ${msg}`;
@@ -906,6 +909,9 @@ export class DiscordBot {
           // Void any bet whose track left the queue before it played.
           this.expireBets(s);
           this.scheduleWaveTopUp(s);
+          // An emptied queue means playback is done for now — drop the
+          // now-playing voice status so it doesn't linger as stale.
+          if (s.queue.getSnapshot().tracks.length === 0) this.clearVoiceStatus(s);
         },
         onStateChanged: (st) => {
           if (st.playing && st.track) {
@@ -959,6 +965,8 @@ export class DiscordBot {
             void s.playback.startAmbient();
             return;
           }
+          // Nothing will play now — clear the voice status while still connected.
+          this.clearVoiceStatus(s);
           void this.notifyQueueEnded(s.guildId);
         })();
       };
@@ -4768,6 +4776,7 @@ export class DiscordBot {
       // queued, and a later V@p picks it back up.
       if (joined) {
         try {
+          this.clearVoiceStatus(s);
           s.voice.leave();
         } catch {
           /* ignore */
@@ -6192,6 +6201,7 @@ export class DiscordBot {
         s.queue.clear();
         break;
       case 'leave':
+        this.clearVoiceStatus(s);
         s.voice.leave();
         break;
       case 'dj': {
@@ -7185,6 +7195,33 @@ export class DiscordBot {
       this.voiceStatusDenied.delete(guildId);
       console.warn(`[voice] status update failed: ${msg}`);
     }
+  }
+
+  /**
+   * Drop the channel's now-playing voice status. Called while the bot is still
+   * connected (the PUT targets the channel we're in) whenever playback stops for
+   * good: an emptied queue, the queue running dry, or a manual leave. A no-op
+   * when nothing was set this process — except it also sweeps a status left over
+   * from before a restart, since the dedupe map starts empty.
+   */
+  private clearVoiceStatus(s: Session): void {
+    const guildId = s.guildId;
+    if (!guildId || !s.voice.isJoined()) return;
+    const channelId = s.voice.getChannelId();
+    if (!channelId) return;
+    if (this.voiceStatusText.get(guildId) === '') return;
+    // A refusal already warned once via syncVoiceStatus; don't repeat it.
+    const deniedAt = this.voiceStatusDenied.get(guildId) ?? 0;
+    if (deniedAt && Date.now() - deniedAt < 60 * 60_000) return;
+    this.voiceStatusText.set(guildId, '');
+    void this.rest.put(`/channels/${channelId}/voice-status`, { body: { status: '' } }).catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/missing permissions|403|50013/i.test(msg)) {
+        this.voiceStatusDenied.set(guildId, Date.now());
+        return;
+      }
+      console.warn(`[voice] status clear failed: ${msg}`);
+    });
   }
 
   /** Fetch lyrics for a track and broadcast them to panels/visualizers (best-effort,

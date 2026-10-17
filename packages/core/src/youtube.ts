@@ -8,6 +8,11 @@ import type { ResolvedTrack } from './spotify.js';
 
 export class YoutubeError extends Error {}
 
+/** Anti-bot-wall failure whose message is already public-ready: the bot's
+ *  `friendlyPlayError` passes it through unmodified, while the actionable
+ *  diagnosis (cookies age, routes, `/cookie-upload`) goes to the log instead. */
+export class YoutubeBusyError extends YoutubeError {}
+
 export interface ResolvedVideo extends ResolvedTrack {
   videoId: string;
   streamUrl: string;
@@ -214,8 +219,11 @@ function ytDlpOnce(args: string[], proxy = ''): Promise<string> {
         if (err) {
           const detail = (stderr || err.message).toString();
           // The anti-bot wall is NOT proof of expired cookies — see describeBotWall().
+          // The diagnosis (cookies age, routes, /cookie-upload) is for the log;
+          // Discord only ever sees the soft line, so public channels never leak it.
           if (isBotWall(detail)) {
-            reject(new YoutubeError(describeBotWall()));
+            console.warn(`[youtube] anti-bot wall — ${describeBotWall()}`);
+            reject(new YoutubeBusyError(YOUTUBE_BUSY_TEXT));
             return;
           }
           reject(new YoutubeError(`yt-dlp failed: ${detail.slice(0, 300)}`));
@@ -351,6 +359,11 @@ export function youtubeProxyHops(): string[] {
   const hops = [config.youtubeProxy, config.youtubeProxyAlt, config.youtubeProxyFallback];
   return hops.filter((v, i) => !!v && hops.indexOf(v) === i);
 }
+
+/** Public, no-internals one-liner for the anti-bot wall — what Discord shows.
+ *  `describeBotWall()` below holds the actionable diagnosis for the logs. */
+export const YOUTUBE_BUSY_TEXT =
+  "Couldn't load that one from YouTube — try again in a moment, or use a Spotify link.";
 
 /** Actionable text for the anti-bot wall.
  *

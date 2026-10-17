@@ -122,6 +122,20 @@ button:disabled{opacity:.55;cursor:default}
   setTimeout(hideSplash, 1600);
   var q = document.getElementById('q'), go = document.getElementById('go'), msg = document.getElementById('msg');
   var who = document.getElementById('who');
+  var REQ_BUILD = '{{BUILD}}';
+  function checkBuildUpdate() {
+    if (!REQ_BUILD || REQ_BUILD === 'dev' || REQ_BUILD.indexOf('{{') >= 0) return;
+    if (q && q.value && q.value.trim()) return;
+    fetch('/health', { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
+      if (!d || !d.build || d.build === 'dev' || d.build === REQ_BUILD) return;
+      try {
+        if (sessionStorage.getItem('vz_req_reload') === d.build) return;
+        sessionStorage.setItem('vz_req_reload', d.build);
+      } catch (e) {}
+      location.reload();
+    }).catch(function () {});
+  }
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') checkBuildUpdate(); });
   // Remember the name so a guest types it once, not once per song.
   try { var saved = localStorage.getItem('vzWho'); if (saved) who.value = saved; } catch (e) {}
   // /jam is this same page with jam framing.
@@ -354,6 +368,7 @@ button:disabled{opacity:.55;cursor:default}
     try { bWS = new WebSocket(url); } catch (e) { bWS = null; return; }
     bWS.onopen = function () {
       hideSplash();
+      checkBuildUpdate();
       try {
         bWS.send(JSON.stringify({ type: 'hello', role: 'panel', name: 'vz-jam' }));
         bWS.send(JSON.stringify({ type: 'panel:subscribe', channels: ['visuals'] }));
