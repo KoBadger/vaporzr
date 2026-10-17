@@ -200,13 +200,6 @@ kbd{display:inline-block;padding:2px 7px;border-radius:6px;border:1px solid var(
 #search-row [data-tip]:hover::after{top:calc(100% + 9px);bottom:auto}
 #search-row [data-tip]:hover::before{top:calc(100% + 3px);bottom:auto;border-top-color:transparent;border-bottom-color:color-mix(in srgb,var(--accent) 55%,transparent)}
 
-@media(max-width:620px){
-  body{padding:calc(14px + env(safe-area-inset-top)) 8px calc(80px + env(safe-area-inset-bottom))}
-  #art{width:60px;height:60px}
-  #track-name{font-size:15px}
-  [data-tip]:hover::after{white-space:normal;width:max-content;max-width:240px}
-}
-
 body.guest button,body.guest input[type=range]{opacity:.45;cursor:not-allowed}
 body.guest #guilds{display:none}
 
@@ -244,7 +237,10 @@ body.guest #guilds{display:none}
 
 /* ===== MOBILE: bottom tab nav + full-bleed cards ===== */
 #tab-bar{display:none}
-@media(max-width:560px){
+/* Applies to everything below the desktop two-column grid (>=900px). The
+ * previous 560px cutoff left a 561-899px gap (landscape phones, small tablets)
+ * on the old single-column layout with no tab bar — "looks the exact same". */
+@media(max-width:899px){
   /* Bottom tab bar */
   #tab-bar{position:fixed;left:0;right:0;bottom:0;z-index:61;display:flex;background:rgba(8,11,28,.98);
     border-top:1px solid var(--line);backdrop-filter:blur(14px);padding-bottom:env(safe-area-inset-bottom)}
@@ -296,6 +292,8 @@ body.guest #guilds{display:none}
   .card.collapsible.collapsed > #queue-info::after,.card.collapsible.collapsed > .section-label::after{content:" \25B8"}
   .card.collapsible.collapsed > *:not(#queue-info):not(.section-label){display:none}
   .footer-card{display:none}
+  /* Tooltips wrap on small screens instead of overflowing */
+  [data-tip]:hover::after{white-space:normal;width:max-content;max-width:240px}
   /* Lyrics */
   .lyrics{max-height:320px;overflow-y:auto;padding:4px 0;font-size:15px;line-height:1.8}
   .lyrics .lyr{padding:3px 12px;border-radius:8px;color:var(--muted);white-space:pre-wrap}
@@ -309,7 +307,7 @@ body.guest #guilds{display:none}
 #mini-bar img{width:38px;height:38px;border-radius:9px;object-fit:cover;background:#141a33;flex-shrink:0}
 #mini-bar .mname{flex:1;min-width:0;font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #mini-bar button{height:44px;min-width:44px}
-@media(min-width:561px){#mini-bar{display:none !important}#tab-bar{display:none !important}}
+@media(min-width:900px){#mini-bar{display:none !important}#tab-bar{display:none !important}}
 /* Opening splash: the animated badge until the first state frame (or 2.5s). */
 #splash{position:fixed;inset:0;z-index:300;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:#0b1026;transition:opacity .45s ease}
 #splash.hide{opacity:0;pointer-events:none}
@@ -967,6 +965,9 @@ body.guest #guilds{display:none}
   }
   document.addEventListener('visibilitychange',function(){if(document.visibilityState==='visible')checkBuildUpdate()});
   window.addEventListener('pageshow',function(e){if(e&&e.persisted)checkBuildUpdate()});
+  // Also check on initial load — a stale cached page otherwise sits there until
+  // the user switches tabs and back. Short delay so /health is up by then.
+  setTimeout(checkBuildUpdate,1200);
   var GUEST=false,GUEST_UI=false;
   function connect(){
     var loc=window.location;
