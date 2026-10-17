@@ -23,7 +23,7 @@
   --text: #e2e8f0; --muted: #94a3b8; --danger: #f87171;
 }
 * { box-sizing: border-box; }
-html,body{height:100%}
+html,body{height:100%;overflow-x:hidden;max-width:100%}
 html{-webkit-text-size-adjust:100%}
 body {
   margin: 0; font-family:'Inter',system-ui,sans-serif; color: var(--text);
@@ -38,19 +38,22 @@ body {
 body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
   background:linear-gradient(rgba(99,102,241,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(99,102,241,.025) 1px,transparent 1px);
   background-size:42px 42px}
-main { position:relative;z-index:1; max-width: 1080px; margin: 0 auto; display: grid; gap: 14px; }
-.left-col,.right-col{display:grid;gap:14px;align-content:start;min-width:0}
-@media(min-width:900px){
-  main{grid-template-columns:1fr 340px;grid-template-areas:"head head" "hero hero" "left right" "foot foot"}
+main { position:relative;z-index:1; width:100%; max-width: 1080px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+.left-col,.right-col{display:grid;grid-template-columns:minmax(0,1fr);gap:14px;align-content:start;min-width:0}
+@media(min-width:961px) and (hover:hover) and (pointer:fine){
+  main{grid-template-columns:minmax(0,1fr) 340px;grid-template-areas:"head head" "hero hero" "left right" "foot foot"}
   .head-card{grid-area:head}.hero-card{grid-area:hero}.left-col{grid-area:left}
   .right-col{grid-area:right}.footer-card{grid-area:foot}
 }
 
 .card {
+  position: relative; z-index: 1; min-width: 0; max-width: 100%;
   background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
   padding: 16px; box-shadow: 0 10px 44px rgba(0,0,0,.45), 0 0 26px color-mix(in srgb, var(--accent) 14%, transparent);
   backdrop-filter: blur(14px);
 }
+.head-card { z-index: 35; }
+.card.menu-open, .card:has(.menu.open) { z-index: 55 !important; }
 h1 { margin: 0; font-size: 17px; letter-spacing: 3px; font-weight:800;
   background: linear-gradient(90deg, var(--accent2), var(--accent)); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .logo-mark{width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,var(--accent),var(--accent2));
@@ -235,79 +238,129 @@ body.guest #guilds{display:none}
 #wave-select:focus{outline:none;border-color:color-mix(in srgb,var(--accent) 60%,transparent)}
 #wave-select.active{color:var(--accent2);border-color:color-mix(in srgb,var(--accent2) 45%,transparent)}
 
-/* ===== MOBILE: bottom tab nav + full-bleed cards ===== */
+/* ===== MOBILE / TOUCH (Portrait & Landscape, S23 Ultra, Tablets) ===== */
 #tab-bar{display:none}
-/* Applies to everything below the desktop two-column grid (>=900px). The
- * previous 560px cutoff left a 561-899px gap (landscape phones, small tablets)
- * on the old single-column layout with no tab bar — "looks the exact same". */
-@media(max-width:899px){
-  /* Bottom tab bar */
-  #tab-bar{position:fixed;left:0;right:0;bottom:0;z-index:61;display:flex;background:rgba(8,11,28,.98);
+@media (hover:none),(pointer:coarse){
+  [data-tip]:hover::after,[data-tip]:hover::before{display:none !important}
+}
+@media (max-width:960px), (hover:none) and (pointer:coarse){
+  /* Bottom quick-jump bar + live Now Playing tracker bar above it */
+  #tab-bar{position:fixed;left:0;right:0;bottom:0;z-index:70;display:flex;background:rgba(8,11,28,.98);
     border-top:1px solid var(--line);backdrop-filter:blur(14px);padding-bottom:env(safe-area-inset-bottom)}
-  #tab-bar button{flex:1;height:52px;border:0;background:none;color:var(--muted);font:600 10.5px/1 inherit;
-    cursor:pointer;border-top:2px solid transparent;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px}
-  #tab-bar button .ti{font-size:18px}
-  #tab-bar button.active{color:var(--accent2);border-top-color:var(--accent2)}
-  /* Mini transport sits above the tab bar */
-  #mini-bar{bottom:calc(52px + env(safe-area-inset-bottom)) !important;border-radius:0}
-  /* Tab visibility — only the active tab's cards show */
-  body[data-tab="np"] [data-tab="queue"],body[data-tab="np"] [data-tab="more"]{display:none}
-  body[data-tab="queue"] [data-tab="np"],body[data-tab="queue"] [data-tab="more"]{display:none}
-  body[data-tab="more"] [data-tab="np"],body[data-tab="more"] [data-tab="queue"]{display:none}
-  /* Full-bleed layout */
-  body{padding:calc(8px + env(safe-area-inset-top)) 0 calc(118px + env(safe-area-inset-bottom))}
-  main{max-width:none;gap:0;padding:0}
-  .left-col,.right-col{display:contents}
-  .card{border-radius:0;border-left:0;border-right:0;padding:14px 16px}
-  .head-card{padding:10px 14px;position:sticky;top:0;z-index:40;background:rgba(11,16,38,.96);backdrop-filter:blur(12px)}
+  #tab-bar button{flex:1;height:50px;border:0;background:none;color:var(--muted);font:700 11.5px/1.1 inherit;
+    cursor:pointer;border-top:2px solid transparent;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px}
+  #tab-bar button .ti{font-size:17px}
+  #tab-bar button:active,#tab-bar button.active{color:var(--accent2);border-top-color:var(--accent2);background:rgba(0,240,255,.05)}
+  #mini-bar{position:fixed;left:0;right:0;bottom:calc(50px + env(safe-area-inset-bottom));z-index:69;display:flex;flex-direction:column;gap:6px;
+    padding:8px 12px 10px;background:rgba(10,14,34,.97);border-top:1px solid color-mix(in srgb,var(--accent) 45%,var(--line));
+    box-shadow:0 -8px 28px rgba(0,0,0,.55);backdrop-filter:blur(14px)}
+  /* Full-bleed layout with ALL cards visible, zero horizontal overflow, no sticky-header overlap */
+  body{padding:calc(8px + env(safe-area-inset-top)) 0 calc(148px + env(safe-area-inset-bottom))}
+  main{max-width:none;width:100%;grid-template-columns:minmax(0,1fr);gap:12px;padding:0 10px}
+  .left-col,.right-col{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;min-width:0}
+  .card{border-radius:16px;padding:16px;width:100%;min-width:0}
+  /* Header: scrolls naturally (never overlaps Now Playing), high z-index so ⋯ menu opens ON TOP */
+  .head-card{padding:12px 14px;position:relative;z-index:45;background:rgba(11,16,38,.96)}
   .head-card .sub{display:none}
-  .head-card .meta{width:100%;order:3;margin-top:4px}
-  #guilds{margin-top:6px}
-  #btn-key,#btn-push,#btn-share{display:none}
-  /* Hero (now-playing): big art, big touch targets */
-  .hero-card{padding:18px 16px}
-  #track{flex-wrap:wrap;gap:14px}
+  .head-card > .row{gap:8px}
+  .head-card .meta{width:100%;order:4;margin-top:2px;gap:6px}
+  .head-card .badge{font-size:12px;padding:4px 10px}
+  #wave-select{order:3;flex:1 1 170px;height:46px;font-size:14.5px;font-weight:600;padding:0 10px;border-radius:12px}
+  #tools-btn,#dj-toggle,#btn-share,#btn-key,#btn-push{height:44px;min-width:44px;font-size:18px;border-radius:12px;padding:0 10px}
+  .menu{min-width:min(270px,calc(100vw - 28px));padding:8px;border-radius:14px;z-index:80}
+  .menu .mlabel{font-size:11px;padding:10px 10px 6px}
+  .menu button,.menu a{padding:11px 12px;font-size:15px;min-height:44px;display:flex;align-items:center;border-radius:10px}
+  .menu .mrow{gap:6px;padding:4px 6px}
+  .menu .mrow button{min-height:44px;font-size:14px;font-weight:600;justify-content:center}
+  #guilds{margin-top:8px;gap:8px}
+  .guild-chip{padding:8px 14px;font-size:13px}
+  /* Hero (now-playing): readable multi-line titles, huge thumb-friendly buttons */
+  .hero-card{padding:18px 16px;z-index:10}
+  #track{flex-wrap:wrap;gap:14px;align-items:center}
+  #art{width:84px;height:84px;border-radius:14px}
+  #track-name{font-size:20px;font-weight:800;white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.25}
+  #track-meta{font-size:14px;white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.35;margin-top:4px}
+  #src-badge{font-size:10.5px;padding:3px 10px}
   #track > .row{width:100%;justify-content:space-between;gap:8px;padding-top:14px;border-top:1px solid rgba(140,160,255,.14)}
-  #track > .row button{height:50px;min-width:50px;flex:1;font-size:18px}
-  #track > .row button.primary{flex:1.4;font-size:24px}
-  #track-name{font-size:19px;font-weight:800}
-  #track-meta{font-size:13px}
-  #art{width:76px;height:76px}
-  #progress{height:32px}
-  #vol{width:130px}
-  #spectrum{height:56px}
-  /* Search + queue: large touch targets, 16px font (prevents iOS zoom) */
-  #search,#vibe-name,#vibe-list{font-size:16px;height:46px}
-  #search-row{flex-wrap:wrap}
-  #search-row button{height:46px;font-size:14px;min-width:48px}
-  #queue{max-height:none}
-  #queue li{padding:11px 12px}
-  #queue .qart{width:46px;height:46px}
-  #queue .qn b{font-size:14px}
-  #queue .qn span{font-size:12px}
-  #queue li button{height:38px;min-width:38px}
-  /* Collapsible cards in "more" tab */
-  .card.collapsible > #queue-info,.card.collapsible > .section-label{cursor:pointer;user-select:none}
-  .card.collapsible > #queue-info::after,.card.collapsible > .section-label::after{content:" \25BE";opacity:.5;font-size:10px}
+  #track > .row button{height:56px;min-width:52px;flex:1;font-size:21px;border-radius:14px}
+  #track > .row button.primary{flex:1.35;height:56px;font-size:26px}
+  input[type=range]{height:8px;border-radius:4px}
+  input[type=range]::-webkit-slider-thumb{width:22px;height:22px}
+  input[type=range]::-moz-range-thumb{width:22px;height:22px}
+  #progress{height:34px;margin-top:16px}
+  #time{font-size:12.5px;margin-top:4px}
+  #spectrum{height:52px;margin-top:12px}
+  #btn-clear{height:46px;font-size:14px;padding:0 14px;border-radius:12px}
+  #vol-wrap{flex:1;min-width:150px;justify-content:flex-end;gap:10px;font-size:16px}
+  #vol{flex:1;max-width:200px;width:100%;height:34px}
+  /* Search: full-width input on top, two big buttons below */
+  #search-row{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px}
+  #search,#vibe-name,#vibe-list{flex:1 1 100%;width:100%;font-size:16px !important;height:50px;padding:0 14px;border-radius:12px}
+  #search-row button{flex:1 1 calc(50% - 6px);height:50px;font-size:15.5px;font-weight:700;min-width:110px;border-radius:12px}
+  /* Queue: large rows & ALL 5 adjustment buttons (▶ ⏭ ▲ ▼ ✕) visible and easy to tap */
+  #q-tools-btn,#btn-jump,#btn-stats-refresh,#btn-vibes-refresh{height:44px !important;min-width:44px !important;font-size:18px !important;border-radius:12px}
+  #q-selbar{flex-wrap:wrap;gap:8px;margin:8px 0}
+  #q-selbar button{height:38px;padding:0 12px;font-size:13.5px}
+  #queue{max-height:540px;gap:8px;margin-top:12px}
+  #queue li{padding:11px 12px;gap:9px;border-radius:14px;flex-wrap:wrap}
+  #queue li .qcheck{width:20px;height:20px;margin-right:2px}
+  #queue .qart{width:46px;height:46px;border-radius:10px}
+  #queue .qn{flex:1 1 calc(100% - 140px);min-width:120px}
+  #queue .qn b{font-size:14.5px;white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.25}
+  #queue .qn span{font-size:12.5px}
+  #queue .qdur{font-size:12px}
+  #queue .qacts{opacity:1;display:flex;width:100%;justify-content:flex-end;gap:6px;padding-top:6px;border-top:1px solid rgba(140,160,255,.1)}
+  #queue li button{height:38px;min-width:42px;flex:1;max-width:64px;font-size:14px;border-radius:10px;padding:0 8px}
+  /* Soundboard, Vibes & Look & Feel controls */
+  #sfx-row{gap:10px}
+  #sfx-row button{flex:1 1 calc(25% - 10px);min-width:66px;height:52px;font-size:22px;border-radius:12px}
+  .swatch{width:36px !important;height:36px !important;min-width:36px !important}
+  .sens-wrap{gap:12px;margin-top:14px}
+  .sens-wrap label{font-size:12px}
+  #sens{max-width:none;height:32px}
+  .viz-links a.viz-link{flex:1;justify-content:center;padding:12px 14px;font-size:14px;min-height:46px}
+  #viz-nav{gap:8px;margin-top:6px}
+  #viz-nav button{min-height:46px;font-size:14.5px;font-weight:600;border-radius:10px}
+  #viz-pace{align-items:center;gap:10px;margin-top:10px}
+  #preset-cycle{height:44px;font-size:15px;padding:0 12px;border-radius:10px;flex:1}
+  /* Collapsible cards: all expanded by default, can still tap header to collapse if wanted */
+  .card.collapsible > #queue-info,.card.collapsible > .section-label{cursor:pointer;user-select:none;min-height:36px;display:flex;align-items:center}
+  .card.collapsible > #queue-info::after,.card.collapsible > .section-label::after{content:" \25BE";opacity:.6;font-size:13px;margin-left:6px}
   .card.collapsible.collapsed > #queue-info::after,.card.collapsible.collapsed > .section-label::after{content:" \25B8"}
   .card.collapsible.collapsed > *:not(#queue-info):not(.section-label){display:none}
   .footer-card{display:none}
-  /* Tooltips wrap on small screens instead of overflowing */
-  [data-tip]:hover::after{white-space:normal;width:max-content;max-width:240px}
   /* Lyrics */
-  .lyrics{max-height:320px;overflow-y:auto;padding:4px 0;font-size:15px;line-height:1.8}
-  .lyrics .lyr{padding:3px 12px;border-radius:8px;color:var(--muted);white-space:pre-wrap}
+  .lyrics{max-height:340px;overflow-y:auto;padding:4px 0;font-size:16px;line-height:1.8}
+  .lyrics .lyr{padding:4px 12px;border-radius:8px;color:var(--muted);white-space:pre-wrap}
   .lyrics .lyr.past{opacity:.45}
-  .lyrics .lyr.active{color:var(--text);font-weight:600;background:var(--line)}
-  .lyrics-plain{max-height:320px;overflow-y:auto;white-space:pre-wrap;font-size:14px;line-height:1.7;color:var(--muted)}
+  .lyrics .lyr.active{color:var(--text);font-weight:700;background:var(--line)}
+  .lyrics-plain{max-height:340px;overflow-y:auto;white-space:pre-wrap;font-size:15px;line-height:1.7;color:var(--muted)}
 }
-/* Mini transport bar (mobile) */
-#mini-bar{position:fixed;left:0;right:0;bottom:0;z-index:60;display:none;align-items:center;gap:10px;padding:8px 12px calc(8px + env(safe-area-inset-bottom));background:rgba(10,14,32,.94);border-top:1px solid var(--line);backdrop-filter:blur(14px)}
-#mini-bar.show{display:flex}
-#mini-bar img{width:38px;height:38px;border-radius:9px;object-fit:cover;background:#141a33;flex-shrink:0}
-#mini-bar .mname{flex:1;min-width:0;font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#mini-bar button{height:44px;min-width:44px}
-@media(min-width:900px){#mini-bar{display:none !important}#tab-bar{display:none !important}}
+/* Landscape on phones (e.g. S23 Ultra landscape): 2-column layout with ALL cards visible, sleek jump bar */
+@media ((max-width:960px) and (orientation:landscape)), ((hover:none) and (pointer:coarse) and (orientation:landscape)){
+  body{padding:calc(6px + env(safe-area-inset-top)) env(safe-area-inset-right) calc(128px + env(safe-area-inset-bottom)) env(safe-area-inset-left)}
+  #tab-bar button{height:42px;flex-direction:row;gap:8px;font-size:13px}
+  #tab-bar button .ti{font-size:16px}
+  #mini-bar{bottom:calc(42px + env(safe-area-inset-bottom));padding:6px 12px 8px;gap:4px}
+  main{grid-template-columns:minmax(0,1.2fr) minmax(0,.8fr);grid-template-areas:"head head" "hero hero" "left right";align-items:start;gap:12px;padding:0 12px}
+  .head-card{grid-area:head}
+  .hero-card{grid-area:hero}
+  .left-col{grid-area:left;display:grid;grid-template-columns:minmax(0,1fr);gap:12px}
+  .right-col{grid-area:right;display:grid;grid-template-columns:minmax(0,1fr);gap:12px}
+  .head-card .meta{width:auto;order:0;margin-top:0}
+  #wave-select{order:0;flex:0 1 auto}
+}
+/* Live Now Playing bottom tracker bar (mobile) */
+@media(min-width:961px) and (hover:hover) and (pointer:fine){#mini-bar{display:none !important}#tab-bar{display:none !important}}
+#mini-bar .mrow-main{display:flex;align-items:center;gap:10px;width:100%}
+#mini-bar img{width:44px;height:44px;border-radius:10px;object-fit:cover;background:#141a33;flex-shrink:0}
+#mini-bar .minfo{flex:1;min-width:0;cursor:pointer}
+#mini-bar .mname{font-size:14px;font-weight:700;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#mini-bar .msub{font-size:11.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px;font-variant-numeric:tabular-nums}
+#mini-bar .msub #mini-time{color:var(--accent2);font-weight:600}
+#mini-bar button{height:44px;min-width:44px;font-size:18px;border-radius:11px;flex-shrink:0}
+#mini-bar button.primary{min-width:50px;font-size:20px}
+#mini-progress{width:100%;height:18px;margin:0;background:linear-gradient(90deg,var(--accent2),var(--accent)) no-repeat rgba(148,163,184,.2);background-size:0% 100%}
 /* Opening splash: the animated badge until the first state frame (or 2.5s). */
 #splash{position:fixed;inset:0;z-index:300;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:#0b1026;transition:opacity .45s ease}
 #splash.hide{opacity:0;pointer-events:none}
@@ -402,7 +455,7 @@ body.guest #guilds{display:none}
     </div>
 
     <!-- Jam (live session: who is here, and a scan-to-join code) -->
-    <div class="card collapsible collapsed" id="jam-card" data-tab="np">
+    <div class="card collapsible" id="jam-card" data-tab="np">
       <div id="queue-info">
         <span class="section-label">🎉 JAM</span>
         <span style="font-size:11px;color:var(--muted)"><span id="jam-count">no one yet</span></span>
@@ -416,7 +469,7 @@ body.guest #guilds{display:none}
     </div>
 
     <!-- Queue -->
-    <div class="card" data-tab="queue">
+    <div class="card" id="queue-card" data-tab="queue">
       <div id="queue-info">
         <span class="section-label">📜 QUEUE</span>
         <span style="font-size:11px;color:var(--muted)"><span id="queue-count">0 tracks</span> <span id="queue-total"></span></span>
@@ -442,14 +495,14 @@ body.guest #guilds{display:none}
     </div>
 
     <!-- Lyrics (synced to playback) -->
-    <div class="card collapsible collapsed" id="lyrics-card" data-tab="queue">
+    <div class="card collapsible" id="lyrics-card" data-tab="queue">
       <span class="section-label">🎤 LYRICS</span>
       <div id="lyrics" class="lyrics"></div>
       <div id="lyrics-plain" class="lyrics-plain"></div>
     </div>
 
     <!-- Leaderboard -->
-    <div class="card collapsible collapsed" data-tab="more">
+    <div class="card collapsible" id="stats-card" data-tab="more">
       <div id="queue-info">
         <span class="section-label">📊 LEADERBOARD</span>
         <button id="btn-stats-refresh" class="icon" data-tip="Refresh stats" style="height:26px;min-width:26px;font-size:12px">↻</button>
@@ -459,7 +512,7 @@ body.guest #guilds{display:none}
     </div>
 
     <!-- Vibes (saved queues) -->
-    <div class="card collapsible collapsed" data-tab="more">
+    <div class="card collapsible" id="vibes-card" data-tab="more">
       <div id="queue-info">
         <span class="section-label">🌙 VIBES</span>
         <button id="btn-vibes-refresh" class="icon" data-tip="Refresh saved vibes" style="height:26px;min-width:26px;font-size:12px">↻</button>
@@ -476,7 +529,7 @@ body.guest #guilds{display:none}
 
   <div class="right-col">
     <!-- Soundboard -->
-    <div class="card collapsible collapsed" id="sfx-card" data-tab="more">
+    <div class="card collapsible" id="sfx-card" data-tab="more">
       <div id="queue-info">
         <span class="section-label">🎛 SOUNDBOARD</span>
         <span style="font-size:11px;color:var(--muted)" id="sfx-status">DJ off — muted</span>
@@ -494,7 +547,7 @@ body.guest #guilds{display:none}
     </div>
 
     <!-- Look & feel -->
-    <div class="card collapsible collapsed" data-tab="more">
+    <div class="card collapsible" id="look-card" data-tab="more">
       <div class="section-label">🎨 LOOK &amp; FEEL</div>
       <div id="swatches"></div>
       <div class="sens-wrap">
@@ -542,15 +595,23 @@ body.guest #guilds{display:none}
   </div>
 </main>
 <div id="mini-bar">
-  <img id="mini-art" alt="" />
-  <div class="mname" id="mini-name">Nothing playing</div>
-  <button id="mini-play" class="primary" data-tip="Play / Pause">&#9654;</button>
-  <button id="mini-next" class="icon" data-tip="Skip">&#9197;</button>
+  <input id="mini-progress" type="range" min="0" max="1000" value="0" step="1" />
+  <div class="mrow-main">
+    <img id="mini-art" alt="" style="display:none" />
+    <div class="minfo" id="mini-info">
+      <div class="mname" id="mini-name">Nothing playing</div>
+      <div class="msub"><span id="mini-meta">Tap 🔎 Search or Queue to play</span> · <span id="mini-time">0:00 / 0:00</span></div>
+    </div>
+    <button id="mini-prev" class="icon" data-tip="Previous">&#9198;</button>
+    <button id="mini-play" class="primary" data-tip="Play / Pause">&#9654;</button>
+    <button id="mini-next" class="icon" data-tip="Skip">&#9197;</button>
+  </div>
 </div>
 <div id="tab-bar">
-  <button data-tab="np" class="active"><span class="ti">&#127925;</span><span>Now Playing</span></button>
-  <button data-tab="queue"><span class="ti">&#128221;</span><span>Queue</span></button>
-  <button data-tab="more"><span class="ti">&#9881;</span><span>More</span></button>
+  <button data-jump=".head-card" class="active"><span class="ti">&#127925;</span><span>Player</span></button>
+  <button data-jump="#queue-card"><span class="ti">&#128221;</span><span>Queue</span></button>
+  <button data-jump="#sfx-card"><span class="ti">&#127899;</span><span>DJ &amp; Vibes</span></button>
+  <button data-jump="#look-card"><span class="ti">&#127912;</span><span>Visuals</span></button>
 </div>
 <div id="toasts"></div>
 
@@ -583,7 +644,7 @@ body.guest #guilds{display:none}
   var $ = function (id) { return document.getElementById(id); };
   var el = {};
   ['voice','dj-badge','dj-toggle','sfx-status','track-name','track-meta','src-badge','art',
-   'wave-select','tools-btn','tools-menu','amb-state','vs-state','q-tools-btn','q-tools-menu','btn-install','mini-bar','mini-art','mini-name','mini-play','mini-next',
+   'wave-select','tools-btn','tools-menu','amb-state','vs-state','q-tools-btn','q-tools-menu','btn-install','mini-bar','mini-art','mini-info','mini-name','mini-meta','mini-time','mini-progress','mini-prev','mini-play','mini-next',
    'btn-push','btn-key','btn-share',
    'key-modal','key-card','key-value','key-reveal','key-copy','key-panel','key-copy-panel','key-viz','key-copy-viz','key-close',
    'btn-play','btn-shuffle','btn-repeat','btn-prev','btn-next','btn-clear','progress','t-now','t-dur','vol',
@@ -719,7 +780,9 @@ body.guest #guilds{display:none}
   }
   function paintProgress(){
     var max=Number(el.progress.max)||1,pos=Number(el.progress.value)||0;
-    el.progress.style.backgroundSize=Math.min(100,(pos/max)*100)+'% 100%';
+    var pct=Math.min(100,(pos/max)*100)+'% 100%';
+    el.progress.style.backgroundSize=pct;
+    if(el['mini-progress'])el['mini-progress'].style.backgroundSize=pct;
   }
   /* ---------- synced lyrics ---------- */
   function lyricPos(){
@@ -786,19 +849,32 @@ body.guest #guilds{display:none}
       } else el['src-badge'].style.display='none';
       var dur=state.durationMs||(t&&t.durationMs)||0;
       var max=Math.max(1,Math.round(dur/1000));
-      if(!el.progress.matches(':active')){
+      if(!el.progress.matches(':active')&&!(el['mini-progress']&&el['mini-progress'].matches(':active'))){
         var pos=state.positionMs||0;
         if(state.playing)pos+=Math.max(0,Date.now()-(state.updatedAt||Date.now()));
-        el.progress.value=String(Math.min(max,Math.round(pos/1000)));
+        var secVal=String(Math.min(max,Math.round(pos/1000)));
+        el.progress.value=secVal;
+        if(el['mini-progress'])el['mini-progress'].value=secVal;
       }
       el.progress.max=String(max);
-      el['t-now'].textContent=fmt(Number(el.progress.value)*1000);
-      el['t-dur'].textContent=fmt(dur);
+      if(el['mini-progress'])el['mini-progress'].max=String(max);
+      var curTime=fmt(Number(el.progress.value)*1000),totTime=fmt(dur);
+      el['t-now'].textContent=curTime;
+      el['t-dur'].textContent=totTime;
+      if(el['mini-time'])el['mini-time'].textContent=curTime+' / '+totTime;
       paintProgress();
       document.querySelector('.hero-card').classList.toggle('paused',!state.playing);
+      var mb=el['mini-bar'];
+      if(mb){
+        mb.classList.toggle('show',!!t);
+        var ma=artUrl(t&&t.image);
+        if(ma){el['mini-art'].src=ma;el['mini-art'].style.display='block';}
+        else{el['mini-art'].removeAttribute('src');el['mini-art'].style.display='none';}
+        el['mini-name'].textContent=t?(t.name||'Playing'):'Nothing playing';
+        if(el['mini-meta'])el['mini-meta'].textContent=t?((t.artists&&t.artists.length)?t.artists.join(', '):(t.album||t.source||'Playing')):'Tap Search or Queue to play';
+        el['mini-play'].textContent=state.playing?'⏸':'▶';
+      }
     }
-    var mb=el['mini-bar'];
-    if(mb){mb.classList.toggle('show',!!t);if(t){var ma=artUrl(t.image);if(ma)el['mini-art'].src=ma;else el['mini-art'].removeAttribute('src');el['mini-name'].textContent=t.name||'';el['mini-play'].textContent=(state&&state.playing)?'\u275A\u275A':'\u25B6';}}
     renderQueue();renderDj();
   }
 
@@ -1115,8 +1191,14 @@ body.guest #guilds{display:none}
   el['btn-viz-shuffle'].onclick=function(){cmd('preset',{presetAction:'shuffle'})};
   (function(){
     var menu=el['tools-menu'],btn=el['tools-btn'];if(!menu||!btn)return;
-    function close(){menu.classList.remove('open')}
-    btn.onclick=function(e){e.stopPropagation();menu.classList.toggle('open')};
+    var card=menu.closest('.card');
+    function syncCard(){if(card)card.classList.toggle('menu-open',menu.classList.contains('open'))}
+    function close(){menu.classList.remove('open');syncCard()}
+    btn.onclick=function(e){
+      e.stopPropagation();
+      if(el['q-tools-menu']){el['q-tools-menu'].classList.remove('open');var qc=el['q-tools-menu'].closest('.card');if(qc)qc.classList.remove('menu-open')}
+      menu.classList.toggle('open');syncCard();
+    };
     document.addEventListener('click',function(e){if(!e.target.closest('.menu-wrap'))close()});
     menu.querySelectorAll('button[data-bass]').forEach(function(b){b.onclick=function(){cmd('bass',{db:Number(b.getAttribute('data-bass'))});close()}});
     menu.querySelectorAll('button[data-speed]').forEach(function(b){b.onclick=function(){cmd('speed',{factor:Number(b.getAttribute('data-speed'))});close()}});
@@ -1129,8 +1211,14 @@ body.guest #guilds{display:none}
   })();
   (function(){
     var qm=el['q-tools-menu'],qb=el['q-tools-btn'];if(!qm||!qb)return;
-    function qclose(){qm.classList.remove('open')}
-    qb.onclick=function(e){e.stopPropagation();qm.classList.toggle('open')};
+    var qcard=qm.closest('.card');
+    function qsync(){if(qcard)qcard.classList.toggle('menu-open',qm.classList.contains('open'))}
+    function qclose(){qm.classList.remove('open');qsync()}
+    qb.onclick=function(e){
+      e.stopPropagation();
+      if(el['tools-menu']){el['tools-menu'].classList.remove('open');var tc=el['tools-menu'].closest('.card');if(tc)tc.classList.remove('menu-open')}
+      qm.classList.toggle('open');qsync();
+    };
     document.addEventListener('click',function(e){if(!e.target.closest('.menu-wrap'))qclose()});
     qm.querySelectorAll('button[data-q]').forEach(function(b){b.onclick=function(){
       var a=b.getAttribute('data-q');
@@ -1142,6 +1230,27 @@ body.guest #guilds{display:none}
       qclose();
     }});
   })();
+  // Auto-scale when Android Chrome's "Desktop site" mode forces a ~980px layout
+  // viewport on a phone, so buttons and text stay full-size with zero sideways scroll.
+  (function(){
+    function syncMobileScale(){
+      var coarse=window.matchMedia&&window.matchMedia('(hover:none) and (pointer:coarse)').matches;
+      var fine=window.matchMedia&&window.matchMedia('(any-hover:hover) and (any-pointer:fine)').matches;
+      if(!coarse||fine){document.documentElement.style.zoom='';return}
+      var w=window.innerWidth||0,h=window.innerHeight||0;
+      var portrait=h>=w;
+      if(portrait&&w>=700){
+        document.documentElement.style.zoom=(w/412).toFixed(3);
+      }else if(!portrait&&w>=960){
+        document.documentElement.style.zoom=(w/780).toFixed(3);
+      }else{
+        document.documentElement.style.zoom='';
+      }
+    }
+    syncMobileScale();
+    window.addEventListener('resize',syncMobileScale);
+    window.addEventListener('orientationchange',function(){setTimeout(syncMobileScale,120)});
+  })();
   window.addEventListener('beforeinstallprompt',function(e){e.preventDefault();window.__vzInstall=e;if(el['btn-install'])el['btn-install'].style.display='inline-block'});
   if(el['btn-install'])el['btn-install'].onclick=function(){var p=window.__vzInstall;if(p){p.prompt();window.__vzInstall=null;el['btn-install'].style.display='none'}};
   if('serviceWorker' in navigator){var hadSw=!!navigator.serviceWorker.controller;navigator.serviceWorker.addEventListener('controllerchange',function(){if(!hadSw){hadSw=true;return}try{toast('info','Panel updated — reloading…');setTimeout(function(){location.reload()},800)}catch(e){}})}
@@ -1149,25 +1258,25 @@ body.guest #guilds{display:none}
     var head=c.querySelector(':scope > #queue-info')||c.querySelector(':scope > .section-label');
     if(head)head.addEventListener('click',function(e){if(e.target.closest('button,a,input'))return;c.classList.toggle('collapsed')});
   });
-  // Mobile bottom tab nav — switches which group of cards is visible.
+  // Mobile bottom quick-jump nav — keeps every card visible on the page and
+  // smooth-scrolls directly to Player, Queue, DJ & Vibes, or Visuals.
   (function(){
-    var tabs=document.querySelectorAll('#tab-bar button[data-tab]');
-    if(!tabs.length)return;
-    var saved=null;
-    try{saved=sessionStorage.getItem('vz-tab')}catch(e){}
-    if(saved!=='np'&&saved!=='queue'&&saved!=='more')saved='np';
-    function setTab(name){
-      document.body.setAttribute('data-tab',name);
-      tabs.forEach(function(b){b.classList.toggle('active',b.getAttribute('data-tab')===name)});
-      try{sessionStorage.setItem('vz-tab',name)}catch(e){}
-      // Scroll the active tab's first card into view so switching feels snappy.
-      window.scrollTo(0,0);
-    }
-    tabs.forEach(function(b){b.addEventListener('click',function(){setTab(b.getAttribute('data-tab'))})});
-    setTab(saved);
+    var jumps=document.querySelectorAll('#tab-bar button[data-jump]');
+    if(!jumps.length)return;
+    jumps.forEach(function(b){
+      b.addEventListener('click',function(){
+        jumps.forEach(function(x){x.classList.toggle('active',x===b)});
+        var sel=b.getAttribute('data-jump');
+        var target=sel?document.querySelector(sel):null;
+        if(target)target.scrollIntoView({behavior:'smooth',block:'start'});
+      });
+    });
   })();
+  if(el['mini-prev'])el['mini-prev'].onclick=function(){cmd('previous')};
   if(el['mini-play'])el['mini-play'].onclick=function(){cmd('toggle')};
   if(el['mini-next'])el['mini-next'].onclick=function(){cmd('next')};
+  if(el['mini-info'])el['mini-info'].onclick=function(){var h=document.querySelector('.hero-card');if(h)h.scrollIntoView({behavior:'smooth',block:'start'})};
+  if(el['mini-progress'])el['mini-progress'].onchange=function(){el.progress.value=el['mini-progress'].value;paintProgress();cmd('seek',{positionMs:Number(el['mini-progress'].value)*1000})};
   el['btn-jump'].onclick=function(){
     var row=document.querySelector('#queue li.current');
     if(row)row.scrollIntoView({behavior:'smooth',block:'center'});
