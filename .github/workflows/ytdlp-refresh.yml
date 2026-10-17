@@ -1,0 +1,42 @@
+name: yt-dlp refresh
+
+# YouTube breaks extractors on a rolling basis; the yt-dlp pinned at image
+# build goes stale between deploys. Update it nightly inside the running
+# container and restart only when the version actually changed.
+on:
+  schedule:
+    # Daily 10:00 UTC (3 AM US Pacific).
+    - cron: '0 10 * * *'
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update yt-dlp in the running container
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -e
+            if [ "$(docker inspect -f '{{.State.Running}}' vaporzr 2>/dev/null)" != "true" ]; then
+              echo "vaporzr is not running — skipping the refresh."
+              exit 0
+            fi
+            before=$(docker exec vaporzr /opt/ytvenv/bin/yt-dlp --version)
+            docker exec vaporzr /opt/ytvenv/bin/pip install --quiet --upgrade yt-dlp
+            after=$(docker exec vaporzr /opt/ytvenv/bin/yt-dlp --version)
+            echo "yt-dlp: $before -> $after"
+            if [ "$before" = "$after" ]; then
+              echo "Already current — no restart needed."
+              exit 0
+            fi
+            docker restart vaporzr
+            sleep 5
+            docker exec vaporzr node -e "const h=require('http');h.get('http://127.0.0.1:'+(process.env.PORT||4876)+'/health',s=>{let b='';s.on('data',d=>b+=d);s.on('end',()=>{console.log('health:',b);process.exit(s.statusCode===200?0:1)})}).on('error',()=>process.exit(1))" || echo "WARN: /health not reachable after yt-dlp restart"
+            echo "Restarted vaporzr with yt-dlp $after"
