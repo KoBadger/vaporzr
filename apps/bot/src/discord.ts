@@ -5652,6 +5652,21 @@ export class DiscordBot {
     return { embeds: [this.miniNpPayload(s)], components: [this.miniControlRow(s)] };
   }
 
+  /**
+   * Subtle nudge shown on the now-playing strip when a long queue is loaded and
+   * autoplay is OFF — the situation where `V@p` appends to the back of a
+   * playlist and a newcomer doesn't realise `V@insert` exists. Autoplay already
+   * inserts, so the hint is redundant there and stays hidden.
+   */
+  private static readonly QUEUE_HINT_MIN = 4;
+  private queueInsertHint(s: Session): string | null {
+    if (EW.modeOf(s.endlessWave) !== 'off') return null;
+    const snap = s.queue.getSnapshot();
+    const queued = Math.max(0, snap.tracks.length - (snap.currentIndex + 1));
+    if (queued < DiscordBot.QUEUE_HINT_MIN) return null;
+    return '💡 `V@insert` plays your pick next';
+  }
+
   /** Compact always-on now-playing strip — the panel's small sibling. */
   private miniNpPayload(s: Session): EmbedBuilder {
     const st = s.queue.getState();
@@ -5675,13 +5690,15 @@ export class DiscordBot {
     const snap = s.queue.getSnapshot();
     const upNext = snap.tracks.find((x, i) => i > snap.tracks.findIndex((y) => y.current));
     const queued = Math.max(0, snap.tracks.length - (snap.currentIndex + 1));
+    const hint = this.queueInsertHint(s);
     const embed = new EmbedBuilder()
       .setColor(color)
       .setDescription(
         `${status} ${srcEmoji(track.source)} **${truncate(track.name, 60)}**\n` +
           `${truncate((track.artists ?? []).join(', ') || track.album, 80)}\n` +
           `\`${bar}\` \`${fmtMs(pos)}\`/\`${fmtMs(dur)}\`` +
-          (upNext ? `\n⏭ ${truncate(upNext.name, 42)}` : ''),
+          (upNext ? `\n⏭ ${truncate(upNext.name, 42)}` : '') +
+          (hint ? `\n${hint}` : ''),
       )
       .setFooter({ text: `${modeLabel} · ${queued} queued · ⏮ ⏯ ⏭ or react 🔥❤️⏭` });
     if (track.image) embed.setThumbnail(track.image);
@@ -5749,11 +5766,13 @@ export class DiscordBot {
       const snap = s.queue.getSnapshot();
       const idx = snap.tracks.findIndex((x) => x.current) + 1;
       const upNext = snap.tracks.find((x, i) => i > snap.tracks.findIndex((y) => y.current));
+      const hint = this.queueInsertHint(s);
       embed
         .setTitle(`${srcEmoji(track.source)} ${track.name}`)
         .setDescription(
           `${truncate((track.artists ?? []).join(', '), 80)}\n\n\`${bar}\`\n${statusIcon} \`${fmtMs(pos)} / ${fmtMs(dur)}\`` +
-            (upNext ? `\n\n⏭️ **Up next:** ${upNext.name}` : ''),
+            (upNext ? `\n\n⏭️ **Up next:** ${upNext.name}` : '') +
+            (hint ? `\n\n${hint}` : ''),
         );
       if (track.image) embed.setThumbnail(track.image);
       embed.addFields([{ name: '📜 Queue', value: `${snap.tracks.length}${idx ? ` · #${idx} now` : ''}`, inline: true }]);
