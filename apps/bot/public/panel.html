@@ -242,46 +242,74 @@ body.guest #guilds{display:none}
 #wave-select:focus{outline:none;border-color:color-mix(in srgb,var(--accent) 60%,transparent)}
 #wave-select.active{color:var(--accent2);border-color:color-mix(in srgb,var(--accent2) 45%,transparent)}
 
-/* mobile */
-@media (max-width:560px){
-  body{padding:calc(12px + env(safe-area-inset-top)) 8px calc(150px + env(safe-area-inset-bottom))}
-  main{padding:8px 6px calc(16px + env(safe-area-inset-bottom));gap:11px}
-  .left-col,.right-col{gap:11px}
-  .card{padding:13px;border-radius:14px}
+/* ===== MOBILE: bottom tab nav + full-bleed cards ===== */
+#tab-bar{display:none}
+@media(max-width:560px){
+  /* Bottom tab bar */
+  #tab-bar{position:fixed;left:0;right:0;bottom:0;z-index:61;display:flex;background:rgba(8,11,28,.98);
+    border-top:1px solid var(--line);backdrop-filter:blur(14px);padding-bottom:env(safe-area-inset-bottom)}
+  #tab-bar button{flex:1;height:52px;border:0;background:none;color:var(--muted);font:600 10.5px/1 inherit;
+    cursor:pointer;border-top:2px solid transparent;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px}
+  #tab-bar button .ti{font-size:18px}
+  #tab-bar button.active{color:var(--accent2);border-top-color:var(--accent2)}
+  /* Mini transport sits above the tab bar */
+  #mini-bar{bottom:calc(52px + env(safe-area-inset-bottom)) !important;border-radius:0}
+  /* Tab visibility — only the active tab's cards show */
+  body[data-tab="np"] [data-tab="queue"],body[data-tab="np"] [data-tab="more"]{display:none}
+  body[data-tab="queue"] [data-tab="np"],body[data-tab="queue"] [data-tab="more"]{display:none}
+  body[data-tab="more"] [data-tab="np"],body[data-tab="more"] [data-tab="queue"]{display:none}
+  /* Full-bleed layout */
+  body{padding:calc(8px + env(safe-area-inset-top)) 0 calc(118px + env(safe-area-inset-bottom))}
+  main{max-width:none;gap:0;padding:0}
+  .left-col,.right-col{display:contents}
+  .card{border-radius:0;border-left:0;border-right:0;padding:14px 16px}
+  .head-card{padding:10px 14px;position:sticky;top:0;z-index:40;background:rgba(11,16,38,.96);backdrop-filter:blur(12px)}
   .head-card .sub{display:none}
-  .head-card .meta{width:100%;order:3;margin-top:2px}
-  #track{flex-wrap:wrap;gap:12px}
-  #track > .row{width:100%;justify-content:space-between;gap:8px;padding-top:8px;border-top:1px solid rgba(140,160,255,.14)}
-  #track > .row button{height:42px;min-width:44px;flex:1}
-  #track > .row button.primary{flex:1.35;font-size:17px}
-  #track-name{font-size:16px}
-  #art{width:60px;height:60px}
-  #vol{width:96px}
-  #search,#vibe-name,#vibe-list{font-size:16px;height:42px}
-  button{height:38px}
-  .footer-card .shortcuts:first-child{display:none}
+  .head-card .meta{width:100%;order:3;margin-top:4px}
+  #guilds{margin-top:6px}
+  #btn-key,#btn-push,#btn-share{display:none}
+  /* Hero (now-playing): big art, big touch targets */
+  .hero-card{padding:18px 16px}
+  #track{flex-wrap:wrap;gap:14px}
+  #track > .row{width:100%;justify-content:space-between;gap:8px;padding-top:14px;border-top:1px solid rgba(140,160,255,.14)}
+  #track > .row button{height:50px;min-width:50px;flex:1;font-size:18px}
+  #track > .row button.primary{flex:1.4;font-size:24px}
+  #track-name{font-size:19px;font-weight:800}
+  #track-meta{font-size:13px}
+  #art{width:76px;height:76px}
+  #progress{height:32px}
+  #vol{width:130px}
+  #spectrum{height:56px}
+  /* Search + queue: large touch targets, 16px font (prevents iOS zoom) */
+  #search,#vibe-name,#vibe-list{font-size:16px;height:46px}
+  #search-row{flex-wrap:wrap}
+  #search-row button{height:46px;font-size:14px;min-width:48px}
+  #queue{max-height:none}
+  #queue li{padding:11px 12px}
+  #queue .qart{width:46px;height:46px}
+  #queue .qn b{font-size:14px}
+  #queue .qn span{font-size:12px}
+  #queue li button{height:38px;min-width:38px}
+  /* Collapsible cards in "more" tab */
+  .card.collapsible > #queue-info,.card.collapsible > .section-label{cursor:pointer;user-select:none}
+  .card.collapsible > #queue-info::after,.card.collapsible > .section-label::after{content:" \25BE";opacity:.5;font-size:10px}
+  .card.collapsible.collapsed > #queue-info::after,.card.collapsible.collapsed > .section-label::after{content:" \25B8"}
+  .card.collapsible.collapsed > *:not(#queue-info):not(.section-label){display:none}
+  .footer-card{display:none}
+  /* Lyrics */
+  .lyrics{max-height:320px;overflow-y:auto;padding:4px 0;font-size:15px;line-height:1.8}
+  .lyrics .lyr{padding:3px 12px;border-radius:8px;color:var(--muted);white-space:pre-wrap}
+  .lyrics .lyr.past{opacity:.45}
+  .lyrics .lyr.active{color:var(--text);font-weight:600;background:var(--line)}
+  .lyrics-plain{max-height:320px;overflow-y:auto;white-space:pre-wrap;font-size:14px;line-height:1.7;color:var(--muted)}
 }
-/* sticky mini now-playing bar (mobile) */
+/* Mini transport bar (mobile) */
 #mini-bar{position:fixed;left:0;right:0;bottom:0;z-index:60;display:none;align-items:center;gap:10px;padding:8px 12px calc(8px + env(safe-area-inset-bottom));background:rgba(10,14,32,.94);border-top:1px solid var(--line);backdrop-filter:blur(14px)}
 #mini-bar.show{display:flex}
 #mini-bar img{width:38px;height:38px;border-radius:9px;object-fit:cover;background:#141a33;flex-shrink:0}
 #mini-bar .mname{flex:1;min-width:0;font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #mini-bar button{height:44px;min-width:44px}
-@media(min-width:561px){#mini-bar{display:none !important}}
-/* collapsible secondary cards (mobile) */
-@media(max-width:560px){
-  .card.collapsible > #queue-info,.card.collapsible > .section-label{cursor:pointer;user-select:none}
-  .card.collapsible > #queue-info::after,.card.collapsible > .section-label::after{content:" \25BE";opacity:.5;font-size:10px}
-  .card.collapsible.collapsed > #queue-info::after,.card.collapsible.collapsed > .section-label::after{content:" \25B8"}
-  .card.collapsible.collapsed > *:not(#queue-info):not(.section-label){display:none}
-
-  /* synced lyrics */
-  .lyrics{max-height:300px;overflow-y:auto;padding:4px 0;font-size:14px;line-height:1.75}
-  .lyrics .lyr{padding:2px 10px;border-radius:8px;color:var(--muted);white-space:pre-wrap}
-  .lyrics .lyr.past{opacity:.45}
-  .lyrics .lyr.active{color:var(--text);font-weight:600;background:var(--line)}
-  .lyrics-plain{max-height:300px;overflow-y:auto;white-space:pre-wrap;font-size:13px;line-height:1.65;color:var(--muted)}
-}
+@media(min-width:561px){#mini-bar{display:none !important}#tab-bar{display:none !important}}
 /* Opening splash: the animated badge until the first state frame (or 2.5s). */
 #splash{position:fixed;inset:0;z-index:300;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:#0b1026;transition:opacity .45s ease}
 #splash.hide{opacity:0;pointer-events:none}
@@ -338,7 +366,7 @@ body.guest #guilds{display:none}
   </div>
 
   <!-- Now playing -->
-  <div class="card hero-card">
+  <div class="card hero-card" data-tab="np">
     <div id="track">
       <img id="art" alt="" />
       <div style="flex:1;min-width:0">
@@ -365,7 +393,7 @@ body.guest #guilds{display:none}
 
   <div class="left-col">
     <!-- Search -->
-    <div class="card">
+    <div class="card" data-tab="np">
       <div class="section-label">🔎 SEARCH &amp; PLAY</div>
       <div id="search-row">
         <input id="search" placeholder="Song, artist, or link (Spotify, YouTube, Suno…)" autocomplete="off" />
@@ -376,7 +404,7 @@ body.guest #guilds{display:none}
     </div>
 
     <!-- Jam (live session: who is here, and a scan-to-join code) -->
-    <div class="card collapsible collapsed" id="jam-card">
+    <div class="card collapsible collapsed" id="jam-card" data-tab="np">
       <div id="queue-info">
         <span class="section-label">🎉 JAM</span>
         <span style="font-size:11px;color:var(--muted)"><span id="jam-count">no one yet</span></span>
@@ -390,7 +418,7 @@ body.guest #guilds{display:none}
     </div>
 
     <!-- Queue -->
-    <div class="card">
+    <div class="card" data-tab="queue">
       <div id="queue-info">
         <span class="section-label">📜 QUEUE</span>
         <span style="font-size:11px;color:var(--muted)"><span id="queue-count">0 tracks</span> <span id="queue-total"></span></span>
@@ -416,14 +444,14 @@ body.guest #guilds{display:none}
     </div>
 
     <!-- Lyrics (synced to playback) -->
-    <div class="card collapsible collapsed" id="lyrics-card">
+    <div class="card collapsible collapsed" id="lyrics-card" data-tab="queue">
       <span class="section-label">🎤 LYRICS</span>
       <div id="lyrics" class="lyrics"></div>
       <div id="lyrics-plain" class="lyrics-plain"></div>
     </div>
 
     <!-- Leaderboard -->
-    <div class="card collapsible collapsed">
+    <div class="card collapsible collapsed" data-tab="more">
       <div id="queue-info">
         <span class="section-label">📊 LEADERBOARD</span>
         <button id="btn-stats-refresh" class="icon" data-tip="Refresh stats" style="height:26px;min-width:26px;font-size:12px">↻</button>
@@ -433,7 +461,7 @@ body.guest #guilds{display:none}
     </div>
 
     <!-- Vibes (saved queues) -->
-    <div class="card collapsible collapsed">
+    <div class="card collapsible collapsed" data-tab="more">
       <div id="queue-info">
         <span class="section-label">🌙 VIBES</span>
         <button id="btn-vibes-refresh" class="icon" data-tip="Refresh saved vibes" style="height:26px;min-width:26px;font-size:12px">↻</button>
@@ -450,7 +478,7 @@ body.guest #guilds{display:none}
 
   <div class="right-col">
     <!-- Soundboard -->
-    <div class="card collapsible collapsed" id="sfx-card">
+    <div class="card collapsible collapsed" id="sfx-card" data-tab="more">
       <div id="queue-info">
         <span class="section-label">🎛 SOUNDBOARD</span>
         <span style="font-size:11px;color:var(--muted)" id="sfx-status">DJ off — muted</span>
@@ -468,7 +496,7 @@ body.guest #guilds{display:none}
     </div>
 
     <!-- Look & feel -->
-    <div class="card collapsible collapsed">
+    <div class="card collapsible collapsed" data-tab="more">
       <div class="section-label">🎨 LOOK &amp; FEEL</div>
       <div id="swatches"></div>
       <div class="sens-wrap">
@@ -520,6 +548,11 @@ body.guest #guilds{display:none}
   <div class="mname" id="mini-name">Nothing playing</div>
   <button id="mini-play" class="primary" data-tip="Play / Pause">&#9654;</button>
   <button id="mini-next" class="icon" data-tip="Skip">&#9197;</button>
+</div>
+<div id="tab-bar">
+  <button data-tab="np" class="active"><span class="ti">&#127925;</span><span>Now Playing</span></button>
+  <button data-tab="queue"><span class="ti">&#128221;</span><span>Queue</span></button>
+  <button data-tab="more"><span class="ti">&#9881;</span><span>More</span></button>
 </div>
 <div id="toasts"></div>
 
@@ -1115,6 +1148,23 @@ body.guest #guilds{display:none}
     var head=c.querySelector(':scope > #queue-info')||c.querySelector(':scope > .section-label');
     if(head)head.addEventListener('click',function(e){if(e.target.closest('button,a,input'))return;c.classList.toggle('collapsed')});
   });
+  // Mobile bottom tab nav — switches which group of cards is visible.
+  (function(){
+    var tabs=document.querySelectorAll('#tab-bar button[data-tab]');
+    if(!tabs.length)return;
+    var saved=null;
+    try{saved=sessionStorage.getItem('vz-tab')}catch(e){}
+    if(saved!=='np'&&saved!=='queue'&&saved!=='more')saved='np';
+    function setTab(name){
+      document.body.setAttribute('data-tab',name);
+      tabs.forEach(function(b){b.classList.toggle('active',b.getAttribute('data-tab')===name)});
+      try{sessionStorage.setItem('vz-tab',name)}catch(e){}
+      // Scroll the active tab's first card into view so switching feels snappy.
+      window.scrollTo(0,0);
+    }
+    tabs.forEach(function(b){b.addEventListener('click',function(){setTab(b.getAttribute('data-tab'))})});
+    setTab(saved);
+  })();
   if(el['mini-play'])el['mini-play'].onclick=function(){cmd('toggle')};
   if(el['mini-next'])el['mini-next'].onclick=function(){cmd('next')};
   el['btn-jump'].onclick=function(){

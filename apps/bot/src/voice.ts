@@ -83,6 +83,9 @@ export class VoiceManager implements AudioTransport {
   private voiceLinkDown = false;
   /** Loudness applied to every new audio resource (0–100). */
   private volumePercent = 100;
+
+  /** Active sequential volume fade-out (sequential crossfade fallback). */
+  private fadeOutTimer: NodeJS.Timeout | null = null;
   /** One-shot seek (ms) applied to the next decoded stream — crossfade handoff. */
   private streamOffsetMs = 0;
   /** Extra ffmpeg `-af` stage for session audio FX (e.g. nightcore/slowed/bass),
@@ -1159,7 +1162,53 @@ export class VoiceManager implements AudioTransport {
     this.applyVolumeToResource();
   }
 
+  /**
+   * Sequential fade-out of the active resource's volume to zero over `ms`.
+   * Used when a true overlap crossfade can't run (the incoming track has no
+   * decodable blend URL — Spotify→Spotify via librespot plays one track at a
+   * time, so there's no second stream to mix in). The next track fades in when
+   * play() starts its own resource. Cancelled by any later setVolume/apply.
+   */
+  fadeOutResource(ms: number): void {
+    if (this.fadeOutTimer) {
+      clearTimeout(this.fadeOutTimer);
+      this.fadeOutTimer = null;
+    }
+    const resource = this.resource;
+    const vol = resource?.volume;
+    if (!resource || !vol) return;
+    const startVol = this.effectiveVolumePercent() / 100;
+    if (startVol <= 0) return;
+    const steps = Math.max(8, Math.min(60, Math.round(ms / 50)));
+    const interval = ms / steps;
+    let i = 0;
+    const tick = (): void => {
+      i++;
+      // Equal-power fade-out (cosine) so the loudness curve matches the true
+      // overlap blend's outgoing side, not a linear ramp.
+      const t = Math.min(1, i / steps);
+      const gain = Math.cos((t * Math.PI) / 2) * startVol;
+      // Stop if the resource was replaced (skip/stop created a new one).
+      if (this.resource !== resource) return;
+      vol.setVolume(Math.max(0, gain));
+      if (i >= steps) {
+        this.fadeOutTimer = null;
+        return;
+      }
+      this.fadeOutTimer = setTimeout(tick, interval);
+      this.fadeOutTimer.unref?.();
+    };
+    this.fadeOutTimer = setTimeout(tick, interval);
+    this.fadeOutTimer.unref?.();
+  }
+
   private applyVolumeToResource(): void {
+    // Any explicit volume change cancels a fade-out in progress — the new
+    // volume (or duck state) is the intended level, not a transient ramp point.
+    if (this.fadeOutTimer) {
+      clearTimeout(this.fadeOutTimer);
+      this.fadeOutTimer = null;
+    }
     this.resource?.volume?.setVolume(this.effectiveVolumePercent() / 100);
   }
 
