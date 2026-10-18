@@ -439,6 +439,22 @@ export class QueueManager {
     return removed;
   }
 
+  /**
+   * Replace an upcoming track in place, keeping its queue position. Powers the
+   * "swap this pick" flow when a search resolved the wrong song. Returns the
+   * track that was replaced, or undefined when `index` isn't an upcoming slot.
+   */
+  replaceAt(
+    index: number,
+    track: Omit<TrackInfo, 'addedBy' | 'addedAt'>,
+    requestedBy: string,
+  ): TrackInfo | undefined {
+    if (index < 0 || index >= this.tracks.length || index <= this.currentIndex) return undefined;
+    const [prev] = this.tracks.splice(index, 1, { ...track, addedBy: requestedBy, addedAt: Date.now() });
+    this.emitQueue();
+    return prev;
+  }
+
   remove(index: number): TrackInfo | undefined {
     if (index < 0 || index >= this.tracks.length) return undefined;
     const [removed] = this.tracks.splice(index, 1);

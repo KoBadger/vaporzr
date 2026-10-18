@@ -678,10 +678,28 @@ export class DiscordBot {
   /** token -> pending interactive search results (for the `V@p <text>` picker). */
   private pendingSearch = new Map<
     string,
-    { guildId: string; userId: string; candidates: ResolvedTrack[]; createdAt: number }
+    { guildId: string; userId: string; candidates: ResolvedTrack[]; query?: string; createdAt: number }
   >();
   /** token -> pending /skipto picker. */
   private pendingSkipTo = new Map<string, { guildId: string; createdAt: number }>();
+  /**
+   * token -> a queue add the user may still correct ("swap this pick").
+   * Any command that resolves search text into queue adds can register one, so a
+   * wrong guess is fixable without hunting the track down in `V@q`. Each item
+   * keeps the original query so a swap can re-offer the very same candidate
+   * dropdown the picker showed in the first place.
+   */
+  private swapRefs = new Map<
+    string,
+    {
+      guildId: string;
+      userId: string;
+      addedBy: string;
+      mode: 'queue' | 'insert';
+      items: { uri: string; label: string; query?: string }[];
+      createdAt: number;
+    }
+  >();
   /** guildId -> in-flight vote-to-skip. */
   private skipVotes = new Map<
     string,
@@ -1223,6 +1241,8 @@ export class DiscordBot {
         await this.handleMashRepickButton(interaction);
       } else if (interaction.customId.startsWith('mashreclose:')) {
         await this.handleMashRepickClose(interaction);
+      } else if (interaction.customId.startsWith('swap:')) {
+        await this.handleSwapButton(interaction);
       } else if (interaction.customId.startsWith('vzhelp:')) {
         const id = interaction.customId.slice('vzhelp:'.length);
         const embed = this.helpCategoryEmbed(id);
@@ -1266,6 +1286,10 @@ export class DiscordBot {
         }
       } else if (interaction.customId.startsWith('vzsearch:')) {
         await this.handleSearchPick(interaction);
+      } else if (interaction.customId.startsWith('swapselect:')) {
+        await this.handleSwapPick(interaction);
+      } else if (interaction.customId.startsWith('swapitem:')) {
+        await this.handleSwapItemPick(interaction);
       } else if (interaction.customId.startsWith('skipto:')) {
         await this.handleSkipToPick(interaction);
       }
@@ -1278,6 +1302,10 @@ export class DiscordBot {
     if (interaction.isModalSubmit()) {
       if (interaction.customId.startsWith('mashrepickmodal:')) {
         await this.handleMashRepickModal(interaction);
+        return;
+      }
+      if (interaction.customId.startsWith('swapmodal:')) {
+        await this.handleSwapModal(interaction);
         return;
       }
       return;
@@ -1639,7 +1667,7 @@ export class DiscordBot {
         const query = interaction.options.getString('query', true);
         await interaction.deferReply();
         const tracks = await resolvePlayInput(query);
-        await this.insertToQueue(interaction, tracks);
+        await this.insertToQueue(interaction, tracks, isUrlPlayInput(query) ? undefined : query);
         break;
       }
 
@@ -2352,10 +2380,14 @@ export class DiscordBot {
         await interaction.deferReply();
         const items = parseBulkItems(interaction.options.getString('tracks', true));
         const resolved: ResolvedTrack[] = [];
+        const itemQuery = new Map<string, string>();
         for (const q of items) {
           try {
             const t = await resolvePlayInput(q);
-            if (t[0]) resolved.push(t[0]);
+            if (t[0]) {
+              resolved.push(t[0]);
+              itemQuery.set(t[0].uri, q);
+            }
           } catch {
             /* skip an unresolvable item */
           }
@@ -2374,6 +2406,17 @@ export class DiscordBot {
         } catch {
           /* queued anyway */
         }
+        const row = this.registerSwap({
+          guildId: interaction.guildId ?? '',
+          userId: interaction.user.id,
+          addedBy: who,
+          mode: this.userQueueMode(s),
+          items: resolved.map((t) => ({
+            uri: t.uri,
+            label: `${t.name} — ${t.artists.join(', ')}`,
+            query: itemQuery.get(t.uri),
+          })),
+        });
         await interaction.editReply({
           embeds: [
             new EmbedBuilder()
@@ -2383,6 +2426,7 @@ export class DiscordBot {
               )
               .setColor(this.themeColor()),
           ],
+          components: row,
         });
         break;
       }
@@ -3076,7 +3120,7 @@ export class DiscordBot {
           if (!args) return void (await message.reply('Usage: `V@i <track name or link>`'));
           await this.withAck(message, '🔎 Working on it…', async () => {
             const tracks = await resolvePlayInput(args);
-            await this.insertToQueueMsg(message, tracks);
+            await this.insertToQueueMsg(message, tracks, isUrlPlayInput(args) ? undefined : args);
           });
           break;
         }
@@ -3763,11 +3807,16 @@ export class DiscordBot {
           await this.withAck(message, `🔎 Adding ${items.length + files.length} item(s)…`, async () => {
             const resolved: Omit<TrackInfo, 'addedBy' | 'addedAt'>[] = [];
             const unresolved: string[] = [];
+            // Remember what each item was searched for, so a wrong pick can be
+            // re-offered the same candidate list later.
+            const itemQuery = new Map<string, string>();
             for (const q of items) {
               try {
                 const t = await resolvePlayInput(q);
-                if (t[0]) resolved.push(t[0]);
-                else unresolved.push(q);
+                if (t[0]) {
+                  resolved.push(t[0]);
+                  itemQuery.set(t[0].uri, q);
+                } else unresolved.push(q);
               } catch {
                 // Name it in the reply — a silent skip reads as "it ignored my song".
                 unresolved.push(q);
@@ -3815,7 +3864,18 @@ export class DiscordBot {
                     : ''),
               )
               .setColor(this.themeColor());
-            await message.reply({ embeds: [embed] });
+            const row = this.registerSwap({
+              guildId: s.guildId ?? '',
+              userId: message.author.id,
+              addedBy: who,
+              mode: 'queue',
+              items: fresh.map((t) => ({
+                uri: t.uri,
+                label: `${t.name} — ${t.artists.join(', ')}`,
+                query: itemQuery.get(t.uri),
+              })),
+            });
+            await message.reply({ embeds: [embed], components: row });
           });
           break;
         }
@@ -4494,7 +4554,7 @@ export class DiscordBot {
       .setColor(this.themeColor());
   }
 
-  private async addToQueueMsg(message: Message, tracks: ResolvedTrack[]): Promise<void> {
+  private async addToQueueMsg(message: Message, tracks: ResolvedTrack[], query?: string): Promise<void> {
     const s = this.sessionFor(message.guildId);
     // Never stack a song that's already waiting — same upload or not.
     const fresh = s.queue.filterNew(tracks);
@@ -4532,7 +4592,19 @@ export class DiscordBot {
       .setThumbnail(first.image ?? '')
       .setFooter({ text: `${fresh.length} track${fresh.length > 1 ? 's' : ''} · ${s.queue.getSnapshot().tracks.length} in queue` })
       .setColor(this.themeColor());
-    this.replyTemp(message, embed);
+    // A name search can land on the wrong recording — offer a one-click fix.
+    if (query) {
+      const row = this.registerSwap({
+        guildId: s.guildId ?? '',
+        userId: message.author.id,
+        addedBy: requestedBy,
+        mode: 'queue',
+        items: fresh.map((t) => ({ uri: t.uri, label: `${t.name} — ${t.artists.join(', ')}`, query })),
+      });
+      this.replyTemp(message, embed, 90_000, row);
+    } else {
+      this.replyTemp(message, embed);
+    }
   }
 
   /** Download one Discord attachment into the uploads dir as a local track. */
@@ -4595,7 +4667,7 @@ export class DiscordBot {
     await reply(embed);
   }
 
-  private async insertToQueueMsg(message: Message, tracks: ResolvedTrack[]): Promise<void> {
+  private async insertToQueueMsg(message: Message, tracks: ResolvedTrack[], query?: string): Promise<void> {
     const s = this.sessionFor(message.guildId);
     // Never stack a song that's already waiting — same upload or not.
     const fresh = s.queue.filterNew(tracks);
@@ -4633,14 +4705,30 @@ export class DiscordBot {
       .setThumbnail(first.image ?? '')
       .setFooter({ text: `${fresh.length} track${fresh.length > 1 ? 's' : ''} · ${s.queue.getSnapshot().tracks.length} in queue` })
       .setColor(this.themeColor());
-    this.replyTemp(message, embed);
+    if (query) {
+      const row = this.registerSwap({
+        guildId: s.guildId ?? '',
+        userId: message.author.id,
+        addedBy: requestedBy,
+        mode: 'insert',
+        items: fresh.map((t) => ({ uri: t.uri, label: `${t.name} — ${t.artists.join(', ')}`, query })),
+      });
+      this.replyTemp(message, embed, 90_000, row);
+    } else {
+      this.replyTemp(message, embed);
+    }
   }
 
   /** Reply with a confirmation embed and auto-delete it shortly after, so busy
    *  channels don't accumulate bot replies. */
-  private replyTemp(message: Message, embed: EmbedBuilder, ms = 12_000): void {
+  private replyTemp(
+    message: Message,
+    embed: EmbedBuilder,
+    ms = 12_000,
+    components?: ActionRowBuilder<ButtonBuilder>[],
+  ): void {
     void message
-      .reply({ embeds: [embed] })
+      .reply({ embeds: [embed], components: components ?? [] })
       .then((msg) => {
         const t = setTimeout(() => void msg.delete().catch(() => {}), ms);
         t.unref?.();
@@ -4800,7 +4888,11 @@ export class DiscordBot {
     }
   }
 
-  private async insertToQueue(interaction: ChatInputCommandInteraction, tracks: ResolvedTrack[]): Promise<void> {
+  private async insertToQueue(
+    interaction: ChatInputCommandInteraction,
+    tracks: ResolvedTrack[],
+    query?: string,
+  ): Promise<void> {
     const s = this.sessionFor(interaction.guildId);
     const first = tracks[0];
     const requestedBy = interaction.member?.user.username ?? 'unknown';
@@ -4832,10 +4924,23 @@ export class DiscordBot {
       .setThumbnail(first.image ?? '')
       .setFooter({ text: `${tracks.length} track${tracks.length > 1 ? 's' : ''} · ${s.queue.getSnapshot().tracks.length} in queue` })
       .setColor(this.themeColor());
-    await interaction.editReply({ embeds: [embed] });
+    const row = query
+      ? this.registerSwap({
+          guildId: interaction.guildId ?? '',
+          userId: interaction.user.id,
+          addedBy: requestedBy,
+          mode: 'insert',
+          items: tracks.map((t) => ({ uri: t.uri, label: `${t.name} — ${t.artists.join(', ')}`, query })),
+        })
+      : undefined;
+    await interaction.editReply({ embeds: [embed], components: row ?? [] });
   }
 
-  private async addToQueue(interaction: ChatInputCommandInteraction, tracks: ResolvedTrack[]): Promise<void> {
+  private async addToQueue(
+    interaction: ChatInputCommandInteraction,
+    tracks: ResolvedTrack[],
+    query?: string,
+  ): Promise<void> {
     const s = this.sessionFor(interaction.guildId);
     const first = tracks[0];
     const requestedBy = interaction.member?.user.username ?? 'unknown';
@@ -4869,7 +4974,16 @@ export class DiscordBot {
       .setThumbnail(first.image ?? '')
       .setFooter({ text: `${tracks.length} track${tracks.length > 1 ? 's' : ''} · ${s.queue.getSnapshot().tracks.length} in queue` })
       .setColor(this.themeColor());
-    await interaction.editReply({ embeds: [embed] });
+    const row = query
+      ? this.registerSwap({
+          guildId: interaction.guildId ?? '',
+          userId: interaction.user.id,
+          addedBy: requestedBy,
+          mode: 'queue',
+          items: tracks.map((t) => ({ uri: t.uri, label: `${t.name} — ${t.artists.join(', ')}`, query })),
+        })
+      : undefined;
+    await interaction.editReply({ embeds: [embed], components: row ?? [] });
   }
 
   private async deny(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -6730,7 +6844,7 @@ export class DiscordBot {
 
     const token = randomBytes(6).toString('hex');
     const userId = isMsg ? (target as Message).author.id : (target as ChatInputCommandInteraction).user.id;
-    this.pendingSearch.set(token, { guildId: target.guildId ?? '', userId, candidates, createdAt: Date.now() });
+    this.pendingSearch.set(token, { guildId: target.guildId ?? '', userId, candidates, query, createdAt: Date.now() });
     const menu = new StringSelectMenuBuilder()
       .setCustomId(`vzsearch:${token}`)
       .setPlaceholder('Pick a track to play…')
@@ -7093,6 +7207,319 @@ export class DiscordBot {
     else await target.reply({ embeds: [embed], components: [row] });
   }
 
+  // --- Swap a wrong pick ----------------------------------------------------
+  // The mashup repick flow, generalised. Anything that turned search text into
+  // a queue add can be corrected in place: "Pick another" re-runs the original
+  // query and offers the same dropdown the picker showed, "Type it" takes free
+  // text for the cases a search cannot fix (bulk items, uploads, no results).
+
+  /** Register a correctable queue add; returns the row to attach to its reply. */
+  private registerSwap(opts: {
+    guildId: string;
+    userId: string;
+    addedBy: string;
+    mode: 'queue' | 'insert';
+    items: { uri: string; label: string; query?: string }[];
+  }): ActionRowBuilder<ButtonBuilder>[] {
+    const token = randomBytes(6).toString('hex');
+    this.swapRefs.set(token, { ...opts, createdAt: Date.now() });
+    const t = setTimeout(() => this.swapRefs.delete(token), 15 * 60 * 1000);
+    t.unref?.();
+    if (this.swapRefs.size > 500) {
+      const cutoff = Date.now() - 15 * 60 * 1000;
+      for (const [k, v] of this.swapRefs) if (v.createdAt < cutoff) this.swapRefs.delete(k);
+    }
+    return this.swapRow(token);
+  }
+
+  /** Buttons for a correctable pick. "Pick another" needs a query to re-run. */
+  private swapRow(token: string): ActionRowBuilder<ButtonBuilder>[] {
+    const ref = this.swapRefs.get(token);
+    const canPick = !!ref?.items.some((it) => it.query);
+    const buttons: ButtonBuilder[] = [];
+    if (canPick) {
+      buttons.push(
+        new ButtonBuilder()
+          .setCustomId(`swap:pick:${token}`)
+          .setLabel(ref!.items.length > 1 ? 'Fix one' : 'Pick another')
+          .setStyle(ButtonStyle.Primary)
+          .setEmoji('🔄'),
+      );
+    }
+    buttons.push(
+      new ButtonBuilder()
+        .setCustomId(`swap:type:${token}`)
+        .setLabel('Type it')
+        .setStyle(canPick ? ButtonStyle.Secondary : ButtonStyle.Primary)
+        .setEmoji('⌨️'),
+      new ButtonBuilder().setCustomId(`swap:x:${token}`).setLabel('Looks right').setStyle(ButtonStyle.Secondary),
+    );
+    return [new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons)];
+  }
+
+  /** Put the replacement where the wrong pick was. Returns a one-line status. */
+  private applySwap(
+    s: Session,
+    addedBy: string,
+    item: { uri: string; label: string },
+    replacement: Omit<TrackInfo, 'addedBy' | 'addedAt'>,
+    requestedBy: string,
+  ): string {
+    const snap = s.queue.getSnapshot();
+    const idx = snap.tracks.findIndex((t) => t.uri === item.uri && (t.addedBy ?? '') === addedBy);
+    const name = `**${truncate(replacement.name, 60)}**`;
+    if (idx !== -1 && idx > snap.currentIndex) {
+      s.queue.replaceAt(idx, replacement, requestedBy);
+      return `🔄 Swapped in ${name} — same spot in the queue.`;
+    }
+    if (idx !== -1 && idx === snap.currentIndex) {
+      s.queue.insertAfterCurrent([replacement], requestedBy);
+      s.playback.next();
+      return `🔄 Swapping what's playing for ${name}.`;
+    }
+    s.queue.enqueue(replacement, requestedBy);
+    return `🔄 **${truncate(item.label, 50)}** had already left the queue — queued ${name} instead.`;
+  }
+
+  /** Resolve search text into candidates (Spotify first, then YouTube). */
+  private async swapCandidates(query: string): Promise<ResolvedTrack[]> {
+    let out: ResolvedTrack[] = [];
+    try {
+      out = await searchCandidates(query, 5);
+    } catch {
+      out = [];
+    }
+    if (out.length === 0) {
+      try {
+        out = await searchYoutube(query, 5);
+      } catch {
+        /* the caller reports the empty result */
+      }
+    }
+    return out;
+  }
+
+  /** Ephemeral dropdown asking which of a multi-item add to fix. */
+  private swapItemMenu(token: string, action: 'pick' | 'type'): ActionRowBuilder<StringSelectMenuBuilder> {
+    const ref = this.swapRefs.get(token)!;
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId(`swapitem:${action}:${token}`)
+      .setPlaceholder('Which one was wrong?')
+      .addOptions(
+        ref.items.slice(0, 25).map((it, i) =>
+          new StringSelectMenuOptionBuilder()
+            .setLabel(truncate(it.label, 100))
+            .setDescription(truncate(it.query ? `searched: ${it.query}` : 'added directly', 100))
+            .setValue(String(i)),
+        ),
+      );
+    return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu);
+  }
+
+  private async handleSwapButton(i: ButtonInteraction): Promise<void> {
+    const [, action = '', token = ''] = i.customId.split(':');
+    const ref = this.swapRefs.get(token);
+    if (!ref) {
+      await i
+        .reply({ content: '⌛ That swap expired — add the track again if you still want it changed.', flags: MessageFlags.Ephemeral })
+        .catch(() => {});
+      return;
+    }
+    if (ref.userId && i.user.id !== ref.userId) {
+      await i.reply({ content: '❌ Only the person who queued that track can swap it.', flags: MessageFlags.Ephemeral }).catch(() => {});
+      return;
+    }
+    if (action === 'x') {
+      this.swapRefs.delete(token);
+      await i.update({ components: [] }).catch(() => {});
+      return;
+    }
+    // Several items in one add (bulk) — ask which one first.
+    if (ref.items.length > 1) {
+      await i
+        .reply({
+          content: `Which of the ${ref.items.length} tracks was wrong?`,
+          components: [this.swapItemMenu(token, action === 'type' ? 'type' : 'pick')],
+          flags: MessageFlags.Ephemeral,
+        })
+        .catch(() => {});
+      return;
+    }
+    await this.openSwapTarget(i, token, 0, action === 'type' ? 'type' : 'pick');
+  }
+
+  /** Open either the candidate dropdown or the free-text modal for one item. */
+  private async openSwapTarget(
+    i: ButtonInteraction,
+    token: string,
+    idx: number,
+    action: 'pick' | 'type',
+  ): Promise<void> {
+    const ref = this.swapRefs.get(token);
+    const item = ref?.items[idx];
+    if (!ref || !item) {
+      await i.reply({ content: '⌛ That swap expired.', flags: MessageFlags.Ephemeral }).catch(() => {});
+      return;
+    }
+    if (action === 'type') {
+      const modal = new ModalBuilder()
+        .setCustomId(`swapmodal:${token}:${idx}`)
+        .setTitle('Swap the track')
+        .addComponents(
+          new ActionRowBuilder<TextInputBuilder>().addComponents(
+            new TextInputBuilder()
+              .setCustomId('swap-song')
+              .setLabel('Correct song (name or link)')
+              .setPlaceholder(truncate(item.label, 100))
+              .setStyle(TextInputStyle.Short)
+              .setRequired(true),
+          ),
+        );
+      await i.showModal(modal).catch(async (err) => {
+        await i
+          .reply({ content: `❌ Could not open the swap box: ${err instanceof Error ? err.message : err}`, flags: MessageFlags.Ephemeral })
+          .catch(() => {});
+      });
+      return;
+    }
+    const query = item.query ?? item.label;
+    await i.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
+    const candidates = await this.swapCandidates(query);
+    if (candidates.length === 0) {
+      await i
+        .editReply({ content: `🔍 No other results for \`${truncate(query, 60)}\` — try **Type it** with a link.` })
+        .catch(() => {});
+      return;
+    }
+    this.pendingSearch.set(`swap-${token}`, {
+      guildId: ref.guildId,
+      userId: ref.userId,
+      candidates,
+      createdAt: Date.now(),
+    });
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId(`swapselect:${token}:${idx}`)
+      .setPlaceholder('Pick the right track…')
+      .addOptions(
+        candidates.map((c, n) =>
+          new StringSelectMenuOptionBuilder()
+            .setLabel(truncate(c.name || 'Unknown', 100))
+            .setDescription(truncate(`${(c.artists ?? []).join(', ') || c.album} · ${fmtMs(c.durationMs)}`, 100))
+            .setValue(String(n)),
+        ),
+      );
+    await i
+      .editReply({
+        content: `Replacing **${truncate(item.label, 60)}** — or pick a different result:`,
+        components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu)],
+      })
+      .catch(() => {});
+  }
+
+  /** A multi-item add: user picked which track to fix, then hand off. */
+  private async handleSwapItemPick(i: StringSelectMenuInteraction): Promise<void> {
+    const [, action = 'pick', token = ''] = i.customId.split(':');
+    const idx = parseInt(i.values[0] ?? '0', 10);
+    const ref = this.swapRefs.get(token);
+    if (!ref || !ref.items[idx]) {
+      await i.update({ content: '⌛ That swap expired.', components: [] }).catch(() => {});
+      return;
+    }
+    if (action === 'type') {
+      const modal = new ModalBuilder()
+        .setCustomId(`swapmodal:${token}:${idx}`)
+        .setTitle('Swap the track')
+        .addComponents(
+          new ActionRowBuilder<TextInputBuilder>().addComponents(
+            new TextInputBuilder()
+              .setCustomId('swap-song')
+              .setLabel('Correct song (name or link)')
+              .setPlaceholder(truncate(ref.items[idx].label, 100))
+              .setStyle(TextInputStyle.Short)
+              .setRequired(true),
+          ),
+        );
+      await i.showModal(modal).catch(() => {});
+      return;
+    }
+    const item = ref.items[idx];
+    await i.deferUpdate().catch(() => {});
+    const candidates = await this.swapCandidates(item.query ?? item.label);
+    if (candidates.length === 0) {
+      await i
+        .editReply({ content: `🔍 No other results for \`${truncate(item.query ?? item.label, 60)}\` — use **Type it**.`, components: [] })
+        .catch(() => {});
+      return;
+    }
+    this.pendingSearch.set(`swap-${token}`, { guildId: ref.guildId, userId: ref.userId, candidates, createdAt: Date.now() });
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId(`swapselect:${token}:${idx}`)
+      .setPlaceholder('Pick the right track…')
+      .addOptions(
+        candidates.map((c, n) =>
+          new StringSelectMenuOptionBuilder()
+            .setLabel(truncate(c.name || 'Unknown', 100))
+            .setDescription(truncate(`${(c.artists ?? []).join(', ') || c.album} · ${fmtMs(c.durationMs)}`, 100))
+            .setValue(String(n)),
+        ),
+      );
+    await i
+      .editReply({
+        content: `Replacing **${truncate(item.label, 60)}**:`,
+        components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu)],
+      })
+      .catch(() => {});
+  }
+
+  private async handleSwapPick(i: StringSelectMenuInteraction): Promise<void> {
+    const [, token = '', idxRaw = '0'] = i.customId.split(':');
+    const ref = this.swapRefs.get(token);
+    const pending = this.pendingSearch.get(`swap-${token}`);
+    const item = ref?.items[parseInt(idxRaw, 10)];
+    if (!ref || !pending || !item) {
+      await i.update({ content: '⌛ That swap expired.', components: [] }).catch(() => {});
+      return;
+    }
+    const track = pending.candidates[parseInt(i.values[0] ?? '0', 10)];
+    if (!track) {
+      await i.update({ content: '⚠️ Invalid selection.', components: [] }).catch(() => {});
+      return;
+    }
+    if (ref.items.length === 1) {
+      this.swapRefs.delete(token);
+      this.pendingSearch.delete(`swap-${token}`);
+    }
+    const s = this.sessionFor(i.guildId);
+    const status = this.applySwap(s, ref.addedBy, item, track, i.user.username);
+    await i.update({ content: status, components: [] }).catch(() => {});
+  }
+
+  private async handleSwapModal(i: ModalSubmitInteraction): Promise<void> {
+    const [, token = '', idxRaw = '0'] = i.customId.split(':');
+    const ref = this.swapRefs.get(token);
+    const item = ref?.items[parseInt(idxRaw, 10)];
+    if (!ref || !item) {
+      await i.reply({ content: '⌛ That swap expired — add the track again.', flags: MessageFlags.Ephemeral }).catch(() => {});
+      return;
+    }
+    const input = i.fields.getTextInputValue('swap-song').trim();
+    await i.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
+    let track: ResolvedTrack | undefined;
+    try {
+      track = (await resolvePlayInput(input))[0];
+    } catch {
+      track = undefined;
+    }
+    if (!track) {
+      await i.editReply({ content: `🔍 Couldn't find \`${truncate(input, 60)}\` — try a direct link.` }).catch(() => {});
+      return;
+    }
+    if (ref.items.length === 1) this.swapRefs.delete(token);
+    const s = this.sessionFor(i.guildId);
+    const status = this.applySwap(s, ref.addedBy, item, track, i.user.username);
+    await i.editReply({ content: status }).catch(() => {});
+  }
+
   private async handleSearchPick(interaction: StringSelectMenuInteraction): Promise<void> {
     const token = interaction.customId.slice('vzsearch:'.length);
     const pending = this.pendingSearch.get(token);
@@ -7127,7 +7554,22 @@ export class DiscordBot {
       .setThumbnail(track.image ?? '')
       .setFooter({ text: `${s.queue.getSnapshot().tracks.length} in queue` })
       .setColor(this.themeColor());
-    await interaction.editReply({ embeds: [embed], components: [] }).catch(() => {});
+    // Keep the correction loop open — a wrong pick from the dropdown is the
+    // most likely wrong pick of all.
+    const row = this.registerSwap({
+      guildId: interaction.guildId ?? '',
+      userId: interaction.user.id,
+      addedBy: interaction.user.username,
+      mode: this.userQueueMode(s),
+      items: [
+        {
+          uri: track.uri,
+          label: `${track.name} — ${(track.artists ?? []).join(', ')}`,
+          query: pending.query ?? track.name,
+        },
+      ],
+    });
+    await interaction.editReply({ embeds: [embed], components: row }).catch(() => {});
   }
 
   /** Whether a member may control playback as DJ (owner/mod/admin or DJ role holder). */
