@@ -7486,7 +7486,11 @@ export class DiscordBot {
         void this.pruneStems();
         return hosted;
       }
-      console.warn('[mashup] Replicate stems unavailable — falling back to local Demucs');
+      // Never fall through to the ~29-min CPU Demucs run here: the caller
+      // posts a fast beat/key-matched blend instead, which beats hanging a
+      // Discord command for half an hour.
+      console.warn('[mashup] Replicate stems unavailable - using the fast blend instead');
+      return null;
     }
     const outDir = path.join(config.dataDir, 'uploads', `stems-${Date.now()}-${Math.floor(Math.random() * 1e6)}`);
     cleanup.push(outDir);
@@ -7643,7 +7647,7 @@ export class DiscordBot {
   }
 
   /** The longest mix `renderMashupStems` can ask for (it clamps `dur` to 180s). */
-  private static readonly STEM_MAX_SEC = 200;
+  private static readonly STEM_MAX_SEC = 120;
 
   /** Cap the audio handed to stem separation. Returns the source unchanged when
    *  the trim fails, so a missing ffmpeg degrades to the old behaviour rather
@@ -7721,8 +7725,9 @@ export class DiscordBot {
 
     // Without a Replicate token, local CPU Demucs takes ~29 min per track and
     // dominates mashup wall time. Skip it and post the fast beat/key-matched
-    // blend instead (still tempo/key aligned, still downloadable).
-    if (!replicateStemsEnabled()) {
+    // blend instead (still tempo/key aligned, still downloadable). Set
+    // STEMS_LOCAL_DEMUCS=1 to opt back into the slow local stem run.
+    if (!replicateStemsEnabled() && process.env.STEMS_LOCAL_DEMUCS !== '1') {
       const blend = await this.mashupTracks(a, b, durSec || 90);
       cleanup.push(...blend.cleanup);
       return {
@@ -7979,7 +7984,7 @@ export class DiscordBot {
         files: [],
       })
       .catch(() => {});
-    await this.renderMashupNow(job.send, guildId, job.a, job.b);
+    await this.renderMashupNow(job.send, guildId, job.a, job.b, job.by);
     void this.drainMashupQueue(guildId);
   }
 
