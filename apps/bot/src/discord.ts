@@ -16,6 +16,7 @@ import {
   EmbedBuilder,
   GatewayIntentBits,
   MessageFlags,
+  ModalBuilder,
   Partials,
   PermissionFlagsBits,
   REST,
@@ -24,7 +25,10 @@ import {
   StringSelectMenuBuilder,
   StringSelectMenuInteraction,
   StringSelectMenuOptionBuilder,
+  TextInputBuilder,
+  TextInputStyle,
   type ButtonInteraction,
+  type ModalSubmitInteraction,
   type ChatInputCommandInteraction,
   type Guild,
   type GuildBasedChannel,
@@ -1215,6 +1219,10 @@ export class DiscordBot {
         await this.handleMashVote(interaction);
       } else if (interaction.customId.startsWith('mashreveal:')) {
         await this.handleMashReveal(interaction);
+      } else if (interaction.customId.startsWith('mashrepick:')) {
+        await this.handleMashRepickButton(interaction);
+      } else if (interaction.customId.startsWith('mashreclose:')) {
+        await this.handleMashRepickClose(interaction);
       } else if (interaction.customId.startsWith('vzhelp:')) {
         const id = interaction.customId.slice('vzhelp:'.length);
         const embed = this.helpCategoryEmbed(id);
@@ -1265,6 +1273,13 @@ export class DiscordBot {
     }
     if (interaction.isAutocomplete()) {
       await this.handleAutocomplete(interaction);
+      return;
+    }
+    if (interaction.isModalSubmit()) {
+      if (interaction.customId.startsWith('mashrepickmodal:')) {
+        await this.handleMashRepickModal(interaction);
+        return;
+      }
       return;
     }
     if (!interaction.isChatInputCommand()) return;
@@ -2274,7 +2289,7 @@ export class DiscordBot {
         const ch = interaction.channel;
         await interaction.editReply('🎛️ Rendering stem mashup — separating both songs (this can take several minutes)…');
         if (ch && 'send' in ch) {
-          void this.startMashupRender((p) => ch.send(p), interaction.guildId ?? '', a, b);
+          void this.startMashupRender((p) => ch.send(p), interaction.guildId ?? '', a, b, interaction.user.id);
         }
         break;
       }
@@ -7437,7 +7452,7 @@ export class DiscordBot {
         : '';
     const tempoNote = tempoA && tempoB ? ` · ${Math.round(tempoA)}/${Math.round(tempoB)} BPM` : '';
     return {
-      text: `🎛️ **${truncate(ra.name, 60)}** × **${truncate(rb.name, 60)}** — ${xf}s beat/key-matched blend${tempoNote}${keyNote}.`,
+      text: `🎛️ **${this.trackIdent(ra)}** × **${this.trackIdent(rb)}** — ${xf}s beat/key-matched blend${tempoNote}${keyNote}.`,
       file: out,
       cleanup,
       similar,
@@ -7471,7 +7486,11 @@ export class DiscordBot {
         void this.pruneStems();
         return hosted;
       }
-      console.warn('[mashup] Replicate stems unavailable — falling back to local Demucs');
+      // Never fall through to the ~29-min CPU Demucs run here: the caller
+      // posts a fast beat/key-matched blend instead, which beats hanging a
+      // Discord command for half an hour.
+      console.warn('[mashup] Replicate stems unavailable - using the fast blend instead');
+      return null;
     }
     const outDir = path.join(config.dataDir, 'uploads', `stems-${Date.now()}-${Math.floor(Math.random() * 1e6)}`);
     cleanup.push(outDir);
@@ -7628,7 +7647,7 @@ export class DiscordBot {
   }
 
   /** The longest mix `renderMashupStems` can ask for (it clamps `dur` to 180s). */
-  private static readonly STEM_MAX_SEC = 200;
+  private static readonly STEM_MAX_SEC = 120;
 
   /** Cap the audio handed to stem separation. Returns the source unchanged when
    *  the trim fails, so a missing ffmpeg degrades to the old behaviour rather
@@ -7703,6 +7722,22 @@ export class DiscordBot {
     const prep = await this.prepareMashupInputs(a, b, cleanup);
     if (!prep.ok) return { ok: false, text: prep.text, files: [], similar: [] };
     const { ra, rb, ia, ib, dir } = prep;
+
+    // Without a Replicate token, local CPU Demucs takes ~29 min per track and
+    // dominates mashup wall time. Skip it and post the fast beat/key-matched
+    // blend instead (still tempo/key aligned, still downloadable). Set
+    // STEMS_LOCAL_DEMUCS=1 to opt back into the slow local stem run.
+    if (!replicateStemsEnabled() && process.env.STEMS_LOCAL_DEMUCS !== '1') {
+      const blend = await this.mashupTracks(a, b, durSec || 90);
+      cleanup.push(...blend.cleanup);
+      return {
+        ok: !!blend.file,
+        text: `${blend.text}\n_(fast beat/key-matched blend — set REPLICATE_API_TOKEN for ~80s GPU stem separation)_`,
+        files: blend.file ? [blend.file] : [],
+        similar: blend.similar,
+      };
+    }
+
     const keyA = createHash('sha1').update(ra.uri).digest('hex').slice(0, 16);
     const keyB = createHash('sha1').update(rb.uri).digest('hex').slice(0, 16);
     const [sa, sb] = await Promise.all([
@@ -7808,7 +7843,7 @@ export class DiscordBot {
     return {
       ok: true,
       text:
-        `🎛️ **${truncate(ra.name, 45)}** × **${truncate(rb.name, 45)}** — stem mashup (${dur}s)${tempoNote}${keyNote}\n` +
+        `🎛️ **${this.trackIdent(ra)}** × **${this.trackIdent(rb)}** — stem mashup (${dur}s)${tempoNote}${keyNote}\n` +
         `• **v1** — ${truncate(ra.name, 30)} vocals over ${truncate(rb.name, 30)} backing\n` +
         `• **v2** — ${truncate(rb.name, 30)} vocals over ${truncate(ra.name, 30)} backing`,
       files: [v1, v2],
@@ -7821,6 +7856,16 @@ export class DiscordBot {
    *  QUEUED rather than bounced, so several can be lined up at once. */
   private mashupBusy = new Set<string>();
   private mashupQueue = new Map<string, MashupJob[]>();
+  /** Pending mashup results keyed by a short token, so a repick modal can
+   *  re-render with one side swapped out (token -> job). */
+  private mashupPending = new Map<string, {
+    guildId: string;
+    channelId: string;
+    messageId: string;
+    a: string;
+    b: string;
+    userId: string;
+  }>();
   private static readonly MASHUP_QUEUE_MAX = 5;
 
   /** Enqueue a mashup, or render it now when the guild is idle. */
@@ -7860,12 +7905,18 @@ export class DiscordBot {
       }).catch(() => {});
       return;
     }
-    await this.renderMashupNow(send, guildId, a, b);
+    await this.renderMashupNow(send, guildId, a, b, by);
     void this.drainMashupQueue(guildId);
   }
 
   /** Render a single mashup; the busy flag is held for its whole duration. */
-  private async renderMashupNow(send: MashupSend, guildId: string, a: string, b: string): Promise<void> {
+  private async renderMashupNow(
+    send: MashupSend,
+    guildId: string,
+    a: string,
+    b: string,
+    by = '',
+  ): Promise<void> {
     this.mashupBusy.add(guildId);
     const cleanup: string[] = [];
     try {
@@ -7882,7 +7933,25 @@ export class DiscordBot {
       }).catch(() => {});
       const r = await this.renderMashupStems(a, b, 90, cleanup);
       const files = r.files.map((f, i) => new AttachmentBuilder(f, { name: `vaporzr-mashup-${i + 1}.mp3` }));
-      await send({ embeds: [this.mashupEmbed(r.text, r.similar)], files }).catch(() => {});
+      const token = randomBytes(4).toString('hex');
+      const sent = await send({
+        embeds: [this.mashupEmbed(this.sillyMashupName(a, b), r.text, r.similar)],
+        files,
+        components: this.mashupRepickRow(token),
+      }).catch(() => null);
+      // Remember this render so a repick modal can re-render with one side swapped.
+      if (sent && typeof sent === 'object' && 'id' in sent) {
+        const s = sent as { id: string; channelId?: string };
+        this.mashupPending.set(token, {
+          guildId,
+          channelId: String(s.channelId ?? ''),
+          messageId: s.id,
+          a,
+          b,
+          userId: by,
+        });
+        setTimeout(() => this.mashupPending.delete(token), 24 * 60 * 60 * 1000).unref?.();
+      }
     } catch (err) {
       await send({
         embeds: [
@@ -7915,7 +7984,7 @@ export class DiscordBot {
         files: [],
       })
       .catch(() => {});
-    await this.renderMashupNow(job.send, guildId, job.a, job.b);
+    await this.renderMashupNow(job.send, guildId, job.a, job.b, job.by);
     void this.drainMashupQueue(guildId);
   }
 
@@ -8033,7 +8102,10 @@ export class DiscordBot {
     try {
       const r = await this.renderMashupStems(a, b, 60, cleanup);
       if (!r.ok || r.files.length === 0) {
-        await send({ embeds: [this.mashupEmbed(`❌ ${r.text}`, [])], files: [] }).catch(() => {});
+        await send({
+          embeds: [this.mashupEmbed(this.sillyMashupName(a, b), `❌ ${r.text}`, [])],
+          files: [],
+        }).catch(() => {});
         return;
       }
       const id = randomBytes(4).toString('hex');
@@ -8061,6 +8133,7 @@ export class DiscordBot {
       const sent = await send({
         embeds: [
           this.mashupEmbed(
+            this.sillyMashupName(a, b),
             `🎲 **Mashup game!** Listen to both blends and vote for the best.\n${r.text}`,
             r.similar,
           ),
@@ -8163,8 +8236,125 @@ export class DiscordBot {
     await this.revealMashup(id);
   }
 
-  /** Embed for a rendered mashup: the blend description + similar-track list. */
-  private mashupEmbed(text: string, similar: ResolvedTrack[]): EmbedBuilder {
+  /** Show a modal to replace one side of a finished mashup result. */
+  private async handleMashRepickButton(i: ButtonInteraction): Promise<void> {
+    const parts = i.customId.split(':'); // mashrepick:A:<token>
+    const side = parts[1] ?? '';
+    const token = parts[2] ?? '';
+    const job = this.mashupPending.get(token);
+    if (!job) {
+      await i
+        .reply({ content: '⌛ This mashup result has expired — render a new one.', flags: MessageFlags.Ephemeral })
+        .catch(() => {});
+      return;
+    }
+    const other = side === 'A' ? job.b : job.a;
+    const modal = new ModalBuilder()
+      .setCustomId(`mashrepickmodal:${side}:${token}`)
+      .setTitle(`Repick ${side === 'A' ? 'song A' : 'song B'}`)
+      .addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder()
+            .setCustomId('mashrepick-song')
+            .setLabel(`New ${side === 'A' ? 'song A' : 'song B'} (name or link)`)
+            .setPlaceholder(other)
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true),
+        ),
+      );
+    await i.showModal(modal).catch(async (err) => {
+      await i
+        .reply({
+          content: `❌ Could not open repick modal: ${err instanceof Error ? err.message : err}`,
+          flags: MessageFlags.Ephemeral,
+        })
+        .catch(() => {});
+    });
+  }
+
+  /** Drop the repick/close buttons from a finished mashup result. */
+  private async handleMashRepickClose(i: ButtonInteraction): Promise<void> {
+    await i.deferUpdate().catch(() => {});
+    await i.message.edit({ components: [] }).catch(() => {});
+  }
+
+  /** Re-render with one side swapped, editing the original result message in place. */
+  private async handleMashRepickModal(i: ModalSubmitInteraction): Promise<void> {
+    const parts = i.customId.split(':'); // mashrepickmodal:A:<token>
+    const side = parts[1] ?? '';
+    const token = parts[2] ?? '';
+    const job = this.mashupPending.get(token);
+    if (!job) {
+      await i.reply({ content: '⌛ This mashup result has expired.', flags: MessageFlags.Ephemeral }).catch(() => {});
+      return;
+    }
+    if (job.userId && i.user.id !== job.userId) {
+      await i
+        .reply({ content: '❌ Only the person who rendered this mashup can repick it.', flags: MessageFlags.Ephemeral })
+        .catch(() => {});
+      return;
+    }
+    const replacement = i.fields.getTextInputValue('mashrepick-song');
+    const newA = side === 'A' ? replacement : job.a;
+    const newB = side === 'B' ? replacement : job.b;
+    await i.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
+    const cleanup: string[] = [];
+    try {
+      const r = await this.renderMashupStems(newA, newB, 90, cleanup);
+      const title = this.sillyMashupName(newA, newB);
+      const embed = r.ok ? this.mashupEmbed(title, r.text, r.similar) : this.mashupEmbed(title, `❌ ${r.text}`, []);
+      const files = r.files.map((f, ix) => new AttachmentBuilder(f, { name: `vaporzr-mashup-${ix + 1}.mp3` }));
+      const newToken = randomBytes(4).toString('hex');
+      const components = this.mashupRepickRow(newToken);
+      if (i.message && 'edit' in i.message) {
+        await i.message.edit({ embeds: [embed], files, components }).catch(() => {});
+      }
+      this.mashupPending.delete(token);
+      this.mashupPending.set(newToken, {
+        guildId: job.guildId,
+        channelId: job.channelId,
+        messageId: (i.message as { id: string }).id,
+        a: newA,
+        b: newB,
+        userId: job.userId,
+      });
+      setTimeout(() => this.mashupPending.delete(newToken), 24 * 60 * 60 * 1000).unref?.();
+      await i.editReply({ content: `✅ Repicked ${side}.` }).catch(() => {});
+    } catch (err) {
+      await i.editReply({ content: `❌ Repick failed: ${err instanceof Error ? err.message : err}` }).catch(() => {});
+    } finally {
+      for (const f of cleanup) await fs.rm(f, { force: true, recursive: true }).catch(() => {});
+    }
+  }
+
+  /** One-line ID for a track: name — artists • source • mm:ss. */
+  private trackIdent(t: ResolvedTrack): string {
+    const secs = Math.max(0, Math.round((t.durationMs || 0) / 1000));
+    const mm = Math.floor(secs / 60);
+    const ss = String(secs % 60).padStart(2, '0');
+    const artists = (t.artists ?? []).join(', ');
+    return `${truncate(t.name, 40)} — ${truncate(artists, 30)} • ${t.source} • ${mm}:${ss}`;
+  }
+
+  /** Clever silly mashup title combining both song names. */
+  private sillyMashupName(a: string, b: string): string {
+    const A = truncate(a, 22);
+    const B = truncate(b, 22);
+    const styles = [
+      () => `${A} & ${B} — The Unholy Union`,
+      () => `${A} feat. ${B} (but make it cursed)`,
+      () => `${B} × ${A}: A Match Made in Algorithm`,
+      () => `${A} ${B.replace(/^[A-Za-z]/, (c) => c.toUpperCase())} — Now With Extra ${B}`,
+      () => `${A} vs ${B}: Battle of the Bridges`,
+      () => `${A.slice(0, Math.max(1, A.length / 2))}${B.slice(Math.floor(B.length / 2))} (the ${A} ${B} mashup)`,
+      () => `${A} — ${B} (Extended Illegal Remix)`,
+      () => `${B} ${A.replace(/^[A-Za-z]/, (c) => c.toUpperCase())} — DJ ${A} Radio Edit`,
+    ];
+    return styles[Math.floor(Math.random() * styles.length)]();
+  }
+
+  /** Embed for a rendered mashup: title (silly name), description + similar-track list. */
+  private mashupEmbed(title: string, text: string, similar: ResolvedTrack[]): EmbedBuilder {
     const lines = [text];
     if (similar.length) {
       lines.push('', '**Similar vibes:**');
@@ -8178,7 +8368,29 @@ export class DiscordBot {
         ),
       );
     }
-    return new EmbedBuilder().setTitle('🎛️ Mashup').setDescription(lines.join('\n')).setColor(this.themeColor());
+    return new EmbedBuilder().setTitle(title).setDescription(lines.join('\n')).setColor(this.themeColor());
+  }
+
+  /** Repick buttons on a finished mashup result: swap side A or side B via modal. */
+  private mashupRepickRow(token: string): ActionRowBuilder<ButtonBuilder>[] {
+    return [
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`mashrepick:A:${token}`)
+          .setLabel('Repick A')
+          .setStyle(ButtonStyle.Secondary)
+          .setEmoji('🔄'),
+        new ButtonBuilder()
+          .setCustomId(`mashrepick:B:${token}`)
+          .setLabel('Repick B')
+          .setStyle(ButtonStyle.Secondary)
+          .setEmoji('🔄'),
+        new ButtonBuilder()
+          .setCustomId(`mashreclose:${token}`)
+          .setLabel('Close')
+          .setStyle(ButtonStyle.Secondary),
+      ),
+    ];
   }
 
   private async mixTracks(s: Session, a: string, b: string, sec: number): Promise<string> {

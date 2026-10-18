@@ -89,4 +89,99 @@ describe('replicate stem separation', () => {
     expect(await separateStemsReplicate(input, dir)).toBeNull();
     expect(spy).toHaveBeenCalled();
   });
+
+  it('retries a throttled prediction create (429) instead of giving up', async () => {
+    config.replicateApiToken = 'test-token';
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'stems-429-'));
+    const input = path.join(dir, 'in.mp3');
+    await fs.writeFile(input, Buffer.from('audio'));
+    let creates = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string | URL, init?: RequestInit) => {
+        const u = String(url);
+        if (u.endsWith('/files')) return new Response(JSON.stringify({ urls: { get: 'https://files.example/abc' } }), { status: 200 });
+        if (u.endsWith('/models/cjwbw/demucs')) {
+          return new Response(JSON.stringify({ latest_version: { id: 'ver-429' } }), { status: 200 });
+        }
+        if (u.endsWith('/predictions') && init?.method === 'POST') {
+          creates++;
+          if (creates === 1) {
+            // The exact shape Replicate returns on a low-credit account: the
+            // throttle body carries `retry_after` in seconds.
+            return new Response(
+              JSON.stringify({ detail: 'Request was throttled.', retry_after: 1, status: 429 }),
+              { status: 429, headers: { 'retry-after': '1' } },
+            );
+          }
+          return new Response(
+            JSON.stringify({
+              id: 'p429',
+              status: 'succeeded',
+              output: { vocals: 'https://out.example/v.mp3', no_vocals: 'https://out.example/nv.mp3' },
+            }),
+            { status: 200 },
+          );
+        }
+        if (u === 'https://out.example/v.mp3' || u === 'https://out.example/nv.mp3') {
+          return new Response(Buffer.from('stem'), { status: 200 });
+        }
+        return new Response('not found', { status: 404 });
+      }),
+    );
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const r = await separateStemsReplicate(input, dir);
+    expect(creates).toBe(2);
+    expect(r).not.toBeNull();
+  });
+
+  it('creates predictions one at a time (burst-of-1 limit cannot 429 a second track)', async () => {
+    config.replicateApiToken = 'test-token';
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'stems-serial-'));
+    const dirs = [path.join(root, 'a'), path.join(root, 'b')];
+    const inputs = [path.join(root, 'a.mp3'), path.join(root, 'b.mp3')];
+    await fs.writeFile(inputs[0], Buffer.from('audio-a'));
+    await fs.writeFile(inputs[1], Buffer.from('audio-b'));
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    let n = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string | URL, init?: RequestInit) => {
+        const u = String(url);
+        if (u.endsWith('/files')) return new Response(JSON.stringify({ urls: { get: 'https://files.example/abc' } }), { status: 200 });
+        if (u.endsWith('/models/cjwbw/demucs')) {
+          return new Response(JSON.stringify({ latest_version: { id: 'ver-serial' } }), { status: 200 });
+        }
+        if (u.endsWith('/predictions') && init?.method === 'POST') {
+          inFlight++;
+          maxInFlight = Math.max(maxInFlight, inFlight);
+          await new Promise((r) => setTimeout(r, 20));
+          inFlight--;
+          n++;
+          return new Response(
+            JSON.stringify({
+              id: `p-serial-${n}`,
+              status: 'succeeded',
+              output: { vocals: 'https://out.example/v.mp3', no_vocals: 'https://out.example/nv.mp3' },
+            }),
+            { status: 200 },
+          );
+        }
+        if (u === 'https://out.example/v.mp3' || u === 'https://out.example/nv.mp3') {
+          return new Response(Buffer.from('stem'), { status: 200 });
+        }
+        return new Response('not found', { status: 404 });
+      }),
+    );
+    const [r1, r2] = await Promise.all([
+      separateStemsReplicate(inputs[0], dirs[0]),
+      separateStemsReplicate(inputs[1], dirs[1]),
+    ]);
+    expect(maxInFlight).toBe(1);
+    expect(n).toBe(2);
+    expect(r1).not.toBeNull();
+    expect(r2).not.toBeNull();
+  });
 });

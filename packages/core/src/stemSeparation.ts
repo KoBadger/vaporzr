@@ -54,21 +54,49 @@ async function uploadFile(file: string): Promise<string> {
   return url;
 }
 
+/**
+ * Replicate throttles prediction creation hard on low-credit accounts
+ * ("6 requests per minute with a burst of 1 while you have less than $5.0 in
+ * credit"). A mashup separates both tracks at once, so the second create used
+ * to 429 and drop that track onto the ~29-minute local Demucs path. Create
+ * predictions one at a time and honour `retry_after` so both still land on the
+ * GPU (they process concurrently once created).
+ */
+let creationQueue: Promise<unknown> = Promise.resolve();
+function serializeCreation<T>(fn: () => Promise<T>): Promise<T> {
+  const run = creationQueue.then(fn, fn);
+  creationQueue = run.catch(() => {});
+  return run;
+}
+
 /** Kick off a Demucs prediction for an uploaded file. */
 async function createPrediction(audioUrl: string): Promise<ReplicatePrediction> {
   const version = await resolveVersion();
-  const res = await fetch(`${API}/predictions`, {
-    method: 'POST',
-    headers: { ...auth(), 'Content-Type': 'application/json' },
-    // `stem: 'vocals'` asks the 2-stem path (vocals + the rest), which is all a
-    // mashup needs and is faster/cheaper than the full 4-stem split.
-    body: JSON.stringify({
-      version,
-      input: { audio: audioUrl, model_name: 'htdemucs', output_format: 'mp3', mp3_bitrate: 320, stem: 'vocals' },
-    }),
+  return serializeCreation(async () => {
+    for (let attempt = 0; ; attempt++) {
+      const res = await fetch(`${API}/predictions`, {
+        method: 'POST',
+        headers: { ...auth(), 'Content-Type': 'application/json' },
+        // `stem: 'vocals'` asks the 2-stem path (vocals + the rest), which is
+        // all a mashup needs and is faster/cheaper than the full 4-stem split.
+        body: JSON.stringify({
+          version,
+          input: { audio: audioUrl, model_name: 'htdemucs', output_format: 'mp3', mp3_bitrate: 320, stem: 'vocals' },
+        }),
+      });
+      if (res.status === 429 && attempt < 10) {
+        const text = await res.text().catch(() => '');
+        const headerRetry = Number(res.headers.get('retry-after') ?? 0);
+        const bodyRetry = Number(/\bretry_after\b\D{0,4}(\d+)/i.exec(text)?.[1] ?? 0);
+        const waitMs = Math.max(1000, (headerRetry || bodyRetry || 10) * 1000);
+        console.warn(`[stems] Replicate throttled prediction create; retrying in ${Math.round(waitMs / 1000)}s`);
+        await new Promise((r) => setTimeout(r, waitMs));
+        continue;
+      }
+      if (!res.ok) throw new Error(`prediction create ${res.status}: ${short(await res.text().catch(() => ''))}`);
+      return (await res.json()) as ReplicatePrediction;
+    }
   });
-  if (!res.ok) throw new Error(`prediction create ${res.status}: ${short(await res.text().catch(() => ''))}`);
-  return (await res.json()) as ReplicatePrediction;
 }
 
 /**
