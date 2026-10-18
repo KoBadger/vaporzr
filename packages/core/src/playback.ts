@@ -1428,6 +1428,13 @@ export class PlaybackController {
     }
     this.voice.setExpectingPcm(true);
     if (!this.librespot) return;
+    // The bot owns this device's volume. Spotify Connect lets an external
+    // client (phone app, web player) change a Connect device's volume directly,
+    // and nothing else re-asserts ours — so a stray change silently leaves us
+    // near-mute while the panel still shows the saved level (observed: the
+    // device sitting at 1% with the UI reading 50). Re-apply the queue's volume
+    // on every Spotify track start so an external change self-corrects.
+    void this.librespot.setVolume?.(this.queue.getState().volume);
     let ff = this.resampler;
     if (!ff) {
       ff = spawn(config.ffmpegPath, RESAMPLE_ARGS(this.audioFxFilter()), {
