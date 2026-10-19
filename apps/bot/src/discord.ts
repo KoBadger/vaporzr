@@ -95,6 +95,7 @@ import { buildSwapItems, swapLabel, trackQuery } from './swapItems.js';
 import { ttsEngine } from '@vaporzr/core/tts';
 import { pushBroadcast, pushSubscriptionCount } from './push.js';
 import { downloadToTempFile } from '@vaporzr/core/mediaDownload';
+import { safeFetch, BlockedFetchError } from '@vaporzr/core/net';
 import { separateStemsReplicate, replicateStemsEnabled } from '@vaporzr/core/stemSeparation';
 import { estimateTempo, beatAlignLagMs } from '@vaporzr/core/tempo';
 import { renderRadarGif, type RadarMetric } from '@vaporzr/core/images';
@@ -10330,12 +10331,12 @@ export async function resolveDirectMediaUrl(url: string): Promise<ResolvedTrack>
   }
   let res: Response;
   try {
-    res = await fetch(url, {
+    res = await safeFetch(url, {
       method: 'HEAD',
-      redirect: 'follow',
       headers: { 'user-agent': 'Mozilla/5.0 (compatible; Vaporzr/1.0)' },
     });
-  } catch {
+  } catch (err) {
+    if (err instanceof BlockedFetchError) throw new YoutubeError(err.message);
     throw new YoutubeError('Could not reach the media URL — it may be down or private.');
   }
   if (!res.ok) {
