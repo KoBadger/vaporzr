@@ -19,7 +19,7 @@ export const V_ALIASES: Record<string, string> = {
   q: 'queue', queue: 'queue',
   np: 'nowplaying', nowplaying: 'nowplaying',
   c: 'clear', clear: 'clear', stop: 'clear',
-  rem: 'remove', remove: 'remove',
+  rem: 'remove', remove: 'remove', oops: 'oops',
   sh: 'shuffle', shuffle: 'shuffle',
   j: 'join', join: 'join',
   l: 'leave', leave: 'leave',
