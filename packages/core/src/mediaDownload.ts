@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { youtubeProxyHops } from '@vaporzr/core/youtube';
+import { safeFetch } from './net.js';
 
 /**
  * Download an http(s) media stream to a temp file using Node's fetch (Range
@@ -73,7 +74,7 @@ async function egressIp(proxy: string, family: 4 | 6): Promise<string> {
  * the resolve forced IPv4.
  */
 async function mediaFetch(url: string, init: RequestInit): Promise<Response> {
-  if (!/googlevideo\.com\//.test(url)) return fetch(url, init);
+  if (!/googlevideo\.com\//.test(url)) return safeFetch(url, init);
   const mintedIp = decodeURIComponent(/[?&]ip=([^&]+)/.exec(url)?.[1] ?? '');
   const family: 4 | 6 = mintedIp.includes(':') ? 6 : 4;
   const hops = youtubeProxyHops();

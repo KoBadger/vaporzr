@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '@vaporzr/core/config';
+import { writeJsonAtomicSync } from './jsonFile.js';
 import type { PermissionLevel } from '@vaporzr/shared';
 import type { Guild } from 'discord.js';
 
@@ -45,6 +46,7 @@ const DEFAULT_COMMAND_LEVELS: Record<string, PermissionLevel> = {
   leave: 'user',
   panel: 'user',
   key: 'admin',
+  nickname: 'user',
   player: 'admin',
   screensaver: 'admin',
   theme: 'user',
@@ -140,8 +142,7 @@ export class PermissionsManager {
 
   private save(guildId: string): void {
     const cfg = this.cache.get(guildId) ?? defaultGuildConfig();
-    fs.mkdirSync(path.dirname(this.fileFor(guildId)), { recursive: true });
-    fs.writeFileSync(this.fileFor(guildId), JSON.stringify(cfg, null, 2), 'utf8');
+    writeJsonAtomicSync(this.fileFor(guildId), cfg);
   }
 
   requiredLevel(command: string, guildId: string): PermissionLevel {

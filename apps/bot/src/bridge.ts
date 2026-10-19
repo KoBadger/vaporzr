@@ -18,6 +18,7 @@ import {
 import { QueueManager, trackKey } from '@vaporzr/core/queue';
 import { PlaybackController } from '@vaporzr/core/playback';
 import { PermissionsManager } from './permissions.js';
+import { writeJsonAtomicSync } from './jsonFile.js';
 import { VoiceManager } from './voice.js';
 import { LibrespotManager, type SpotifyBackend } from '@vaporzr/core/librespot';
 import { GoLibrespotManager } from '@vaporzr/core/golibrespot';
@@ -1068,8 +1069,7 @@ export class Bridge {
   setTheme(theme: VaporzrTheme): void {
     this.theme = theme;
     try {
-      fs.mkdirSync(config.dataDir, { recursive: true });
-      fs.writeFileSync(path.join(config.dataDir, 'theme.json'), JSON.stringify(theme, null, 2), 'utf8');
+      writeJsonAtomicSync(path.join(config.dataDir, 'theme.json'), theme);
     } catch { /* non-fatal */ }
     const msg: OutboundMessage = { type: 'theme', theme };
     this.broadcastPanels(msg);
@@ -1084,8 +1084,7 @@ export class Bridge {
     const secs = Math.max(5, Math.min(600, Math.round(seconds)));
     this.presetCycleSec = secs;
     try {
-      fs.mkdirSync(config.dataDir, { recursive: true });
-      fs.writeFileSync(path.join(config.dataDir, 'preset-cycle.json'), JSON.stringify({ seconds: secs }, null, 2), 'utf8');
+      writeJsonAtomicSync(path.join(config.dataDir, 'preset-cycle.json'), { seconds: secs });
     } catch { /* non-fatal */ }
     this.broadcast({ type: 'preset:cycle', seconds: secs, guildId: this.primaryGuildId ?? undefined });
     // The pace moved to the bridge with the preset choice: restart the timer so
@@ -1188,8 +1187,7 @@ export class Bridge {
   setSensitivity(multiplier: number): void {
     this.sensitivity = multiplier;
     try {
-      fs.mkdirSync(config.dataDir, { recursive: true });
-      fs.writeFileSync(path.join(config.dataDir, 'sensitivity.json'), JSON.stringify({ multiplier }, null, 2), 'utf8');
+      writeJsonAtomicSync(path.join(config.dataDir, 'sensitivity.json'), { multiplier });
     } catch { /* non-fatal */ }
     const msg: OutboundMessage = { type: 'visuals:sensitivity', multiplier };
     this.broadcastVisualizers(msg);

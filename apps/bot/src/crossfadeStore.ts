@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '@vaporzr/core/config';
+import { writeJsonAtomicSync } from './jsonFile.js';
 
 /**
  * Per-guild crossfade length in milliseconds — one knob that covers both the
@@ -35,8 +36,7 @@ function load(): Record<string, number> {
 
 function save(): void {
   try {
-    fs.mkdirSync(path.dirname(file()), { recursive: true });
-    fs.writeFileSync(file(), JSON.stringify(load(), null, 2));
+    writeJsonAtomicSync(file(), load());
   } catch (err) {
     console.warn('[crossfade] could not save:', err instanceof Error ? err.message : err);
   }

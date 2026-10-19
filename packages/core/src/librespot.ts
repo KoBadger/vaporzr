@@ -290,9 +290,15 @@ export class LibrespotManager implements SpotifyBackend {
         }
       });
     // Bridges first: their librespot may still be alive, and killing them forces
-    // librespot's subprocess sink to give up too.
-    await run('pkill', ['-f', 'bridge.cjs']);
-    await run('pkill', ['-f', 'librespot']);
+    // librespot's subprocess sink to give up too. pkill is POSIX-only; on
+    // Windows, kill librespot by image name instead (the bridge is a node
+    // process we can't match without risking the bot's own node PIDs).
+    if (process.platform === 'win32') {
+      await run('taskkill', ['/F', '/IM', 'librespot.exe']);
+    } else {
+      await run('pkill', ['-f', 'bridge.cjs']);
+      await run('pkill', ['-f', 'librespot']);
+    }
   }
 
   private startTcpServer(): Promise<void> {

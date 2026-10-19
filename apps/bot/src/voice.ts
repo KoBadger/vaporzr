@@ -19,6 +19,7 @@ import { config } from '@vaporzr/core/config';
 import { tailFadeSeconds } from '@vaporzr/core/crossfade';
 import type { AudioTransport } from '@vaporzr/core/transport';
 import { youtubeProxyHops } from '@vaporzr/core/youtube';
+import { safeFetch } from '@vaporzr/core/net';
 
 /**
  * User-Agent used when the bot itself (Node fetch) pulls a media stream.
@@ -1080,7 +1081,7 @@ export class VoiceManager implements AudioTransport {
     const signal = outer ? AbortSignal.any([outer, stall]) : stall;
     const opts = { ...init, signal } as RequestInit & { dispatcher?: unknown };
 
-    if (!/googlevideo\.com\//.test(url)) return fetch(url, opts);
+    if (!/googlevideo\.com\//.test(url)) return safeFetch(url, opts);
 
     // Address families differ: the `ip=` param can be URL-encoded IPv6.
     const mintedIp = decodeURIComponent(/[?&]ip=([^&]+)/.exec(url)?.[1] ?? '');
