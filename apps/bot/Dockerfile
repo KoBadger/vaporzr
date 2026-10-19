@@ -27,7 +27,7 @@
 #   OAuth link, copy apps/bot/data (tokens.json) into the vaporzr-data volume.
 # - The bot runs TypeScript directly (tsx), so no compile step is needed.
 
-FROM node:20-trixie-slim AS build
+FROM node:22-trixie-slim AS build
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential python3 python3-pip ca-certificates ffmpeg \
@@ -73,7 +73,7 @@ RUN cp node_modules/butterchurn-presets/lib/butterchurnPresets.min.js \
 RUN cp node_modules/qrcode-generator/dist/qrcode.js apps/bot/public/vendor/qrcode.min.js \
  && node -e "const fs=require('fs');console.log('qrcode served:', fs.statSync('apps/bot/public/vendor/qrcode.min.js').size, 'bytes')"
 
-FROM node:20-trixie-slim AS runtime
+FROM node:22-trixie-slim AS runtime
 
 ARG GIT_SHA=dev
 
