@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import webpush from 'web-push';
 import { config } from '@vaporzr/core/config';
+import { writeJsonAtomicSync } from './jsonFile.js';
 
 interface PushSub {
   endpoint: string;
@@ -31,8 +32,7 @@ function loadVapid(): { publicKey: string; privateKey: string } {
   const gen = webpush.generateVAPIDKeys();
   vapid = { publicKey: gen.publicKey, privateKey: gen.privateKey };
   try {
-    fs.mkdirSync(config.dataDir, { recursive: true });
-    fs.writeFileSync(vapidFile(), JSON.stringify(vapid, null, 2), 'utf8');
+    writeJsonAtomicSync(vapidFile(), vapid);
   } catch (err) {
     console.warn('[push] could not persist VAPID keys:', err instanceof Error ? err.message : err);
   }
@@ -54,8 +54,7 @@ function loadSubs(): PushSub[] {
 
 function saveSubs(): void {
   try {
-    fs.mkdirSync(config.dataDir, { recursive: true });
-    fs.writeFileSync(subsFile(), JSON.stringify(subs ?? [], null, 2), 'utf8');
+    writeJsonAtomicSync(subsFile(), subs ?? []);
   } catch (err) {
     console.warn('[push] could not persist subscriptions:', err instanceof Error ? err.message : err);
   }

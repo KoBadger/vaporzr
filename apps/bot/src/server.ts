@@ -448,13 +448,19 @@ function activityHtml(origin: string): string | null {
   }
 }
 
+/** OAuth states issued by /login ΓåÆ expiry timestamp; verified once by /callback. */
+const oauthStates = new Map<string, number>();
+
 async function handleRoute(
   req: http.IncomingMessage,
   url: URL,
   res: http.ServerResponse,
   bridgeRef: () => Bridge | null,
 ): Promise<void> {
-  const host = req.headers.host ?? `localhost:${config.port}`;
+  // Host is attacker-controlled on raw HTTP connections and gets substituted
+  // into served HTML ({{ORIGIN}}); accept only plausible host[:port] shapes.
+  const rawHost = req.headers.host ?? '';
+  const host = /^[a-z0-9.-]+(:\d{1,5})?$/i.test(rawHost) ? rawHost : `localhost:${config.port}`;
   const origin = `https://${host}`;
   try {
     // Share-key gate: only the CONTROL panel requires the key. The visualizer
@@ -695,7 +701,16 @@ async function handleRoute(
       }
 
       case '/login': {
+        // Linking writes tokens.json, so only share-key holders may start it.
+        if (!hasShareAccess(req, url)) {
+          keyPrompt(res);
+          return;
+        }
         const state = crypto.randomBytes(16).toString('hex');
+        // Remember the state so /callback can prove the redirect belongs to a
+        // flow we started (CSRF / token-overwrite guard). 10-minute TTL.
+        oauthStates.set(state, Date.now() + 10 * 60_000);
+        for (const [k, exp] of oauthStates) if (exp < Date.now()) oauthStates.delete(k);
         res.writeHead(302, { Location: buildAuthorizeUrl(state) });
         res.end();
         break;
@@ -704,10 +719,18 @@ async function handleRoute(
       case '/callback': {
         const code = url.searchParams.get('code');
         const err = url.searchParams.get('error');
-        console.log(`[vaporzr] oauth callback: code=${code ? 'present' : 'MISSING'} error=${err ?? 'none'} state=${url.searchParams.get('state') ?? 'none'}`);
+        const state = url.searchParams.get('state') ?? '';
+        const stateExp = oauthStates.get(state);
+        if (state) oauthStates.delete(state);
+        console.log(`[vaporzr] oauth callback: code=${code ? 'present' : 'MISSING'} error=${err ?? 'none'} state=${state ? (stateExp ? 'valid' : 'unknown') : 'MISSING'}`);
+        if (!stateExp || stateExp < Date.now()) {
+          res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+          res.end(html(`<h1 style="font-family:sans-serif">This sign-in link is invalid or expired. Open the panel and start the Spotify link again.</h1>`));
+          return;
+        }
         if (err) {
           res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
-          res.end(html(`<h1 style="font-family:sans-serif">Authorization failed (${err}). Close this tab and try /login again.</h1>`));
+          res.end(html(`<h1 style="font-family:sans-serif">Authorization failed (${esc(err)}). Close this tab and try /login again.</h1>`));
           return;
         }
         if (!code) throw new SpotifyError('Missing code.');
@@ -1034,6 +1057,12 @@ async function handleRoute(
     res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end(err instanceof Error ? err.message : String(err));
   }
+}
+
+/** Escape text interpolated into the small html() pages below. */
+function esc(s: string): string {
+  const map: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+  return s.replace(/[&<>"']/g, (c) => map[c] ?? c);
 }
 
 function html(body: string): string {

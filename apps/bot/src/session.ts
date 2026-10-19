@@ -8,6 +8,7 @@ import { config } from '@vaporzr/core/config';
 import { getCrossfadeMs } from './crossfadeStore.js';
 import type { PlaybackState, TrackInfo } from '@vaporzr/shared';
 import * as EW from '@vaporzr/core/endlesswave';
+import { writeJsonAtomicSync } from './jsonFile.js';
 
 /** Details for a queue restored while it was mid-playback (see onRestoredPlaying). */
 export interface RestoredPlayingInfo {
@@ -126,11 +127,11 @@ export class SessionManager {
       return;
     }
     try {
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(
-        file,
-        JSON.stringify({ ...data, endlessWave: ew, voiceChannelId: s.voice.getChannelId() ?? undefined }, null, 2),
-      );
+      writeJsonAtomicSync(file, {
+        ...data,
+        endlessWave: ew,
+        voiceChannelId: s.voice.getChannelId() ?? undefined,
+      });
     } catch (err) {
       console.warn(`[vaporzr] could not persist queue for ${guildId}:`, err instanceof Error ? err.message : err);
     }
