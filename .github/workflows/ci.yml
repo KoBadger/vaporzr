@@ -27,8 +27,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Typecheck (shared + bot)
-        run: npm run typecheck -w @vaporzr/shared && npm run typecheck -w @vaporzr/bot
+      # apps/player is excluded: it typechecks against the untracked Electron fork
+      # in vendor/electron-ecs, which is not available on CI runners.
+      - name: Typecheck (shared, core, bot, spicetify)
+        run: npm run typecheck -w @vaporzr/shared && npm run typecheck -w @vaporzr/core && npm run typecheck -w @vaporzr/bot && npm run typecheck -w @vaporzr/spicetify-app
 
       - name: Unit tests (bot)
         working-directory: apps/bot
