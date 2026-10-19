@@ -18,7 +18,10 @@
     "install:spicetify": "npm run install-app -w @vaporzr/spicetify-app"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
+  },
+  "overrides": {
+    "tar": "^7.5.22"
   },
   "allowScripts": {
     "electron@33.4.11": true,
