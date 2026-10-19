@@ -91,6 +91,7 @@ import { trackKey } from '@vaporzr/core/stats';
 import { gamesStore, fitPercent, describeFit, pickRouletteWeighted, keyToQuery, explainFit } from '@vaporzr/core/games';
 import { packCategoryFields, chunkFieldsIntoEmbeds, aliasIndexFields } from './help.js';
 import { V_ALIASES, V_DISPATCH_ALIASES } from './aliases.js';
+import { buildSwapItems, swapLabel, trackQuery } from './swapItems.js';
 import { ttsEngine } from '@vaporzr/core/tts';
 import { pushBroadcast, pushSubscriptionCount } from './push.js';
 import { downloadToTempFile } from '@vaporzr/core/mediaDownload';
@@ -655,6 +656,18 @@ function isMessageGone(err: unknown): boolean {
   return false;
 }
 
+/** A queue add the user may still correct ("swap this pick"). */
+interface SwapRef {
+  guildId: string;
+  userId: string;
+  addedBy: string;
+  mode: 'queue' | 'insert';
+  items: { uri: string; label: string; query?: string }[];
+  /** Alternatives to re-roll from (a `/similar` surprise pick has no query). */
+  pool?: ResolvedTrack[];
+  createdAt: number;
+}
+
 export class DiscordBot {
   private client: Client;
   private rest: REST;
@@ -689,17 +702,7 @@ export class DiscordBot {
    * keeps the original query so a swap can re-offer the very same candidate
    * dropdown the picker showed in the first place.
    */
-  private swapRefs = new Map<
-    string,
-    {
-      guildId: string;
-      userId: string;
-      addedBy: string;
-      mode: 'queue' | 'insert';
-      items: { uri: string; label: string; query?: string }[];
-      createdAt: number;
-    }
-  >();
+  private swapRefs = new Map<string, SwapRef>();
   /** guildId -> in-flight vote-to-skip. */
   private skipVotes = new Map<
     string,
@@ -1683,7 +1686,7 @@ export class DiscordBot {
           const hit = await searchAndResolveYoutube(query);
           tracks = hit ? [hit] : [];
         }
-        await this.addToQueue(interaction, tracks);
+        await this.addToQueue(interaction, tracks, isUrlPlayInput(query) ? undefined : query);
         break;
       }
 
@@ -2622,7 +2625,8 @@ export class DiscordBot {
 
       case 'stump': {
         if (!this.requireLevel('stump', interaction)) return this.deny(interaction);
-        await interaction.reply(await this.gameStump(s, interaction.user.username, interaction.options.getString('track') ?? undefined));
+        const res = await this.gameStump(s, interaction.user.username, interaction.options.getString('track') ?? undefined, interaction.user.id);
+        await interaction.reply(typeof res === 'string' ? res : { content: res.content, components: res.components });
         break;
       }
 
@@ -3346,6 +3350,25 @@ export class DiscordBot {
               names.map((n) => `• ${truncate(n, 60)}`).join('\n') +
               (misses.length ? `\n-# Out of range: ${misses.join(', ')}` : ''),
           );
+          break;
+        }
+
+        case 'oops': {
+          if (!canUse('play')) return void (await deny());
+          const last = this.latestSwap(message.author.id, message.guildId ?? '', s);
+          if (!last) {
+            { const m = await message.reply('Nothing to fix — none of your picks from the last 15 minutes are still waiting in the queue.'); this.autoExpire(m); }
+            break;
+          }
+          const { token, ref } = last;
+          const embed = new EmbedBuilder()
+            .setTitle(ref.items.length > 1 ? `Your last pick — ${ref.items.length} tracks` : 'Your last pick')
+            .setDescription(
+              ref.items.map((it, n) => `**${n + 1}.** ${it.label}`).join('\n') +
+                '\n\nFix it here — the replacement takes the same spot in the queue.',
+            )
+            .setColor(this.themeColor());
+          await message.reply({ embeds: [embed], components: this.swapRow(token) });
           break;
         }
 
@@ -4337,7 +4360,8 @@ export class DiscordBot {
 
         case 'stump': {
           if (!canUse('stump')) return void (await deny());
-          await message.reply(await this.gameStump(s, message.author.username, args || undefined));
+          const res = await this.gameStump(s, message.author.username, args || undefined, message.author.id);
+          await message.reply(typeof res === 'string' ? res : { content: res.content, components: res.components });
           break;
         }
 
@@ -4593,13 +4617,16 @@ export class DiscordBot {
       .setFooter({ text: `${fresh.length} track${fresh.length > 1 ? 's' : ''} · ${s.queue.getSnapshot().tracks.length} in queue` })
       .setColor(this.themeColor());
     // A name search can land on the wrong recording — offer a one-click fix.
-    if (query) {
+    // A playlist needs it too: nobody typed those titles, so each item keeps
+    // its own title as the query that "Pick another" re-runs.
+    const items = buildSwapItems(fresh, query);
+    if (items) {
       const row = this.registerSwap({
         guildId: s.guildId ?? '',
         userId: message.author.id,
         addedBy: requestedBy,
         mode: 'queue',
-        items: fresh.map((t) => ({ uri: t.uri, label: `${t.name} — ${t.artists.join(', ')}`, query })),
+        items,
       });
       this.replyTemp(message, embed, 90_000, row);
     } else {
@@ -4705,13 +4732,14 @@ export class DiscordBot {
       .setThumbnail(first.image ?? '')
       .setFooter({ text: `${fresh.length} track${fresh.length > 1 ? 's' : ''} · ${s.queue.getSnapshot().tracks.length} in queue` })
       .setColor(this.themeColor());
-    if (query) {
+    const items = buildSwapItems(fresh, query);
+    if (items) {
       const row = this.registerSwap({
         guildId: s.guildId ?? '',
         userId: message.author.id,
         addedBy: requestedBy,
         mode: 'insert',
-        items: fresh.map((t) => ({ uri: t.uri, label: `${t.name} — ${t.artists.join(', ')}`, query })),
+        items,
       });
       this.replyTemp(message, embed, 90_000, row);
     } else {
@@ -4924,13 +4952,14 @@ export class DiscordBot {
       .setThumbnail(first.image ?? '')
       .setFooter({ text: `${tracks.length} track${tracks.length > 1 ? 's' : ''} · ${s.queue.getSnapshot().tracks.length} in queue` })
       .setColor(this.themeColor());
-    const row = query
+    const items = buildSwapItems(tracks, query);
+    const row = items
       ? this.registerSwap({
           guildId: interaction.guildId ?? '',
           userId: interaction.user.id,
           addedBy: requestedBy,
           mode: 'insert',
-          items: tracks.map((t) => ({ uri: t.uri, label: `${t.name} — ${t.artists.join(', ')}`, query })),
+          items,
         })
       : undefined;
     await interaction.editReply({ embeds: [embed], components: row ?? [] });
@@ -4974,13 +5003,14 @@ export class DiscordBot {
       .setThumbnail(first.image ?? '')
       .setFooter({ text: `${tracks.length} track${tracks.length > 1 ? 's' : ''} · ${s.queue.getSnapshot().tracks.length} in queue` })
       .setColor(this.themeColor());
-    const row = query
+    const items = buildSwapItems(tracks, query);
+    const row = items
       ? this.registerSwap({
           guildId: interaction.guildId ?? '',
           userId: interaction.user.id,
           addedBy: requestedBy,
           mode: 'queue',
-          items: tracks.map((t) => ({ uri: t.uri, label: `${t.name} — ${t.artists.join(', ')}`, query })),
+          items,
         })
       : undefined;
     await interaction.editReply({ embeds: [embed], components: row ?? [] });
@@ -7214,13 +7244,7 @@ export class DiscordBot {
   // text for the cases a search cannot fix (bulk items, uploads, no results).
 
   /** Register a correctable queue add; returns the row to attach to its reply. */
-  private registerSwap(opts: {
-    guildId: string;
-    userId: string;
-    addedBy: string;
-    mode: 'queue' | 'insert';
-    items: { uri: string; label: string; query?: string }[];
-  }): ActionRowBuilder<ButtonBuilder>[] {
+  private registerSwap(opts: Omit<SwapRef, 'createdAt'>): ActionRowBuilder<ButtonBuilder>[] {
     const token = randomBytes(6).toString('hex');
     this.swapRefs.set(token, { ...opts, createdAt: Date.now() });
     const t = setTimeout(() => this.swapRefs.delete(token), 15 * 60 * 1000);
@@ -7254,7 +7278,38 @@ export class DiscordBot {
         .setEmoji('⌨️'),
       new ButtonBuilder().setCustomId(`swap:x:${token}`).setLabel('Looks right').setStyle(ButtonStyle.Secondary),
     );
+    // A surprise pick ("Roll again") has no query to re-run, only the pool it
+    // came from — offer that when there is something left to roll.
+    if (ref && ref.items.length === 1 && (ref.pool?.length ?? 0) > 0) {
+      buttons.splice(
+        canPick ? 1 : 0,
+        0,
+        new ButtonBuilder()
+          .setCustomId(`swap:roll:${token}`)
+          .setLabel('Roll again')
+          .setStyle(ButtonStyle.Secondary)
+          .setEmoji('🎲'),
+        new ButtonBuilder()
+          .setCustomId(`swap:list:${token}`)
+          .setLabel('Show list')
+          .setStyle(ButtonStyle.Secondary)
+          .setEmoji('📜'),
+      );
+    }
     return [new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons)];
+  }
+
+  /** Newest swap this user registered in this guild whose pick is still queued. */
+  private latestSwap(userId: string, guildId: string, s: Session): { token: string; ref: SwapRef } | null {
+    const snap = s.queue.getSnapshot();
+    let best: { token: string; ref: SwapRef } | null = null;
+    for (const [token, ref] of this.swapRefs) {
+      if (ref.userId !== userId || ref.guildId !== guildId) continue;
+      // Already corrected, already played, or removed — nothing left to fix.
+      if (!ref.items.some((it) => snap.tracks.some((t) => t.uri === it.uri))) continue;
+      if (!best || ref.createdAt > best.ref.createdAt) best = { token, ref };
+    }
+    return best;
   }
 
   /** Put the replacement where the wrong pick was. Returns a one-line status. */
@@ -7332,6 +7387,51 @@ export class DiscordBot {
     if (action === 'x') {
       this.swapRefs.delete(token);
       await i.update({ components: [] }).catch(() => {});
+      return;
+    }
+    // "Surprise me" alternatives: re-roll the same candidate pool, or list it.
+    if (action === 'list') {
+      const pool = ref.pool ?? [];
+      const shown = pool.slice(0, 20);
+      await i
+        .reply({
+          content:
+            `📜 The ${pool.length} candidates this picked from:\n` +
+            shown.map((t, n) => `**${n + 1}.** ${swapLabel(t)}`).join('\n') +
+            (pool.length > shown.length ? `\n…and ${pool.length - shown.length} more.` : ''),
+          flags: MessageFlags.Ephemeral,
+        })
+        .catch(() => {});
+      return;
+    }
+    if (action === 'roll') {
+      const item = ref.items[0];
+      const choices = (ref.pool ?? []).filter((t) => t.uri !== item?.uri);
+      if (!item || choices.length === 0) {
+        await i
+          .reply({ content: '🎲 Nothing left to roll — that list is used up. Run `/similar` again.', flags: MessageFlags.Ephemeral })
+          .catch(() => {});
+        return;
+      }
+      await i.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
+      const pick = choices[Math.floor(Math.random() * choices.length)];
+      let info: TrackInfo | null = null;
+      try {
+        info = await EW.resolveCandidate(pick);
+      } catch {
+        info = null;
+      }
+      if (!info) {
+        await i.editReply({ content: `🎲 Rolled *${pick.name}* but couldn't resolve it — roll again.` }).catch(() => {});
+        return;
+      }
+      const status = this.applySwap(this.sessionFor(ref.guildId), ref.addedBy, item, info, i.user.username);
+      // Keep the ref pointing at what is actually queued now, so the next roll
+      // swaps *that* instead of queueing a second copy — and drop the candidate
+      // we just used so "Roll again" cannot return the same one twice.
+      ref.items = [{ uri: info.uri, label: swapLabel(info), query: item.query }];
+      ref.pool = choices.filter((t) => t !== pick);
+      await i.editReply({ content: status, components: this.swapRow(token) }).catch(() => {});
       return;
     }
     // Several items in one add (bulk) — ask which one first.
@@ -9040,9 +9140,17 @@ export class DiscordBot {
   }
 
   /** Open a Stump-the-Bot wager on the player's pick (or a named track). */
-  private async gameStump(s: Session, userName: string, query: string | undefined): Promise<string> {
+  private async gameStump(
+    s: Session,
+    userName: string,
+    query: string | undefined,
+    userId: string,
+  ): Promise<string | { content: string; components: ActionRowBuilder<ButtonBuilder>[] }> {
     const gid = s.guildId ?? '';
     let track: TrackInfo | null;
+    // A named track is a genuine silent guess: the bot searched the text and
+    // queued whatever won. Keep the very same swap row any other guess gets.
+    let row: ActionRowBuilder<ButtonBuilder>[] | undefined;
     if (query) {
       const found = await this.findTrackTrack(query);
       if (!found) return `🔎 Couldn't find “${query}”.`;
@@ -9052,13 +9160,16 @@ export class DiscordBot {
       );
       track = s.queue.getSnapshot().tracks.find((t) => t.uri === found.uri) ?? null;
       if (!track) return `Queued *${found.name}* but couldn't track it for the bet — try again.`;
+      const items = buildSwapItems([found], query);
+      if (items) row = this.registerSwap({ guildId: gid, userId, addedBy: userName, mode: 'queue', items });
     } else {
       track = this.lastPickBy(s, userName);
     }
     if (!track) return 'Queue something first (`V@p <track>`), then bet on it with `V@stump`.\n_New here? `V@games` explains how these work._';
     const { fit, insufficient, reasons, features } = await this.trackFit(s, track);
     if (insufficient) {
-      return '🤖 Not enough listening history for me to judge a fit yet — play a few tracks, then try again. (No bet placed.)\n_New here? `V@games` explains how these work._';
+      const text = '🤖 Not enough listening history for me to judge a fit yet — play a few tracks, then try again. (No bet placed.)\n_New here? `V@games` explains how these work._';
+      return row ? { content: text, components: row } : text;
     }
     const prev = this.stumps.get(gid);
     const snap = s.queue.getSnapshot();
@@ -9072,16 +9183,18 @@ export class DiscordBot {
       channelId: this.lastTextChannel.get(gid) ?? this.perms.getNpChannel(gid) ?? '',
     });
     const playing = s.voice.isJoined();
-    return [
+    const text = [
       `🤖 **Stump the Bot** — I rate *${track.name}* a **${fit}/100** room fit (${describeFit(fit)}).`,
       reasons.length > 0 ? `Why: ${reasons.join(' · ')}` : '',
       features ? '' : '_No audio features for this one, so I judged it on artist/genre only._',
       prev ? `_(Replacing your earlier bet on *${prev.name}*.)_` : '',
       `It settles when it plays — currently **${place}**. Play it through → you win. Skipped → I win.`,
       playing ? '' : '_Run `/follow` or `/join` so it can actually play._',
+      row ? '_Wrong song? Fix it right here before it plays._' : '',
     ]
       .filter(Boolean)
       .join('\n');
+    return row ? { content: text, components: row } : text;
   }
 
   /** Resolve a pending Stump bet when its track ends naturally or is skipped. */
@@ -9258,10 +9371,22 @@ export class DiscordBot {
     ].join('\n');
   }
 
+  /** ⭐ / 🚫 / 🎲 buttons for one roulette offer. */
+  private rouletteRow(nonce: string): ActionRowBuilder<ButtonBuilder>[] {
+    return [
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder().setCustomId(`roulette:star:${nonce}`).setLabel('Save to Hall of Fame').setEmoji('⭐').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(`roulette:ban:${nonce}`).setLabel('Ban for everyone').setEmoji('🚫').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId(`roulette:spin:${nonce}`).setLabel('Spin again').setEmoji('🎲').setStyle(ButtonStyle.Secondary),
+      ),
+    ];
+  }
+
   /** Track Roulette: pull a random track from this server's own history. */
   private async gameRoulette(
     s: Session,
     userName: string,
+    excludeKey?: string,
   ): Promise<string | { content: string; components: ActionRowBuilder<ButtonBuilder>[] }> {
     const gid = s.guildId ?? '';
     const history = this.stats.historyTracks(gid, 300);
@@ -9272,7 +9397,8 @@ export class DiscordBot {
     const queued = s.queue.getSnapshot().tracks.map((t) => trackKey(t.name, t.artists));
     // Weighted toward DEEP CUTS — uniform picking just resurfaced the songs the
     // server already plays constantly, which is the opposite of a surprise.
-    const key = pickRouletteWeighted(history, gamesStore.get(gid).banned, queued);
+    const banned = gamesStore.get(gid).banned;
+    const key = pickRouletteWeighted(history, excludeKey ? [...banned, excludeKey] : banned, queued);
     if (!key) return '🎲 Everything worth spinning is already queued or banned.';
     const found = await this.findTrackTrack(keyToQuery(key));
     if (!found) return `🎲 Pulled *${keyToQuery(key)}* from your history but couldn't find a playable match.`;
@@ -9306,19 +9432,17 @@ export class DiscordBot {
         image: found.image,
       },
     });
-    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder().setCustomId(`roulette:star:${nonce}`).setLabel('Save to Hall of Fame').setEmoji('⭐').setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId(`roulette:ban:${nonce}`).setLabel('Ban for everyone').setEmoji('🚫').setStyle(ButtonStyle.Danger),
-    );
+    const row = this.rouletteRow(nonce);
     const plays = counts.get(key) ?? 1;
     return {
       content:
         `🎲 **Track Roulette** — spun **${found.name}** — ${found.artists.join(', ') || 'unknown artist'} ` +
         `out of this server's own history (played just ${plays}×). It's queued **next**.\n` +
         `⭐ **Save to Hall of Fame** — keeps it in a \`Hall of Fame\` playlist (anyone can add).\n` +
-        `🚫 **Ban for everyone** — never spins that song here again (and skips it if it's on now).` +
+        `🚫 **Ban for everyone** — never spins that song here again (and skips it if it's on now).\n` +
+        `🎲 **Spin again** — drop this one and pull another deep cut.` +
         (s.voice.isJoined() ? '' : '\n_Run `/join` so it can play._'),
-      components: [row],
+      components: row,
     };
   }
 
@@ -9330,9 +9454,27 @@ export class DiscordBot {
       { const r = await interaction.reply({ content: 'That roulette offer has expired — spin again with `V@roulette`.', flags: MessageFlags.Ephemeral }).catch(() => null); if (r) this.autoExpireNotice(r); }
       return;
     }
-    this.rouletteOffers.delete(nonce);
     const gid = offer.guildId;
     const s = this.sessionFor(gid);
+    if (action === 'spin') {
+      // Re-roll before touching the old pick: if there is nothing else left to
+      // spin, keep the offer (and its buttons) exactly as they were.
+      const res = await this.gameRoulette(s, offer.userId, offer.key);
+      if (typeof res === 'string') {
+        await interaction.update({ content: res, components: this.rouletteRow(nonce) }).catch(() => {});
+        return;
+      }
+      // Drop the previous pick — unless it is what's playing right now.
+      const cur = s.queue.getCurrentTrack();
+      if (cur?.uri !== offer.track.uri) {
+        const prevIdx = s.queue.getSnapshot().tracks.findIndex((t) => t.uri === offer.track.uri);
+        if (prevIdx >= 0) s.queue.remove(prevIdx);
+      }
+      this.rouletteOffers.delete(nonce);
+      await interaction.update({ content: res.content, components: res.components }).catch(() => {});
+      return;
+    }
+    this.rouletteOffers.delete(nonce);
     if (action === 'star') {
       const n = gamesStore.star(gid, interaction.user.username);
       playlistStore.appendTrack(gid, 'Hall of Fame', offer.track);
@@ -9384,11 +9526,20 @@ export class DiscordBot {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     let queued = 0;
     let failed = 0;
+    const added: { uri: string; label: string; query?: string }[] = [];
     for (let i = 0; i < picks.length; i++) {
       try {
         const info = await EW.resolveCandidate(picks[i]);
         if (info) {
           s.queue.enqueue(info, interaction.user.username);
+          // Queue-all: each track came from the list, so its own title is the
+          // natural "pick another" query. Surprise-me: leave it clean and let
+          // the pool power "Roll again" instead.
+          added.push({
+            uri: info.uri,
+            label: swapLabel(info),
+            ...(action === 'one' ? {} : { query: trackQuery(picks[i]) }),
+          });
           queued++;
         } else {
           failed++;
@@ -9400,12 +9551,22 @@ export class DiscordBot {
         await interaction.editReply(`➕ Queuing… ${i + 1}/${picks.length}`).catch(() => {});
       }
     }
-    await interaction
-      .editReply(
-        `✅ Queued **${queued}** track${queued === 1 ? '' : 's'} from the cosine.club list` +
-          (failed ? ` — ${failed} couldn't be resolved.` : '.'),
-      )
-      .catch(() => {});
+    const text =
+      `✅ Queued **${queued}** track${queued === 1 ? '' : 's'} from the cosine.club list` +
+      (failed ? ` — ${failed} couldn't be resolved.` : '.');
+    const components =
+      added.length > 0
+        ? this.registerSwap({
+            guildId: interaction.guildId ?? '',
+            userId: interaction.user.id,
+            addedBy: interaction.user.username,
+            mode: 'queue',
+            items: added,
+            // The pick is no longer a roll candidate; the rest of the list is.
+            pool: action === 'one' ? stash.tracks.filter((t) => t !== picks[0]) : undefined,
+          })
+        : [];
+    await interaction.editReply({ content: text, components }).catch(() => {});
   }
 
   /** Split a `V@config` line into `key value` clauses (`;`/newline separated). */
@@ -10226,6 +10387,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`V@shuffle smart` · `arc` · `key` — smart shuffle: order the upcoming tracks by vibe (flow), a set curve, or harmonic key',
       '`/remove <#>` · `V@rem <#>` — remove a queued track',
       '`V@undo` — put back the tracks from the last removal or clear',
+      '`V@oops` — fix your most recent pick: pick another recording, retype it, or confirm it',
       '`V@qa` · `V@qadjust` — interactive queue editor: pick a track, then move / remove / play it now',
       '`/dedupe` · `V@dd` — remove duplicate upcoming tracks',
       '`/bulk <tracks>` · `V@bulk` — queue a list at once: names, links and/or attached files, one per line or `;` (max 25)',
