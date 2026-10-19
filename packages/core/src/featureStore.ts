@@ -6,10 +6,11 @@
  * on disk is what lets `V@shuffle key|arc|smart` order those tracks across
  * restarts instead of starting featureless again.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { config } from '@vaporzr/core/config';
 import type { AudioFeatures } from '@vaporzr/core/spotify';
+import { writeJsonAtomicSync } from './jsonFile.js';
 
 /** Evict the oldest measurements past this many entries (~0.7 MB on disk). */
 const MAX_ENTRIES = 5000;
@@ -39,8 +40,7 @@ function load(): Store {
 function persist(): void {
   if (!store) return;
   try {
-    mkdirSync(dirname(storeFile()), { recursive: true });
-    writeFileSync(storeFile(), JSON.stringify(store));
+    writeJsonAtomicSync(storeFile(), store, 0);
   } catch {
     /* best effort — a failed write only loses this measurement on restart */
   }

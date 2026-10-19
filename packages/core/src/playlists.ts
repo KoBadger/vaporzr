@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '@vaporzr/core/config';
+import { writeJsonAtomicSync } from './jsonFile.js';
 
 /** A queueable track persisted in a saved playlist (stream URL resolved on load). */
 export interface SavedTrack {
@@ -51,9 +52,7 @@ export class PlaylistStore {
   private persist(guildId: string): void {
     const data = this.load(guildId);
     try {
-      const file = this.fileFor(guildId);
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, JSON.stringify(data, null, 2));
+      writeJsonAtomicSync(this.fileFor(guildId), data);
     } catch (err) {
       console.warn('[playlists] save failed:', err instanceof Error ? err.message : err);
     }

@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { config } from '@vaporzr/core/config';
 import type { ResolvedVideo } from './youtube.js';
+import { safeFetch } from './net.js';
 
 export class SunoError extends Error {}
 
@@ -133,7 +134,7 @@ export async function cacheSunoAudio(uuid: string, url: string): Promise<string>
   if (existing) return existing;
   const ext = /\.mp3(\?|$)/i.test(url) ? 'mp3' : 'mp4';
   const file = path.join(dir, `${uuid}.${ext}`);
-  const res = await fetch(url, { headers: { 'user-agent': UA }, signal: AbortSignal.timeout(60_000) });
+  const res = await safeFetch(url, { headers: { 'user-agent': UA }, signal: AbortSignal.timeout(60_000) });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const buf = Buffer.from(await res.arrayBuffer());
   if (buf.length < 50_000) throw new Error(`suspiciously small (${buf.length} bytes)`);

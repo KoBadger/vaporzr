@@ -44,7 +44,9 @@ export class GoLibrespotManager implements SpotifyBackend {
 
   /** Mirrors LibrespotManager so the two are interchangeable. */
   get enabled(): boolean {
-    return Boolean(config.goLibrespotPath);
+    // The pipe audio backend needs a POSIX FIFO (mkfifo); on Windows there is
+    // no FIFO primitive, so this backend cannot produce audio there.
+    return process.platform !== 'win32' && Boolean(config.goLibrespotPath);
   }
 
   getPcmBytes(): number {
@@ -279,6 +281,7 @@ export class GoLibrespotManager implements SpotifyBackend {
 
   /** Create the PCM FIFO if it is missing (or replace a stale non-FIFO file). */
   private ensureFifo(): void {
+    if (process.platform === 'win32') return; // no mkfifo on Windows
     try {
       fs.mkdirSync(path.dirname(this.fifoPath), { recursive: true });
       let isFifo = false;
