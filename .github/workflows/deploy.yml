@@ -155,21 +155,49 @@ jobs:
             docker run --rm ${{ env.IMAGE }}:$SHA \
               sh -c "cd /app/apps/bot && tsx smoke-persist.ts"
 
+            # Remember the image currently serving traffic so a failed health
+            # gate can restore it without a manual rollback dispatch.
+            PREV_IMAGE=$(docker inspect -f '{{.Config.Image}}' vaporzr 2>/dev/null || true)
+
+            start_container() {
+              docker run -d --name vaporzr \
+                --restart unless-stopped \
+                --network host \
+                --env-file /opt/vaporzr/.env \
+                -e BIND_ADDRESS=127.0.0.1 \
+                -v vaporzr-data:/app/data \
+                $COOKIE_MOUNT \
+                "$1"
+            }
+
             docker stop vaporzr || true
             docker rm vaporzr || true
-            docker run -d --name vaporzr \
-              --restart unless-stopped \
-              --network host \
-              --env-file /opt/vaporzr/.env \
-              -e BIND_ADDRESS=127.0.0.1 \
-              -v vaporzr-data:/app/data \
-              $COOKIE_MOUNT \
-              ${{ env.IMAGE }}:$SHA
+            start_container ${{ env.IMAGE }}:$SHA
             docker image prune -f
             # Keep the 6 newest bot images (current + a few rollback targets);
             # the VPS disk fills fast at ~1.4 GB per tag otherwise.
             docker images --format '{{.ID}} {{.CreatedAt}}' ${{ env.IMAGE }} \
               | sort -k2 -r | tail -n +7 | awk '{print $1}' | sort -u \
               | xargs -r docker rmi -f >/dev/null 2>&1 || true
-            sleep 5
-            docker exec vaporzr node -e "const h=require('http');h.get('http://127.0.0.1:'+(process.env.PORT||4876)+'/health',s=>{let b='';s.on('data',d=>b+=d);s.on('end',()=>{console.log('health:',b);process.exit(s.statusCode===200?0:1)})}).on('error',()=>process.exit(1))" || echo "WARN: /health not reachable after deploy"
+            # Health gate: the container needs a few seconds to log in and bind.
+            # Require a 200 from /health within 60s, else restore the previous
+            # image and fail the run — a broken deploy is never left serving.
+            HEALTH_CMD="const h=require('http');h.get('http://127.0.0.1:'+(process.env.PORT||4876)+'/health',s=>{let b='';s.on('data',d=>b+=d);s.on('end',()=>{console.log('health:',b);process.exit(s.statusCode===200?0:1)})}).on('error',()=>process.exit(1))"
+            healthy=0
+            for _ in $(seq 1 30); do
+              sleep 2
+              if docker exec vaporzr node -e "$HEALTH_CMD" >/dev/null 2>&1; then healthy=1; break; fi
+            done
+            if [ "$healthy" -ne 1 ]; then
+              echo "ERROR: /health did not answer 200 within 60s — rolling back."
+              docker logs --tail 100 vaporzr || true
+              docker rm -f vaporzr || true
+              if [ -n "$PREV_IMAGE" ]; then
+                start_container "$PREV_IMAGE"
+                echo "Rolled back to $PREV_IMAGE"
+              else
+                echo "No previous image recorded — nothing to roll back to."
+              fi
+              exit 1
+            fi
+            docker exec vaporzr node -e "$HEALTH_CMD" || true
