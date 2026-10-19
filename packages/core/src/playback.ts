@@ -14,6 +14,7 @@ import { config } from '@vaporzr/core/config';
 import { analyzer } from './analyzer.js';
 import { LocalFeatureCollector, toAudioFeatures } from './audioFeatures.js';
 import { rememberMeasuredFeatures } from './featureStore.js';
+import { writeJsonAtomicSync } from './jsonFile.js';
 import { buildAudioFxChain, isEqPreset } from './audiofx.js';
 import { canCrossfade, fadeInPcm, planCrossfade, tempoMatchRatio } from './crossfade.js';
 import * as EW from '@vaporzr/core/endlesswave';
@@ -265,8 +266,7 @@ export class PlaybackController {
         }
         // Keep the file small: only retain entries still inside the TTL.
         const fresh = rows.filter((r) => Date.now() - r.savedAt < PLAYBACK_CACHE_TTL_MS);
-        fs.mkdirSync(config.dataDir, { recursive: true });
-        fs.writeFileSync(path.join(config.dataDir, 'stream-cache.json'), JSON.stringify(fresh));
+        writeJsonAtomicSync(path.join(config.dataDir, 'stream-cache.json'), fresh, 0);
       } catch (err) {
         console.warn(`[playback] could not persist stream cache: ${err instanceof Error ? err.message : err}`);
       }

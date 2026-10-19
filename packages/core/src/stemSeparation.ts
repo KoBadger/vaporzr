@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { config } from '@vaporzr/core/config';
+import { safeFetch } from './net.js';
 
 /**
  * Hosted stem separation via Replicate's Demucs (GPU).
@@ -138,7 +139,9 @@ async function waitForPrediction(pred: ReplicatePrediction, timeoutMs: number): 
 }
 
 async function download(url: string, dest: string): Promise<void> {
-  const res = await fetch(url);
+  // API-returned URL, but treat it as untrusted: the SSRF guard keeps a
+  // compromised/malicious API response from pointing the bot at internal hosts.
+  const res = await safeFetch(url);
   if (!res.ok) throw new Error(`stem download ${res.status}`);
   await fs.writeFile(dest, Buffer.from(await res.arrayBuffer()));
 }

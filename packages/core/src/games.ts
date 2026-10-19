@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '@vaporzr/core/config';
+import { writeJsonAtomicSync } from './jsonFile.js';
 
 /**
  * Mini-game state (DJ Duel, Stump the Bot, Track Roulette) — persisted per guild
@@ -84,8 +85,7 @@ export class GamesStore {
     const t = setTimeout(() => {
       this.timers.delete(guildId);
       try {
-        fs.mkdirSync(path.dirname(this.file()), { recursive: true });
-        fs.writeFileSync(this.file(), JSON.stringify(this.all(), null, 2));
+        writeJsonAtomicSync(this.file(), this.all());
       } catch (err) {
         console.warn('[games] save failed:', err instanceof Error ? err.message : err);
       }

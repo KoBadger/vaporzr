@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { config, repoRoot } from '@vaporzr/core/config';
+import { writeJsonAtomicSync } from './jsonFile.js';
 
 export interface SfxSound {
   id: string;
@@ -106,8 +107,7 @@ export class DjManager {
 
   private save(): void {
     try {
-      fs.mkdirSync(config.dataDir, { recursive: true });
-      fs.writeFileSync(this.file(), JSON.stringify(Object.fromEntries(this.enabled), null, 2), 'utf8');
+      writeJsonAtomicSync(this.file(), Object.fromEntries(this.enabled));
     } catch {
       /* non-fatal */
     }

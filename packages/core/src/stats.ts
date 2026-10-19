@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '@vaporzr/core/config';
+import { writeJsonAtomicSync } from './jsonFile.js';
 
 interface UserStat {
   queued: number;
@@ -114,9 +115,7 @@ export class StatsStore {
 
   private save(guildId: string): void {
     try {
-      const file = this.fileFor(guildId);
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, JSON.stringify(this.load(guildId), null, 2));
+      writeJsonAtomicSync(this.fileFor(guildId), this.load(guildId));
     } catch (err) {
       console.warn('[stats] save failed:', err instanceof Error ? err.message : err);
     }

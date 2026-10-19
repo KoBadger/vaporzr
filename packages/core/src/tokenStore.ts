@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
+import { writeJsonAtomicSync } from './jsonFile.js';
 
 export interface StoredTokens {
   access_token: string;
@@ -19,7 +20,6 @@ export const tokenStore = {
     }
   },
   save(tokens: StoredTokens): void {
-    fs.mkdirSync(config.dataDir, { recursive: true });
-    fs.writeFileSync(tokensPath(), JSON.stringify(tokens, null, 2), 'utf8');
+    writeJsonAtomicSync(tokensPath(), tokens);
   },
 };
