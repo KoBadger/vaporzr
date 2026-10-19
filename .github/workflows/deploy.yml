@@ -11,6 +11,13 @@ on:
         required: false
         default: ''
 
+# Serialize deploys: two master pushes in quick succession must not race on the
+# VPS (whichever SSH script runs last wins, and an older run finishing later
+# would leave prod on the older image).
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
 env:
   IMAGE: ghcr.io/kobadger/vaporzr/vaporzr-bot
   LIBRESPOT_VERSION: v0.8.0
