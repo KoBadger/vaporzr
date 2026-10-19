@@ -15,7 +15,7 @@
     "dotenv": "^16.4.0",
     "ffmpeg-static": "^5.2.0",
     "gifenc": "^1.0.3",
-    "undici": "^6.28.0"
+    "undici": "^6.29.1"
   },
   "devDependencies": {
     "@types/node": "^20.16.0",
