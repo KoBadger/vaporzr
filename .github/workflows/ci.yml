@@ -35,3 +35,7 @@ jobs:
       - name: Unit tests (bot)
         working-directory: apps/bot
         run: npm test
+
+      - name: Unit tests (core)
+        working-directory: packages/core
+        run: npm test
