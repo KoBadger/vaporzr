@@ -112,6 +112,7 @@ import { estimateTempo, beatAlignLagMs } from '@vaporzr/core/tempo';
 import { renderRadarGif, type RadarMetric } from '@vaporzr/core/images';
 import { parseVibe, vibeIsSteerable, type ParsedVibe } from '@vaporzr/core/vibe';
 import { buildJamInviteCard, type JamInviteInfo } from './jamInvite.js';
+import { askAmok } from './amok.js';
 
 /** First non-internal IPv4 address of this machine — reachable from the LAN. */
 function localIp(): string {
@@ -671,6 +672,18 @@ const COMMANDS = [
     .setName('guess')
     .setDescription('Guess the current quiz song')
     .addStringOption((o) => o.setName('text').setDescription('Your guess').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('weasel')
+    .setDescription('Chat with Amok ("The Weasel" — 90s Pauly Shore AI agent)')
+    .addStringOption((o) =>
+      o.setName('message').setDescription('What to ask or say to The Weasel (or "reset")').setRequired(true),
+    ),
+  new SlashCommandBuilder()
+    .setName('amok')
+    .setDescription('Chat with Amok ("The Weasel" — 90s Pauly Shore AI agent)')
+    .addStringOption((o) =>
+      o.setName('message').setDescription('What to ask or say to Amok (or "reset")').setRequired(true),
+    ),
 ];
 
 function fmtMs(ms: number): string {
@@ -2700,6 +2713,22 @@ export class DiscordBot {
         break;
       }
 
+      case 'weasel':
+      case 'amok': {
+        if (!this.requireLevel(name, interaction)) return this.deny(interaction);
+        const prompt = interaction.options.getString('message', true);
+        await interaction.deferReply();
+        const cur = s.queue.getState().track;
+        const nowPlaying = cur ? `"${cur.name}" by ${(cur.artists ?? []).join(', ')}` : null;
+        const reply = await askAmok(prompt, {
+          scopeId: interaction.guildId ?? interaction.channelId ?? 'dm',
+          userId: interaction.user.id,
+          nowPlaying,
+        });
+        await interaction.editReply(reply);
+        break;
+      }
+
       case 'sensitivity': {
         if (!this.requireLevel('sensitivity', interaction)) return this.deny(interaction);
         const multiplier = interaction.options.getNumber('multiplier', true);
@@ -4001,6 +4030,23 @@ export class DiscordBot {
           if (!canUse('guess')) return void (await deny());
           const res = this.guessSong(message, args);
           if (res) await message.reply(res);
+          break;
+        }
+
+        case 'weasel': {
+          if (!canUse('weasel')) return void (await deny());
+          const prompt = args.trim() || "Hey buddy, what's shakin'?";
+          if ('sendTyping' in message.channel) {
+            void message.channel.sendTyping().catch(() => {});
+          }
+          const cur = s.queue.getState().track;
+          const nowPlaying = cur ? `"${cur.name}" by ${(cur.artists ?? []).join(', ')}` : null;
+          const reply = await askAmok(prompt, {
+            scopeId: message.guildId ?? message.channelId ?? 'dm',
+            userId: message.author.id,
+            nowPlaying,
+          });
+          await message.reply(reply);
           break;
         }
 
@@ -11095,6 +11141,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`V@duel board` — duel leaderboard + how often the bot called the room right',
       "`/roulette` · `V@roulette` — a rarely-played track from this server's own history, queued next: ⭐ Hall of Fame or 🚫 Ban",
       '`/quiz` · `V@quiz` — guess-the-song lyric game · `/guess <answer>` · `V@guess`',
+      '`/weasel <message>` · `/amok` · `V@weasel` (`V@amok`, `V@pauly`, `V@w`) — chat with Amok ("The Weasel", 90s Pauly Shore AI)',
     ],
   },
   {

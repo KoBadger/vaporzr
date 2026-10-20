@@ -101,6 +101,8 @@ const DEFAULT_COMMAND_LEVELS: Record<string, PermissionLevel> = {
   crossfade: 'user',
   sleep: 'user',
   diag: 'user',
+  weasel: 'user',
+  amok: 'user',
 };
 
 const LEVEL_RANK: Record<PermissionLevel, number> = { user: 0, mod: 1, admin: 2 };
