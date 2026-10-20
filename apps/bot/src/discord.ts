@@ -112,7 +112,17 @@ import { estimateTempo, beatAlignLagMs } from '@vaporzr/core/tempo';
 import { renderRadarGif, type RadarMetric } from '@vaporzr/core/images';
 import { parseVibe, vibeIsSteerable, type ParsedVibe } from '@vaporzr/core/vibe';
 import { buildJamInviteCard, type JamInviteInfo } from './jamInvite.js';
-import { askAmokRich, synthWeaselVoice } from './amok.js';
+import {
+  askAmokRich,
+  curateEndlessWaveTracks,
+  getWeaselMemorySummary,
+  noteWeaselUserArtists,
+  pcmMono48kToWav,
+  rememberWeaselFact,
+  synthWeaselVoice,
+  transcribeVoiceUtterance,
+  type WeaselWavePick,
+} from './amok.js';
 
 /** First non-internal IPv4 address of this machine — reachable from the LAN. */
 function localIp(): string {
@@ -780,6 +790,15 @@ export class DiscordBot {
   private lastHypeAt = new Map<string, number>();
   /** guildId -> Weasel Auto-VJ spoken track intros enabled (`v@w vj on`). */
   private weaselVjGuilds = new Set<string>();
+  /** guildId -> Weasel live voice-channel ear enabled (`v@w listen on`). */
+  private weaselListenGuilds = new Set<string>();
+  private weaselListenBusy = new Set<string>();
+  /** guildId -> active AI steering / harmonic arc directive for Endless Wave (`v@w wave ...`). */
+  private ewSteerPrompt = new Map<string, string>();
+  /** guildId -> buffered AI crate-digger picks for Endless Wave. */
+  private ewAiPickBuffer = new Map<string, WeaselWavePick[]>();
+  /** track.uri -> 1-line AI crate-digger note explaining sample/producer/harmonic fit. */
+  private ewTrackLore = new Map<string, string>();
   /** Message IDs sent by Amok ("The Weasel") so users can reply without `v@w`. */
   private amokMessageIds = new Set<string>();
   /** guildId -> active lyric guess-the-song quiz. */
@@ -2725,6 +2744,7 @@ export class DiscordBot {
         const reply = await this.handleWeaselRequest(s, prompt, {
           scopeId: interaction.guildId ?? interaction.channelId ?? 'dm',
           guildId: interaction.guildId,
+          channelId: interaction.channelId,
           userId: interaction.user.id,
           username: interaction.user.username,
           ensureJoin: () => this.ensureJoinedForPlayback(interaction, s),
@@ -4049,6 +4069,7 @@ export class DiscordBot {
           const reply = await this.handleWeaselRequest(s, prompt, {
             scopeId: message.guildId ?? message.channelId ?? 'dm',
             guildId: message.guildId,
+            channelId: message.channelId,
             userId: message.author.id,
             username: message.author.username,
             ensureJoin: () => this.ensureJoinedForMessage(message, s),
@@ -10683,14 +10704,107 @@ export class DiscordBot {
     }
   }
 
+  /** Gather recent channel messages + current voice channel members ("Read the Room"). */
+  private async collectRoomAwareness(
+    guildId: string | null,
+    channelId?: string | null,
+  ): Promise<{ recentChat: string[]; voiceMembers: string[] }> {
+    const recentChat: string[] = [];
+    const voiceMembers: string[] = [];
+
+    if (guildId) {
+      const guild = this.client.guilds.cache.get(guildId);
+      if (guild) {
+        const s = this.sessions.get(guildId);
+        const vcId = s?.voice.getChannelId();
+        const vc = vcId ? guild.channels.cache.get(vcId) : null;
+        if (vc && vc.isVoiceBased()) {
+          for (const [, m] of vc.members) {
+            if (!m.user.bot) voiceMembers.push(m.displayName || m.user.username);
+          }
+        }
+      }
+    }
+
+    if (channelId) {
+      try {
+        const ch = this.client.channels.cache.get(channelId);
+        if (ch && ch.isTextBased() && 'messages' in ch) {
+          const msgs = await ch.messages.fetch({ limit: 10 });
+          const ordered = Array.from(msgs.values()).reverse();
+          for (const m of ordered) {
+            const txt = (m.content ?? '').replace(/\s+/g, ' ').trim();
+            if (!txt) continue;
+            recentChat.push(`${m.author.username}: ${txt.slice(0, 140)}`);
+          }
+        }
+      } catch {
+        /* channel history unavailable */
+      }
+    }
+
+    return { recentChat, voiceMembers };
+  }
+
+  /** Handle a spoken utterance captured from the Discord voice channel (`v@w listen on`). */
+  private async onWeaselVoiceUtterance(s: Session, userId: string, pcmMono48k: Buffer): Promise<void> {
+    const gid = s.guildId;
+    if (!this.weaselListenGuilds.has(gid) || this.weaselListenBusy.has(gid)) return;
+    this.weaselListenBusy.add(gid);
+    try {
+      const wav = pcmMono48kToWav(pcmMono48k);
+      const transcript = await transcribeVoiceUtterance(wav);
+      if (!transcript) return;
+      // Respond when the speaker addresses The Weasel or gives a clear DJ voice request
+      const addressed =
+        /\b(weasel|pauly|amok|bu+ddy|broham|hey dj|yo dj)\b/i.test(transcript) ||
+        /^(?:hey|yo|okay|ok)?\s*(?:play|queue|put on|throw on|skip|what song|who sings|roast)\b/i.test(
+          transcript.trim(),
+        );
+      if (!addressed) return;
+
+      const guild = this.client.guilds.cache.get(gid);
+      const member = guild?.members.cache.get(userId);
+      const username = member?.user.username ?? 'broham';
+      const channelId = this.lastTextChannel.get(gid) ?? null;
+
+      const reply = await this.handleWeaselRequest(s, transcript, {
+        scopeId: gid,
+        guildId: gid,
+        channelId,
+        userId,
+        username,
+        ensureJoin: async () => true,
+      });
+
+      const firstParagraph = reply.split(/\n\n/)[0] ?? reply;
+      await this.speakWeaselInVoice(s, firstParagraph);
+
+      if (channelId) {
+        const ch = this.client.channels.cache.get(channelId);
+        if (ch && ch.isTextBased() && 'send' in ch) {
+          const sent = await ch.send(`🎤 **${username}** *(in voice)*: "${transcript}"\n${reply}`);
+          if (sent?.id) this.rememberAmokMessage(sent.id);
+        }
+      }
+    } catch {
+      /* ignore transient voice transcription errors */
+    } finally {
+      this.weaselListenBusy.delete(gid);
+    }
+  }
+
   /**
-   * Full smart dispatcher for `/weasel`, `/amok`, `V@weasel` (`V@w`), and
-   * direct replies to The Weasel:
+   * Full smart dispatcher for `/weasel`, `/amok`, `V@weasel` (`V@w`),
+   * direct replies to The Weasel, and spoken voice-channel commands:
    *  - `vj [on|off]`: toggle spoken MTV VJ track announcements in voice
+   *  - `listen [on|off]`: toggle live voice-channel ears (talk to The Weasel out loud)
+   *  - `memory` / `remember <fact>`: persistent long-term user & server memory
+   *  - `wave <vibe/arc>` / `arc <journey>` / `steer <vibe>`: AI Deep-DNA Endless Wave & Harmonic Set Architect
+   *  - `breakdown` / `lore` / `sample`: deep track deconstruction (samples, producer, lyrics, Song DNA)
    *  - `say <prompt>`: speak out loud in the voice channel + reply in text
    *  - `roast` / `rate`: roast or hype the current queue and server DJs
    *  - `play` / `dj` / `spin` / natural song requests: auto-resolve & queue tracks
-   *  - live Google Search grounding + room context
    */
   private async handleWeaselRequest(
     s: Session,
@@ -10698,6 +10812,7 @@ export class DiscordBot {
     opts: {
       scopeId: string;
       guildId: string | null;
+      channelId?: string | null;
       userId: string;
       username: string;
       ensureJoin: () => Promise<unknown>;
@@ -10719,21 +10834,62 @@ export class DiscordBot {
       }
       const active = this.weaselVjGuilds.has(gid);
       return active
-        ? "🎙️ **Weasel Auto-VJ is ON, buuuddy!** I'll hop on the mic and drop 90s MTV Spring Break intros in voice when tracks kick off. (`V@w vj off` to chill)"
+        ? "🎙️ **Weasel Auto-VJ is ON, buuuddy!** I'll hop on the mic with SSML surfer cadence and drop 90s MTV Spring Break intros (+ sample/producer notes) when tracks kick off. (`V@w vj off` to chill)"
         : '🔇 **Weasel Auto-VJ is OFF** — keeping the mic quiet during track changes, broham.';
     }
 
-    // Build rich room context (current track, upcoming queue with addedBy, top DJs)
+    // 2. `v@w listen [on|off]` — toggle live Voice-Channel Ears
+    const listenMatch = /^listen(?:\s+(on|off|toggle|status))?$/i.exec(trimmed);
+    if (listenMatch) {
+      if (!gid) return 'Must be used inside a server.';
+      const mode = (listenMatch[1] ?? 'toggle').toLowerCase();
+      if (mode === 'on') this.weaselListenGuilds.add(gid);
+      else if (mode === 'off') this.weaselListenGuilds.delete(gid);
+      else if (mode === 'toggle') {
+        if (this.weaselListenGuilds.has(gid)) this.weaselListenGuilds.delete(gid);
+        else this.weaselListenGuilds.add(gid);
+      }
+      const active = this.weaselListenGuilds.has(gid);
+      s.voice.setVoiceListenHandler(active ? (uid, pcm) => void this.onWeaselVoiceUtterance(s, uid, pcm) : null);
+      if (active && !s.voice.isJoined()) {
+        try {
+          await opts.ensureJoin();
+        } catch {
+          /* user can join VC after */
+        }
+      }
+      return active
+        ? '👂 **Weasel Voice Ears are ON, buuuddy!** Just talk out loud in the voice channel — say *"Hey Weasel, what song is this?"* or *"Yo Weasel, play some Sublime"* and I\'ll hear you and answer back on the mic! (`V@w listen off` to disable)'
+        : '🔇 **Weasel Voice Ears are OFF** — no longer listening to voice chat.';
+    }
+
+    // 3. `v@w memory` / `v@w remember <fact>` — persistent long-term memory
+    const remMatch = /^(?:remember|memo)\s+(.+)$/i.exec(trimmed);
+    if (remMatch) {
+      rememberWeaselFact(gid || null, opts.userId, opts.username, remMatch[1]);
+      return `🧠 Locked into the old melon forever, **${opts.username}**! I'll remember: *"${remMatch[1].trim()}"* — wheeze the juice!`;
+    }
+    if (/^memory$/i.test(trimmed)) {
+      const mem = getWeaselMemorySummary(gid || null, opts.userId, opts.username);
+      return mem
+        ? `🧠 **What The Weasel remembers about you & this room, buuuddy:**\n${mem}\n-# Tip: I learn your tastes automatically as we chat and queue music, or use \`V@w remember <fact>\`.`
+        : "🧠 My melon's still fresh on you, buuuddy! Queue some jams or tell me what you're into (or use `V@w remember <fact>`) and I'll remember it across sessions.";
+    }
+
+    // Build rich room context (current track, upcoming queue with addedBy, top DJs, DNA, chat, VC presence)
     const st = s.queue.getState();
     const cur = st.track;
     const snap = s.queue.getSnapshot();
+    const curLore = cur ? this.ewTrackLore.get(cur.uri) : undefined;
+    const dnaCal = EW.describeCalibration(s.endlessWave);
     const nowPlaying = cur
-      ? `"${cur.name}" by ${(cur.artists ?? []).join(', ')}${cur.addedBy ? ` (queued by ${cur.addedBy})` : ''}`
+      ? `"${cur.name}" by ${(cur.artists ?? []).join(', ')}${cur.addedBy ? ` (queued by ${cur.addedBy})` : ''}${dnaCal ? ` [Sonic DNA: ${dnaCal}]` : ''}${curLore ? ` [Crate-Digger connection: ${curLore}]` : ''}`
       : null;
     const upcomingQueue = snap.tracks
       .slice(0, 8)
       .map(
-        (t, i) => `${i + 1}. "${t.name}" by ${(t.artists ?? []).join(', ')}${t.addedBy ? ` [DJ: ${t.addedBy}]` : ''}`,
+        (t, i) =>
+          `${i + 1}. "${t.name}" by ${(t.artists ?? []).join(', ')}${t.addedBy ? ` [DJ: ${t.addedBy}]` : ''}${this.ewTrackLore.get(t.uri) ? ` (${this.ewTrackLore.get(t.uri)})` : ''}`,
       );
     let leaderboardSummary: string | null = null;
     if (gid) {
@@ -10749,7 +10905,116 @@ export class DiscordBot {
       if (parts.length > 0) leaderboardSummary = parts.join(' · ');
     }
 
-    // 2. `v@w say ...` — speak out loud in the voice channel
+    const { recentChat, voiceMembers } = await this.collectRoomAwareness(gid || null, opts.channelId);
+
+    // 4. `v@w wave <vibe/arc>` / `v@w arc <journey>` / `v@w steer <vibe>` — Fused AI Deep-DNA Endless Wave + Harmonic Set Architect
+    const waveMatch = /^(?:wave|arc|steer|journey)(?:\s+(.*))?$/i.exec(trimmed);
+    if (waveMatch && gid) {
+      const directive = (waveMatch[1] ?? '').trim();
+      if (/^(off|clear|stop)$/i.test(directive)) {
+        this.ewSteerPrompt.delete(gid);
+        this.ewAiPickBuffer.delete(gid);
+        return '🌊 Cleared the custom AI wave arc — Endless Wave is cruising on pure track-to-track DNA now, buuuddy!';
+      }
+      if (directive) {
+        this.ewSteerPrompt.set(gid, directive);
+      }
+      this.ewAiPickBuffer.delete(gid);
+      if (EW.modeOf(s.endlessWave) !== 'smart') {
+        this.setAutoplayMode(s, 'smart');
+      }
+      const recentSeeds = EW.pickContext(snap.tracks, snap.currentIndex, 3, 4).map((t) => ({
+        name: t.name,
+        artists: t.artists ?? [],
+      }));
+      const picks = await curateEndlessWaveTracks({
+        seedTracks: recentSeeds,
+        dnaSummary: dnaCal,
+        avoidNames: Array.from(s.endlessWave.playedNames),
+        steerDirective: this.ewSteerPrompt.get(gid) ?? null,
+        count: 3,
+      });
+      const resolved: ResolvedTrack[] = [];
+      const whyByName = new Map<string, string>();
+      for (const p of picks) {
+        try {
+          const hits = await resolvePlayInput(p.query);
+          if (hits.length > 0) {
+            resolved.push(hits[0]);
+            whyByName.set(hits[0].uri, p.why);
+            this.ewTrackLore.set(hits[0].uri, p.why);
+          }
+        } catch {
+          /* skip unresolvable */
+        }
+      }
+      const fresh = s.queue.filterNew(resolved);
+      const lines: string[] = [];
+      if (fresh.length > 0) {
+        s.queue.insertUserBatch(fresh, 'endless-wave');
+        try {
+          await opts.ensureJoin();
+          if (!s.queue.getState().playing) await s.playback.play();
+        } catch {
+          /* queued even if not in voice yet */
+        }
+        for (const [idx, t] of fresh.entries()) {
+          const why = whyByName.get(t.uri);
+          lines.push(`${idx + 1}. **${t.name}** — ${(t.artists ?? []).join(', ')}${why ? `\n   -# 🧬 *${why}*` : ''}`);
+        }
+      }
+      const intro = await askAmokRich(
+        directive
+          ? `Introduce this new Endless Wave harmonic/DNA journey you just engineered for the room: "${directive}"`
+          : 'Hype up the Deep-DNA Endless Wave crate-digging session you just kicked off based on the room’s current tracks!',
+        {
+          scopeId: opts.scopeId,
+          guildId: gid,
+          userId: opts.userId,
+          username: opts.username,
+          nowPlaying,
+          upcomingQueue,
+          recentChat,
+          voiceMembers,
+          ewSteerDirective: this.ewSteerPrompt.get(gid) ?? null,
+          forceRoomContext: true,
+        },
+      );
+      return lines.length > 0
+        ? `${intro.text}\n\n🌊 **Endless Wave (Deep-DNA & Harmonic Arc) queued:**\n${lines.join('\n')}`
+        : `${intro.text}\n-# 🌊 Endless Wave (smart) is active${directive ? ` — steering toward: **${directive}**` : ''}.`;
+    }
+
+    // 5. `v@w breakdown` / `v@w lore` / `v@w sample` — Deep Track Intelligence
+    const breakdownMatch = /^(?:breakdown|lore|sample|samples|dna|why)(?:\s+(.*))?$/i.exec(trimmed);
+    if (breakdownMatch) {
+      const target = (breakdownMatch[1] ?? '').trim();
+      const targetDesc = target || nowPlaying;
+      if (!targetDesc) {
+        return "Whoa buuuddy, nothing's spinning right now! Play a track or type `V@w breakdown <artist - song>` and I'll dig up the samples, producer lore, and sonic DNA!";
+      }
+      const bdPrompt = `Give a deep-dive musicologist breakdown of ${targetDesc}! Cover: (1) who produced it and the recording/album backstory, (2) what samples it flipped or who sampled it (WhoSampled lore), (3) what the lyrics and sonic DNA (${dnaCal || 'groove/key/BPM'}) are doing, and (4) at the very end output WEASEL_QUEUE: with 1 or 2 sample-source or producer-cousin tracks if the user wants to hear the connection!`;
+      const res = await askAmokRich(bdPrompt, {
+        scopeId: opts.scopeId,
+        guildId: gid,
+        userId: opts.userId,
+        username: opts.username,
+        nowPlaying,
+        upcomingQueue,
+        leaderboardSummary,
+        recentChat,
+        voiceMembers,
+        ewSteerDirective: this.ewSteerPrompt.get(gid) ?? null,
+        forceRoomContext: true,
+      });
+      const cousinNotes =
+        res.queueQueries.length > 0
+          ? `\n\n🧬 **Sample / Producer Cousins:** ${res.queueQueries.map((q) => `\`${q}\``).join(' · ')} *(reply "queue those" or \`V@w wave ${res.queueQueries[0]}\` to ride that DNA in Endless Wave!)*`
+          : '';
+      return `${res.text}${cousinNotes}`;
+    }
+
+    // 6. `v@w say ...` — speak out loud in the voice channel
     const sayMatch = /^(?:say|speak|mic|announce)(?:\s+(.*))?$/i.exec(trimmed);
     if (sayMatch) {
       const topic = (sayMatch[1] ?? '').trim();
@@ -10760,11 +11025,14 @@ export class DiscordBot {
           : 'Give a short, punchy 1-2 sentence 90s MTV VJ shoutout to the Discord voice channel!';
       const res = await askAmokRich(voicePrompt, {
         scopeId: opts.scopeId,
+        guildId: gid,
         userId: opts.userId,
         username: opts.username,
         nowPlaying,
         upcomingQueue,
         leaderboardSummary,
+        recentChat,
+        voiceMembers,
         forceRoomContext: true,
       });
       if (!s.voice.isJoined()) {
@@ -10780,27 +11048,31 @@ export class DiscordBot {
         : `${res.text}\n-# (Join a voice channel to hear me on the mic!)`;
     }
 
-    // 3. `v@w roast` / `v@w rate` — roast or rate the room's queue & DJs
+    // 7. `v@w roast` / `v@w rate` — roast or rate the room's queue & DJs
     const isRoast = /^(?:roast|rate)(?:\s+(.*))?$/i.exec(trimmed);
     const effectivePrompt = isRoast
-      ? `Roast and rate our Discord server's current music queue and DJs by name! Call out specific songs and who queued them${isRoast[1] ? ` (focus on: ${isRoast[1].trim()})` : ''}.`
+      ? `Roast and rate our Discord server's current music queue, DJs, and channel vibe by name! Call out specific songs and who queued them${isRoast[1] ? ` (focus on: ${isRoast[1].trim()})` : ''}.`
       : trimmed;
 
     const result = await askAmokRich(effectivePrompt, {
       scopeId: opts.scopeId,
+      guildId: gid,
       userId: opts.userId,
       username: opts.username,
       nowPlaying,
       upcomingQueue,
       leaderboardSummary,
+      recentChat,
+      voiceMembers,
+      ewSteerDirective: this.ewSteerPrompt.get(gid) ?? null,
       forceRoomContext: Boolean(isRoast),
     });
 
-    // 4. VJ Weasel Auto-DJ — resolve & queue any `WEASEL_QUEUE:` tracks
+    // 8. VJ Weasel Auto-DJ — resolve & queue any `WEASEL_QUEUE:` tracks
     const queuedLabels: string[] = [];
     if (result.queueQueries.length > 0 && gid) {
       const resolved: ResolvedTrack[] = [];
-      for (const q of result.queueQueries.slice(0, 4)) {
+      for (const q of result.queueQueries.slice(0, 5)) {
         try {
           const hits = await resolvePlayInput(q);
           if (hits.length > 0) resolved.push(hits[0]);
@@ -10811,11 +11083,9 @@ export class DiscordBot {
       const fresh = s.queue.filterNew(resolved);
       if (fresh.length > 0) {
         s.queue.insertUserBatch(fresh, 'The Weasel 🦦');
-        this.stats.noteQueued(
-          gid,
-          opts.username,
-          fresh.flatMap((t) => t.artists),
-        );
+        const allArtists = fresh.flatMap((t) => t.artists);
+        this.stats.noteQueued(gid, opts.username, allArtists);
+        noteWeaselUserArtists(opts.userId, opts.username, allArtists);
         try {
           await opts.ensureJoin();
           if (!s.queue.getState().playing) await s.playback.play();
@@ -10829,7 +11099,7 @@ export class DiscordBot {
           const first = fresh[0];
           void this.speakWeaselInVoice(
             s,
-            `Hey buuuddy! The Weasel just lined up ${first.name} by ${(first.artists ?? []).slice(0, 2).join(' and ')}! Keep wheezin the juice!`,
+            `Hey buuuddy! The Weasel just lined up ${first.name} by ${(first.artists ?? []).slice(0, 2).join(' and ')}! Keep wheezin the ju-uice!`,
           );
         }
       }
@@ -10842,6 +11112,49 @@ export class DiscordBot {
   }
 
   /**
+   * AI Deep-DNA Crate-Digger step inside Endless Wave (`smart` mode):
+   * Pulls producer/sample/era/harmonic picks from Gemini + Google Search grounding
+   * before falling back to the mechanical Spotify/Deezer recommender.
+   */
+  private async pickAiEndlessWaveTrack(s: Session, recent: TrackInfo[]): Promise<TrackInfo | null> {
+    if (recent.length === 0 && !this.ewSteerPrompt.has(s.guildId)) return null;
+    try {
+      let buf = this.ewAiPickBuffer.get(s.guildId) ?? [];
+      if (buf.length === 0) {
+        buf = await curateEndlessWaveTracks({
+          seedTracks: recent.slice(-4).map((t) => ({ name: t.name, artists: t.artists ?? [] })),
+          dnaSummary: EW.describeCalibration(s.endlessWave),
+          avoidNames: Array.from(s.endlessWave.playedNames),
+          steerDirective: this.ewSteerPrompt.get(s.guildId) ?? null,
+          count: 3,
+        });
+        this.ewAiPickBuffer.set(s.guildId, buf);
+      }
+      while (buf.length > 0) {
+        const pick = buf.shift()!;
+        const hits = await resolvePlayInput(pick.query).catch(() => []);
+        if (hits.length === 0) continue;
+        const hit = hits[0];
+        if (s.endlessWave.playedUris.has(hit.uri)) continue;
+        if (s.queue.filterNew([hit]).length === 0) continue;
+        this.ewTrackLore.set(hit.uri, pick.why);
+        EW.markPlayed(s.endlessWave, hit.uri, hit.name, hit.artists);
+        s.endlessWave.generated++;
+        s.endlessWave.runStreak++;
+        if (s.endlessWave.runStreak > s.endlessWave.longestRun) {
+          s.endlessWave.longestRun = s.endlessWave.runStreak;
+        }
+        for (const a of hit.artists ?? []) s.endlessWave.artistSet.add(a.toLowerCase());
+        console.log(`[endlesswave:ai-dna] picked "${hit.name}" (${pick.why})`);
+        return { ...hit, addedBy: 'endless-wave', addedAt: Date.now() };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Optional TTS DJ: speak a short "now playing" line when a new track starts.
    * Strictly opt-in per guild (`/tts on` or `V@w vj on`), deduped per track.
    * The music ducks under the clip, then releases.
@@ -10851,8 +11164,14 @@ export class DiscordBot {
       if (this.ttsAnnounced.get(s.guildId) === track.uri) return;
       this.ttsAnnounced.set(s.guildId, track.uri);
       const artists = (track.artists ?? []).filter(Boolean).slice(0, 2).join(' and ');
-      const dj = track.addedBy && track.addedBy !== 'Endless Wave' ? ` queued up by ${track.addedBy},` : '';
-      const line = `Hey buuuddy! Coming up on the crustacean station,${dj} we got ${track.name}${artists ? ` by ${artists}` : ''}! Keep wheezin the juice!`;
+      const lore = this.ewTrackLore.get(track.uri);
+      const dj =
+        track.addedBy && track.addedBy !== 'endless-wave' && track.addedBy !== 'Endless Wave'
+          ? ` queued up by ${track.addedBy},`
+          : '';
+      const line = lore
+        ? `Hey buuuddy! Up next on the wave, we got ${track.name}${artists ? ` by ${artists}` : ''}! ${lore}`
+        : `Hey buuuddy! Coming up on the crustacean station,${dj} we got ${track.name}${artists ? ` by ${artists}` : ''}! Keep wheezin the ju-uice!`;
       setTimeout(() => {
         if (s.queue.getCurrentTrack()?.uri !== track.uri) return;
         void this.speakWeaselInVoice(s, line);
@@ -11008,6 +11327,9 @@ export class DiscordBot {
         const recent = EW.pickContext(snap.tracks, snap.currentIndex, 3, 6);
         const failed = new Set<string>();
         let resolved: TrackInfo | null = null;
+        if (smart) {
+          resolved = await this.pickAiEndlessWaveTrack(s, recent);
+        }
         for (let attempt = 0; attempt < 3 && !resolved; attempt++) {
           if (!EW.isAutoActive(s.endlessWave)) return;
           const candidate = smart ? await EW.pickNextTrack(s.endlessWave, recent, failed, upcoming) : null;

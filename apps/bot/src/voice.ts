@@ -3,6 +3,7 @@ import {
   AudioPlayerStatus,
   createAudioPlayer,
   createAudioResource,
+  EndBehaviorType,
   entersState,
   joinVoiceChannel,
   NoSubscriberBehavior,
@@ -109,6 +110,9 @@ export class VoiceManager implements AudioTransport {
   private duckTimer: NodeJS.Timeout | null = null;
   /** Music stays ducked until this timestamp (used over TTS announcements). */
   private duckForceUntil = 0;
+  /** Optional voice-channel utterance listener (`v@w listen on`). */
+  private voiceListenHandler: ((userId: string, pcmMono48k: Buffer) => void) | null = null;
+  private activeVoiceCaptures = new Set<string>();
 
   /** True when the voice connection is alive but a SERVER-SIDE stream has died
    *  (ffmpeg crashed, pipe broken, etc.) — resume should re-stream instead of unpause.
@@ -240,7 +244,7 @@ export class VoiceManager implements AudioTransport {
   async join(guildId: string, channelId: string, adapterCreator: DiscordGatewayAdapterCreator): Promise<boolean> {
     this.leave();
     const connect = (): VoiceConnection => {
-      const connection = joinVoiceChannel({ channelId, guildId, adapterCreator, selfDeaf: true });
+      const connection = joinVoiceChannel({ channelId, guildId, adapterCreator, selfDeaf: false });
       this.connection = connection;
       this.channelId = channelId;
       return connection;
@@ -339,6 +343,7 @@ export class VoiceManager implements AudioTransport {
       (connection as unknown as { __vzDuck?: boolean }).__vzDuck = true;
       connection.receiver.speaking.on('start', (userId) => {
         if (this.duckAuto?.(userId)) this.noteSpeaker(userId, true);
+        if (this.voiceListenHandler) this.captureUserUtterance(connection, userId);
       });
       connection.receiver.speaking.on('end', (userId) => this.noteSpeaker(userId, false));
     }
@@ -427,7 +432,7 @@ export class VoiceManager implements AudioTransport {
       } catch {
         /* ignore */
       }
-      const conn = joinVoiceChannel({ channelId, guildId, adapterCreator, selfDeaf: true });
+      const conn = joinVoiceChannel({ channelId, guildId, adapterCreator, selfDeaf: false });
       this.connection = conn;
       this.channelId = channelId;
       this.attachHandlers(conn);
@@ -1295,6 +1300,60 @@ export class VoiceManager implements AudioTransport {
       }
       this.applyVolumeToResource();
     }
+  }
+
+  /** Enable or disable live voice-channel speech capture (`v@w listen on`). */
+  setVoiceListenHandler(fn: ((userId: string, pcmMono48k: Buffer) => void) | null): void {
+    this.voiceListenHandler = fn;
+    if (!fn) this.activeVoiceCaptures.clear();
+  }
+
+  private captureUserUtterance(connection: VoiceConnection, userId: string): void {
+    if (!this.voiceListenHandler || this.activeVoiceCaptures.has(userId)) return;
+    this.activeVoiceCaptures.add(userId);
+    void (async () => {
+      try {
+        const mod = (await import('opusscript')) as unknown as {
+          default?: new (rate: number, channels: number, app?: number) => { decode(buf: Buffer): Buffer };
+        };
+        const OpusScriptCtor = mod.default;
+        if (!OpusScriptCtor) {
+          this.activeVoiceCaptures.delete(userId);
+          return;
+        }
+        const decoder = new OpusScriptCtor(48_000, 1, 2049);
+        const opusStream = connection.receiver.subscribe(userId, {
+          end: { behavior: EndBehaviorType.AfterSilence, duration: 900 },
+        });
+        const chunks: Buffer[] = [];
+        let totalBytes = 0;
+        const maxBytes = 48_000 * 2 * 8; // cap at 8s of 48kHz mono Int16 PCM
+        opusStream.on('data', (packet: Buffer) => {
+          if (totalBytes >= maxBytes) return;
+          try {
+            const pcm = decoder.decode(packet);
+            if (pcm && pcm.length > 0) {
+              chunks.push(pcm);
+              totalBytes += pcm.length;
+            }
+          } catch {
+            /* ignore corrupt packet */
+          }
+        });
+        const done = (): void => {
+          this.activeVoiceCaptures.delete(userId);
+          if (totalBytes < 48_000) return; // < 0.5s speech
+          const cb = this.voiceListenHandler;
+          if (cb) cb(userId, Buffer.concat(chunks, totalBytes));
+        };
+        opusStream.once('end', done);
+        opusStream.once('error', () => {
+          this.activeVoiceCaptures.delete(userId);
+        });
+      } catch {
+        this.activeVoiceCaptures.delete(userId);
+      }
+    })();
   }
 
   /** Playback position (ms) of the ffmpeg-backed stream, or 0 for raw feeds. */

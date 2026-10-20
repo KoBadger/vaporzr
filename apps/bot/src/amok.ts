@@ -22,11 +22,15 @@ interface DetectIntentResponse {
 
 export interface AmokRoomContext {
   scopeId: string;
+  guildId?: string | null;
   userId: string;
   username?: string;
   nowPlaying?: string | null;
   upcomingQueue?: string[];
   leaderboardSummary?: string | null;
+  recentChat?: string[];
+  voiceMembers?: string[];
+  ewSteerDirective?: string | null;
   forceRoomContext?: boolean;
 }
 
@@ -35,13 +39,145 @@ export interface AmokResult {
   queueQueries: string[];
 }
 
+export interface WeaselWavePick {
+  query: string;
+  why: string;
+}
+
+interface WeaselUserMemory {
+  username: string;
+  facts: string[];
+  favoriteArtists: Record<string, number>;
+  updatedAt: number;
+}
+
+interface WeaselMemoryStoreData {
+  users: Record<string, WeaselUserMemory>;
+  guildLore: Record<string, string[]>;
+}
+
 const DEFAULT_PROJECT_ID = 'projbdgr';
 const DEFAULT_LOCATION = 'global';
 const DEFAULT_AGENT_ID = '3762bcaf-20c6-404b-a94b-4803b3b09213';
-const DEFAULT_TTS_VOICE = 'en-US-Chirp3-HD-Puck';
+const DEFAULT_TTS_VOICE = 'en-US-Casual-K';
 
 let cachedToken: { token: string; expiresAt: number; quotaProject: string } | null = null;
 const sessionEpochs = new Map<string, number>();
+let memoryCache: WeaselMemoryStoreData | null = null;
+
+function memoryFilePath(): string {
+  return path.join(config.dataDir, 'weasel-memory.json');
+}
+
+function loadMemoryStore(): WeaselMemoryStoreData {
+  if (memoryCache) return memoryCache;
+  try {
+    const p = memoryFilePath();
+    if (fs.existsSync(p)) {
+      const parsed = JSON.parse(fs.readFileSync(p, 'utf8')) as Partial<WeaselMemoryStoreData>;
+      memoryCache = {
+        users: parsed.users && typeof parsed.users === 'object' ? parsed.users : {},
+        guildLore: parsed.guildLore && typeof parsed.guildLore === 'object' ? parsed.guildLore : {},
+      };
+      return memoryCache;
+    }
+  } catch {
+    /* start fresh on corrupt file */
+  }
+  memoryCache = { users: {}, guildLore: {} };
+  return memoryCache;
+}
+
+function saveMemoryStore(): void {
+  if (!memoryCache) return;
+  try {
+    const p = memoryFilePath();
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, JSON.stringify(memoryCache, null, 2), 'utf8');
+  } catch {
+    /* non-fatal */
+  }
+}
+
+/** Record artists a user queued so The Weasel learns their music taste over time. */
+export function noteWeaselUserArtists(userId: string, username: string, artists: string[]): void {
+  if (!userId || artists.length === 0) return;
+  const store = loadMemoryStore();
+  const entry = (store.users[userId] ??= {
+    username: username || userId,
+    facts: [],
+    favoriteArtists: {},
+    updatedAt: Date.now(),
+  });
+  if (username) entry.username = username;
+  for (const raw of artists) {
+    const a = raw.trim();
+    if (!a) continue;
+    entry.favoriteArtists[a] = (entry.favoriteArtists[a] ?? 0) + 1;
+  }
+  entry.updatedAt = Date.now();
+  saveMemoryStore();
+}
+
+/** Explicitly save a user or server lore fact to The Weasel's permanent memory. */
+export function rememberWeaselFact(
+  guildId: string | null | undefined,
+  userId: string,
+  username: string,
+  fact: string,
+): void {
+  const clean = fact.replace(/\s+/g, ' ').trim().slice(0, 220);
+  if (!clean) return;
+  const store = loadMemoryStore();
+  const entry = (store.users[userId] ??= {
+    username: username || userId,
+    facts: [],
+    favoriteArtists: {},
+    updatedAt: Date.now(),
+  });
+  if (username) entry.username = username;
+  if (!entry.facts.includes(clean)) {
+    entry.facts.push(clean);
+    if (entry.facts.length > 12) entry.facts.shift();
+  }
+  if (guildId) {
+    const lore = (store.guildLore[guildId] ??= []);
+    const tagged = `${username || userId}: ${clean}`;
+    if (!lore.includes(tagged)) {
+      lore.push(tagged);
+      if (lore.length > 20) lore.shift();
+    }
+  }
+  entry.updatedAt = Date.now();
+  saveMemoryStore();
+}
+
+/** Build a compact summary of what The Weasel remembers about this user and server. */
+export function getWeaselMemorySummary(
+  guildId: string | null | undefined,
+  userId: string,
+  username?: string,
+): string | null {
+  const store = loadMemoryStore();
+  const parts: string[] = [];
+  const u = store.users[userId];
+  if (u) {
+    const topArtists = Object.entries(u.favoriteArtists)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([name, count]) => `${name} (${count}x)`);
+    if (topArtists.length > 0) {
+      parts.push(`${username || u.username}'s favorite queued artists: ${topArtists.join(', ')}`);
+    }
+    if (u.facts.length > 0) {
+      parts.push(`Remembered about ${username || u.username}: ${u.facts.slice(-6).join('; ')}`);
+    }
+  }
+  if (guildId && store.guildLore[guildId]?.length) {
+    parts.push(`Server lore: ${store.guildLore[guildId].slice(-6).join('; ')}`);
+  }
+  return parts.length > 0 ? parts.join(' | ') : null;
+}
 
 /** Candidate file paths for Google Application Default Credentials. */
 export function adcCandidatePaths(): string[] {
@@ -171,7 +307,7 @@ export function parseWeaselResponse(raw: string): AmokResult {
 
 /** True when a user prompt likely benefits from live Google Search grounding. */
 export function shouldGroundOnWeb(prompt: string): boolean {
-  return /\b(weather|forecast|temperature|news|headline|headlines|today|tonight|yesterday|last night|this week|right now|current|currently|latest|score|scores|standings|won|winner|who is the|price|stock|bitcoin|btc|eth|release date|2025|2026|search|google|look up|happening)\b/i.test(
+  return /\b(weather|forecast|temperature|news|headline|headlines|today|tonight|yesterday|last night|this week|right now|current|currently|latest|score|scores|standings|won|winner|who is the|price|stock|bitcoin|btc|eth|release date|2025|2026|search|google|look up|happening|sample|sampled|whosampled|producer|produced by|album|released)\b/i.test(
     prompt,
   );
 }
@@ -223,6 +359,59 @@ async function fetchLiveWebFacts(
   }
 }
 
+/** Background fact extractor: learns personal tastes/facts from user turns without slowing replies. */
+async function maybeExtractUserFact(
+  guildId: string | null | undefined,
+  userId: string,
+  username: string,
+  userMessage: string,
+): Promise<void> {
+  if (userMessage.length < 12) return;
+  if (
+    !/\b(i love|i hate|my favorite|i am|i'm a|i work|i live|i play|i listen|always|never|obsessed with)\b/i.test(
+      userMessage,
+    )
+  ) {
+    return;
+  }
+  try {
+    const projectId = (process.env.AMOK_PROJECT_ID ?? DEFAULT_PROJECT_ID).trim();
+    const { token, quotaProject } = await getAccessToken(projectId);
+    const url = `https://aiplatform.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/locations/global/publishers/google/models/gemini-2.5-flash:generateContent`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'x-goog-user-project': quotaProject,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              {
+                text: `Extract at most ONE durable personal fact or music/food/hobby preference about user "${username}" from their message below. If there is no durable personal fact worth remembering, output exactly NONE.\nMessage: "${userMessage.slice(0, 400)}"`,
+              },
+            ],
+          },
+        ],
+      }),
+      signal: AbortSignal.timeout(7_000),
+    });
+    if (!res.ok) return;
+    const data = (await res.json()) as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    };
+    const fact = (data.candidates?.[0]?.content?.parts?.[0]?.text ?? '').trim();
+    if (fact && !/^none\.?$/i.test(fact) && fact.length <= 180) {
+      rememberWeaselFact(guildId, userId, username, fact);
+    }
+  } catch {
+    /* best-effort background learning */
+  }
+}
+
 /** Clean markdown/emoji from a Weasel line before sending it to Cloud TTS. */
 export function cleanWeaselSpeechText(text: string): string {
   return text
@@ -233,6 +422,22 @@ export function cleanWeaselSpeechText(text: string): string {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 320);
+}
+
+/**
+ * Build SSML with Pauly Shore surfer prosody: stretches out repeated vowels
+ * ("buuuddy", "ju-uice", "chaaa", "duuude") and shifts pitch/rate on signature
+ * Weasel slang so Google's California Casual voice acts out the cadence.
+ */
+export function buildWeaselSsml(text: string): string {
+  const clean = cleanWeaselSpeechText(text);
+  const escaped = clean.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  const shaped = escaped.replace(
+    /\b(bu+ddy|ju+-?u*ice|cha+a*|du+de|so+o+|broham|wheezin'?|myagi|crusty|grindage|cheeza|mahi-mahi|ow-oww+)\b/gi,
+    '<prosody rate="70%" pitch="+2.5st">$1</prosody>',
+  );
+  return `<speak><prosody rate="95%" pitch="+0.8st">${shaped}</prosody></speak>`;
 }
 
 /** Convert a 48 kHz 16-bit mono WAV buffer into 48 kHz 16-bit stereo Int16 PCM. */
@@ -251,9 +456,29 @@ export function monoWavToStereoPcm(wav: Buffer): { pcm: Buffer; durationMs: numb
   return { pcm: stereo, durationMs };
 }
 
+/** Wrap raw 48 kHz 16-bit mono PCM samples in a standard 44-byte RIFF WAV header. */
+export function pcmMono48kToWav(pcm: Buffer): Buffer {
+  const header = Buffer.alloc(44);
+  const dataSize = pcm.length;
+  header.write('RIFF', 0, 'ascii');
+  header.writeUInt32LE(36 + dataSize, 4);
+  header.write('WAVE', 8, 'ascii');
+  header.write('fmt ', 12, 'ascii');
+  header.writeUInt32LE(16, 16); // PCM chunk size
+  header.writeUInt16LE(1, 20); // AudioFormat = 1 (PCM)
+  header.writeUInt16LE(1, 22); // NumChannels = 1 (mono)
+  header.writeUInt32LE(48_000, 24); // SampleRate = 48000
+  header.writeUInt32LE(48_000 * 2, 28); // ByteRate
+  header.writeUInt16LE(2, 32); // BlockAlign
+  header.writeUInt16LE(16, 34); // BitsPerSample
+  header.write('data', 36, 'ascii');
+  header.writeUInt32LE(dataSize, 40);
+  return Buffer.concat([header, pcm]);
+}
+
 /**
- * Synthesize spoken Weasel audio via Google Cloud Text-to-Speech (`Chirp3-HD-Puck`)
- * as 48 kHz stereo Int16 PCM ready for `s.voice.queueSfxPcm`.
+ * Synthesize spoken Weasel audio via Google Cloud Text-to-Speech (`en-US-Casual-K`
+ * with SSML surfer prosody shaping) as 48 kHz stereo Int16 PCM.
  */
 export async function synthWeaselVoice(text: string): Promise<{ pcm: Buffer; durationMs: number } | null> {
   const clean = cleanWeaselSpeechText(text);
@@ -261,6 +486,7 @@ export async function synthWeaselVoice(text: string): Promise<{ pcm: Buffer; dur
   const projectId = (process.env.AMOK_PROJECT_ID ?? DEFAULT_PROJECT_ID).trim();
   const voiceName = (process.env.AMOK_TTS_VOICE ?? DEFAULT_TTS_VOICE).trim();
   const { token, quotaProject } = await getAccessToken(projectId);
+  const ssml = buildWeaselSsml(clean);
 
   const res = await fetch('https://texttospeech.googleapis.com/v1/text:synthesize', {
     method: 'POST',
@@ -270,7 +496,7 @@ export async function synthWeaselVoice(text: string): Promise<{ pcm: Buffer; dur
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      input: { text: clean },
+      input: { ssml },
       voice: { languageCode: 'en-US', name: voiceName },
       audioConfig: { audioEncoding: 'LINEAR16', sampleRateHertz: 48000 },
     }),
@@ -283,13 +509,137 @@ export async function synthWeaselVoice(text: string): Promise<{ pcm: Buffer; dur
   return monoWavToStereoPcm(wav);
 }
 
-/** Send a message to the Google Cloud Conversational Agent ("Amok" / The Weasel) with full room + web intelligence. */
+/**
+ * Transcribe a spoken Discord voice-channel utterance via Vertex AI Gemini 2.5 Flash
+ * Multimodal Audio. Returns the transcript if intelligible, or null on silence/noise.
+ */
+export async function transcribeVoiceUtterance(wav: Buffer): Promise<string | null> {
+  if (wav.length < 48_000) return null; // ignore < 0.5s micro-blips
+  try {
+    const projectId = (process.env.AMOK_PROJECT_ID ?? DEFAULT_PROJECT_ID).trim();
+    const { token, quotaProject } = await getAccessToken(projectId);
+    const url = `https://aiplatform.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/locations/global/publishers/google/models/gemini-2.5-flash:generateContent`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'x-goog-user-project': quotaProject,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              {
+                inlineData: {
+                  mimeType: 'audio/wav',
+                  data: wav.toString('base64'),
+                },
+              },
+              {
+                text: 'Transcribe the exact English speech in this audio clip. If there is no clear speech or only background noise/coughing, reply with exactly NONE.',
+              },
+            ],
+          },
+        ],
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    };
+    const transcript = (data.candidates?.[0]?.content?.parts?.[0]?.text ?? '').trim();
+    if (!transcript || /^none\.?$/i.test(transcript)) return null;
+    return transcript;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * AI Deep-DNA Crate-Digger for Endless Wave (`smart` mode) & Harmonic Set Architect:
+ * Uses Gemini 2.5 Flash + Google Search grounding to select next tracks that share
+ * producer lineage, sample DNA, micro-subgenre/scene, lyrical vibe, and harmonic flow.
+ */
+export async function curateEndlessWaveTracks(opts: {
+  seedTracks: Array<{ name: string; artists: string[] }>;
+  dnaSummary?: string;
+  avoidNames?: string[];
+  steerDirective?: string | null;
+  count?: number;
+}): Promise<WeaselWavePick[]> {
+  if (opts.seedTracks.length === 0 && !opts.steerDirective) return [];
+  try {
+    const projectId = (process.env.AMOK_PROJECT_ID ?? DEFAULT_PROJECT_ID).trim();
+    const { token, quotaProject } = await getAccessToken(projectId);
+    const url = `https://aiplatform.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/locations/global/publishers/google/models/gemini-2.5-flash:generateContent`;
+    const count = Math.min(5, Math.max(1, opts.count ?? 3));
+    const seeds = opts.seedTracks.map((t) => `"${t.name}" by ${t.artists.join(', ')}`).join('; ');
+    const avoid = (opts.avoidNames ?? []).slice(0, 25).join(', ');
+
+    const prompt = [
+      `You are an elite crate-digging musicologist and harmonic DJ curating the next ${count} track(s) for Vaporzr's Endless Wave autoplay.`,
+      seeds ? `Recent seed tracks in the session: ${seeds}.` : '',
+      opts.dnaSummary ? `Measured sonic/harmonic DNA: ${opts.dnaSummary}.` : '',
+      opts.steerDirective
+        ? `ACTIVE USER VIBE / HARMONIC ARC DIRECTIVE (prioritize this journey): ${opts.steerDirective}.`
+        : 'Match the deep musical DNA of the seeds: consider shared producers, sample lineage (WhoSampled connections), exact era/micro-scene, lyrical mood, and smooth BPM/Camelot key flow.',
+      avoid ? `Do NOT pick any of these already-played songs: ${avoid}.` : '',
+      `Output ONLY ${count} lines, one per track, in this exact format:`,
+      `WAVE_PICK: Artist - Track Title || 1-sentence reason explaining the producer/sample/vibe/harmonic connection`,
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'x-goog-user-project': quotaProject,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        tools: [{ googleSearch: {} }],
+      }),
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (!res.ok) return [];
+    const data = (await res.json()) as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    };
+    const raw = (data.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? '').join('\n');
+    return parseWavePicks(raw);
+  } catch {
+    return [];
+  }
+}
+
+/** Parse `WAVE_PICK: Artist - Track || reason` lines from `curateEndlessWaveTracks`. */
+export function parseWavePicks(raw: string): WeaselWavePick[] {
+  const picks: WeaselWavePick[] = [];
+  for (const line of raw.split(/\r?\n/)) {
+    const m = /^[\s`*_-]*WAVE_PICK:\s*(.+?)\s*\|\|\s*(.+?)\s*[`*_]*$/i.exec(line);
+    if (m) {
+      const query = m[1].replace(/^[`"'*\s]+|[`"'*\s]+$/g, '').trim();
+      const why = m[2].trim();
+      if (query && picks.length < 5) {
+        picks.push({ query, why });
+      }
+    }
+  }
+  return picks;
+}
+
+/** Send a message to the Google Cloud Conversational Agent ("Amok" / The Weasel) with full room, memory, and web intelligence. */
 export async function askAmokRich(prompt: string, opts: AmokRoomContext): Promise<AmokResult> {
   const trimmed = prompt.trim();
   if (/^(reset|clear|new)$/i.test(trimmed)) {
     resetAmokSession(opts.scopeId, opts.userId);
     return {
-      text: "🧹 Right on, buuuddy — wiped the slate totally clean! Fresh vibes, fresh melon. What's shakin'?",
+      text: "🧹 Right on, buuuddy — wiped the short-term slate totally clean! Fresh vibes, fresh melon. What's shakin'?",
       queueQueries: [],
     };
   }
@@ -304,9 +654,20 @@ export async function askAmokRich(prompt: string, opts: AmokRoomContext): Promis
   const url = `https://${host}/v3/projects/${encodeURIComponent(projectId)}/locations/${encodeURIComponent(location)}/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}:detectIntent`;
 
   const contextNotes: string[] = [];
+  if (opts.username) {
+    contextNotes.push(`Speaker: ${opts.username}`);
+  }
+
+  // 1. Long-term user & server memory
+  const memSummary = getWeaselMemorySummary(opts.guildId ?? opts.scopeId, opts.userId, opts.username);
+  if (memSummary) {
+    contextNotes.push(`Long-term memory: ${memSummary}`);
+  }
+
+  // 2. Music / Queue / Endless Wave context
   const wantsMusicContext =
     opts.forceRoomContext ||
-    /\b(playing|song|track|music|queue|queued|listening|tune|jam|vibe|roast|rate|dj|djs|who queued|leaderboard|stats)\b/i.test(
+    /\b(playing|song|track|music|queue|queued|listening|tune|jam|vibe|roast|rate|dj|djs|who queued|leaderboard|stats|sample|sampled|producer|breakdown|lore|wave|autoplay)\b/i.test(
       trimmed,
     );
 
@@ -319,16 +680,33 @@ export async function askAmokRich(prompt: string, opts: AmokRoomContext): Promis
     if (opts.upcomingQueue && opts.upcomingQueue.length > 0) {
       contextNotes.push(`Upcoming queue: ${opts.upcomingQueue.slice(0, 8).join('; ')}`);
     }
+    if (opts.ewSteerDirective) {
+      contextNotes.push(`Active Endless Wave AI direction: ${opts.ewSteerDirective}`);
+    }
     if (opts.leaderboardSummary) {
       contextNotes.push(`Server DJ stats: ${opts.leaderboardSummary}`);
     }
   }
 
+  // 3. "Read the Room" — voice channel presence + recent channel chat
+  if (opts.voiceMembers && opts.voiceMembers.length > 0) {
+    contextNotes.push(`Currently hanging out in the voice channel: ${opts.voiceMembers.join(', ')}`);
+  }
+  if (opts.recentChat && opts.recentChat.length > 0) {
+    contextNotes.push(`Recent channel messages: ${opts.recentChat.slice(-10).join(' // ')}`);
+  }
+
+  // 4. Live Google Search web grounding
   if (shouldGroundOnWeb(trimmed)) {
     const facts = await fetchLiveWebFacts(trimmed, projectId, token, quotaProject);
     if (facts) {
       contextNotes.push(`Live web facts as of today: ${facts}`);
     }
+  }
+
+  // Background non-blocking learning from what the user said
+  if (opts.username) {
+    void maybeExtractUserFact(opts.guildId ?? opts.scopeId, opts.userId, opts.username, trimmed);
   }
 
   let text = trimmed;
