@@ -51,6 +51,12 @@ COPY apps/spicetify ./apps/spicetify
 
 RUN npm ci --omit=dev
 
+# npm treats failed optional dependencies as non-fatal: a flaky fetch of a
+# platform package (e.g. @snazzah/davey-linux-x64-gnu) leaves node_modules
+# without the native binding and the image only fails at startup. Load the
+# binding here so a bad install fails the build instead of shipping.
+RUN node -e "require('@snazzah/davey')"
+
 # The desktop player's preset pack, served to the web visualizer so both rotate
 # the same pool — the player's pack is the one that looks best. butterchurn-presets
 # ships a browser-ready UMD build, so it can be served as-is (the vendor route
