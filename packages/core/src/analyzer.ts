@@ -280,7 +280,7 @@ export const analyzer = {
     const n = Math.floor(buf.length / 4);
     for (let i = 0; i < n; i++) {
       const s = buf.readInt16LE(i * 4) + buf.readInt16LE(i * 4 + 2);
-      ring.push((s / 2) / 32768);
+      ring.push(s / 2 / 32768);
     }
     ensureTicker();
   },

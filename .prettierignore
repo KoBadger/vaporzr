@@ -8,4 +8,7 @@ apps/bot/data
 apps/bot/public/vendor
 apps/player/www
 apps/spicetify/www
+# Legacy single-file page with hand-written inline JS; formatting it would
+# balloon the diff and re-trigger CodeQL's large-change re-scan.
+apps/bot/public/viz.html
 **/*.md
