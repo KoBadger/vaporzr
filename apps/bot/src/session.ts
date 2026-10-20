@@ -138,9 +138,15 @@ export class SessionManager {
   }
 
   private schedulePersist(guildId: string): void {
-    const timer = this.saveTimers.get(guildId);
-    if (timer) clearTimeout(timer);
-    const t = setTimeout(() => this.persist(guildId), 3000);
+    // Coalesce bursts with a 3s debounce, but never starve the write: while a
+    // track plays, state ticks arrive every second, and resetting the timer on
+    // each one meant playing queues were never persisted at all (a restart lost
+    // them). The write snapshots the latest state when the timer fires.
+    if (this.saveTimers.has(guildId)) return;
+    const t = setTimeout(() => {
+      this.saveTimers.delete(guildId);
+      this.persist(guildId);
+    }, 3000);
     t.unref?.();
     this.saveTimers.set(guildId, t);
   }
