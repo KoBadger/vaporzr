@@ -20,9 +20,25 @@ interface DetectIntentResponse {
   };
 }
 
+export interface AmokRoomContext {
+  scopeId: string;
+  userId: string;
+  username?: string;
+  nowPlaying?: string | null;
+  upcomingQueue?: string[];
+  leaderboardSummary?: string | null;
+  forceRoomContext?: boolean;
+}
+
+export interface AmokResult {
+  text: string;
+  queueQueries: string[];
+}
+
 const DEFAULT_PROJECT_ID = 'projbdgr';
 const DEFAULT_LOCATION = 'global';
 const DEFAULT_AGENT_ID = '3762bcaf-20c6-404b-a94b-4803b3b09213';
+const DEFAULT_TTS_VOICE = 'en-US-Chirp3-HD-Puck';
 
 let cachedToken: { token: string; expiresAt: number; quotaProject: string } | null = null;
 const sessionEpochs = new Map<string, number>();
@@ -124,15 +140,158 @@ export function extractAmokReply(payload: DetectIntentResponse): string {
   return parts.join('\n\n');
 }
 
-/** Send a message to the Google Cloud Conversational Agent ("Amok" / The Weasel). */
-export async function askAmok(
+/**
+ * Separate a Playbook reply into clean display text and any `WEASEL_QUEUE:`
+ * track queries the agent asked Vaporzr to queue.
+ */
+export function parseWeaselResponse(raw: string): AmokResult {
+  const queueQueries: string[] = [];
+  const keptLines: string[] = [];
+
+  for (const line of raw.split(/\r?\n/)) {
+    const m = /^[\s`*_-]*WEASEL_QUEUE:\s*(.+?)\s*[`*_]*$/i.exec(line);
+    if (m) {
+      for (const item of m[1].split('|')) {
+        const cleaned = item
+          .replace(/^[`"'*\s-]+|[`"'*\s]+$/g, '')
+          .replace(/^\d+\.\s*/, '')
+          .trim();
+        if (cleaned && queueQueries.length < 5) {
+          queueQueries.push(cleaned);
+        }
+      }
+    } else {
+      keptLines.push(line);
+    }
+  }
+
+  const text = keptLines.join('\n').trim();
+  return { text, queueQueries };
+}
+
+/** True when a user prompt likely benefits from live Google Search grounding. */
+export function shouldGroundOnWeb(prompt: string): boolean {
+  return /\b(weather|forecast|temperature|news|headline|headlines|today|tonight|yesterday|last night|this week|right now|current|currently|latest|score|scores|standings|won|winner|who is the|price|stock|bitcoin|btc|eth|release date|2025|2026|search|google|look up|happening)\b/i.test(
+    prompt,
+  );
+}
+
+/** Fetch concise live web facts via Vertex AI Gemini with Google Search grounding. */
+async function fetchLiveWebFacts(
   prompt: string,
-  opts: { scopeId: string; userId: string; nowPlaying?: string | null },
-): Promise<string> {
+  projectId: string,
+  token: string,
+  quotaProject: string,
+): Promise<string | null> {
+  try {
+    const url = `https://aiplatform.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/locations/global/publishers/google/models/gemini-2.5-flash:generateContent`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'x-goog-user-project': quotaProject,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              {
+                text: `Provide a concise, factual 2-3 sentence summary answering this query with current facts: ${prompt}`,
+              },
+            ],
+          },
+        ],
+        tools: [{ googleSearch: {} }],
+      }),
+      signal: AbortSignal.timeout(9_000),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    };
+    const parts = data.candidates?.[0]?.content?.parts ?? [];
+    const text = parts
+      .map((p) => p.text ?? '')
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return text ? text.slice(0, 600) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Clean markdown/emoji from a Weasel line before sending it to Cloud TTS. */
+export function cleanWeaselSpeechText(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/[*_`~>#]/g, '')
+    .replace(/https?:\/\/\S+/g, '')
+    .replace(/[^\p{L}\p{N} .,!?'’\-:&()]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 320);
+}
+
+/** Convert a 48 kHz 16-bit mono WAV buffer into 48 kHz 16-bit stereo Int16 PCM. */
+export function monoWavToStereoPcm(wav: Buffer): { pcm: Buffer; durationMs: number } | null {
+  const headerOffset = wav.length > 44 && wav.toString('ascii', 0, 4) === 'RIFF' ? 44 : 0;
+  const monoBytes = wav.length - headerOffset;
+  const samples = Math.floor(monoBytes / 2);
+  if (samples <= 0) return null;
+  const stereo = Buffer.allocUnsafe(samples * 4);
+  for (let i = 0; i < samples; i++) {
+    const s = wav.readInt16LE(headerOffset + i * 2);
+    stereo.writeInt16LE(s, i * 4);
+    stereo.writeInt16LE(s, i * 4 + 2);
+  }
+  const durationMs = Math.round((samples / 48_000) * 1000);
+  return { pcm: stereo, durationMs };
+}
+
+/**
+ * Synthesize spoken Weasel audio via Google Cloud Text-to-Speech (`Chirp3-HD-Puck`)
+ * as 48 kHz stereo Int16 PCM ready for `s.voice.queueSfxPcm`.
+ */
+export async function synthWeaselVoice(text: string): Promise<{ pcm: Buffer; durationMs: number } | null> {
+  const clean = cleanWeaselSpeechText(text);
+  if (!clean) return null;
+  const projectId = (process.env.AMOK_PROJECT_ID ?? DEFAULT_PROJECT_ID).trim();
+  const voiceName = (process.env.AMOK_TTS_VOICE ?? DEFAULT_TTS_VOICE).trim();
+  const { token, quotaProject } = await getAccessToken(projectId);
+
+  const res = await fetch('https://texttospeech.googleapis.com/v1/text:synthesize', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'x-goog-user-project': quotaProject,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      input: { text: clean },
+      voice: { languageCode: 'en-US', name: voiceName },
+      audioConfig: { audioEncoding: 'LINEAR16', sampleRateHertz: 48000 },
+    }),
+    signal: AbortSignal.timeout(12_000),
+  });
+  if (!res.ok) return null;
+  const data = (await res.json()) as { audioContent?: string };
+  if (!data.audioContent) return null;
+  const wav = Buffer.from(data.audioContent, 'base64');
+  return monoWavToStereoPcm(wav);
+}
+
+/** Send a message to the Google Cloud Conversational Agent ("Amok" / The Weasel) with full room + web intelligence. */
+export async function askAmokRich(prompt: string, opts: AmokRoomContext): Promise<AmokResult> {
   const trimmed = prompt.trim();
   if (/^(reset|clear|new)$/i.test(trimmed)) {
     resetAmokSession(opts.scopeId, opts.userId);
-    return "🧹 Right on, buuuddy — wiped the slate totally clean! Fresh vibes, fresh melon. What's shakin'?";
+    return {
+      text: "🧹 Right on, buuuddy — wiped the slate totally clean! Fresh vibes, fresh melon. What's shakin'?",
+      queueQueries: [],
+    };
   }
 
   const projectId = (process.env.AMOK_PROJECT_ID ?? DEFAULT_PROJECT_ID).trim();
@@ -144,9 +303,37 @@ export async function askAmok(
   const host = location === 'global' ? 'dialogflow.googleapis.com' : `${location}-dialogflow.googleapis.com`;
   const url = `https://${host}/v3/projects/${encodeURIComponent(projectId)}/locations/${encodeURIComponent(location)}/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}:detectIntent`;
 
+  const contextNotes: string[] = [];
+  const wantsMusicContext =
+    opts.forceRoomContext ||
+    /\b(playing|song|track|music|queue|queued|listening|tune|jam|vibe|roast|rate|dj|djs|who queued|leaderboard|stats)\b/i.test(
+      trimmed,
+    );
+
+  if (wantsMusicContext) {
+    if (opts.nowPlaying) {
+      contextNotes.push(`Currently playing in Discord voice channel: ${opts.nowPlaying}`);
+    } else {
+      contextNotes.push('Currently playing in Discord voice channel: nothing right now');
+    }
+    if (opts.upcomingQueue && opts.upcomingQueue.length > 0) {
+      contextNotes.push(`Upcoming queue: ${opts.upcomingQueue.slice(0, 8).join('; ')}`);
+    }
+    if (opts.leaderboardSummary) {
+      contextNotes.push(`Server DJ stats: ${opts.leaderboardSummary}`);
+    }
+  }
+
+  if (shouldGroundOnWeb(trimmed)) {
+    const facts = await fetchLiveWebFacts(trimmed, projectId, token, quotaProject);
+    if (facts) {
+      contextNotes.push(`Live web facts as of today: ${facts}`);
+    }
+  }
+
   let text = trimmed;
-  if (opts.nowPlaying && /\b(playing|song|track|music|queue|listening|tune|jam|vibe)\b/i.test(trimmed)) {
-    text = `${trimmed}\n[Context: Currently playing in the Discord voice channel: ${opts.nowPlaying}]`;
+  if (contextNotes.length > 0) {
+    text = `${trimmed}\n(${contextNotes.join(' | ')})`;
   }
 
   const res = await fetch(url, {
@@ -171,9 +358,23 @@ export async function askAmok(
   }
 
   const data = (await res.json()) as DetectIntentResponse;
-  const reply = extractAmokReply(data);
-  if (!reply) {
-    return 'Whoa buuuddy, my brain totally spaced out for a sec! Hit me with that again, broham!';
+  const rawReply = extractAmokReply(data);
+  if (!rawReply) {
+    return {
+      text: 'Whoa buuuddy, my brain totally spaced out for a sec! Hit me with that again, broham!',
+      queueQueries: [],
+    };
   }
-  return reply.length > 1950 ? `${reply.slice(0, 1949)}…` : reply;
+  const parsed = parseWeaselResponse(rawReply);
+  const finalText = parsed.text || rawReply;
+  return {
+    text: finalText.length > 1800 ? `${finalText.slice(0, 1799)}…` : finalText,
+    queueQueries: parsed.queueQueries,
+  };
+}
+
+/** Backwards-compatible string helper around `askAmokRich`. */
+export async function askAmok(prompt: string, opts: AmokRoomContext): Promise<string> {
+  const res = await askAmokRich(prompt, opts);
+  return res.text;
 }
