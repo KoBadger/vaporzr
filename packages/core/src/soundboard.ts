@@ -59,7 +59,22 @@ async function decodePcm(filePath: string): Promise<Buffer> {
     const chunks: Buffer[] = [];
     const proc = spawn(
       config.ffmpegPath,
-      ['-hide_banner', '-loglevel', 'error', '-i', filePath, '-af', `volume=${gain.toFixed(3)}`, '-ac', '2', '-ar', '48000', '-f', 's16le', 'pipe:1'],
+      [
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-i',
+        filePath,
+        '-af',
+        `volume=${gain.toFixed(3)}`,
+        '-ac',
+        '2',
+        '-ar',
+        '48000',
+        '-f',
+        's16le',
+        'pipe:1',
+      ],
       { windowsHide: true },
     );
     proc.stdout.on('data', (d) => chunks.push(d as Buffer));

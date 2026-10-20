@@ -120,25 +120,29 @@ export class Bridge {
     this.wss = new WebSocketServer({ server });
 
     try {
-      const saved = JSON.parse(
-        fs.readFileSync(path.join(config.dataDir, 'theme.json'), 'utf8'),
-      ) as VaporzrTheme;
+      const saved = JSON.parse(fs.readFileSync(path.join(config.dataDir, 'theme.json'), 'utf8')) as VaporzrTheme;
       if (saved && typeof saved.accent === 'string') this.theme = saved;
-    } catch { /* no saved theme yet */ }
+    } catch {
+      /* no saved theme yet */
+    }
 
     try {
-      const s = JSON.parse(
-        fs.readFileSync(path.join(config.dataDir, 'sensitivity.json'), 'utf8'),
-      ) as { multiplier: number };
+      const s = JSON.parse(fs.readFileSync(path.join(config.dataDir, 'sensitivity.json'), 'utf8')) as {
+        multiplier: number;
+      };
       if (s && typeof s.multiplier === 'number') this.sensitivity = s.multiplier;
-    } catch { /* no saved sensitivity yet */ }
+    } catch {
+      /* no saved sensitivity yet */
+    }
 
     try {
-      const c = JSON.parse(
-        fs.readFileSync(path.join(config.dataDir, 'preset-cycle.json'), 'utf8'),
-      ) as { seconds: number };
+      const c = JSON.parse(fs.readFileSync(path.join(config.dataDir, 'preset-cycle.json'), 'utf8')) as {
+        seconds: number;
+      };
       if (c && typeof c.seconds === 'number') this.presetCycleSec = Math.max(5, Math.min(600, Math.round(c.seconds)));
-    } catch { /* no saved preset cycle yet */ }
+    } catch {
+      /* no saved preset cycle yet */
+    }
 
     // Preset ownership: load the canonical list now so an early joiner gets the
     // current preset in its first snapshot, and start the shared pace timer.
@@ -298,7 +302,9 @@ export class Bridge {
     let msg: InboundMessage;
     try {
       msg = JSON.parse(raw.toString()) as InboundMessage;
-    } catch { return; }
+    } catch {
+      return;
+    }
 
     if (msg.type === 'hello') {
       const client: Client = {
@@ -323,7 +329,9 @@ export class Bridge {
       } else {
         this.panels.add(client);
         const guest = config.shareKey && !this.isAuthed(socket);
-        console.log(`[bridge] panel connected${client.guildId ? ` (guild ${client.guildId})` : ''}${guest ? ' [guest]' : ''}`);
+        console.log(
+          `[bridge] panel connected${client.guildId ? ` (guild ${client.guildId})` : ''}${guest ? ' [guest]' : ''}`,
+        );
         this.sendSnapshot(socket);
       }
       // A new viewer changes the jam roster — tell everyone.
@@ -340,7 +348,12 @@ export class Bridge {
       if (client) {
         client.roster = (Array.isArray(msg.names) ? msg.names : [])
           .filter((n): n is string => typeof n === 'string')
-          .map((n) => n.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 32))
+          .map((n) =>
+            n
+              .replace(/[\u0000-\u001f\u007f]/g, '')
+              .trim()
+              .slice(0, 32),
+          )
           .filter(Boolean)
           .slice(0, 50);
         this.broadcastPresence();
@@ -372,11 +385,7 @@ export class Bridge {
    *  because the Activity (always a guest) is where the prev/next/shuffle
    *  buttons live. Every other command still requires the key. */
   private guestMaySend(msg: InboundMessage & { type: 'cmd' }): boolean {
-    return (
-      msg.command === 'preset' &&
-      typeof msg.presetAction === 'string' &&
-      typeof msg.presetCycle !== 'number'
-    );
+    return msg.command === 'preset' && typeof msg.presetAction === 'string' && typeof msg.presetCycle !== 'number';
   }
 
   private allowCommand(socket: WebSocket): boolean {
@@ -577,13 +586,12 @@ export class Bridge {
             this.notice('error', 'Sharing is not available on this instance.');
             return;
           }
-          const r = await this.onShareJam(guildId).catch(
-            (err): { ok: boolean; where?: string; error?: string } => ({
-              ok: false,
-              error: err instanceof Error ? err.message : String(err),
-            }),
-          );
-          if (r.ok) this.notice('success', `📱 Jam card posted${r.where ? ` in ${r.where}` : ''} — scan or tap to join.`);
+          const r = await this.onShareJam(guildId).catch((err): { ok: boolean; where?: string; error?: string } => ({
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          }));
+          if (r.ok)
+            this.notice('success', `📱 Jam card posted${r.where ? ` in ${r.where}` : ''} — scan or tap to join.`);
           else this.notice('error', r.error ?? 'Could not post the jam card.');
         })();
         break;
@@ -739,7 +747,7 @@ export class Bridge {
         const res = playlistStore.save(s.guildId, name, tracks);
         this.notice(
           res.ok ? 'success' : 'error',
-          res.ok ? `Saved vibe "${name}" (${res.tracks} tracks)` : res.error ?? 'Save failed.',
+          res.ok ? `Saved vibe "${name}" (${res.tracks} tracks)` : (res.error ?? 'Save failed.'),
         );
         break;
       }
@@ -800,19 +808,25 @@ export class Bridge {
       } else {
         const video = await searchAndResolveYoutube(q);
         tracks = video
-          ? [{
-              uri: video.uri,
-              name: video.name,
-              artists: video.artists,
-              album: video.album,
-              durationMs: video.durationMs,
-              image: video.image,
-              source: 'youtube' as const,
-            }]
+          ? [
+              {
+                uri: video.uri,
+                name: video.name,
+                artists: video.artists,
+                album: video.album,
+                durationMs: video.durationMs,
+                image: video.image,
+                source: 'youtube' as const,
+              },
+            ]
           : [];
       }
       if (!tracks.length) {
-        this.noticeTo(requester, 'error', `No match for "${q}" — try a link (YouTube, Spotify, Suno…) or different words.`);
+        this.noticeTo(
+          requester,
+          'error',
+          `No match for "${q}" — try a link (YouTube, Spotify, Suno…) or different words.`,
+        );
         return;
       }
       // A playlist link can resolve to many tracks; cap it the same way the
@@ -914,15 +928,17 @@ export class Bridge {
       } else {
         const video = await searchAndResolveYoutube(q);
         tracks = video
-          ? [{
-              uri: video.uri,
-              name: video.name,
-              artists: video.artists,
-              album: video.album,
-              durationMs: video.durationMs,
-              image: video.image,
-              source: 'youtube' as const,
-            }]
+          ? [
+              {
+                uri: video.uri,
+                name: video.name,
+                artists: video.artists,
+                album: video.album,
+                durationMs: video.durationMs,
+                image: video.image,
+                source: 'youtube' as const,
+              },
+            ]
           : [];
       }
       if (!tracks.length) return { ok: false, error: `No match for "${q}".` };
@@ -1064,19 +1080,25 @@ export class Bridge {
     return false;
   }
 
-  getTheme(): VaporzrTheme { return this.theme; }
+  getTheme(): VaporzrTheme {
+    return this.theme;
+  }
 
   setTheme(theme: VaporzrTheme): void {
     this.theme = theme;
     try {
       writeJsonAtomicSync(path.join(config.dataDir, 'theme.json'), theme);
-    } catch { /* non-fatal */ }
+    } catch {
+      /* non-fatal */
+    }
     const msg: OutboundMessage = { type: 'theme', theme };
     this.broadcastPanels(msg);
     this.broadcastVisualizers(msg);
   }
 
-  getPresetCycle(): number { return this.presetCycleSec; }
+  getPresetCycle(): number {
+    return this.presetCycleSec;
+  }
 
   /** How long a visual preset stays up. Persisted like sensitivity so a fresh
    *  viewer (or the Activity) picks up the same pace on connect. */
@@ -1085,7 +1107,9 @@ export class Bridge {
     this.presetCycleSec = secs;
     try {
       writeJsonAtomicSync(path.join(config.dataDir, 'preset-cycle.json'), { seconds: secs });
-    } catch { /* non-fatal */ }
+    } catch {
+      /* non-fatal */
+    }
     this.broadcast({ type: 'preset:cycle', seconds: secs, guildId: this.primaryGuildId ?? undefined });
     // The pace moved to the bridge with the preset choice: restart the timer so
     // every surface turns the page together.
@@ -1110,13 +1134,19 @@ export class Bridge {
         const mod = req(p) as { getPresets?: () => Record<string, unknown> };
         const got = mod && typeof mod.getPresets === 'function' ? mod.getPresets() : {};
         for (const n of Object.keys(got)) {
-          if (!seen.has(n)) { seen.add(n); this.presetNames.push(n); }
+          if (!seen.has(n)) {
+            seen.add(n);
+            this.presetNames.push(n);
+          }
         }
       }
       // The bundled "baron" pack — 762 curated Cream-of-the-Crop presets that
       // were sitting unused in the image. It is what the visualizers now merge.
       for (const n of this.baronPresetNames()) {
-        if (!seen.has(n)) { seen.add(n); this.presetNames.push(n); }
+        if (!seen.has(n)) {
+          seen.add(n);
+          this.presetNames.push(n);
+        }
       }
       console.log(`[bridge] preset library: ${this.presetNames.length} presets`);
     } catch (err) {
@@ -1137,9 +1167,7 @@ export class Bridge {
       const file = path.join(here, '..', 'public', 'vendor', 'butterchurnPresetsBaron.min.js');
       const sandbox: { window: Record<string, unknown> } = { window: {} };
       vm.runInNewContext(fs.readFileSync(file, 'utf8'), sandbox, { timeout: 10_000 });
-      const pack = sandbox.window.butterchurnPresetsBaron as
-        | { getPresets?: () => Record<string, unknown> }
-        | undefined;
+      const pack = sandbox.window.butterchurnPresetsBaron as { getPresets?: () => Record<string, unknown> } | undefined;
       const got = pack && typeof pack.getPresets === 'function' ? pack.getPresets() : {};
       return Object.keys(got).map((k) => `Baron #${k}`);
     } catch (err) {
@@ -1182,13 +1210,17 @@ export class Bridge {
     }, this.presetCycleSec * 1000);
   }
 
-  getSensitivity(): number { return this.sensitivity; }
+  getSensitivity(): number {
+    return this.sensitivity;
+  }
 
   setSensitivity(multiplier: number): void {
     this.sensitivity = multiplier;
     try {
       writeJsonAtomicSync(path.join(config.dataDir, 'sensitivity.json'), { multiplier });
-    } catch { /* non-fatal */ }
+    } catch {
+      /* non-fatal */
+    }
     const msg: OutboundMessage = { type: 'visuals:sensitivity', multiplier };
     this.broadcastVisualizers(msg);
     this.broadcastPanels(msg);
@@ -1219,19 +1251,19 @@ export class Bridge {
     // clients — even key-authed users. Other servers' names (and existence)
     // are never sent, so multi-server lists are hidden from every viewer.
     const primaryId = this.primaryGuildId;
-    const guildList = this.guildList.length > 0
-      ? this.guildList
-      : this.sessions.all()
-          .filter((s) => s.guildId !== '__fallback__')
-          .map((s) => ({ id: s.guildId, name: s.guildId }));
-    const current = guildList.find((g) => g.id === primaryId) ??
-      (primaryId ? { id: primaryId, name: primaryId } : undefined);
+    const guildList =
+      this.guildList.length > 0
+        ? this.guildList
+        : this.sessions
+            .all()
+            .filter((s) => s.guildId !== '__fallback__')
+            .map((s) => ({ id: s.guildId, name: s.guildId }));
+    const current =
+      guildList.find((g) => g.id === primaryId) ?? (primaryId ? { id: primaryId, name: primaryId } : undefined);
     // Anonymous /viz viewers (viewing is deliberately keyless) still get a
     // generic label — the id stays so the guild switcher keeps working.
     const authed = this.isAuthed(socket);
-    const guildsForClient = current
-      ? [authed ? current : { id: current.id, name: 'Server' }]
-      : [];
+    const guildsForClient = current ? [authed ? current : { id: current.id, name: 'Server' }] : [];
     const primaryEw = this.primaryGuildId ? this.sessions.get(this.primaryGuildId)?.endlessWave : undefined;
     const out: OutboundMessage = {
       type: 'snapshot',
@@ -1247,18 +1279,13 @@ export class Bridge {
       guilds: guildsForClient.length > 0 ? guildsForClient : undefined,
       sensitivity: this.sensitivity,
       presetCycle: this.presetCycleSec,
-      preset: this.presetIdx >= 0 && this.presetNames[this.presetIdx]
-        ? { name: this.presetNames[this.presetIdx], index: this.presetIdx }
-        : undefined,
+      preset:
+        this.presetIdx >= 0 && this.presetNames[this.presetIdx]
+          ? { name: this.presetNames[this.presetIdx], index: this.presetIdx }
+          : undefined,
       guest: config.shareKey ? !authed : undefined,
       endlesswave: primaryEw ? primaryEw.active : undefined,
-      endlesswaveMode: primaryEw
-        ? primaryEw.active
-          ? 'smart'
-          : primaryEw.basic
-            ? 'basic'
-            : 'off'
-        : undefined,
+      endlesswaveMode: primaryEw ? (primaryEw.active ? 'smart' : primaryEw.basic ? 'basic' : 'off') : undefined,
       ambient: this.primaryGuildId ? this.perms.getAmbient(this.primaryGuildId) : undefined,
       voteSkip: this.primaryGuildId ? this.perms.getVoteSkip(this.primaryGuildId) : undefined,
       skipForward: this.primaryGuildId ? this.perms.getSkipForward(this.primaryGuildId) : undefined,
@@ -1279,8 +1306,7 @@ export class Bridge {
   private ensureBarsTicker(): void {
     if (this.barsTicker) return;
     this.barsTicker = setInterval(() => {
-      const hasConsumers =
-        this.visualizers.size > 0 || [...this.panels].some((p) => p.subscribedVisuals);
+      const hasConsumers = this.visualizers.size > 0 || [...this.panels].some((p) => p.subscribedVisuals);
       if (!hasConsumers || !analyzer.hasData()) return;
       const msg: OutboundMessage = { type: 'visuals:bars', bars: analyzer.currentBars() };
       for (const panel of this.panels) {
@@ -1348,8 +1374,7 @@ export class Bridge {
    * `request`/`panel` are queue origins, not people, so they are dropped.
    */
   private presence(): { names: string[]; count: number; contributors: string[]; joinPath: string; joinUrl?: string } {
-    const isPerson = (n: string): boolean =>
-      !!n && !/^web-viz-|^vaporzr-/.test(n) && !/^vz-/.test(n);
+    const isPerson = (n: string): boolean => !!n && !/^web-viz-|^vaporzr-/.test(n) && !/^vz-/.test(n);
     /** Queue origins that are plumbing rather than people. */
     const ORIGINS = QUEUE_ORIGINS;
     const people = new Set<string>();
@@ -1391,10 +1416,7 @@ export class Bridge {
     this.broadcastPresence();
   }
 
-  sendToSocket(
-    socket: WebSocket,
-    msg: OutboundMessage | (InboundMessage & { type: 'cmd' }),
-  ): void {
+  sendToSocket(socket: WebSocket, msg: OutboundMessage | (InboundMessage & { type: 'cmd' })): void {
     if (socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify(msg));
     }

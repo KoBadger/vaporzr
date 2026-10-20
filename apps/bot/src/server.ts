@@ -5,7 +5,14 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { config } from '@vaporzr/core/config';
-import { buildAuthorizeUrl, exchangeCode, getAccessToken, SpotifyError, spotifyCacheSize, spotifyCooldownRemainingSec } from '@vaporzr/core/spotify';
+import {
+  buildAuthorizeUrl,
+  exchangeCode,
+  getAccessToken,
+  SpotifyError,
+  spotifyCacheSize,
+  spotifyCooldownRemainingSec,
+} from '@vaporzr/core/spotify';
 import { tokenStore } from '@vaporzr/core/tokenStore';
 import { Bridge } from './bridge.js';
 import { SessionManager } from './session.js';
@@ -241,7 +248,9 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
   if (cookieAge === null) {
     console.warn('[vaporzr] no YouTube cookies file found — YouTube may hit the bot check. Set YOUTUBE_COOKIES_PATH.');
   } else if (cookieAge > 21) {
-    console.warn(`[vaporzr] YouTube cookies are ~${cookieAge} days old — they expire soon; refresh /opt/vaporzr/cookies.txt.`);
+    console.warn(
+      `[vaporzr] YouTube cookies are ~${cookieAge} days old — they expire soon; refresh /opt/vaporzr/cookies.txt.`,
+    );
   }
   // Delay the first probe. Right after boot the PO-token HTTP server is still
   // coming up, and a transient failure here is reported as `proxy` — which,
@@ -435,14 +444,16 @@ function activityHtml(origin: string): string | null {
       `}catch(e){window.__VZ_SDK_STATE__='ready-nosdk';}` +
       `}` +
       `</script>`;
-    return fs
-      .readFileSync(path.join(__dirname, '..', 'public', 'viz.html'), 'utf8')
-      .replace(/\{\{ORIGIN\}\}/g, origin)
-      .replace(/\{\{BUILD\}\}/g, build)
-      // Assets and the socket keep their normal root-absolute paths. That is the
-      // whole point of mapping the Activity's root at the bare origin: there is
-      // no path rewriting to reason about, and the same URLs work in a browser.
-      .replace(/<head([^>]*)>/i, (m) => `${m}<meta name="vz-build" content="${build}">${handshake}`);
+    return (
+      fs
+        .readFileSync(path.join(__dirname, '..', 'public', 'viz.html'), 'utf8')
+        .replace(/\{\{ORIGIN\}\}/g, origin)
+        .replace(/\{\{BUILD\}\}/g, build)
+        // Assets and the socket keep their normal root-absolute paths. That is the
+        // whole point of mapping the Activity's root at the bare origin: there is
+        // no path rewriting to reason about, and the same URLs work in a browser.
+        .replace(/<head([^>]*)>/i, (m) => `${m}<meta name="vz-build" content="${build}">${handshake}`)
+    );
   } catch {
     return null;
   }
@@ -474,7 +485,9 @@ async function handleRoute(
       // Persist the key so later loads don't need ?key=. Add Secure when the
       // request arrived through an HTTPS tunnel so the cookie never travels in
       // clear over the last hop.
-      const proto = String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim();
+      const proto = String(req.headers['x-forwarded-proto'] ?? '')
+        .split(',')[0]
+        .trim();
       const secure = proto === 'https' ? '; Secure' : '';
       res.setHeader(
         'Set-Cookie',
@@ -524,7 +537,11 @@ async function handleRoute(
           });
           const stream = fs.createReadStream(filePath, { start, end });
           stream.on('error', () => {
-            try { res.end(); } catch { /* client went away */ }
+            try {
+              res.end();
+            } catch {
+              /* client went away */
+            }
           });
           stream.pipe(res);
         } else {
@@ -536,7 +553,11 @@ async function handleRoute(
           });
           const stream = fs.createReadStream(filePath);
           stream.on('error', () => {
-            try { res.end(); } catch { /* client went away */ }
+            try {
+              res.end();
+            } catch {
+              /* client went away */
+            }
           });
           stream.pipe(res);
         }
@@ -567,7 +588,8 @@ async function handleRoute(
 
     // Static vendor bundles for the web visualizer (butterchurn etc.) plus the
     // lazily-loaded preset library under presets/.
-    if (url.pathname.startsWith('/vendor/')) {      const rel = url.pathname.slice('/vendor/'.length);
+    if (url.pathname.startsWith('/vendor/')) {
+      const rel = url.pathname.slice('/vendor/'.length);
       if (/^[\w.-]+\.(m?js|json)$/.test(rel) || /^presets\/[\w.-]+\.(m?js|json)$/.test(rel)) {
         try {
           let target = path.join(__dirname, '..', 'public', 'vendor', rel);
@@ -642,9 +664,8 @@ async function handleRoute(
           // Preset chunks are tens of MB; compress once and cache like /vendor.
           let entry = vendorCache.get(`activity:${rel}`);
           if (!entry) {
-            const gz = raw.length > 4096 && /json|javascript/.test(types[ext] ?? '')
-              ? zlib.gzipSync(raw, { level: 6 })
-              : null;
+            const gz =
+              raw.length > 4096 && /json|javascript/.test(types[ext] ?? '') ? zlib.gzipSync(raw, { level: 6 }) : null;
             entry = { body: gz ?? raw, gzip: !!gz };
             if (vendorCache.size > 24) vendorCache.clear();
             vendorCache.set(`activity:${rel}`, entry);
@@ -681,7 +702,8 @@ async function handleRoute(
         const perms = (1n << 11n) | (1n << 14n) | (1n << 15n) | (1n << 20n) | (1n << 31n) | (1n << 52n);
         const inviteUrl = `https://discord.com/oauth2/authorize?client_id=${appId}&permissions=${perms}&scope=bot+applications.commands`;
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-        res.end(html(`
+        res.end(
+          html(`
           <img src="/logo.png" alt="Vaporzr" style="width:96px;height:96px;border-radius:22px;box-shadow:0 8px 30px rgba(106,92,255,.45);margin-bottom:1rem">
           <h1>Vaporzr Bot</h1>
           <p><a href="${inviteUrl}" style="border-color:#6a5cff;background:rgba(106,92,255,.18);font-weight:600">➕ Add to your server</a></p>
@@ -696,7 +718,8 @@ async function handleRoute(
               });
             } catch (e) { document.getElementById('s').textContent = 'error'; }
           </script>
-        `));
+        `),
+        );
         break;
       }
 
@@ -722,15 +745,25 @@ async function handleRoute(
         const state = url.searchParams.get('state') ?? '';
         const stateExp = oauthStates.get(state);
         if (state) oauthStates.delete(state);
-        console.log(`[vaporzr] oauth callback: code=${code ? 'present' : 'MISSING'} error=${err ?? 'none'} state=${state ? (stateExp ? 'valid' : 'unknown') : 'MISSING'}`);
+        console.log(
+          `[vaporzr] oauth callback: code=${code ? 'present' : 'MISSING'} error=${err ?? 'none'} state=${state ? (stateExp ? 'valid' : 'unknown') : 'MISSING'}`,
+        );
         if (!stateExp || stateExp < Date.now()) {
           res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-          res.end(html(`<h1 style="font-family:sans-serif">This sign-in link is invalid or expired. Open the panel and start the Spotify link again.</h1>`));
+          res.end(
+            html(
+              `<h1 style="font-family:sans-serif">This sign-in link is invalid or expired. Open the panel and start the Spotify link again.</h1>`,
+            ),
+          );
           return;
         }
         if (err) {
           res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
-          res.end(html(`<h1 style="font-family:sans-serif">Authorization failed (${esc(err)}). Close this tab and try /login again.</h1>`));
+          res.end(
+            html(
+              `<h1 style="font-family:sans-serif">Authorization failed (${esc(err)}). Close this tab and try /login again.</h1>`,
+            ),
+          );
           return;
         }
         if (!code) throw new SpotifyError('Missing code.');
@@ -917,9 +950,10 @@ async function handleRoute(
           res.end(JSON.stringify({ error: 'unauthorized' }));
           return;
         }
-        const body = (await readJsonBody(req)) as
-          | { endpoint?: string; keys?: { p256dh?: string; auth?: string } }
-          | null;
+        const body = (await readJsonBody(req)) as {
+          endpoint?: string;
+          keys?: { p256dh?: string; auth?: string };
+        } | null;
         if (body?.endpoint && body.keys?.p256dh && body.keys.auth) {
           addPushSubscription({ endpoint: body.endpoint, keys: { p256dh: body.keys.p256dh, auth: body.keys.auth } });
           res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
@@ -1000,7 +1034,9 @@ async function handleRoute(
       case '/jam': {
         if (!hasRequestAccess(req, url)) {
           res.writeHead(403, { 'Content-Type': 'text/html; charset=utf-8' });
-          res.end('<h1 style="font-family:system-ui">Requests are disabled or keyed. Ask the operator for a link.</h1>');
+          res.end(
+            '<h1 style="font-family:system-ui">Requests are disabled or keyed. Ask the operator for a link.</h1>',
+          );
           return;
         }
         if (config.requestKey && secretEquals(url.searchParams.get('key'), config.requestKey)) {

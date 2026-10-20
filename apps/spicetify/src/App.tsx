@@ -31,11 +31,7 @@ function NowPlaying({ bridge }: { bridge: BridgeClient }) {
   return (
     <div className="vz-now">
       <div className="vz-art">
-        {track?.image ? (
-          <img src={track.image} alt="" />
-        ) : (
-          <div className="vz-art-placeholder">◈</div>
-        )}
+        {track?.image ? <img src={track.image} alt="" /> : <div className="vz-art-placeholder">◈</div>}
       </div>
       <div className="vz-now-info">
         <div className="vz-now-track">{track?.name ?? 'Nothing playing'}</div>
@@ -79,11 +75,7 @@ function Transport({ bridge }: { bridge: BridgeClient }) {
       >
         {bridge.playback?.playing ? '⏸' : '▶'}
       </button>
-      <button
-        className="vz-btn vz-btn-ghost"
-        onClick={() => bridge.cmd({ type: 'cmd', command: 'next' })}
-        title="Next"
-      >
+      <button className="vz-btn vz-btn-ghost" onClick={() => bridge.cmd({ type: 'cmd', command: 'next' })} title="Next">
         ⏭
       </button>
     </div>
@@ -204,11 +196,14 @@ function Visuals({ bridge }: { bridge: BridgeClient }) {
         ) : (
           <div className="vz-visuals-placeholder">
             <div className="vz-eq">
-              <span /><span /><span /><span /><span /><span />
+              <span />
+              <span />
+              <span />
+              <span />
+              <span />
+              <span />
             </div>
-            <div className="vz-visuals-hint">
-              {enabled ? 'Waiting for the visualizer stream…' : 'Visuals disabled'}
-            </div>
+            <div className="vz-visuals-hint">{enabled ? 'Waiting for the visualizer stream…' : 'Visuals disabled'}</div>
           </div>
         )}
       </div>

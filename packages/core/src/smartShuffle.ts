@@ -48,18 +48,19 @@ export function keyDistance(a: Partial<AudioFeatures>, b: Partial<AudioFeatures>
   return Math.min(1, apart / 5);
 }
 
-const WEIGHTS: Record<ShuffleMode, { energy: number; valence: number; tempo: number; acoustic: number; key: number }> = {
-  // Energy and valence dominate deliberately: they are what a listener actually
-  // perceives as "the vibe", and they are the only two features Spotify
-  // guarantees. Tempo is scaled by /60 in vibeDistance, so its weight is already
-  // an order of magnitude larger than the raw number suggests — keep it modest.
-  flow: { energy: 0.5, valence: 0.35, tempo: 0.1, acoustic: 0.05, key: 0.1 },
-  arc: { energy: 0.55, valence: 0.25, tempo: 0.1, acoustic: 0.05, key: 0.1 },
-  key: { energy: 0.25, valence: 0.15, tempo: 0.1, acoustic: 0.1, key: 0.5 },
-  // `sonic` is ordered by cosine similarity (orderBySonic), not by features —
-  // this entry only satisfies the Record type; vibeDistance falls back to flow.
-  sonic: { energy: 0.5, valence: 0.35, tempo: 0.1, acoustic: 0.05, key: 0.1 },
-};
+const WEIGHTS: Record<ShuffleMode, { energy: number; valence: number; tempo: number; acoustic: number; key: number }> =
+  {
+    // Energy and valence dominate deliberately: they are what a listener actually
+    // perceives as "the vibe", and they are the only two features Spotify
+    // guarantees. Tempo is scaled by /60 in vibeDistance, so its weight is already
+    // an order of magnitude larger than the raw number suggests — keep it modest.
+    flow: { energy: 0.5, valence: 0.35, tempo: 0.1, acoustic: 0.05, key: 0.1 },
+    arc: { energy: 0.55, valence: 0.25, tempo: 0.1, acoustic: 0.05, key: 0.1 },
+    key: { energy: 0.25, valence: 0.15, tempo: 0.1, acoustic: 0.1, key: 0.5 },
+    // `sonic` is ordered by cosine similarity (orderBySonic), not by features —
+    // this entry only satisfies the Record type; vibeDistance falls back to flow.
+    sonic: { energy: 0.5, valence: 0.35, tempo: 0.1, acoustic: 0.05, key: 0.1 },
+  };
 
 /** Weighted musical distance in 0..1 (0 = same vibe).
  *
@@ -68,11 +69,7 @@ const WEIGHTS: Record<ShuffleMode, { energy: number; valence: number; tempo: num
  *  carry a partial feature set measured from its own audio: comparing an
  *  unmeasured dimension (or worse, defaulting it) would add noise and dilute the
  *  real signal. For two full feature sets this is identical to the old maths. */
-export function vibeDistance(
-  a: Partial<AudioFeatures>,
-  b: Partial<AudioFeatures>,
-  mode: ShuffleMode = 'flow',
-): number {
+export function vibeDistance(a: Partial<AudioFeatures>, b: Partial<AudioFeatures>, mode: ShuffleMode = 'flow'): number {
   const w = WEIGHTS[mode] ?? WEIGHTS.flow;
   let sum = 0;
   let used = 0;
@@ -81,14 +78,10 @@ export function vibeDistance(
     sum += weight * d;
     used += weight;
   };
-  const diff = (x?: number, y?: number): number | null =>
-    x === undefined || y === undefined ? null : Math.abs(x - y);
+  const diff = (x?: number, y?: number): number | null => (x === undefined || y === undefined ? null : Math.abs(x - y));
   add(w.energy, diff(a.energy, b.energy));
   add(w.valence, diff(a.valence, b.valence));
-  add(
-    w.tempo,
-    a.tempo !== undefined && b.tempo !== undefined ? Math.min(1, Math.abs(a.tempo - b.tempo) / 60) : null,
-  );
+  add(w.tempo, a.tempo !== undefined && b.tempo !== undefined ? Math.min(1, Math.abs(a.tempo - b.tempo) / 60) : null);
   add(w.acoustic, diff(a.acousticness, b.acousticness));
   // keyDistance already answers "neutral" (0.5) when either key is unknown.
   add(w.key, keyDistance(a, b));

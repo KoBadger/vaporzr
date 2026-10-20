@@ -1,12 +1,7 @@
 declare module 'gifenc' {
   type RGB = [number, number, number];
   export interface GIFEncoderInstance {
-    writeFrame(
-      index: Uint8Array,
-      width: number,
-      height: number,
-      opts: { palette: RGB[]; delay?: number },
-    ): void;
+    writeFrame(index: Uint8Array, width: number, height: number, opts: { palette: RGB[]; delay?: number }): void;
     finish(): void;
     bytes(): Uint8Array;
   }

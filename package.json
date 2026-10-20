@@ -15,7 +15,12 @@
     "build:spicetify": "npm run build -w @vaporzr/spicetify-app",
     "build": "npm run build:bot && npm run build:player && npm run build:spicetify",
     "typecheck": "npm run typecheck -w @vaporzr/shared && npm run typecheck -w @vaporzr/core && npm run typecheck -w @vaporzr/bot && npm run typecheck -w @vaporzr/player && npm run typecheck -w @vaporzr/spicetify-app",
-    "install:spicetify": "npm run install-app -w @vaporzr/spicetify-app"
+    "install:spicetify": "npm run install-app -w @vaporzr/spicetify-app",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "prettier": "^3.9.10"
   },
   "engines": {
     "node": ">=22"

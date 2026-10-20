@@ -42,11 +42,7 @@ describe('VoiceManager.isStalled (the resume gate)', () => {
   });
 
   it('is not a stall while paused or disconnected', () => {
-    expect(
-      voiceWith({ connected: false, paused: false, ffmpeg: null, expectingPcm: false }).isStalled(),
-    ).toBe(false);
-    expect(
-      voiceWith({ connected: true, paused: true, ffmpeg: null, expectingPcm: false }).isStalled(),
-    ).toBe(false);
+    expect(voiceWith({ connected: false, paused: false, ffmpeg: null, expectingPcm: false }).isStalled()).toBe(false);
+    expect(voiceWith({ connected: true, paused: true, ffmpeg: null, expectingPcm: false }).isStalled()).toBe(false);
   });
 });

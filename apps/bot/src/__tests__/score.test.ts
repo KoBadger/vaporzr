@@ -70,21 +70,27 @@ describe('scoreBreakdown (game-facing scoring)', () => {
   it('scoreCandidate still equals the breakdown total (EW picking unchanged)', () => {
     vi.spyOn(Math, 'random').mockReturnValue(0.25);
     const t = track();
-    expect(scoreCandidate(t, targets, [], features())).toBeCloseTo(
-      scoreBreakdown(t, targets, [], features()).total,
-    );
+    expect(scoreCandidate(t, targets, [], features())).toBeCloseTo(scoreBreakdown(t, targets, [], features()).total);
   });
 
   it('labels an artist that just played as a penalty', () => {
-    const hot = scoreBreakdown(track({ artists: ['Bonobo'] }), targets, ['Bonobo'], features(), undefined, { jitter: false });
-    const fresh = scoreBreakdown(track({ artists: ['Nils Frahm'] }), targets, ['Bonobo'], features(), undefined, { jitter: false });
+    const hot = scoreBreakdown(track({ artists: ['Bonobo'] }), targets, ['Bonobo'], features(), undefined, {
+      jitter: false,
+    });
+    const fresh = scoreBreakdown(track({ artists: ['Nils Frahm'] }), targets, ['Bonobo'], features(), undefined, {
+      jitter: false,
+    });
     expect(hot.terms.find((t) => t.id === 'artist')?.points).toBe(20);
     expect(hot.total).toBeGreaterThan(fresh.total);
   });
 
   it('a song matching the room scores better than a mismatched one', () => {
-    const onVibe = scoreBreakdown(track(), targets, [], features({ energy: 0.5, valence: 0.5 }), undefined, { jitter: false });
-    const offVibe = scoreBreakdown(track(), targets, [], features({ energy: 0.98, valence: 0.02 }), undefined, { jitter: false });
+    const onVibe = scoreBreakdown(track(), targets, [], features({ energy: 0.5, valence: 0.5 }), undefined, {
+      jitter: false,
+    });
+    const offVibe = scoreBreakdown(track(), targets, [], features({ energy: 0.98, valence: 0.02 }), undefined, {
+      jitter: false,
+    });
     expect(onVibe.total).toBeLessThan(offVibe.total);
   });
 });

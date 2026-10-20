@@ -140,7 +140,13 @@ describe('orderByVibe — artist imputation', () => {
       { uri: 'x2', artist: 'X', f: null },
       { uri: 'y1', artist: 'Y', f: feat({ key: 6 }) },
     ];
-    const { withoutFeatures } = orderByVibe(tiles, feat(), 'key', (t) => t.f, (t) => t.artist);
+    const { withoutFeatures } = orderByVibe(
+      tiles,
+      feat(),
+      'key',
+      (t) => t.f,
+      (t) => t.artist,
+    );
     expect(withoutFeatures).toBe(1);
   });
 

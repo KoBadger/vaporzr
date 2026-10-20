@@ -44,7 +44,18 @@ import {
 import { generateDependencyReport } from '@discordjs/voice';
 import { config } from '@vaporzr/core/config';
 import { getCrossfadeMs, setCrossfadeMs } from './crossfadeStore.js';
-import { getRecommendations, resolveTracks, searchCandidates, searchTracks, SpotifyError, getAudioFeatures, extractSpotifyId, type AudioFeatures, type RecommendationParams, type ResolvedTrack } from '@vaporzr/core/spotify';
+import {
+  getRecommendations,
+  resolveTracks,
+  searchCandidates,
+  searchTracks,
+  SpotifyError,
+  getAudioFeatures,
+  extractSpotifyId,
+  type AudioFeatures,
+  type RecommendationParams,
+  type ResolvedTrack,
+} from '@vaporzr/core/spotify';
 import { getMeasuredFeatures } from '@vaporzr/core/featureStore';
 import { orderByVibe, orderBySonic, SHUFFLE_MODE_LABEL, type ShuffleMode } from '@vaporzr/core/smartShuffle';
 import { cosineEnabled, cosineSimilarScores, cosineSimilarCandidates, cosineRoomFit } from '@vaporzr/core/cosine';
@@ -77,7 +88,7 @@ import {
   SoundcloudError,
 } from '@vaporzr/core/soundcloud';
 import { Session, SessionManager, type RestoredPlayingInfo } from './session.js';
-  import { fetchLyrics, type LyricsResult, type SyncedLine } from '@vaporzr/core/lyrics';
+import { fetchLyrics, type LyricsResult, type SyncedLine } from '@vaporzr/core/lyrics';
 import { PermissionsManager } from './permissions.js';
 import { analyzer } from '@vaporzr/core/analyzer';
 import { vizTunnel } from './tunnel.js';
@@ -167,12 +178,14 @@ const COMMANDS = [
   new SlashCommandBuilder().setName('queue').setDescription('Show the current queue'),
   new SlashCommandBuilder().setName('skip').setDescription('Skip to the next track'),
   new SlashCommandBuilder().setName('pause').setDescription('Pause playback'),
-    new SlashCommandBuilder().setName('resume').setDescription('Resume or refresh stalled playback'),
+  new SlashCommandBuilder().setName('resume').setDescription('Resume or refresh stalled playback'),
   new SlashCommandBuilder().setName('clear').setDescription('Clear the queue'),
   new SlashCommandBuilder()
     .setName('remove')
     .setDescription('Remove a track from the queue')
-    .addIntegerOption((o) => o.setName('index').setDescription('1-based index into the queue').setRequired(true).setAutocomplete(true)),
+    .addIntegerOption((o) =>
+      o.setName('index').setDescription('1-based index into the queue').setRequired(true).setAutocomplete(true),
+    ),
   new SlashCommandBuilder()
     .setName('volume')
     .setDescription('Check the current volume, or set it with a level')
@@ -195,35 +208,41 @@ const COMMANDS = [
         ),
     )
     .addBooleanOption((o) => o.setName('enabled').setDescription('On or off (used when no mode is given)')),
-    new SlashCommandBuilder().setName('panel').setDescription('Post (or refresh) the live control panel with buttons'),
-    new SlashCommandBuilder()
-      .setName('key')
-      .setDescription('Web panel/visualizer access links and key (trusted users)')
-      .addSubcommand((sc) => sc.setName('give').setDescription('Get your pre-authorized panel + visualizer links'))
-      .addSubcommand((sc) => sc.setName('show').setDescription('Owner: reveal the current key itself (not just the links)'))
-      .addSubcommand((sc) => sc.setName('rotate').setDescription('Owner: issue a new key — all old links stop working')),
-    new SlashCommandBuilder()
-      .setName('endwav')
-      .setDescription('Endless Wave — AI-powered autoplay that evolves with your vibe')
-      .addSubcommand((sc) => sc.setName('on').setDescription('Activate Endless Wave'))
-      .addSubcommand((sc) => sc.setName('off').setDescription('Deactivate Endless Wave'))
-      .addSubcommand((sc) => sc.setName('status').setDescription('Show Endless Wave status')),
-    new SlashCommandBuilder()
-      .setName('nickname')
-      .setDescription('🥚 Rename me in THIS server (unlocked by key activation)')
-      .addSubcommand((sc) =>
-        sc
-          .setName('set')
-          .setDescription('Set my server nickname (max 2 words, ends in -rzr / -orzr / -porzr)')
-          .addStringOption((o) => o.setName('name').setDescription('e.g. Neon-rzr, Bass Drop-orzr, Vapor-porzr').setRequired(true).setMaxLength(100)),
-      )
-      .addSubcommand((sc) => sc.setName('clear').setDescription('Reset my server nickname')),
+  new SlashCommandBuilder().setName('panel').setDescription('Post (or refresh) the live control panel with buttons'),
+  new SlashCommandBuilder()
+    .setName('key')
+    .setDescription('Web panel/visualizer access links and key (trusted users)')
+    .addSubcommand((sc) => sc.setName('give').setDescription('Get your pre-authorized panel + visualizer links'))
+    .addSubcommand((sc) =>
+      sc.setName('show').setDescription('Owner: reveal the current key itself (not just the links)'),
+    )
+    .addSubcommand((sc) => sc.setName('rotate').setDescription('Owner: issue a new key — all old links stop working')),
+  new SlashCommandBuilder()
+    .setName('endwav')
+    .setDescription('Endless Wave — AI-powered autoplay that evolves with your vibe')
+    .addSubcommand((sc) => sc.setName('on').setDescription('Activate Endless Wave'))
+    .addSubcommand((sc) => sc.setName('off').setDescription('Deactivate Endless Wave'))
+    .addSubcommand((sc) => sc.setName('status').setDescription('Show Endless Wave status')),
+  new SlashCommandBuilder()
+    .setName('nickname')
+    .setDescription('🥚 Rename me in THIS server (unlocked by key activation)')
+    .addSubcommand((sc) =>
+      sc
+        .setName('set')
+        .setDescription('Set my server nickname (max 2 words, ends in -rzr / -orzr / -porzr)')
+        .addStringOption((o) =>
+          o
+            .setName('name')
+            .setDescription('e.g. Neon-rzr, Bass Drop-orzr, Vapor-porzr')
+            .setRequired(true)
+            .setMaxLength(100),
+        ),
+    )
+    .addSubcommand((sc) => sc.setName('clear').setDescription('Reset my server nickname')),
   new SlashCommandBuilder()
     .setName('screensaver')
     .setDescription('Fullscreen the visualizer like a milkdrop screensaver on this machine'),
-  new SlashCommandBuilder()
-    .setName('viz')
-    .setDescription('Open the web visualizer in your browser'),
+  new SlashCommandBuilder().setName('viz').setDescription('Open the web visualizer in your browser'),
   new SlashCommandBuilder()
     .setName('theme')
     .setDescription('Set the visual mood / color theme (no arg lists themes)')
@@ -239,8 +258,12 @@ const COMMANDS = [
   new SlashCommandBuilder()
     .setName('lyrics')
     .setDescription('Show lyrics for the current or searched song')
-    .addStringOption((o) => o.setName('query').setDescription('Song to look up (optional — defaults to current track)').setRequired(false))
-    .addBooleanOption((o) => o.setName('karaoke').setDescription('Jump straight into live karaoke highlight').setRequired(false)),
+    .addStringOption((o) =>
+      o.setName('query').setDescription('Song to look up (optional — defaults to current track)').setRequired(false),
+    )
+    .addBooleanOption((o) =>
+      o.setName('karaoke').setDescription('Jump straight into live karaoke highlight').setRequired(false),
+    ),
   new SlashCommandBuilder()
     .setName('perms')
     .setDescription('Manage permissions (admin only)')
@@ -249,7 +272,9 @@ const COMMANDS = [
       s
         .setName('set')
         .setDescription('Set the minimum level for a command')
-        .addStringOption((o) => o.setName('command').setDescription('Command name').setRequired(true).setAutocomplete(true))
+        .addStringOption((o) =>
+          o.setName('command').setDescription('Command name').setRequired(true).setAutocomplete(true),
+        )
         .addStringOption((o) =>
           o
             .setName('level')
@@ -293,7 +318,9 @@ const COMMANDS = [
   new SlashCommandBuilder()
     .setName('sfx')
     .setDescription('Play a DJ sound effect over the music')
-    .addStringOption((o) => o.setName('sound').setDescription('The effect to play (omit to list)').setAutocomplete(true)),
+    .addStringOption((o) =>
+      o.setName('sound').setDescription('The effect to play (omit to list)').setAutocomplete(true),
+    ),
   new SlashCommandBuilder()
     .setName('help')
     .setDescription('Show how to use Vaporzr')
@@ -318,7 +345,9 @@ const COMMANDS = [
         ),
     ),
   new SlashCommandBuilder().setName('invite').setDescription('Get a link to add Vaporzr to your server'),
-  new SlashCommandBuilder().setName('jam').setDescription('Post the jam invite card — QR + link so guests can request songs from their phones'),
+  new SlashCommandBuilder()
+    .setName('jam')
+    .setDescription('Post the jam invite card — QR + link so guests can request songs from their phones'),
   new SlashCommandBuilder().setName('stats').setDescription('Show bot statistics'),
   new SlashCommandBuilder()
     .setName('sensitivity')
@@ -330,10 +359,10 @@ const COMMANDS = [
         .setRequired(true)
         .addChoices(
           { name: '1.0x (default)', value: 1.0 },
-          { name: '1.10x (slightly more reactive)', value: 1.10 },
+          { name: '1.10x (slightly more reactive)', value: 1.1 },
           { name: '1.15x (moderately reactive)', value: 1.15 },
           { name: '1.25x (noticeably snappy)', value: 1.25 },
-          { name: '1.50x (very reactive)', value: 1.50 },
+          { name: '1.50x (very reactive)', value: 1.5 },
         ),
     ),
   new SlashCommandBuilder()
@@ -402,7 +431,9 @@ const COMMANDS = [
   new SlashCommandBuilder()
     .setName('stump')
     .setDescription('Stump the Bot — bet a track will fit the room: survive to the end and you win')
-    .addStringOption((o) => o.setName('track').setDescription('Track to bet on (omit to bet your last pick)').setRequired(false)),
+    .addStringOption((o) =>
+      o.setName('track').setDescription('Track to bet on (omit to bet your last pick)').setRequired(false),
+    ),
   new SlashCommandBuilder()
     .setName('games')
     .setDescription('How the games work — Stump the Bot, DJ Duel and Track Roulette'),
@@ -415,20 +446,19 @@ const COMMANDS = [
     ),
   new SlashCommandBuilder()
     .setName('roulette')
-    .setDescription('Track Roulette — a random track from this server\'s history, star it or ban it'),
+    .setDescription("Track Roulette — a random track from this server's history, star it or ban it"),
   new SlashCommandBuilder()
     .setName('sleep')
     .setDescription('Stop playback and leave the voice channel after a timer')
     .addStringOption((o) =>
-      o
-        .setName('time')
-        .setDescription('When to stop, e.g. 30m, 1h, 45s (omit to cancel)')
-        .setRequired(false),
+      o.setName('time').setDescription('When to stop, e.g. 30m, 1h, 45s (omit to cancel)').setRequired(false),
     ),
   new SlashCommandBuilder()
     .setName('cookie-refresh')
     .setDescription('Refresh YouTube cookies from your browser (write to youtubeCookiesPath)')
-    .addBooleanOption((o) => o.setName('confirm').setDescription('Confirm you want to export cookies from your browser').setRequired(true)),
+    .addBooleanOption((o) =>
+      o.setName('confirm').setDescription('Confirm you want to export cookies from your browser').setRequired(true),
+    ),
   new SlashCommandBuilder()
     .setName('cookie-upload')
     .setDescription('Upload a Netscape cookies.txt to refresh YouTube cookies (owner only)')
@@ -474,9 +504,7 @@ const COMMANDS = [
           { name: 'Smart — Endless Wave (evolves with the vibe)', value: 'smart' },
         ),
     )
-    .addBooleanOption((o) =>
-      o.setName('now').setDescription('Queue one more track right now').setRequired(false),
-    )
+    .addBooleanOption((o) => o.setName('now').setDescription('Queue one more track right now').setRequired(false))
     .addIntegerOption((o) =>
       o
         .setName('count')
@@ -492,20 +520,26 @@ const COMMANDS = [
       sc
         .setName('save')
         .setDescription('Save the current queue as a playlist')
-        .addStringOption((o) => o.setName('name').setDescription('Playlist name').setRequired(true).setAutocomplete(true)),
+        .addStringOption((o) =>
+          o.setName('name').setDescription('Playlist name').setRequired(true).setAutocomplete(true),
+        ),
     )
     .addSubcommand((sc) =>
       sc
         .setName('load')
         .setDescription('Load a saved playlist into the queue')
-        .addStringOption((o) => o.setName('name').setDescription('Playlist name').setRequired(true).setAutocomplete(true)),
+        .addStringOption((o) =>
+          o.setName('name').setDescription('Playlist name').setRequired(true).setAutocomplete(true),
+        ),
     )
     .addSubcommand((sc) => sc.setName('list').setDescription('List saved playlists'))
     .addSubcommand((sc) =>
       sc
         .setName('delete')
         .setDescription('Delete a saved playlist')
-        .addStringOption((o) => o.setName('name').setDescription('Playlist name').setRequired(true).setAutocomplete(true)),
+        .addStringOption((o) =>
+          o.setName('name').setDescription('Playlist name').setRequired(true).setAutocomplete(true),
+        ),
     ),
   new SlashCommandBuilder()
     .setName('djrole')
@@ -522,7 +556,12 @@ const COMMANDS = [
     .setName('duck')
     .setDescription('Lower the music for a moment so people can talk (manual, not automatic)')
     .addIntegerOption((o) =>
-      o.setName('seconds').setDescription('How long to duck (5-300, default 30)').setRequired(false).setMinValue(5).setMaxValue(300),
+      o
+        .setName('seconds')
+        .setDescription('How long to duck (5-300, default 30)')
+        .setRequired(false)
+        .setMinValue(5)
+        .setMaxValue(300),
     )
     .addBooleanOption((o) => o.setName('cancel').setDescription('Cancel an in-progress duck').setRequired(false)),
   new SlashCommandBuilder()
@@ -542,24 +581,35 @@ const COMMANDS = [
   new SlashCommandBuilder()
     .setName('jump')
     .setDescription('Jump to a lyric line in the current song (e.g. "jump to the chorus")')
-    .addStringOption((o) => o.setName('query').setDescription('Words from the lyric line to jump to').setRequired(true)),
+    .addStringOption((o) =>
+      o.setName('query').setDescription('Words from the lyric line to jump to').setRequired(true),
+    ),
   new SlashCommandBuilder()
     .setName('ambient')
     .setDescription('Play a quiet lo-fi/ambient track when the queue ends (intermission)')
-    .addBooleanOption((o) => o.setName('enabled').setDescription('Turn ambient intermission on or off').setRequired(false)),
+    .addBooleanOption((o) =>
+      o.setName('enabled').setDescription('Turn ambient intermission on or off').setRequired(false),
+    ),
   new SlashCommandBuilder()
     .setName('mood')
     .setDescription("Tint now-playing colors + visuals from the current track's mood")
-    .addBooleanOption((o) => o.setName('enabled').setDescription('Turn mood-reactive visuals on or off').setRequired(false)),
+    .addBooleanOption((o) =>
+      o.setName('enabled').setDescription('Turn mood-reactive visuals on or off').setRequired(false),
+    ),
   new SlashCommandBuilder()
     .setName('tts')
     .setDescription('Toggle spoken DJ announcements between tracks (opt-in, off by default)')
-    .addBooleanOption((o) => o.setName('enabled').setDescription('Turn TTS announcements on or off').setRequired(false)),
+    .addBooleanOption((o) =>
+      o.setName('enabled').setDescription('Turn TTS announcements on or off').setRequired(false),
+    ),
   new SlashCommandBuilder()
     .setName('vibe')
     .setDescription('Let the DJ pick a set for your mood, time of day or weather')
     .addStringOption((o) =>
-      o.setName('mood').setDescription('Optional mood/style, e.g. "rainy lo-fi", "peak time techno"').setRequired(false),
+      o
+        .setName('mood')
+        .setDescription('Optional mood/style, e.g. "rainy lo-fi", "peak time techno"')
+        .setRequired(false),
     ),
   new SlashCommandBuilder()
     .setName('leaderboard')
@@ -570,9 +620,7 @@ const COMMANDS = [
     .setName('hype')
     .setDescription('Fire short hype SFX on strong beats (auto-hype)')
     .addBooleanOption((o) => o.setName('enabled').setDescription('Turn auto-hype on or off').setRequired(false)),
-  new SlashCommandBuilder()
-    .setName('dedupe')
-    .setDescription('Remove duplicate tracks from the upcoming queue'),
+  new SlashCommandBuilder().setName('dedupe').setDescription('Remove duplicate tracks from the upcoming queue'),
   new SlashCommandBuilder()
     .setName('bulk')
     .setDescription('Queue a list of songs at once (one per line, max 25)')
@@ -583,9 +631,7 @@ const COMMANDS = [
         .setRequired(true)
         .setMaxLength(1500),
     ),
-  new SlashCommandBuilder()
-    .setName('skipto')
-    .setDescription('Jump to a future queued track (drops the ones skipped)'),
+  new SlashCommandBuilder().setName('skipto').setDescription('Jump to a future queued track (drops the ones skipped)'),
   new SlashCommandBuilder()
     .setName('skiptoggle')
     .setDescription('Allow /skipto in this server (mod)')
@@ -606,16 +652,19 @@ const COMMANDS = [
   new SlashCommandBuilder()
     .setName('mashupgame')
     .setDescription('Mashup game: auto-pick two queued songs, render stems, vote for the best'),
-  new SlashCommandBuilder()
-    .setName('mashups')
-    .setDescription('Show past mashup games and their winners'),
+  new SlashCommandBuilder().setName('mashups').setDescription('Show past mashup games and their winners'),
   new SlashCommandBuilder()
     .setName('mix')
     .setDescription('Crossfade two tracks into one DJ-style mix')
     .addStringOption((o) => o.setName('a').setDescription('First track (link or name)').setRequired(true))
     .addStringOption((o) => o.setName('b').setDescription('Second track (link or name)').setRequired(true))
     .addIntegerOption((o) =>
-      o.setName('crossfade').setDescription('Crossfade seconds (2–20, default 6)').setRequired(false).setMinValue(2).setMaxValue(20),
+      o
+        .setName('crossfade')
+        .setDescription('Crossfade seconds (2–20, default 6)')
+        .setRequired(false)
+        .setMinValue(2)
+        .setMaxValue(20),
     ),
   new SlashCommandBuilder().setName('quiz').setDescription('Start a guess-the-song lyric quiz'),
   new SlashCommandBuilder()
@@ -705,10 +754,7 @@ export class DiscordBot {
    */
   private swapRefs = new Map<string, SwapRef>();
   /** guildId -> in-flight vote-to-skip. */
-  private skipVotes = new Map<
-    string,
-    { voters: Set<string>; eligible: Set<string>; timer: NodeJS.Timeout }
-  >();
+  private skipVotes = new Map<string, { voters: Set<string>; eligible: Set<string>; timer: NodeJS.Timeout }>();
   /** guildId -> last voice-status text posted (rate-limit aware). */
   private voiceStatusText = new Map<string, string>();
   private voiceStatusAt = new Map<string, number>();
@@ -740,13 +786,23 @@ export class DiscordBot {
   /** nonce -> a roulette offer waiting on a star/ban button press. */
   private rouletteOffers = new Map<
     string,
-    { guildId: string; key: string; userId: string; track: { uri: string; name: string; artists: string[]; album: string; durationMs: number; source: string; image?: string } }
+    {
+      guildId: string;
+      key: string;
+      userId: string;
+      track: {
+        uri: string;
+        name: string;
+        artists: string[];
+        album: string;
+        durationMs: number;
+        source: string;
+        image?: string;
+      };
+    }
   >();
   /** nonce -> a /similar candidate list waiting on a queue button press. */
-  private similarPending = new Map<
-    string,
-    { guildId: string; userId: string; tracks: ResolvedTrack[]; at: number }
-  >();
+  private similarPending = new Map<string, { guildId: string; userId: string; tracks: ResolvedTrack[]; at: number }>();
   /** guildId -> recently applied V@config clauses (most recent first). */
   private recentConfig = new Map<string, string[]>();
   /** guildId -> mood visuals on; moodColor tints now-playing colors from features. */
@@ -796,8 +852,23 @@ export class DiscordBot {
   private static readonly KARAOKE_TTL_MS = 30 * 60 * 1000; // 30 min
   private static readonly LYRIC_PAGES_MAX = 500;
   private static readonly LYRIC_PAGES_TTL_MS = 60 * 60 * 1000; // 1 hour
-  private karaokeSessions = new Map<string, { guildId: string; channelId: string; messageId: string; title: string; artist: string; lines: SyncedLine[]; lastIdx: number; createdAt: number }>();
-  private lyricPages = new Map<string, { title: string; artist: string; synced: boolean; pages: string[]; syncedLines?: SyncedLine[]; createdAt: number }>();
+  private karaokeSessions = new Map<
+    string,
+    {
+      guildId: string;
+      channelId: string;
+      messageId: string;
+      title: string;
+      artist: string;
+      lines: SyncedLine[];
+      lastIdx: number;
+      createdAt: number;
+    }
+  >();
+  private lyricPages = new Map<
+    string,
+    { title: string; artist: string; synced: boolean; pages: string[]; syncedLines?: SyncedLine[]; createdAt: number }
+  >();
   private lyricPagesTicker: NodeJS.Timeout | null = null;
   private karaokeTicker: NodeJS.Timeout | null = null;
   /** guildId -> active sleep timer (stops playback + leaves voice when it fires). */
@@ -900,8 +971,7 @@ export class DiscordBot {
     // The web panel's Share button posts the jam card through the same path as
     // /jam. The panel has no channel of its own, so the bot resolves one (the
     // panel's channel, else the last text channel it heard from).
-    bridge.onShareJam = (guildId) =>
-      this.shareJamCard(guildId ?? this.client.guilds.cache.first()?.id ?? '', null);
+    bridge.onShareJam = (guildId) => this.shareJamCard(guildId ?? this.client.guilds.cache.first()?.id ?? '', null);
     // Panel toggles Endless Wave through the same machinery as `V@ew on/off`.
     bridge.setEndlessWaveToggle((guildId, mode) => {
       void this.panelSetEndlessWave(guildId, mode).catch((err) => {
@@ -1037,47 +1107,56 @@ export class DiscordBot {
       // Alert the owner if the YouTube canary flips to a broken state.
       setYoutubeHealthListener((status, context) => void this.alertYoutubeHealth(status, context));
       if (!config.ownerId) {
-          // Auto-detect owner from the application record. This fetch can fail
-          // on a flaky network at boot, so retry with backoff, then keep
-          // re-checking periodically — owner rank must never silently vanish.
-          let attempts = 0;
-          const MAX_RETRIES = 10;
-          const detect = async (): Promise<void> => {
-            if (this.perms.hasOwner) return;
-            attempts++;
-            try {
-              const app = await this.client.application?.fetch();
-              const owner = app?.owner;
-              const ownerId = owner
-                ? 'ownerId' in owner
-                  ? (owner as { ownerId?: string }).ownerId
-                  : (owner as { id: string }).id
-                : null;
-              if (ownerId) {
-                this.perms.setOwner(ownerId);
-                console.log(`[vaporzr] auto-detected owner: ${ownerId} (set OWNER_ID in .env to pin it)`);
-                return;
-              }
-              throw new Error('no owner in application record');
-            } catch (err) {
-              console.warn(`[vaporzr] owner auto-detect attempt ${attempts} failed:`, err instanceof Error ? err.message : err);
-              if (attempts < 6) {
-                const dt = setTimeout(() => void detect(), 5000 * attempts);
-                dt.unref?.();
-              } else if (attempts < MAX_RETRIES) {
-                // Slow periodic re-check with max retry limit.
-                const t = setInterval(() => {
-                  if (this.perms.hasOwner) { clearInterval(t); return; }
-                  void detect();
-                }, 15 * 60 * 1000);
-                t.unref?.();
-              } else {
-                console.warn(`[vaporzr] owner auto-detect giving up after ${MAX_RETRIES} attempts`);
-              }
+        // Auto-detect owner from the application record. This fetch can fail
+        // on a flaky network at boot, so retry with backoff, then keep
+        // re-checking periodically — owner rank must never silently vanish.
+        let attempts = 0;
+        const MAX_RETRIES = 10;
+        const detect = async (): Promise<void> => {
+          if (this.perms.hasOwner) return;
+          attempts++;
+          try {
+            const app = await this.client.application?.fetch();
+            const owner = app?.owner;
+            const ownerId = owner
+              ? 'ownerId' in owner
+                ? (owner as { ownerId?: string }).ownerId
+                : (owner as { id: string }).id
+              : null;
+            if (ownerId) {
+              this.perms.setOwner(ownerId);
+              console.log(`[vaporzr] auto-detected owner: ${ownerId} (set OWNER_ID in .env to pin it)`);
+              return;
             }
-          };
-          void detect();
-        }
+            throw new Error('no owner in application record');
+          } catch (err) {
+            console.warn(
+              `[vaporzr] owner auto-detect attempt ${attempts} failed:`,
+              err instanceof Error ? err.message : err,
+            );
+            if (attempts < 6) {
+              const dt = setTimeout(() => void detect(), 5000 * attempts);
+              dt.unref?.();
+            } else if (attempts < MAX_RETRIES) {
+              // Slow periodic re-check with max retry limit.
+              const t = setInterval(
+                () => {
+                  if (this.perms.hasOwner) {
+                    clearInterval(t);
+                    return;
+                  }
+                  void detect();
+                },
+                15 * 60 * 1000,
+              );
+              t.unref?.();
+            } else {
+              console.warn(`[vaporzr] owner auto-detect giving up after ${MAX_RETRIES} attempts`);
+            }
+          }
+        };
+        void detect();
+      }
       const guilds = await this.client.guilds.fetch();
       console.log(
         `[vaporzr] in ${guilds.size} guild(s): ${guilds.map((g) => `${g.name} (${g.id})`).join(', ') || 'none'}`,
@@ -1107,10 +1186,12 @@ export class DiscordBot {
       }
       void this.handleMessageCommand(m);
     });
-    this.client.on('guildCreate', () =>
-      void this.registerCommands().catch((err) =>
-        console.error('[vaporzr] registerCommands on guildCreate failed:', err instanceof Error ? err.message : err),
-      ),
+    this.client.on(
+      'guildCreate',
+      () =>
+        void this.registerCommands().catch((err) =>
+          console.error('[vaporzr] registerCommands on guildCreate failed:', err instanceof Error ? err.message : err),
+        ),
     );
     this.client.on('guildCreate', () => this.syncPrimaryGuild());
     this.client.on('guildCreate', (g) => void this.handleGuildCreate(g));
@@ -1174,10 +1255,7 @@ export class DiscordBot {
       await channel.send({ embeds: [this.welcomeEmbed(guild)] });
       console.log(`[vaporzr] sent welcome to ${guild.name} in #${channel.name}`);
     } catch (err) {
-      console.warn(
-        `[vaporzr] could not send welcome to ${guild.name}:`,
-        err instanceof Error ? err.message : err,
-      );
+      console.warn(`[vaporzr] could not send welcome to ${guild.name}:`, err instanceof Error ? err.message : err);
     }
   }
 
@@ -1194,8 +1272,7 @@ export class DiscordBot {
       if (!me) return true;
       const perms = ch.permissionsFor(me);
       return (
-        perms?.has(PermissionFlagsBits.SendMessages) === true &&
-        perms.has(PermissionFlagsBits.EmbedLinks) === true
+        perms?.has(PermissionFlagsBits.SendMessages) === true && perms.has(PermissionFlagsBits.EmbedLinks) === true
       );
     };
     if (canWrite(guild.systemChannel)) return guild.systemChannel;
@@ -1283,7 +1360,16 @@ export class DiscordBot {
           } else {
             const idx = parseInt(val, 10);
             const page = Number.isFinite(idx) ? Math.min(stash.pages.length - 1, Math.max(0, idx)) : 0;
-            const embeds = [this.lyricsPageEmbed(stash.title, stash.artist, stash.synced, stash.pages[page], page + 1, stash.pages.length)];
+            const embeds = [
+              this.lyricsPageEmbed(
+                stash.title,
+                stash.artist,
+                stash.synced,
+                stash.pages[page],
+                page + 1,
+                stash.pages.length,
+              ),
+            ];
             const components = this.lyricsComponents(id, stash.pages, Boolean(stash.syncedLines?.length), page);
             await interaction.update({ embeds, components }).catch(() => {});
           }
@@ -1319,9 +1405,12 @@ export class DiscordBot {
       await this.handleCommand(interaction);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`[discord] command "/${interaction.commandName}" failed in guild ${interaction.guildId ?? 'DM'}: ${msg}`);
+      console.warn(
+        `[discord] command "/${interaction.commandName}" failed in guild ${interaction.guildId ?? 'DM'}: ${msg}`,
+      );
       const friendly = friendlyPlayError(err);
-      if (interaction.deferred) await interaction.followUp({ content: `⚠️ ${friendly}`, flags: MessageFlags.Ephemeral });
+      if (interaction.deferred)
+        await interaction.followUp({ content: `⚠️ ${friendly}`, flags: MessageFlags.Ephemeral });
       else await interaction.reply({ content: `⚠️ ${friendly}`, flags: MessageFlags.Ephemeral });
     }
   }
@@ -1494,7 +1583,11 @@ export class DiscordBot {
   }
 
   /** Queue tracks from parsed vibe targets (audio-feature steering via Spotify recs). */
-  private async vibeFromTargets(s: Session, parsed: ParsedVibe, ensureJoined: () => Promise<boolean>): Promise<string | null> {
+  private async vibeFromTargets(
+    s: Session,
+    parsed: ParsedVibe,
+    ensureJoined: () => Promise<boolean>,
+  ): Promise<string | null> {
     try {
       // Spotify /recommendations needs at least one seed: "like X" → that artist's
       // top track; otherwise seed from whatever is currently playing.
@@ -1535,12 +1628,8 @@ export class DiscordBot {
       if (recs.length === 0) return null;
       // Skip tracks already queued (same song, any upload) — like every add path.
       const snap = s.queue.getSnapshot();
-      const queued = new Set(
-        snap.tracks.map((t) => `${t.name.toLowerCase()}|${(t.artists[0] ?? '').toLowerCase()}`),
-      );
-      const fresh = recs.filter(
-        (t) => !queued.has(`${t.name.toLowerCase()}|${(t.artists[0] ?? '').toLowerCase()}`),
-      );
+      const queued = new Set(snap.tracks.map((t) => `${t.name.toLowerCase()}|${(t.artists[0] ?? '').toLowerCase()}`));
+      const fresh = recs.filter((t) => !queued.has(`${t.name.toLowerCase()}|${(t.artists[0] ?? '').toLowerCase()}`));
       const picks = (fresh.length ? fresh : recs).slice(0, parsed.count);
       this.setAutoplayMode(s, 'smart');
       const failed = await this.playTracks(s, picks, 'vibe-dj', ensureJoined);
@@ -1697,7 +1786,7 @@ export class DiscordBot {
           await interaction.reply('The queue is empty.');
           return;
         }
-         const { embeds, components } = this.queuePage(s);
+        const { embeds, components } = this.queuePage(s);
         await interaction.reply({ embeds, components });
         break;
       }
@@ -1714,10 +1803,14 @@ export class DiscordBot {
         const v = this.requestSkip(s, interaction.user.id);
         if (v.result === 'skipped') {
           s.playback.next();
-          const r1 = await interaction.reply(this.perms.getVoteSkip(interaction.guildId ?? '') ? '⏭️ Skipped (majority vote reached)' : '⏭️ Skipped');
+          const r1 = await interaction.reply(
+            this.perms.getVoteSkip(interaction.guildId ?? '') ? '⏭️ Skipped (majority vote reached)' : '⏭️ Skipped',
+          );
           this.autoExpire(r1);
         } else if (v.result === 'started') {
-          await interaction.reply(`🗳️ Vote to skip started — **${v.votes}/${v.needed}**. Others: use \`/skip\` again to vote.`);
+          await interaction.reply(
+            `🗳️ Vote to skip started — **${v.votes}/${v.needed}**. Others: use \`/skip\` again to vote.`,
+          );
         } else {
           await interaction.reply(`🗳️ Vote recorded — **${v.votes}/${v.needed}**.`);
         }
@@ -1727,20 +1820,29 @@ export class DiscordBot {
       case 'pause':
         if (!this.requireLevel('pause', interaction)) return this.deny(interaction);
         s.playback.pause();
-        { const r2 = await interaction.reply('⏸️ Paused'); this.autoExpire(r2); }
+        {
+          const r2 = await interaction.reply('⏸️ Paused');
+          this.autoExpire(r2);
+        }
         break;
 
       case 'resume':
         if (!this.requireLevel('resume', interaction)) return this.deny(interaction);
         await s.playback.resume();
-        { const r3 = await interaction.reply('▶️ Resumed'); this.autoExpire(r3); }
+        {
+          const r3 = await interaction.reply('▶️ Resumed');
+          this.autoExpire(r3);
+        }
         break;
 
       case 'clear':
         if (!this.requireLevel('clear', interaction)) return this.deny(interaction);
         s.playback.stopAll();
         s.queue.clear();
-        { const r4 = await interaction.reply('🗑️ Queue cleared'); this.autoExpire(r4); }
+        {
+          const r4 = await interaction.reply('🗑️ Queue cleared');
+          this.autoExpire(r4);
+        }
         break;
 
       case 'remove': {
@@ -1821,7 +1923,13 @@ export class DiscordBot {
         const msg = await channel.send({ embeds: [this.npPayload(s)] });
         this.npMessages.set(guildId, { channelId: interaction.channelId, messageId: msg.id });
         this.scheduleSavePanels();
-        { const r = await interaction.reply({ content: '🔴 Live now-playing message posted right here — it updates itself.', flags: MessageFlags.Ephemeral }); this.autoExpireNotice(r); }
+        {
+          const r = await interaction.reply({
+            content: '🔴 Live now-playing message posted right here — it updates itself.',
+            flags: MessageFlags.Ephemeral,
+          });
+          this.autoExpireNotice(r);
+        }
         break;
       }
 
@@ -1836,7 +1944,15 @@ export class DiscordBot {
             await interaction.followUp({ content: payload.error, flags: MessageFlags.Ephemeral });
           } else {
             const msg = await interaction.followUp({ embeds: [payload.embed] });
-            this.registerKaraoke(s, msg.id, interaction.guildId!, interaction.channelId, payload.title, payload.artist, payload.syncedLines);
+            this.registerKaraoke(
+              s,
+              msg.id,
+              interaction.guildId!,
+              interaction.channelId,
+              payload.title,
+              payload.artist,
+              payload.syncedLines,
+            );
           }
           break;
         }
@@ -1850,7 +1966,9 @@ export class DiscordBot {
         if (!this.requireLevel('shuffle', interaction)) return this.deny(interaction);
         const modeArg = interaction.options.getString('mode');
         if (modeArg) {
-          const mode = (modeArg === 'arc' ? 'arc' : modeArg === 'key' ? 'key' : modeArg === 'sonic' ? 'sonic' : 'flow') as ShuffleMode;
+          const mode = (
+            modeArg === 'arc' ? 'arc' : modeArg === 'key' ? 'key' : modeArg === 'sonic' ? 'sonic' : 'flow'
+          ) as ShuffleMode;
           // A smart reorder replaces the upcoming order with a deliberate one,
           // so random shuffle must go off or it re-randomises at the next track.
           const wasShuffle = s.queue.getState().shuffle;
@@ -1883,7 +2001,10 @@ export class DiscordBot {
         // Always re-post at the bottom of the channel (old copy deleted) so the
         // panel lands where you're looking instead of scrolled up from before.
         await this.repostPanel(interaction.guildId!, interaction.channel as GuildTextBasedChannel | null);
-        { const r = await interaction.editReply({ content: '🎛️ Control panel posted right here.' }); this.autoExpireNotice(r); }
+        {
+          const r = await interaction.editReply({ content: '🎛️ Control panel posted right here.' });
+          this.autoExpireNotice(r);
+        }
         break;
       }
 
@@ -1925,7 +2046,9 @@ export class DiscordBot {
             console.warn(`[discord] could not persist SHARE_KEY: ${err instanceof Error ? err.message : err}`);
           }
           const pl = vizTunnel.panelLink();
-          const linkLine = pl.secure ? `${pl.url}?key=${newKey}` : `(links appear once PUBLIC_BASE_URL or a tunnel is up)`;
+          const linkLine = pl.secure
+            ? `${pl.url}?key=${newKey}`
+            : `(links appear once PUBLIC_BASE_URL or a tunnel is up)`;
           await interaction.reply({
             content: `🔑 New key issued — all previous links and remembered devices are dead.\n${linkLine}`,
             flags: MessageFlags.Ephemeral,
@@ -1937,7 +2060,10 @@ export class DiscordBot {
         if (sub === 'show') {
           if (!this.perms.isOwner(interaction.user.id)) return this.deny(interaction);
           if (!config.shareKey) {
-            await interaction.reply({ content: 'No share key is configured — the web panel is open access.', flags: MessageFlags.Ephemeral });
+            await interaction.reply({
+              content: 'No share key is configured — the web panel is open access.',
+              flags: MessageFlags.Ephemeral,
+            });
             break;
           }
           const sPl = vizTunnel.panelLink();
@@ -1962,7 +2088,10 @@ export class DiscordBot {
         // must not be able to mint/hand them out.
         if (!this.perms.isOwner(interaction.user.id)) return this.deny(interaction);
         if (!config.shareKey) {
-          await interaction.reply({ content: 'No share key is configured — the web panel is open access.', flags: MessageFlags.Ephemeral });
+          await interaction.reply({
+            content: 'No share key is configured — the web panel is open access.',
+            flags: MessageFlags.Ephemeral,
+          });
           break;
         }
         const pl = vizTunnel.panelLink();
@@ -1979,7 +2108,9 @@ export class DiscordBot {
                   `\n\n🥚 *Psst… this server can now rename me — try* \`/nickname set\``,
               )
               .setColor(this.themeColor())
-              .setFooter({ text: 'Keep these links private — anyone holding them gets in · /key rotate to revoke all' }),
+              .setFooter({
+                text: 'Keep these links private — anyone holding them gets in · /key rotate to revoke all',
+              }),
           ],
           flags: MessageFlags.Ephemeral,
         });
@@ -1988,13 +2119,20 @@ export class DiscordBot {
 
       case 'endwav': {
         if (!this.requireLevel('endwav', interaction)) return this.deny(interaction);
-        if (!interaction.guildId) return void (await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral }));
+        if (!interaction.guildId)
+          return void (await interaction.reply({
+            content: 'Must be used in a server.',
+            flags: MessageFlags.Ephemeral,
+          }));
         const s = this.sessionFor(interaction.guildId);
         const sub = interaction.options.getSubcommand();
         if (sub === 'on') {
           this.setAutoplayMode(s, 'smart');
           await interaction.reply({
-            content: this.autoplayStatus(s, '🌊 **Endless Wave enabled** — I\'ll keep the vibes flowing with AI-curated tracks that evolve with your session.'),
+            content: this.autoplayStatus(
+              s,
+              "🌊 **Endless Wave enabled** — I'll keep the vibes flowing with AI-curated tracks that evolve with your session.",
+            ),
             flags: MessageFlags.Ephemeral,
           });
         } else if (sub === 'off') {
@@ -2014,7 +2152,11 @@ export class DiscordBot {
 
       case 'autoplay': {
         if (!this.requireLevel('autoplay', interaction)) return this.deny(interaction);
-        if (!interaction.guildId) return void (await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral }));
+        if (!interaction.guildId)
+          return void (await interaction.reply({
+            content: 'Must be used in a server.',
+            flags: MessageFlags.Ephemeral,
+          }));
         const s = this.sessionFor(interaction.guildId);
         const mode = interaction.options.getString('mode') as EW.AutoplayMode | null;
         const forceNow = interaction.options.getBoolean('now') ?? false;
@@ -2041,7 +2183,11 @@ export class DiscordBot {
 
       case 'playlist': {
         if (!this.requireLevel('playlist', interaction)) return this.deny(interaction);
-        if (!interaction.guildId) return void (await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral }));
+        if (!interaction.guildId)
+          return void (await interaction.reply({
+            content: 'Must be used in a server.',
+            flags: MessageFlags.Ephemeral,
+          }));
         const sub = interaction.options.getSubcommand();
         const ps = this.sessionFor(interaction.guildId);
         if (sub === 'save') {
@@ -2104,15 +2250,25 @@ export class DiscordBot {
 
       case 'djrole': {
         if (!this.requireLevel('djrole', interaction)) return this.deny(interaction);
-        if (!interaction.guildId || !interaction.guild) return void (await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral }));
+        if (!interaction.guildId || !interaction.guild)
+          return void (await interaction.reply({
+            content: 'Must be used in a server.',
+            flags: MessageFlags.Ephemeral,
+          }));
         const off = interaction.options.getBoolean('off') ?? false;
         const role = interaction.options.getRole('role');
         if (off) {
           this.perms.setDjRole(interaction.guildId, null);
-          await interaction.reply({ content: '🎧 DJ role cleared — skip now uses vote-to-skip.', flags: MessageFlags.Ephemeral });
+          await interaction.reply({
+            content: '🎧 DJ role cleared — skip now uses vote-to-skip.',
+            flags: MessageFlags.Ephemeral,
+          });
         } else if (role) {
           this.perms.setDjRole(interaction.guildId, role.id);
-          await interaction.reply({ content: `🎧 DJ role set to <@&${role.id}>. Holders can skip/control without a vote.`, flags: MessageFlags.Ephemeral });
+          await interaction.reply({
+            content: `🎧 DJ role set to <@&${role.id}>. Holders can skip/control without a vote.`,
+            flags: MessageFlags.Ephemeral,
+          });
         } else {
           const cur = this.perms.getDjRole(interaction.guildId);
           await interaction.reply({
@@ -2126,14 +2282,18 @@ export class DiscordBot {
       case 'ambient': {
         if (!this.requireLevel('ambient', interaction)) return this.deny(interaction);
         const gid = interaction.guildId;
-        if (!gid) return void (await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral }));
+        if (!gid)
+          return void (await interaction.reply({
+            content: 'Must be used in a server.',
+            flags: MessageFlags.Ephemeral,
+          }));
         const enabled = interaction.options.getBoolean('enabled');
         if (enabled === true) this.perms.setAmbient(gid, true);
         else if (enabled === false) this.perms.setAmbient(gid, false);
         const on = this.perms.getAmbient(gid);
         await interaction.reply({
           content: on
-            ? '🌙 Lo-fi intermission **on** — when the queue ends I\'ll play a quiet lo-fi track instead of going quiet.'
+            ? "🌙 Lo-fi intermission **on** — when the queue ends I'll play a quiet lo-fi track instead of going quiet."
             : 'Ambient intermission **off** — the queue ends quietly.',
           flags: MessageFlags.Ephemeral,
         });
@@ -2150,7 +2310,11 @@ export class DiscordBot {
       case 'mood': {
         if (!this.requireLevel('mood', interaction)) return this.deny(interaction);
         const gid = interaction.guildId;
-        if (!gid) return void (await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral }));
+        if (!gid)
+          return void (await interaction.reply({
+            content: 'Must be used in a server.',
+            flags: MessageFlags.Ephemeral,
+          }));
         const enabled = interaction.options.getBoolean('enabled');
         if (enabled === true) this.moodOn.add(gid);
         else if (enabled === false) this.clearMood(gid);
@@ -2169,14 +2333,18 @@ export class DiscordBot {
       case 'tts': {
         if (!this.requireLevel('tts', interaction)) return this.deny(interaction);
         const gid = interaction.guildId;
-        if (!gid) return void (await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral }));
+        if (!gid)
+          return void (await interaction.reply({
+            content: 'Must be used in a server.',
+            flags: MessageFlags.Ephemeral,
+          }));
         const enabled = interaction.options.getBoolean('enabled');
         if (enabled !== null) this.perms.setTts(gid, enabled);
         const on = this.perms.getTts(gid);
         await interaction.reply({
           content: on
             ? ttsEngine.enabled
-              ? '🗣 Spoken DJ announcements **on** — I\'ll announce each track.'
+              ? "🗣 Spoken DJ announcements **on** — I'll announce each track."
               : '🗣 Announcements are **on**, but no TTS engine is configured on the bot (set `TTS_PROVIDER`).'
             : '🗣 Spoken DJ announcements **off**.',
           flags: MessageFlags.Ephemeral,
@@ -2187,7 +2355,11 @@ export class DiscordBot {
       case 'voteskip': {
         if (!this.requireLevel('voteskip', interaction)) return this.deny(interaction);
         const gid = interaction.guildId;
-        if (!gid) return void (await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral }));
+        if (!gid)
+          return void (await interaction.reply({
+            content: 'Must be used in a server.',
+            flags: MessageFlags.Ephemeral,
+          }));
         const enabled = interaction.options.getBoolean('enabled');
         if (enabled !== null) this.perms.setVoteSkip(gid, enabled);
         const on = this.perms.getVoteSkip(gid);
@@ -2202,7 +2374,8 @@ export class DiscordBot {
 
       case 'duck': {
         if (!this.requireLevel('duck', interaction)) return this.deny(interaction);
-        if (!s.voice.isJoined()) return void (await interaction.reply({ content: 'Not in a voice channel.', flags: MessageFlags.Ephemeral }));
+        if (!s.voice.isJoined())
+          return void (await interaction.reply({ content: 'Not in a voice channel.', flags: MessageFlags.Ephemeral }));
         if (interaction.options.getBoolean('cancel')) {
           s.voice.cancelDuck();
           await interaction.reply({ content: '🔊 Duck cancelled.', flags: MessageFlags.Ephemeral });
@@ -2210,14 +2383,21 @@ export class DiscordBot {
         }
         const seconds = interaction.options.getInteger('seconds') ?? 30;
         s.voice.duckFor(seconds * 1000);
-        await interaction.reply({ content: `🔉 Ducking the music for **${seconds}s** — talk away.`, flags: MessageFlags.Ephemeral });
+        await interaction.reply({
+          content: `🔉 Ducking the music for **${seconds}s** — talk away.`,
+          flags: MessageFlags.Ephemeral,
+        });
         break;
       }
 
       case 'duckmode': {
         if (!this.requireLevel('duckmode', interaction)) return this.deny(interaction);
         const gid = interaction.guildId;
-        if (!gid) return void (await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral }));
+        if (!gid)
+          return void (await interaction.reply({
+            content: 'Must be used in a server.',
+            flags: MessageFlags.Ephemeral,
+          }));
         const mode = interaction.options.getString('mode', true) as 'off' | 'auto' | 'hosts';
         this.perms.setDuckMode(gid, mode);
         await interaction.reply({
@@ -2235,7 +2415,11 @@ export class DiscordBot {
       case 'npchannel': {
         if (!this.requireLevel('npchannel', interaction)) return this.deny(interaction);
         const gid = interaction.guildId;
-        if (!gid) return void (await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral }));
+        if (!gid)
+          return void (await interaction.reply({
+            content: 'Must be used in a server.',
+            flags: MessageFlags.Ephemeral,
+          }));
         if (interaction.options.getBoolean('off')) {
           this.perms.setNpAuto(gid, false);
           this.perms.setNpChannel(gid, null);
@@ -2257,7 +2441,9 @@ export class DiscordBot {
         if (!this.requireLevel('vibe', interaction)) return this.deny(interaction);
         await interaction.deferReply();
         await interaction.editReply(
-          await this.vibeDj(s, interaction.options.getString('mood') ?? undefined, () => this.ensureJoinedForPlayback(interaction, s)),
+          await this.vibeDj(s, interaction.options.getString('mood') ?? undefined, () =>
+            this.ensureJoinedForPlayback(interaction, s),
+          ),
         );
         break;
       }
@@ -2265,7 +2451,11 @@ export class DiscordBot {
       case 'leaderboard': {
         if (!this.requireLevel('leaderboard', interaction)) return this.deny(interaction);
         const gid = interaction.guildId;
-        if (!gid) return void (await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral }));
+        if (!gid)
+          return void (await interaction.reply({
+            content: 'Must be used in a server.',
+            flags: MessageFlags.Ephemeral,
+          }));
         await interaction.reply({ embeds: [this.leaderboardEmbed(gid, interaction.user.username)] });
         break;
       }
@@ -2291,13 +2481,17 @@ export class DiscordBot {
       case 'hype': {
         if (!this.requireLevel('hype', interaction)) return this.deny(interaction);
         const gid = interaction.guildId;
-        if (!gid) return void (await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral }));
+        if (!gid)
+          return void (await interaction.reply({
+            content: 'Must be used in a server.',
+            flags: MessageFlags.Ephemeral,
+          }));
         const enabled = interaction.options.getBoolean('enabled');
         if (enabled === true) this.hypeGuilds.add(gid);
         else if (enabled === false) this.hypeGuilds.delete(gid);
         const on = this.hypeGuilds.has(gid);
         await interaction.reply({
-          content: on ? '⚡ Auto-hype **on** — I\'ll drop a hit on strong beats.' : 'Auto-hype **off**.',
+          content: on ? "⚡ Auto-hype **on** — I'll drop a hit on strong beats." : 'Auto-hype **off**.',
           flags: MessageFlags.Ephemeral,
         });
         break;
@@ -2319,7 +2513,9 @@ export class DiscordBot {
         const a = interaction.options.getString('a', true);
         const b = interaction.options.getString('b', true);
         const ch = interaction.channel;
-        await interaction.editReply('🎛️ Rendering stem mashup — separating both songs (this can take several minutes)…');
+        await interaction.editReply(
+          '🎛️ Rendering stem mashup — separating both songs (this can take several minutes)…',
+        );
         if (ch && 'send' in ch) {
           void this.startMashupRender((p) => ch.send(p), interaction.guildId ?? '', a, b, interaction.user.id);
         }
@@ -2372,9 +2568,7 @@ export class DiscordBot {
         if (!this.requireLevel('dedupe', interaction)) return this.deny(interaction);
         const n = s.queue.dedupe();
         await interaction.reply(
-          n > 0
-            ? `🧹 Removed ${n} duplicate track${n > 1 ? 's' : ''} from the queue.`
-            : 'No duplicates in the queue.',
+          n > 0 ? `🧹 Removed ${n} duplicate track${n > 1 ? 's' : ''} from the queue.` : 'No duplicates in the queue.',
         );
         break;
       }
@@ -2403,7 +2597,11 @@ export class DiscordBot {
         const who = interaction.user.username;
         if (this.userQueueMode(s) === 'insert') s.queue.insertAfterCurrent(resolved, who);
         else s.queue.enqueueMany(resolved, who);
-        this.stats.noteQueued(s.guildId ?? '', who, resolved.flatMap((t) => t.artists));
+        this.stats.noteQueued(
+          s.guildId ?? '',
+          who,
+          resolved.flatMap((t) => t.artists),
+        );
         try {
           await this.ensureJoinedForPlayback(interaction, s);
           if (!s.queue.getState().playing) await s.playback.play();
@@ -2478,15 +2676,24 @@ export class DiscordBot {
         if (!this.requireLevel('guess', interaction)) return this.deny(interaction);
         const q = this.quizzes.get(interaction.guildId ?? '');
         if (!q) {
-          await interaction.reply({ content: 'No quiz running — start one with `/quiz`.', flags: MessageFlags.Ephemeral });
+          await interaction.reply({
+            content: 'No quiz running — start one with `/quiz`.',
+            flags: MessageFlags.Ephemeral,
+          });
           break;
         }
-        const norm = (x: string): string => x.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+        const norm = (x: string): string =>
+          x
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, ' ')
+            .trim();
         const g = norm(interaction.options.getString('text', true));
         const t = norm(q.name);
         if (g.length >= 3 && (t.includes(g) || g.includes(t))) {
           this.endQuiz(interaction.guildId ?? '');
-          await interaction.reply(`✅ **${interaction.user.username}** got it — **${q.name}** — ${(q.artists ?? []).join(', ')}!`);
+          await interaction.reply(
+            `✅ **${interaction.user.username}** got it — **${q.name}** — ${(q.artists ?? []).join(', ')}!`,
+          );
         } else {
           await interaction.reply({ content: '❌ Not it — keep guessing!', flags: MessageFlags.Ephemeral });
         }
@@ -2523,7 +2730,12 @@ export class DiscordBot {
         const mode = interaction.options.getString('mode');
         if (!mode) {
           const speed = s.playback.getSpeed();
-          const label = speed === 1 ? 'Normal (1x)' : speed > 1 ? `Nightcore (${speed.toFixed(2)}x)` : `Slowed (${speed.toFixed(2)}x)`;
+          const label =
+            speed === 1
+              ? 'Normal (1x)'
+              : speed > 1
+                ? `Nightcore (${speed.toFixed(2)}x)`
+                : `Slowed (${speed.toFixed(2)}x)`;
           await interaction.reply(`🎚️ Current speed: **${label}** — use \`/speed mode\` to change it.`);
           break;
         }
@@ -2575,7 +2787,10 @@ export class DiscordBot {
           break;
         }
         if (!s.playback.setEq(preset)) {
-          await interaction.reply({ content: `Unknown preset \`${preset}\`. Try flat, bass, vocal, night, warm, lofi.`, flags: MessageFlags.Ephemeral });
+          await interaction.reply({
+            content: `Unknown preset \`${preset}\`. Try flat, bass, vocal, night, warm, lofi.`,
+            flags: MessageFlags.Ephemeral,
+          });
           break;
         }
         await interaction.reply(`🎛️ EQ preset → **${preset}** — applies from the next track.`);
@@ -2605,7 +2820,11 @@ export class DiscordBot {
       case 'wrapped': {
         if (!this.requireLevel('wrapped', interaction)) return this.deny(interaction);
         const gid = interaction.guildId;
-        if (!gid) return void (await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral }));
+        if (!gid)
+          return void (await interaction.reply({
+            content: 'Must be used in a server.',
+            flags: MessageFlags.Ephemeral,
+          }));
         const which = interaction.options.getString('month') ?? 'this';
         const now = new Date();
         const month =
@@ -2619,14 +2838,25 @@ export class DiscordBot {
       case 'follow': {
         if (!this.requireLevel('follow', interaction)) return this.deny(interaction);
         const gid = interaction.guildId;
-        if (!gid) return void (await interaction.reply({ content: 'Must be used in a server.', flags: MessageFlags.Ephemeral }));
-        await interaction.reply(await this.followNowPlaying(gid, interaction.channelId, interaction.options.getBoolean('off') ?? false));
+        if (!gid)
+          return void (await interaction.reply({
+            content: 'Must be used in a server.',
+            flags: MessageFlags.Ephemeral,
+          }));
+        await interaction.reply(
+          await this.followNowPlaying(gid, interaction.channelId, interaction.options.getBoolean('off') ?? false),
+        );
         break;
       }
 
       case 'stump': {
         if (!this.requireLevel('stump', interaction)) return this.deny(interaction);
-        const res = await this.gameStump(s, interaction.user.username, interaction.options.getString('track') ?? undefined, interaction.user.id);
+        const res = await this.gameStump(
+          s,
+          interaction.user.username,
+          interaction.options.getString('track') ?? undefined,
+          interaction.user.id,
+        );
         await interaction.reply(typeof res === 'string' ? res : { content: res.content, components: res.components });
         break;
       }
@@ -2658,7 +2888,10 @@ export class DiscordBot {
       case 'sleep': {
         if (!this.requireLevel('sleep', interaction)) return this.deny(interaction);
         if (!interaction.inGuild()) {
-          await interaction.reply({ content: 'Sleep timer only works inside a server.', flags: MessageFlags.Ephemeral });
+          await interaction.reply({
+            content: 'Sleep timer only works inside a server.',
+            flags: MessageFlags.Ephemeral,
+          });
           break;
         }
         const raw = interaction.options.getString('time');
@@ -2673,7 +2906,10 @@ export class DiscordBot {
         }
         const ms = parseSleepSpec(raw);
         if (!ms || ms <= 0) {
-          await interaction.reply({ content: `Couldn't parse \`${raw}\`. Try \`30m\`, \`1h\`, or \`45s\`.`, flags: MessageFlags.Ephemeral });
+          await interaction.reply({
+            content: `Couldn't parse \`${raw}\`. Try \`30m\`, \`1h\`, or \`45s\`.`,
+            flags: MessageFlags.Ephemeral,
+          });
           break;
         }
         const when = new Date(Date.now() + ms);
@@ -2765,7 +3001,10 @@ export class DiscordBot {
           break;
         }
         if (!s.playback.isDjEnabled(interaction.guildId)) {
-          await interaction.reply({ content: '🎛️ DJ effects are off for this server. A mod can enable them with `/dj on`.', flags: MessageFlags.Ephemeral });
+          await interaction.reply({
+            content: '🎛️ DJ effects are off for this server. A mod can enable them with `/dj on`.',
+            flags: MessageFlags.Ephemeral,
+          });
           break;
         }
         const sound = interaction.options.getString('sound');
@@ -2781,7 +3020,10 @@ export class DiscordBot {
         await interaction.reply(
           ok
             ? `${s.playback.listSoundEffects().find((snd) => snd.id === sound)?.emoji ?? ''} **${sound}**! 🎧`
-            : `Unknown sound \`${sound}\`. Try ${s.playback.listSoundEffects().map((snd) => `\`${snd.id}\``).join(', ')}.`,
+            : `Unknown sound \`${sound}\`. Try ${s.playback
+                .listSoundEffects()
+                .map((snd) => `\`${snd.id}\``)
+                .join(', ')}.`,
         );
         break;
       }
@@ -2804,7 +3046,19 @@ export class DiscordBot {
 
       case 'invite': {
         const appId = this.client.user!.id;
-        const perms = (1n << 6n) | (1n << 10n) | (1n << 11n) | (1n << 13n) | (1n << 14n) | (1n << 15n) | (1n << 16n) | (1n << 18n) | (1n << 20n) | (1n << 21n) | (1n << 31n) | (1n << 52n);
+        const perms =
+          (1n << 6n) |
+          (1n << 10n) |
+          (1n << 11n) |
+          (1n << 13n) |
+          (1n << 14n) |
+          (1n << 15n) |
+          (1n << 16n) |
+          (1n << 18n) |
+          (1n << 20n) |
+          (1n << 21n) |
+          (1n << 31n) |
+          (1n << 52n);
         const url = `https://discord.com/oauth2/authorize?client_id=${appId}&permissions=${perms}&scope=bot+applications.commands`;
         await interaction.reply({
           content: '➕ **Add Vaporzr to a server** — pick the server in the dropdown, hit Authorize, done.',
@@ -2886,16 +3140,20 @@ export class DiscordBot {
       case 'cookie-refresh': {
         const confirm = interaction.options.getBoolean('confirm', true);
         if (!confirm) {
-          await interaction.reply('Cookies were NOT refreshed. Run `/cookie-refresh confirm:true` to export cookies from your browser.');
+          await interaction.reply(
+            'Cookies were NOT refreshed. Run `/cookie-refresh confirm:true` to export cookies from your browser.',
+          );
           break;
         }
         await interaction.deferReply();
         try {
           const { refreshYoutubeCookies } = await import('@vaporzr/core/youtube');
           const saved = await refreshYoutubeCookies();
-          await interaction.followUp(saved.ok
-            ? `✅ Cookies refreshed and written to \`${saved.path}\` (${saved.lines} cookies).`
-            : `⚠️ ${saved.error}`);
+          await interaction.followUp(
+            saved.ok
+              ? `✅ Cookies refreshed and written to \`${saved.path}\` (${saved.lines} cookies).`
+              : `⚠️ ${saved.error}`,
+          );
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           await interaction.followUp(`⚠️ Cookie refresh failed: ${msg}`);
@@ -3042,7 +3300,9 @@ export class DiscordBot {
     }
 
     if (!rest) {
-      await message.reply('Vaporzr commands — try `V@p <link or search>`, `V@s`, `V@i <link or search>`, `V@q`, or `V@help`.');
+      await message.reply(
+        'Vaporzr commands — try `V@p <link or search>`, `V@s`, `V@i <link or search>`, `V@q`, or `V@help`.',
+      );
       return;
     }
     const [rawCmd, ...rawArgs] = rest.split(/\s+/);
@@ -3056,7 +3316,7 @@ export class DiscordBot {
     };
     const canWindow = (): boolean => this.requireWindowOwner(message.author.id, message.guild, message.member);
     const deny = async (): Promise<never> => {
-      await message.reply('⛔ You don\'t have permission to do that.');
+      await message.reply("⛔ You don't have permission to do that.");
       throw new Error('denied');
     };
 
@@ -3137,14 +3397,19 @@ export class DiscordBot {
             this.clearSkipVote(message.guildId);
             s.playback.next();
             this.scheduleWaveTopUp(s);
-            { const m1 = await message.reply('⏭️ Skipped'); this.autoExpire(m1); }
+            {
+              const m1 = await message.reply('⏭️ Skipped');
+              this.autoExpire(m1);
+            }
             break;
           }
           const v = this.requestSkip(s, message.author.id);
           if (v.result === 'skipped') {
             s.playback.next();
             this.scheduleWaveTopUp(s);
-            const m1 = await message.reply(this.perms.getVoteSkip(message.guildId ?? '') ? '⏭️ Skipped (majority vote reached)' : '⏭️ Skipped');
+            const m1 = await message.reply(
+              this.perms.getVoteSkip(message.guildId ?? '') ? '⏭️ Skipped (majority vote reached)' : '⏭️ Skipped',
+            );
             this.autoExpire(m1);
           } else {
             await message.reply(
@@ -3156,7 +3421,7 @@ export class DiscordBot {
           break;
         }
 
-      case 'jump': {
+        case 'jump': {
           if (!canUse('jump')) return void (await deny());
           if (!args) return void (await message.reply('Usage: `V@jump <words from a lyric line>`.'));
           await message.reply(await this.jumpToLyric(s, args));
@@ -3167,7 +3432,10 @@ export class DiscordBot {
         case 'pause': {
           if (!canUse('pause')) return void (await deny());
           s.playback.pause();
-          { const m2 = await message.reply('⏸️ Paused'); this.autoExpire(m2); }
+          {
+            const m2 = await message.reply('⏸️ Paused');
+            this.autoExpire(m2);
+          }
           break;
         }
 
@@ -3175,7 +3443,10 @@ export class DiscordBot {
         case 'resume': {
           if (!canUse('resume')) return void (await deny());
           await s.playback.resume();
-          { const m3 = await message.reply('▶️ Resumed'); this.autoExpire(m3); }
+          {
+            const m3 = await message.reply('▶️ Resumed');
+            this.autoExpire(m3);
+          }
           break;
         }
 
@@ -3193,11 +3464,17 @@ export class DiscordBot {
           if (!canUse('volume')) return void (await deny());
           const n = Number(args);
           if (!args || Number.isNaN(n)) {
-            { const m = await message.reply(`🔊 Current volume is **${s.queue.getState().volume}%**`); this.autoExpire(m); }
+            {
+              const m = await message.reply(`🔊 Current volume is **${s.queue.getState().volume}%**`);
+              this.autoExpire(m);
+            }
             break;
           }
           s.playback.volume(Math.max(0, Math.min(100, n)));
-          { const m = await message.reply(`🔊 Volume set to ${n}%`); this.autoExpire(m); }
+          {
+            const m = await message.reply(`🔊 Volume set to ${n}%`);
+            this.autoExpire(m);
+          }
           break;
         }
 
@@ -3279,7 +3556,10 @@ export class DiscordBot {
           const sent = await message.channel.send({ embeds: [this.npPayload(s)] });
           this.npMessages.set(guildId, { channelId: message.channelId, messageId: sent.id });
           this.scheduleSavePanels();
-          { const m = await message.reply('🔴 Live now-playing message posted right here — it updates itself.'); this.autoExpireNotice(m); }
+          {
+            const m = await message.reply('🔴 Live now-playing message posted right here — it updates itself.');
+            this.autoExpireNotice(m);
+          }
           break;
         }
 
@@ -3290,11 +3570,18 @@ export class DiscordBot {
           {
             // Keep the queue so V@undo can bring it back after a mis-click.
             const snapshot = s.queue.getSnapshot().tracks;
-            if (snapshot.length) this.lastRemoved.set(message.guildId ?? '', snapshot.map((t) => ({ ...t })));
+            if (snapshot.length)
+              this.lastRemoved.set(
+                message.guildId ?? '',
+                snapshot.map((t) => ({ ...t })),
+              );
           }
           s.playback.stopAll();
           s.queue.clear();
-          { const m4 = await message.reply('🗑️ Queue cleared'); this.autoExpire(m4); }
+          {
+            const m4 = await message.reply('🗑️ Queue cleared');
+            this.autoExpire(m4);
+          }
           break;
         }
 
@@ -3328,9 +3615,7 @@ export class DiscordBot {
             else misses.push(tok);
           }
           if (targets.size === 0) {
-            await message.reply(
-              misses.length ? `Nothing matched: **${misses.join(', ')}**.` : 'Nothing to remove.',
-            );
+            await message.reply(misses.length ? `Nothing matched: **${misses.join(', ')}**.` : 'Nothing to remove.');
             break;
           }
           const names: string[] = [];
@@ -3358,7 +3643,12 @@ export class DiscordBot {
           if (!canUse('play')) return void (await deny());
           const last = this.latestSwap(message.author.id, message.guildId ?? '', s);
           if (!last) {
-            { const m = await message.reply('Nothing to fix — none of your picks from the last 15 minutes are still waiting in the queue.'); this.autoExpire(m); }
+            {
+              const m = await message.reply(
+                'Nothing to fix — none of your picks from the last 15 minutes are still waiting in the queue.',
+              );
+              this.autoExpire(m);
+            }
             break;
           }
           const { token, ref } = last;
@@ -3378,7 +3668,10 @@ export class DiscordBot {
           const key = message.guildId ?? '';
           const removed = this.lastRemoved.get(key);
           if (!removed || removed.length === 0) {
-            { const m = await message.reply('Nothing to undo.'); this.autoExpire(m); }
+            {
+              const m = await message.reply('Nothing to undo.');
+              this.autoExpire(m);
+            }
             break;
           }
           this.lastRemoved.delete(key);
@@ -3499,7 +3792,10 @@ export class DiscordBot {
           await message.reply(
             ok
               ? `${s.playback.listSoundEffects().find((snd) => snd.id === id)?.emoji ?? ''} **${id}**! 🎧`
-              : `Unknown sound \`${id}\`. Try ${s.playback.listSoundEffects().map((snd) => `\`${snd.id}\``).join(', ')}.`,
+              : `Unknown sound \`${id}\`. Try ${s.playback
+                  .listSoundEffects()
+                  .map((snd) => `\`${snd.id}\``)
+                  .join(', ')}.`,
           );
           break;
         }
@@ -3513,7 +3809,7 @@ export class DiscordBot {
           const on = this.perms.getAmbient(message.guildId);
           await message.reply(
             on
-              ? '🌙 Lo-fi intermission **on** — when the queue ends I\'ll play a quiet lo-fi track.'
+              ? "🌙 Lo-fi intermission **on** — when the queue ends I'll play a quiet lo-fi track."
               : '🌌 Ambient intermission **off**. Use `V@ambient on` to enable.',
           );
           break;
@@ -3584,9 +3880,9 @@ export class DiscordBot {
           await message.reply(
             on
               ? ttsEngine.enabled
-                ? '🗣 Spoken DJ announcements **on** — I\'ll announce each track.'
+                ? "🗣 Spoken DJ announcements **on** — I'll announce each track."
                 : '🗣 Announcements are **on**, but no TTS engine is configured on the bot (set `TTS_PROVIDER`).'
-                : '🗣 Spoken DJ announcements **off**.',
+              : '🗣 Spoken DJ announcements **off**.',
           );
           break;
         }
@@ -3710,7 +4006,10 @@ export class DiscordBot {
 
         case 'mix': {
           if (!canUse('mix')) return void (await deny());
-          const parts = args.split(/\s*\|\s*|\s*->\s*/).map((x) => x.trim()).filter(Boolean);
+          const parts = args
+            .split(/\s*\|\s*|\s*->\s*/)
+            .map((x) => x.trim())
+            .filter(Boolean);
           if (parts.length < 2) return void (await message.reply('Usage: `V@mix <a> | <b> [seconds]` (or `/mix`).'));
           const sec = parts[2] ? parseInt(parts[2], 10) : 6;
           await message.reply(await this.mixTracks(s, parts[0], parts[1], Number.isFinite(sec) ? sec : 6));
@@ -3729,9 +4028,9 @@ export class DiscordBot {
           if (sub === 'clear') {
             const had = (this.mashupQueue.get(gid) ?? []).length;
             this.mashupQueue.delete(gid);
-            return void (
-              await reply(had ? `🧹 Cleared ${had} queued mashup${had === 1 ? '' : 's'}.` : 'The mashup queue is already empty.')
-            );
+            return void (await reply(
+              had ? `🧹 Cleared ${had} queued mashup${had === 1 ? '' : 's'}.` : 'The mashup queue is already empty.',
+            ));
           }
           if (sub === 'remove' || sub === 'cancel' || sub === 'delete') {
             return void (await this.removeMashupFromQueue(reply, gid, parseInt(raw.split(/\s+/)[1] ?? '', 10)));
@@ -3743,18 +4042,24 @@ export class DiscordBot {
           if (sub === 'edit' || sub === 'replace') {
             const rest = raw.replace(/^\S+\s*/, '');
             const m = /^(\d+)\s+([\s\S]+)$/.exec(rest);
-            const ep = m ? m[2].split(/\s*\|\s*|\s*->\s*/).map((x) => x.trim()).filter(Boolean) : [];
+            const ep = m
+              ? m[2]
+                  .split(/\s*\|\s*|\s*->\s*/)
+                  .map((x) => x.trim())
+                  .filter(Boolean)
+              : [];
             if (!m || ep.length < 2) return void (await reply('Usage: `V@mashup edit <n> <song A> | <song B>`'));
             return void (await this.editMashupInQueue(reply, gid, parseInt(m[1]!, 10), ep[0]!, ep[1]!));
           }
-          const parts = raw.split(/\s*\|\s*|\s*->\s*/).map((x) => x.trim()).filter(Boolean);
+          const parts = raw
+            .split(/\s*\|\s*|\s*->\s*/)
+            .map((x) => x.trim())
+            .filter(Boolean);
           if (parts.length < 2)
-            return void (
-              await reply(
-                'Usage: `V@mashup <song A> | <song B>` — separates both songs and cross-layers their stems into 2 downloadable blends + 5 similar songs.\n' +
-                  'Queue: `V@mashup list` · `V@mashup remove <n>` · `V@mashup edit <n> <a> | <b>` · `V@mashup move <n> <m>` · `V@mashup clear`',
-              )
-            );
+            return void (await reply(
+              'Usage: `V@mashup <song A> | <song B>` — separates both songs and cross-layers their stems into 2 downloadable blends + 5 similar songs.\n' +
+                'Queue: `V@mashup list` · `V@mashup remove <n>` · `V@mashup edit <n> <a> | <b>` · `V@mashup move <n> <m>` · `V@mashup clear`',
+            ));
           const ch = message.channel;
           if (!('send' in ch)) return void (await reply('Cannot post here.'));
           void this.startMashupRender((p) => ch.send(p), gid, parts[0]!, parts[1]!, message.author?.username ?? '');
@@ -3767,11 +4072,9 @@ export class DiscordBot {
           if (!('send' in ch)) return void (await message.reply('Cannot post here.'));
           const pair = this.suggestMashupPair(s);
           if (!pair)
-            return void (
-              await message.reply(
-                'Need at least 2 tracks queued to suggest a mashup pair — or use `V@mashup <a> | <b>`.',
-              )
-            );
+            return void (await message.reply(
+              'Need at least 2 tracks queued to suggest a mashup pair — or use `V@mashup <a> | <b>`.',
+            ));
           await message.reply(
             `🎲 **Mashup game!** Suggesting:\n• **${pair.a}**\n• **${pair.b}**\n\nRendering both stem blends — this takes several minutes…`,
           );
@@ -3860,15 +4163,17 @@ export class DiscordBot {
             const skipped = resolved.length - fresh.length;
             if (fresh.length === 0)
               throw new Error(
-                skipped === 1
-                  ? 'That track is already in the queue.'
-                  : 'All of those are already in the queue.',
+                skipped === 1 ? 'That track is already in the queue.' : 'All of those are already in the queue.',
               );
             const who = message.author.username;
             // Bulk adds always land ahead of Endless Wave filler so an explicit
             // list is never queued behind (or interleaved with) auto-play picks.
             s.queue.insertUserBatch(fresh, who);
-            this.stats.noteQueued(s.guildId ?? '', who, fresh.flatMap((t) => t.artists));
+            this.stats.noteQueued(
+              s.guildId ?? '',
+              who,
+              fresh.flatMap((t) => t.artists),
+            );
             try {
               await this.ensureJoinedForMessage(message, s);
               if (!s.queue.getState().playing) await s.playback.play();
@@ -3907,9 +4212,9 @@ export class DiscordBot {
         case 'skipto': {
           if (!canUse('skipto')) return void (await deny());
           if (!this.perms.getSkipForward(message.guildId ?? ''))
-            return void (
-              await message.reply('⏭ Skip-to is **off** here — a mod can enable it with `/skiptoggle enabled:true`.')
-            );
+            return void (await message.reply(
+              '⏭ Skip-to is **off** here — a mod can enable it with `/skiptoggle enabled:true`.',
+            ));
           await this.presentSkipTo(message);
           break;
         }
@@ -3936,7 +4241,7 @@ export class DiscordBot {
           if (/^(on|1|true)$/.test(a)) this.hypeGuilds.add(message.guildId);
           else if (/^(off|0|false)$/.test(a)) this.hypeGuilds.delete(message.guildId);
           const on = this.hypeGuilds.has(message.guildId);
-          await message.reply(on ? '⚡ Auto-hype **on** — I\'ll drop a hit on strong beats.' : 'Auto-hype **off**.');
+          await message.reply(on ? "⚡ Auto-hype **on** — I'll drop a hit on strong beats." : 'Auto-hype **off**.');
           break;
         }
 
@@ -3944,7 +4249,7 @@ export class DiscordBot {
         case 'sensitivity': {
           if (!canUse('sensitivity')) return void (await deny());
           const val = args ? parseFloat(args) : NaN;
-          const valid = [1.0, 1.10, 1.15, 1.25, 1.50];
+          const valid = [1.0, 1.1, 1.15, 1.25, 1.5];
           if (!args || isNaN(val) || !valid.includes(val)) {
             const current = this.bridge.getSensitivity();
             await message.reply(
@@ -3960,7 +4265,9 @@ export class DiscordBot {
         case 'pan':
         case 'panel': {
           if (!this.isAdminMember(message.author.id, message.guild, message.member)) {
-            await message.reply('⛔ Admins only — server admins can post the panel (or `/perms` grant admin to a role).');
+            await message.reply(
+              '⛔ Admins only — server admins can post the panel (or `/perms` grant admin to a role).',
+            );
             return;
           }
           if (!canUse('panel')) return void (await deny());
@@ -4015,7 +4322,9 @@ export class DiscordBot {
               console.warn(`[discord] could not persist SHARE_KEY: ${err instanceof Error ? err.message : err}`);
             }
             const pl = vizTunnel.panelLink();
-            const linkLine = pl.secure ? `${pl.url}?key=${newKey}` : `(links appear once PUBLIC_BASE_URL or a tunnel is up)`;
+            const linkLine = pl.secure
+              ? `${pl.url}?key=${newKey}`
+              : `(links appear once PUBLIC_BASE_URL or a tunnel is up)`;
             await message.reply(`🔑 New key issued — all previous links and remembered devices are dead.\n${linkLine}`);
             break;
           }
@@ -4054,7 +4363,9 @@ export class DiscordBot {
                     `\n\n🥚 *Psst… this server can now rename me — try* \`V@nick Neon-rzr\``,
                 )
                 .setColor(this.themeColor())
-                .setFooter({ text: 'Keep these links private — anyone holding them gets in · V@key rotate to revoke all' }),
+                .setFooter({
+                  text: 'Keep these links private — anyone holding them gets in · V@key rotate to revoke all',
+                }),
             ],
           });
           if (message.guildId) await this.markKeyedGuild(message.guildId);
@@ -4064,7 +4375,9 @@ export class DiscordBot {
         case 'sc':
         case 'screensaver': {
           const svl = vizTunnel.vizLink();
-          await message.reply(`🎬 Fullscreen visuals live in the browser now:\n${svl.url}\n\nOpen it and tap ⛶ (or F) for fullscreen.`);
+          await message.reply(
+            `🎬 Fullscreen visuals live in the browser now:\n${svl.url}\n\nOpen it and tap ⛶ (or F) for fullscreen.`,
+          );
           break;
         }
 
@@ -4093,12 +4406,18 @@ export class DiscordBot {
           } else if (arg === 'on' || arg === 'activate' || arg === 'smart' || arg === 'high') {
             this.setAutoplayMode(ewS, 'smart');
             await message.reply({
-              content: this.autoplayStatus(ewS, '🌊 **Endless Wave (smart autoplay) enabled** — I\'ll keep the vibes flowing with AI-curated tracks.'),
+              content: this.autoplayStatus(
+                ewS,
+                "🌊 **Endless Wave (smart autoplay) enabled** — I'll keep the vibes flowing with AI-curated tracks.",
+              ),
             });
           } else if (arg === 'basic' || arg === 'light' || arg === 'low') {
             this.setAutoplayMode(ewS, 'basic');
             await message.reply({
-              content: this.autoplayStatus(ewS, '🎵 **Basic autoplay enabled** — I\'ll queue a related track whenever the queue ends.'),
+              content: this.autoplayStatus(
+                ewS,
+                "🎵 **Basic autoplay enabled** — I'll queue a related track whenever the queue ends.",
+              ),
             });
           } else if (arg === 'off' || arg === 'deactivate' || arg === 'stop') {
             const wasOff = EW.modeOf(ewS.endlessWave) === 'off';
@@ -4204,7 +4523,9 @@ export class DiscordBot {
           if (!canUse('theme')) return void (await deny());
           if (!args) {
             const current = this.bridge.getTheme();
-            const lines = THEMES.map((t) => `${t.id === current.id ? '▶' : '•'} **${t.name}** (\`${t.id}\`)`).join('\n');
+            const lines = THEMES.map((t) => `${t.id === current.id ? '▶' : '•'} **${t.name}** (\`${t.id}\`)`).join(
+              '\n',
+            );
             await message.reply({
               embeds: [new EmbedBuilder().setTitle('Visual themes').setDescription(lines).setColor(this.themeColor())],
             });
@@ -4223,11 +4544,14 @@ export class DiscordBot {
         case 'wave': {
           const gif = analyzer.renderGif();
           if (!gif) {
-            await message.reply("Nothing playing, or the audio is too quiet for a waveform right now.");
+            await message.reply('Nothing playing, or the audio is too quiet for a waveform right now.');
             break;
           }
           if ('send' in message.channel) {
-            await message.channel.send({ content: '📊 Waveform — last ~2.4s:', files: [new AttachmentBuilder(gif, { name: 'vaporzr-wave.gif' })] });
+            await message.channel.send({
+              content: '📊 Waveform — last ~2.4s:',
+              files: [new AttachmentBuilder(gif, { name: 'vaporzr-wave.gif' })],
+            });
           }
           break;
         }
@@ -4305,7 +4629,9 @@ export class DiscordBot {
             break;
           }
           if (!s.playback.setEq(preset)) {
-            await message.reply(`Unknown preset \`${preset}\`. Try \`flat\`, \`bass\`, \`vocal\`, \`night\`, \`warm\`, \`lofi\`.`);
+            await message.reply(
+              `Unknown preset \`${preset}\`. Try \`flat\`, \`bass\`, \`vocal\`, \`night\`, \`warm\`, \`lofi\`.`,
+            );
             break;
           }
           await message.reply(`🎛️ EQ preset → **${preset}** — applies from the next track.`);
@@ -4448,7 +4774,15 @@ export class DiscordBot {
           if ('error' in payload) await message.reply({ content: payload.error });
           else {
             const msg = await message.reply({ embeds: [payload.embed] });
-            this.registerKaraoke(s, msg.id, message.guildId!, message.channelId, payload.title, payload.artist, payload.syncedLines);
+            this.registerKaraoke(
+              s,
+              msg.id,
+              message.guildId!,
+              message.channelId,
+              payload.title,
+              payload.artist,
+              payload.syncedLines,
+            );
           }
           break;
         }
@@ -4470,7 +4804,10 @@ export class DiscordBot {
             break;
           }
           if ('send' in message.channel) {
-            await message.channel.send({ content: '🎞 Visual burst:', files: [new AttachmentBuilder(gif, { name: 'vaporzr-burst.gif' })] });
+            await message.channel.send({
+              content: '🎞 Visual burst:',
+              files: [new AttachmentBuilder(gif, { name: 'vaporzr-burst.gif' })],
+            });
           }
           break;
         }
@@ -4538,7 +4875,19 @@ export class DiscordBot {
 
         case 'invite': {
           const appId = this.client.user!.id;
-          const perms = (1n << 6n) | (1n << 10n) | (1n << 11n) | (1n << 13n) | (1n << 14n) | (1n << 15n) | (1n << 16n) | (1n << 18n) | (1n << 20n) | (1n << 21n) | (1n << 31n) | (1n << 52n);
+          const perms =
+            (1n << 6n) |
+            (1n << 10n) |
+            (1n << 11n) |
+            (1n << 13n) |
+            (1n << 14n) |
+            (1n << 15n) |
+            (1n << 16n) |
+            (1n << 18n) |
+            (1n << 20n) |
+            (1n << 21n) |
+            (1n << 31n) |
+            (1n << 52n);
           const url = `https://discord.com/oauth2/authorize?client_id=${appId}&permissions=${perms}&scope=bot+applications.commands`;
           await message.reply({
             content: '➕ **Add Vaporzr to a server** — pick the server in the dropdown, hit Authorize, done.',
@@ -4593,7 +4942,11 @@ export class DiscordBot {
     const suppressStrip = !wasPlaying && !!first;
     if (suppressStrip) this.suppressAutoMiniNp(message.guildId ?? undefined, first.uri);
     s.queue.enqueueMany(fresh, requestedBy);
-    this.stats.noteQueued(s.guildId ?? '', requestedBy, fresh.flatMap((t) => t.artists));
+    this.stats.noteQueued(
+      s.guildId ?? '',
+      requestedBy,
+      fresh.flatMap((t) => t.artists),
+    );
     if (first) s.playback.prefetchStream(first);
     let playbackFailed: string | null = null;
     try {
@@ -4615,7 +4968,9 @@ export class DiscordBot {
           (playbackFailed ? `\n⚠️ Couldn't start playback yet: ${playbackFailed}` : ''),
       )
       .setThumbnail(first.image ?? '')
-      .setFooter({ text: `${fresh.length} track${fresh.length > 1 ? 's' : ''} · ${s.queue.getSnapshot().tracks.length} in queue` })
+      .setFooter({
+        text: `${fresh.length} track${fresh.length > 1 ? 's' : ''} · ${s.queue.getSnapshot().tracks.length} in queue`,
+      })
       .setColor(this.themeColor());
     // A name search can land on the wrong recording — offer a one-click fix.
     // A playlist needs it too: nobody typed those titles, so each item keeps
@@ -4636,9 +4991,10 @@ export class DiscordBot {
   }
 
   /** Download one Discord attachment into the uploads dir as a local track. */
-  private async downloadUploadedTrack(
-    file: { name: string; url: string },
-  ): Promise<Omit<TrackInfo, 'addedBy' | 'addedAt'>> {
+  private async downloadUploadedTrack(file: {
+    name: string;
+    url: string;
+  }): Promise<Omit<TrackInfo, 'addedBy' | 'addedAt'>> {
     const dir = path.join(config.dataDir, 'uploads');
     await fs.mkdir(dir, { recursive: true });
     const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, '_');
@@ -4709,7 +5065,11 @@ export class DiscordBot {
     const suppressStrip = !wasPlaying && !!first;
     if (suppressStrip) this.suppressAutoMiniNp(message.guildId ?? undefined, first.uri);
     s.queue.insertAfterCurrent(fresh, requestedBy);
-    this.stats.noteQueued(s.guildId ?? '', requestedBy, fresh.flatMap((t) => t.artists));
+    this.stats.noteQueued(
+      s.guildId ?? '',
+      requestedBy,
+      fresh.flatMap((t) => t.artists),
+    );
     if (first) s.playback.prefetchStream(first);
     let playbackFailed: string | null = null;
     try {
@@ -4731,7 +5091,9 @@ export class DiscordBot {
           (playbackFailed ? `\n⚠️ Couldn't start playback yet: ${playbackFailed}` : ''),
       )
       .setThumbnail(first.image ?? '')
-      .setFooter({ text: `${fresh.length} track${fresh.length > 1 ? 's' : ''} · ${s.queue.getSnapshot().tracks.length} in queue` })
+      .setFooter({
+        text: `${fresh.length} track${fresh.length > 1 ? 's' : ''} · ${s.queue.getSnapshot().tracks.length} in queue`,
+      })
       .setColor(this.themeColor());
     const items = buildSwapItems(fresh, query);
     if (items) {
@@ -4784,7 +5146,8 @@ export class DiscordBot {
         );
       return true;
     }
-    if (s.voice.isJoined()) console.warn(`[discord] auto-join: voice link is \`${s.voice.connectionStatus()}\` — rejoining`);
+    if (s.voice.isJoined())
+      console.warn(`[discord] auto-join: voice link is \`${s.voice.connectionStatus()}\` — rejoining`);
     if (!message.inGuild()) throw this.joinFailedError();
     const channel = message.member?.voice?.channel;
     if (!channel) {
@@ -4929,7 +5292,11 @@ export class DiscordBot {
     const suppressStrip = !wasPlaying && !!first;
     if (suppressStrip) this.suppressAutoMiniNp(interaction.guildId ?? undefined, first.uri);
     s.queue.insertAfterCurrent(tracks, requestedBy);
-    this.stats.noteQueued(s.guildId ?? '', requestedBy, tracks.flatMap((t) => t.artists));
+    this.stats.noteQueued(
+      s.guildId ?? '',
+      requestedBy,
+      tracks.flatMap((t) => t.artists),
+    );
     if (first) s.playback.prefetchStream(first);
     let playbackFailed: string | null = null;
     try {
@@ -4951,7 +5318,9 @@ export class DiscordBot {
           (playbackFailed ? `\n⚠️ Couldn't start playback yet: ${playbackFailed}` : ''),
       )
       .setThumbnail(first.image ?? '')
-      .setFooter({ text: `${tracks.length} track${tracks.length > 1 ? 's' : ''} · ${s.queue.getSnapshot().tracks.length} in queue` })
+      .setFooter({
+        text: `${tracks.length} track${tracks.length > 1 ? 's' : ''} · ${s.queue.getSnapshot().tracks.length} in queue`,
+      })
       .setColor(this.themeColor());
     const items = buildSwapItems(tracks, query);
     const row = items
@@ -4978,7 +5347,11 @@ export class DiscordBot {
     const suppressStrip = !wasPlaying && !!first;
     if (suppressStrip) this.suppressAutoMiniNp(interaction.guildId ?? undefined, first.uri);
     s.queue.enqueueMany(tracks, requestedBy);
-    this.stats.noteQueued(s.guildId ?? '', requestedBy, tracks.flatMap((t) => t.artists));
+    this.stats.noteQueued(
+      s.guildId ?? '',
+      requestedBy,
+      tracks.flatMap((t) => t.artists),
+    );
     // Warm the stream resolve while the voice-channel join is in flight so
     // playback starts as soon as the join completes instead of serially after.
     if (first) s.playback.prefetchStream(first);
@@ -5002,7 +5375,9 @@ export class DiscordBot {
           (playbackFailed ? `\n⚠️ Couldn't start playback yet: ${playbackFailed}` : ''),
       )
       .setThumbnail(first.image ?? '')
-      .setFooter({ text: `${tracks.length} track${tracks.length > 1 ? 's' : ''} · ${s.queue.getSnapshot().tracks.length} in queue` })
+      .setFooter({
+        text: `${tracks.length} track${tracks.length > 1 ? 's' : ''} · ${s.queue.getSnapshot().tracks.length} in queue`,
+      })
       .setColor(this.themeColor());
     const items = buildSwapItems(tracks, query);
     const row = items
@@ -5018,7 +5393,7 @@ export class DiscordBot {
   }
 
   private async deny(interaction: ChatInputCommandInteraction): Promise<void> {
-    await interaction.reply({ content: '⛔ You don\'t have permission to do that.', flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: "⛔ You don't have permission to do that.", flags: MessageFlags.Ephemeral });
   }
 
   /** Auto-join the author's voice channel before playback, Luna/Jockie-style. */
@@ -5029,7 +5404,8 @@ export class DiscordBot {
     // Same Ready-only rule as the message variant — a non-Ready link must not
     // satisfy "already joined" or the join gets silently skipped.
     if (s.voice.isConnectionReady()) return true;
-    if (s.voice.isJoined()) console.warn(`[discord] auto-join: voice link is \`${s.voice.connectionStatus()}\` — rejoining`);
+    if (s.voice.isJoined())
+      console.warn(`[discord] auto-join: voice link is \`${s.voice.connectionStatus()}\` — rejoining`);
     if (!interaction.inGuild()) throw this.joinFailedError();
     const member = interaction.member;
     if (!member || !('voice' in member)) throw this.joinFailedError();
@@ -5119,10 +5495,18 @@ export class DiscordBot {
         `**Admin roles:** ${fmt(snap.adminRoles, 'admin')}`,
         `**Mod roles:** ${fmt(snap.modRoles, 'mod')}`,
         `**Command overrides:** ${
-          Object.keys(snap.commandLevels).length ? Object.entries(snap.commandLevels).map(([c, l]) => `\`${c}\` → ${l}`).join(', ') : 'none'
+          Object.keys(snap.commandLevels).length
+            ? Object.entries(snap.commandLevels)
+                .map(([c, l]) => `\`${c}\` → ${l}`)
+                .join(', ')
+            : 'none'
         }`,
       ];
-      await interaction.reply({ embeds: [new EmbedBuilder().setTitle('Permissions').setDescription(lines.join('\n')).setColor(this.themeColor())] });
+      await interaction.reply({
+        embeds: [
+          new EmbedBuilder().setTitle('Permissions').setDescription(lines.join('\n')).setColor(this.themeColor()),
+        ],
+      });
       return;
     }
 
@@ -5254,8 +5638,7 @@ export class DiscordBot {
     // reliably postable, and the guard below returned silently, so the strip was
     // simply never created and follow looked broken in a new way.
     const room = this.sessionFor(guildId)?.voice.getChannelId() ?? null;
-    const channelId =
-      this.lastTextChannel.get(guildId) ?? room ?? this.perms.getNpChannel(guildId);
+    const channelId = this.lastTextChannel.get(guildId) ?? room ?? this.perms.getNpChannel(guildId);
     if (!channelId) return;
     // A command reply for this exact track is already the visible now-playing —
     // don't also auto-post a strip (that was the "two identical embeds"
@@ -5359,8 +5742,7 @@ export class DiscordBot {
         const isMini = msg.embeds.some(
           (e) =>
             !!e.description &&
-            ((e.description.includes('▰') && e.description.includes('▱')) ||
-              e.description.startsWith('⏸️ **Idle**')),
+            ((e.description.includes('▰') && e.description.includes('▱')) || e.description.startsWith('⏸️ **Idle**')),
         );
         if (isMini) void msg.delete().catch(() => {});
       }
@@ -5400,7 +5782,9 @@ export class DiscordBot {
         embeds: [
           new EmbedBuilder()
             .setColor(this.themeColor())
-            .setDescription('⏹️ **Queue ended** — nothing left to play. Queue something with `V@p` or `/play` to keep it going!'),
+            .setDescription(
+              '⏹️ **Queue ended** — nothing left to play. Queue something with `V@p` or `/play` to keep it going!',
+            ),
         ],
       });
     } catch {
@@ -5424,7 +5808,7 @@ export class DiscordBot {
       status === 'auth'
         ? '⚠️ **Vaporzr: YouTube is refusing the bot** — the anti-bot wall persisted across every route (the direct connection plus all configured proxy hops), so no single exit IP is the cause: the cookies are stale or the PO token is missing. Check `/health` (`youtube`) and refresh the cookies with `/cookie-upload` if they are old.'
         : status === 'blocked'
-          ? '⚠️ **Vaporzr: YouTube is blocking the bot\'s IP** — no proxy hops are configured (`YOUTUBE_PROXY_ALT` / `YOUTUBE_PROXY_FALLBACK` in `/opt/vaporzr/.env`), which is the usual cause for a datacenter address. Refreshing cookies alone will not fix this.'
+          ? "⚠️ **Vaporzr: YouTube is blocking the bot's IP** — no proxy hops are configured (`YOUTUBE_PROXY_ALT` / `YOUTUBE_PROXY_FALLBACK` in `/opt/vaporzr/.env`), which is the usual cause for a datacenter address. Refreshing cookies alone will not fix this."
           : status === 'proxy'
             ? context.carryingHop === 'fallback'
               ? '⚠️ **Vaporzr: YouTube is running on the metered residential proxy** — every free route is failing, so playback is being carried by `YOUTUBE_PROXY_FALLBACK` and spending its balance. Investigate why the free routes are blocked, and check the balance before it runs dry.'
@@ -5440,8 +5824,8 @@ export class DiscordBot {
                       ? '⚠️ **Vaporzr: the residential fallback is DOWN** — `YOUTUBE_PROXY_FALLBACK` is not accepting connections and the other routes failed too. Playback will fail until a route is healthy.'
                       : '⚠️ **Vaporzr: a YouTube proxy hop is DOWN** — a configured hop is not accepting connections, and no other route could resolve. Playback will fail until a route is healthy.'
                 : status === 'down'
-                ? '⚠️ **Vaporzr: YouTube resolution is failing** — check `/health` (`youtube`) and the network.'
-                : '';
+                  ? '⚠️ **Vaporzr: YouTube resolution is failing** — check `/health` (`youtube`) and the network.'
+                  : '';
     if (!text) return;
     if (hopNote && status !== 'bridge') text += hopNote;
     // The residential proxy is STICKY (DataImpulse holds one exit for `sessttl`
@@ -5450,7 +5834,7 @@ export class DiscordBot {
     if (status === 'auth') {
       const rotated = rotateYoutubeFallbackProxy();
       if (rotated) {
-        text += '\n\n🔄 Rotated the residential fallback\'s exit — re-checking in ~30s.';
+        text += "\n\n🔄 Rotated the residential fallback's exit — re-checking in ~30s.";
         const t = setTimeout(() => void probeYoutube(), 30_000);
         t.unref?.();
       }
@@ -5491,7 +5875,7 @@ export class DiscordBot {
           new EmbedBuilder()
             .setColor(this.themeColor())
             .setDescription(
-              '⚠️ **Playback stopped** — several tracks in a row couldn\'t start (Spotify device unavailable / no YouTube match). The queue is intact; try `V@p` again or re-link Spotify.',
+              "⚠️ **Playback stopped** — several tracks in a row couldn't start (Spotify device unavailable / no YouTube match). The queue is intact; try `V@p` again or re-link Spotify.",
             ),
         ],
       });
@@ -5517,24 +5901,47 @@ export class DiscordBot {
   }
 
   /** Render one lyrics page embed. */
-  private lyricsPageEmbed(title: string, artist: string, synced: boolean, page: string, pageNum: number, total: number): EmbedBuilder {
-    return new EmbedBuilder().setColor(this.themeColor()).setDescription(
-      `${pageNum === 1 ? `📝 **${title}** — ${artist}${synced ? ' (synced)' : ''}\n\n` : ''}${page}` +
-        (total > 1 ? `\n\n*(part ${pageNum}/${total})*` : ''),
-    );
+  private lyricsPageEmbed(
+    title: string,
+    artist: string,
+    synced: boolean,
+    page: string,
+    pageNum: number,
+    total: number,
+  ): EmbedBuilder {
+    return new EmbedBuilder()
+      .setColor(this.themeColor())
+      .setDescription(
+        `${pageNum === 1 ? `📝 **${title}** — ${artist}${synced ? ' (synced)' : ''}\n\n` : ''}${page}` +
+          (total > 1 ? `\n\n*(part ${pageNum}/${total})*` : ''),
+      );
   }
 
   /** Compact intro: title/artist + a short teaser, pointing at the dropdown. */
-  private lyricsTeaserEmbed(title: string, artist: string, synced: boolean, lines: string[], lineCount: number, pageCount: number): EmbedBuilder {
+  private lyricsTeaserEmbed(
+    title: string,
+    artist: string,
+    synced: boolean,
+    lines: string[],
+    lineCount: number,
+    pageCount: number,
+  ): EmbedBuilder {
     const teaser = lines.slice(0, 6).join('\n');
-    return new EmbedBuilder().setColor(this.themeColor()).setDescription(
-      `📝 **${title}** — ${artist}${synced ? ' (synced)' : ''}\n\n${teaser}\n\n` +
-        `*${lineCount} lines · ${pageCount} part${pageCount > 1 ? 's' : ''} — use the dropdown below to read*`,
-    );
+    return new EmbedBuilder()
+      .setColor(this.themeColor())
+      .setDescription(
+        `📝 **${title}** — ${artist}${synced ? ' (synced)' : ''}\n\n${teaser}\n\n` +
+          `*${lineCount} lines · ${pageCount} part${pageCount > 1 ? 's' : ''} — use the dropdown below to read*`,
+      );
   }
 
   /** Build the dropdown + karaoke components for a lyrics result. */
-  private lyricsComponents(id: string, pages: string[], hasSynced: boolean, current: number): ActionRowBuilder<StringSelectMenuBuilder | ButtonBuilder>[] {
+  private lyricsComponents(
+    id: string,
+    pages: string[],
+    hasSynced: boolean,
+    current: number,
+  ): ActionRowBuilder<StringSelectMenuBuilder | ButtonBuilder>[] {
     const rows: ActionRowBuilder<StringSelectMenuBuilder | ButtonBuilder>[] = [];
     if (pages.length > 1) {
       const menu = new StringSelectMenuBuilder()
@@ -5561,7 +5968,11 @@ export class DiscordBot {
     if (hasSynced) {
       rows.push(
         new ActionRowBuilder<ButtonBuilder>().addComponents(
-          new ButtonBuilder().setCustomId(`lyrics_karaoke:${id}`).setLabel('Karaoke').setEmoji('🎤').setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId(`lyrics_karaoke:${id}`)
+            .setLabel('Karaoke')
+            .setEmoji('🎤')
+            .setStyle(ButtonStyle.Secondary),
         ),
       );
     }
@@ -5569,13 +5980,18 @@ export class DiscordBot {
   }
 
   /** Resolve what track to use for lyrics: a query (resolve it) or the current track. */
-  private async lyricsPayload(s: Session, query?: string): Promise<{ embeds: EmbedBuilder[]; components: ActionRowBuilder<StringSelectMenuBuilder | ButtonBuilder>[] } | { error: string }> {
-    const track = query
-      ? await this.resolveLyricsQuery(query)
-      : s.queue.getCurrentTrack();
+  private async lyricsPayload(
+    s: Session,
+    query?: string,
+  ): Promise<
+    | { embeds: EmbedBuilder[]; components: ActionRowBuilder<StringSelectMenuBuilder | ButtonBuilder>[] }
+    | { error: string }
+  > {
+    const track = query ? await this.resolveLyricsQuery(query) : s.queue.getCurrentTrack();
     if (!track) return { error: '📝 Nothing playing — run a query or queue a track first.' };
     const result = await fetchLyrics(track);
-    if (!result) return { error: `📝 No lyrics found for **${truncate(track.name, 60)}** — works best with title + artist.` };
+    if (!result)
+      return { error: `📝 No lyrics found for **${truncate(track.name, 60)}** — works best with title + artist.` };
     const pages = this.lyricsChunks(result.lyrics);
     const id = randomBytes(4).toString('hex');
     if (this.lyricPages.size >= DiscordBot.LYRIC_PAGES_MAX) {
@@ -5600,7 +6016,16 @@ export class DiscordBot {
       embeds = [this.lyricsPageEmbed(result.trackName, result.artistName, result.synced, result.lyrics, 1, 1)];
       components = this.lyricsComponents(id, pages, Boolean(result.syncedLines?.length), 0);
     } else {
-      embeds = [this.lyricsTeaserEmbed(result.trackName, result.artistName, result.synced, allLines, allLines.length, pages.length)];
+      embeds = [
+        this.lyricsTeaserEmbed(
+          result.trackName,
+          result.artistName,
+          result.synced,
+          allLines,
+          allLines.length,
+          pages.length,
+        ),
+      ];
       components = this.lyricsComponents(id, pages, Boolean(result.syncedLines?.length), 0);
     }
     return { embeds, components };
@@ -5612,7 +6037,9 @@ export class DiscordBot {
     const stash = this.lyricPages.get(id);
     const lines = stash?.syncedLines;
     if (!stash || !lines || lines.length === 0) {
-      await interaction.reply({ content: 'No synced lyrics for this song.', flags: MessageFlags.Ephemeral }).catch(() => {});
+      await interaction
+        .reply({ content: 'No synced lyrics for this song.', flags: MessageFlags.Ephemeral })
+        .catch(() => {});
       return;
     }
     const s = this.sessionFor(interaction.guildId);
@@ -5622,11 +6049,21 @@ export class DiscordBot {
     const st = s.queue.getState();
     const pos = st.positionMs + (st.playing ? Math.max(0, Date.now() - (st.updatedAt || Date.now())) : 0);
     const idx = this.syncedLineIndex(lines, pos);
-    await interaction.update({ embeds: [this.karaokeEmbed(stash.title, stash.artist, lines, idx, pos)], components: [] }).catch(() => {});
+    await interaction
+      .update({ embeds: [this.karaokeEmbed(stash.title, stash.artist, lines, idx, pos)], components: [] })
+      .catch(() => {});
   }
 
   /** Register a message as a live karaoke session (starts the ticker). */
-  private registerKaraoke(s: Session, messageId: string, guildId: string, channelId: string, title: string, artist: string, lines: SyncedLine[]): void {
+  private registerKaraoke(
+    s: Session,
+    messageId: string,
+    guildId: string,
+    channelId: string,
+    title: string,
+    artist: string,
+    lines: SyncedLine[],
+  ): void {
     const st = s.queue.getState();
     const pos = st.positionMs + (st.playing ? Math.max(0, Date.now() - (st.updatedAt || Date.now())) : 0);
     if (this.karaokeSessions.size >= DiscordBot.KARAOKE_MAX_SESSIONS) {
@@ -5647,7 +6084,10 @@ export class DiscordBot {
   }
 
   /** Resolve lyrics for a track, jumping straight into karaoke when synced lyrics exist. */
-  private async lyricsKaraokePayload(s: Session, query?: string): Promise<{ embed: EmbedBuilder; title: string; artist: string; syncedLines: SyncedLine[] } | { error: string }> {
+  private async lyricsKaraokePayload(
+    s: Session,
+    query?: string,
+  ): Promise<{ embed: EmbedBuilder; title: string; artist: string; syncedLines: SyncedLine[] } | { error: string }> {
     const track = query ? await this.resolveLyricsQuery(query) : s.queue.getCurrentTrack();
     if (!track) return { error: '🎤 Nothing playing — run a query or queue a track first.' };
     const result = await fetchLyrics(track);
@@ -5658,7 +6098,12 @@ export class DiscordBot {
     const st = s.queue.getState();
     const pos = st.positionMs + (st.playing ? Math.max(0, Date.now() - (st.updatedAt || Date.now())) : 0);
     const idx = this.syncedLineIndex(lines, pos);
-    return { embed: this.karaokeEmbed(result.trackName, result.artistName, lines, idx, pos), title: result.trackName, artist: result.artistName, syncedLines: lines };
+    return {
+      embed: this.karaokeEmbed(result.trackName, result.artistName, lines, idx, pos),
+      title: result.trackName,
+      artist: result.artistName,
+      syncedLines: lines,
+    };
   }
 
   /** Index of the synced line active at `pos` (the last line with time <= pos). */
@@ -5832,7 +6277,8 @@ export class DiscordBot {
     const st = s.queue.getState();
     const track = st.track;
     const mode = EW.modeOf(s.endlessWave);
-    const modeLabel = mode === 'smart' ? '🌊 Autoplay: smart' : mode === 'basic' ? '🎵 Autoplay: basic' : 'Autoplay: off';
+    const modeLabel =
+      mode === 'smart' ? '🌊 Autoplay: smart' : mode === 'basic' ? '🎵 Autoplay: basic' : 'Autoplay: off';
     const color = this.panelColor(s.guildId);
     if (!track) {
       return new EmbedBuilder()
@@ -5916,11 +6362,12 @@ export class DiscordBot {
     const filled = dur ? Math.min(slots, Math.max(0, Math.round((pos / dur) * slots))) : 0;
     const bar = '━'.repeat(filled) + (filled < slots ? '⬤' : '━') + '─'.repeat(Math.max(0, slots - filled - 1));
     const statusIcon = st.playing ? '▶️' : '⏸';
-    const embed = new EmbedBuilder()
-      .setColor(this.themeColor())
-      .setTimestamp();
+    const embed = new EmbedBuilder().setColor(this.themeColor()).setTimestamp();
     if (this.client.user) {
-      embed.setAuthor({ name: st.playing ? 'PLAYING NOW' : 'PAUSED', iconURL: this.client.user.displayAvatarURL({ extension: 'gif', size: 128 }) });
+      embed.setAuthor({
+        name: st.playing ? 'PLAYING NOW' : 'PAUSED',
+        iconURL: this.client.user.displayAvatarURL({ extension: 'gif', size: 128 }),
+      });
     }
     if (track) {
       const snap = s.queue.getSnapshot();
@@ -5935,7 +6382,9 @@ export class DiscordBot {
             (hint ? `\n\n${hint}` : ''),
         );
       if (track.image) embed.setThumbnail(track.image);
-      embed.addFields([{ name: '📜 Queue', value: `${snap.tracks.length}${idx ? ` · #${idx} now` : ''}`, inline: true }]);
+      embed.addFields([
+        { name: '📜 Queue', value: `${snap.tracks.length}${idx ? ` · #${idx} now` : ''}`, inline: true },
+      ]);
     } else {
       embed.setTitle('Nothing playing').setDescription('Queue something with /play — this message updates itself.');
     }
@@ -5999,9 +6448,7 @@ export class DiscordBot {
       const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
       // Prefer the animated GIF so the avatar animates in Discord embeds (the
       // VC-chat now-playing post uses displayAvatarURL({ extension: 'gif', size: 128 }) as the author icon).
-      const logo = await fs
-        .readFile(path.join(dir, 'avatar.gif'))
-        .catch(() => fs.readFile(path.join(dir, 'logo.png')));
+      const logo = await fs.readFile(path.join(dir, 'avatar.gif')).catch(() => fs.readFile(path.join(dir, 'logo.png')));
       const hash = createHash('sha256').update(logo).digest('hex');
       const hashFile = path.join(config.dataDir, 'avatar.hash');
       let last = '';
@@ -6105,7 +6552,9 @@ export class DiscordBot {
   /** Short-lived command confirmation — delete it after a few seconds so rapid
    *  commands don't leave a wall of one-line replies in the channel. */
   private autoExpire(msg: { delete(): Promise<unknown> }, ms = 6000): void {
-    setTimeout(() => { msg.delete().catch(() => {}); }, ms);
+    setTimeout(() => {
+      msg.delete().catch(() => {});
+    }, ms);
   }
 
   /** Transient notice (an expired-button reply, a "posted right here"
@@ -6153,7 +6602,12 @@ export class DiscordBot {
       { name: '🔊 Volume', value: `${st.volume}%`, inline: true },
       { name: '🎙️ Voice', value: s.voice.isJoined() ? 'streaming' : 'not in VC', inline: true },
       { name: '🎛️ DJ', value: djEnabled ? 'on' : 'off', inline: true },
-      { name: 'Controls', value: '⏮ prev · ▶ play · ⏭ next · 🔁 repeat · 🔀 shuffle · ⏪/⏩ seek · 🔉/🔊 vol · 🎛 dj · 📝 lyrics · ⏹ stop · 📤 leave', inline: false },
+      {
+        name: 'Controls',
+        value:
+          '⏮ prev · ▶ play · ⏭ next · 🔁 repeat · 🔀 shuffle · ⏪/⏩ seek · 🔉/🔊 vol · 🎛 dj · 📝 lyrics · ⏹ stop · 📤 leave',
+        inline: false,
+      },
     ]);
     embed.setFooter({ text: `${this.client.user?.username ?? 'Vaporzr'} · this panel updates itself` });
 
@@ -6175,16 +6629,40 @@ export class DiscordBot {
           .setStyle(ButtonStyle.Secondary),
       ),
       new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder().setCustomId('vz:back10').setLabel('10s').setEmoji(this.vzE('vz_back10', '⏪')).setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('vz:fwd10').setLabel('10s').setEmoji(this.vzE('vz_fwd10', '⏩')).setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('vz:vol-down').setEmoji(this.vzE('vz_voldown', '🔉')).setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('vz:vol-up').setEmoji(this.vzE('vz_volup', '🔊')).setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId('vz:back10')
+          .setLabel('10s')
+          .setEmoji(this.vzE('vz_back10', '⏪'))
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId('vz:fwd10')
+          .setLabel('10s')
+          .setEmoji(this.vzE('vz_fwd10', '⏩'))
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId('vz:vol-down')
+          .setEmoji(this.vzE('vz_voldown', '🔉'))
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId('vz:vol-up')
+          .setEmoji(this.vzE('vz_volup', '🔊'))
+          .setStyle(ButtonStyle.Secondary),
       ),
       new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder().setCustomId('vz:dj').setLabel('DJ').setEmoji(this.vzE('vz_dj', '🎛️')).setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('vz:lyrics').setEmoji(this.vzE('vz_lyrics', '📝')).setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId('vz:dj')
+          .setLabel('DJ')
+          .setEmoji(this.vzE('vz_dj', '🎛️'))
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId('vz:lyrics')
+          .setEmoji(this.vzE('vz_lyrics', '📝'))
+          .setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('vz:stop').setEmoji(this.vzE('vz_stop', '⏹')).setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('vz:leave').setEmoji(this.vzE('vz_eject', '📤')).setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId('vz:leave')
+          .setEmoji(this.vzE('vz_eject', '📤'))
+          .setStyle(ButtonStyle.Secondary),
       ),
     ];
     const djRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -6222,8 +6700,8 @@ export class DiscordBot {
       if (cmd === 'playlist' && focused.name === 'name') {
         choices = this.playlists.list(guildId).map((p) => ({ name: `${p.name} · ${p.tracks.length}`, value: p.name }));
       } else if (cmd === 'sfx' && focused.name === 'sound') {
-        choices = this.sessionFor(guildId).playback
-          .listSoundEffects()
+        choices = this.sessionFor(guildId)
+          .playback.listSoundEffects()
           .map((snd) => ({ name: `${snd.emoji ?? '🔊'} ${snd.id}`, value: snd.id }));
       } else if (cmd === 'perms' && focused.name === 'command') {
         choices = COMMANDS.map((c) => ({ name: c.name, value: c.name }));
@@ -6310,7 +6788,7 @@ export class DiscordBot {
     const req = permissionCommand[action];
     const requiresSfx = action.startsWith('sfx:');
     if ((req || requiresSfx) && !this.canUse(requiresSfx ? 'sfx' : req, interaction)) {
-      await interaction.reply({ content: '⛔ You don\'t have permission to do that.', flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: "⛔ You don't have permission to do that.", flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -6330,8 +6808,12 @@ export class DiscordBot {
         break;
       case 'lyrics': {
         const payload = await this.lyricsPayload(s);
-        if ('error' in payload) void interaction.followUp({ content: payload.error, flags: MessageFlags.Ephemeral }).catch(() => {});
-        else void interaction.followUp({ embeds: payload.embeds, components: payload.components, flags: MessageFlags.Ephemeral }).catch(() => {});
+        if ('error' in payload)
+          void interaction.followUp({ content: payload.error, flags: MessageFlags.Ephemeral }).catch(() => {});
+        else
+          void interaction
+            .followUp({ embeds: payload.embeds, components: payload.components, flags: MessageFlags.Ephemeral })
+            .catch(() => {});
         break;
       }
       case 'next': {
@@ -6350,7 +6832,10 @@ export class DiscordBot {
       case 'repeat': {
         s.playback.setRepeat(!st.repeat);
         void interaction
-          .followUp({ content: st.repeat ? '🔁 Repeat off' : '🔁 Repeat on — track replays at its end', flags: MessageFlags.Ephemeral })
+          .followUp({
+            content: st.repeat ? '🔁 Repeat off' : '🔁 Repeat on — track replays at its end',
+            flags: MessageFlags.Ephemeral,
+          })
           .catch(() => {});
         break;
       }
@@ -6395,10 +6880,12 @@ export class DiscordBot {
           const id = action.slice(4);
           void s.playback.playSoundEffect(id);
           const sfx = s.playback.listSoundEffects().find((snd) => snd.id === id);
-          void interaction.followUp({ content: `🔊 ${sfx ? `${sfx.emoji} ${sfx.name}` : id}`, flags: MessageFlags.Ephemeral }).catch(() => {});
+          void interaction
+            .followUp({ content: `🔊 ${sfx ? `${sfx.emoji} ${sfx.name}` : id}`, flags: MessageFlags.Ephemeral })
+            .catch(() => {});
         }
-          break;
-        }
+        break;
+    }
 
     if (interaction.guildId) {
       const panel = this.panels.get(interaction.guildId);
@@ -6425,7 +6912,10 @@ export class DiscordBot {
   /** Build the queue embed for one 15-song page plus a jump-to dropdown for
    *  the rest — a single message even for 200-track playlists, instead of a
    *  wall of follow-up chunks. */
-  private queuePage(s: Session, start?: number): {
+  private queuePage(
+    s: Session,
+    start?: number,
+  ): {
     embeds: EmbedBuilder[];
     components: ActionRowBuilder<StringSelectMenuBuilder>[];
   } {
@@ -6623,10 +7113,16 @@ export class DiscordBot {
     try {
       if (msg.pinned) {
         await msg.unpin();
-        await interaction.update({ content: '📍 Unpinned — the jam card can scroll away.', components: [build(false)] });
+        await interaction.update({
+          content: '📍 Unpinned — the jam card can scroll away.',
+          components: [build(false)],
+        });
       } else {
         await msg.pin();
-        await interaction.update({ content: '📌 Pinned — the jam card stays at the top of the channel.', components: [build(true)] });
+        await interaction.update({
+          content: '📌 Pinned — the jam card stays at the top of the channel.',
+          components: [build(true)],
+        });
       }
     } catch {
       await interaction.update({
@@ -6656,7 +7152,9 @@ export class DiscordBot {
       .setDescription(desc)
       .setColor(this.themeColor())
       .setFooter({
-        text: link.secure ? 'HTTPS keeps links trusted · works great on phones' : 'Secure link reconnects automatically',
+        text: link.secure
+          ? 'HTTPS keeps links trusted · works great on phones'
+          : 'Secure link reconnects automatically',
       });
   }
 
@@ -6691,9 +7189,7 @@ export class DiscordBot {
     const ready = !!s?.voice.isConnectionReady();
     const chanId = ready ? s?.voice.getChannelId() : null;
     const linkNote = s && !ready && s.voice.isJoined() ? ` (link \`${s.voice.connectionStatus()}\`)` : '';
-    const voiceLine = ready
-      ? `connected${chanId ? ` · <#${chanId}>` : ''}`
-      : `not connected${linkNote}`;
+    const voiceLine = ready ? `connected${chanId ? ` · <#${chanId}>` : ''}` : `not connected${linkNote}`;
     const dev = this.bridge.librespot.getDeviceInfo();
     const up = process.uptime();
     const uptime = `${Math.floor(up / 3600)}h ${Math.floor((up % 3600) / 60)}m`;
@@ -6711,7 +7207,11 @@ export class DiscordBot {
       .setColor(this.themeColor())
       .addFields(
         { name: 'Gateway', value: `ping \`${Math.round(this.client.ws.ping)} ms\` · up \`${uptime}\``, inline: true },
-        { name: 'Token', value: `${this.client.guilds.cache.size} guild(s) · ${sessions.length} session(s)`, inline: true },
+        {
+          name: 'Token',
+          value: `${this.client.guilds.cache.size} guild(s) · ${sessions.length} session(s)`,
+          inline: true,
+        },
         { name: 'Voice', value: `DAVE \`${dave}\`\n${voiceLine}`, inline: true },
         {
           name: 'librespot',
@@ -6738,7 +7238,11 @@ export class DiscordBot {
           inline: true,
         },
         { name: 'Web Push', value: `${pushSubscriptionCount()} subscriber(s)`, inline: true },
-        { name: 'Audio', value: st?.track ? `${st.playing ? '▶️' : '⏸️'} ${st.track.name}`.slice(0, 100) : '`idle`', inline: false },
+        {
+          name: 'Audio',
+          value: st?.track ? `${st.playing ? '▶️' : '⏸️'} ${st.track.name}`.slice(0, 100) : '`idle`',
+          inline: false,
+        },
       )
       .setFooter({
         text: 'Two instances sharing one token fight over the gateway session — run only one.',
@@ -6784,7 +7288,11 @@ export class DiscordBot {
     if (suppressStrip) this.suppressAutoMiniNp(s.guildId, first.uri);
     if (mode === 'insert') s.queue.insertAfterCurrent(tracks, requestedBy);
     else s.queue.enqueueMany(tracks, requestedBy);
-    this.stats.noteQueued(s.guildId ?? '', requestedBy, tracks.flatMap((t) => t.artists));
+    this.stats.noteQueued(
+      s.guildId ?? '',
+      requestedBy,
+      tracks.flatMap((t) => t.artists),
+    );
     if (first) s.playback.prefetchStream(first);
     let playbackFailed: string | null = null;
     try {
@@ -6816,9 +7324,7 @@ export class DiscordBot {
       // Node surfaces a failed multi-address connect as `AggregateError:
       // "Received one or more errors"` — a transient network blip, not a bad
       // link. Give the user something actionable instead of the raw text.
-      const friendly = /Received one or more errors|fetch failed|ENOTFOUND|ETIMEDOUT|ECONNRESET|EAI_AGAIN/i.test(
-        msg,
-      )
+      const friendly = /Received one or more errors|fetch failed|ENOTFOUND|ETIMEDOUT|ECONNRESET|EAI_AGAIN/i.test(msg)
         ? 'Network hiccup reaching Discord/YouTube — give it another try.'
         : msg;
       const text = `❌ ${friendly}`;
@@ -6910,7 +7416,10 @@ export class DiscordBot {
     if (!this.pendingSearch.has(token)) return;
     this.pendingSearch.delete(token);
     try {
-      if (sent) { await sent.edit({ content: '⌛ Search expired — run the command again.', embeds: [], components: [] }); this.autoExpireNotice(sent); }
+      if (sent) {
+        await sent.edit({ content: '⌛ Search expired — run the command again.', embeds: [], components: [] });
+        this.autoExpireNotice(sent);
+      }
     } catch {
       /* gone */
     }
@@ -6978,7 +7487,11 @@ export class DiscordBot {
             '🔀 Sonic flow needs cosine.club and a current track it knows — it only covers electronic/underground music. Try `flow` instead.',
         };
       }
-      const norm = (x: string): string => x.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+      const norm = (x: string): string =>
+        x
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, ' ')
+          .trim();
       const scoreOf = (t: TrackInfo): number | undefined => {
         const n = norm(t.name);
         if (n.length < 3) return undefined;
@@ -7030,10 +7543,7 @@ export class DiscordBot {
       // (see audioFeatures.ts). Partial: only the fields we actually measured.
       // The queue copy is live-only; the store keeps measurements across
       // restarts so key/arc shuffle does not forget them.
-      return (
-        (t as { estimatedFeatures?: Partial<AudioFeatures> }).estimatedFeatures ??
-        getMeasuredFeatures(t.uri)
-      );
+      return (t as { estimatedFeatures?: Partial<AudioFeatures> }).estimatedFeatures ?? getMeasuredFeatures(t.uri);
     };
     const anchor = anchorId ? (features.get(anchorId) ?? null) : null;
     // Pass the artist so a track the mirror does not know can be ranked by the
@@ -7073,12 +7583,7 @@ export class DiscordBot {
   }
 
   /** Reorder the upcoming queue by musical flow / set curve / harmonic key. */
-  private async smartShuffleMsg(
-    message: Message,
-    s: Session,
-    mode: ShuffleMode,
-    wasShuffle = false,
-  ): Promise<void> {
+  private async smartShuffleMsg(message: Message, s: Session, mode: ShuffleMode, wasShuffle = false): Promise<void> {
     const snap = s.queue.getSnapshot();
     const upcoming = snap.tracks.slice(snap.currentIndex + 1);
     if (upcoming.length < 3) {
@@ -7109,7 +7614,10 @@ export class DiscordBot {
     if (upcoming.length === 0) {
       return {
         embeds: [
-          new EmbedBuilder().setTitle(title).setDescription('Nothing queued ahead to adjust.').setColor(this.themeColor()),
+          new EmbedBuilder()
+            .setTitle(title)
+            .setDescription('Nothing queued ahead to adjust.')
+            .setColor(this.themeColor()),
         ],
         components,
       };
@@ -7119,8 +7627,16 @@ export class DiscordBot {
     if (sel !== undefined && selTrack) {
       const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder().setCustomId(`qa:up:${sel}`).setLabel('Up').setEmoji('⏫').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(`qa:down:${sel}`).setLabel('Down').setEmoji('⏬').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(`qa:play:${sel}`).setLabel('Play now').setEmoji('▶').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId(`qa:down:${sel}`)
+          .setLabel('Down')
+          .setEmoji('⏬')
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId(`qa:play:${sel}`)
+          .setLabel('Play now')
+          .setEmoji('▶')
+          .setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId(`qa:rm:${sel}`).setLabel('Remove').setEmoji('🗑').setStyle(ButtonStyle.Danger),
         new ButtonBuilder().setCustomId('qa:back').setLabel('Back').setEmoji('↩').setStyle(ButtonStyle.Secondary),
       );
@@ -7377,12 +7893,17 @@ export class DiscordBot {
     const ref = this.swapRefs.get(token);
     if (!ref) {
       await i
-        .reply({ content: '⌛ That swap expired — add the track again if you still want it changed.', flags: MessageFlags.Ephemeral })
+        .reply({
+          content: '⌛ That swap expired — add the track again if you still want it changed.',
+          flags: MessageFlags.Ephemeral,
+        })
         .catch(() => {});
       return;
     }
     if (ref.userId && i.user.id !== ref.userId) {
-      await i.reply({ content: '❌ Only the person who queued that track can swap it.', flags: MessageFlags.Ephemeral }).catch(() => {});
+      await i
+        .reply({ content: '❌ Only the person who queued that track can swap it.', flags: MessageFlags.Ephemeral })
+        .catch(() => {});
       return;
     }
     if (action === 'x') {
@@ -7410,7 +7931,10 @@ export class DiscordBot {
       const choices = (ref.pool ?? []).filter((t) => t.uri !== item?.uri);
       if (!item || choices.length === 0) {
         await i
-          .reply({ content: '🎲 Nothing left to roll — that list is used up. Run `/similar` again.', flags: MessageFlags.Ephemeral })
+          .reply({
+            content: '🎲 Nothing left to roll — that list is used up. Run `/similar` again.',
+            flags: MessageFlags.Ephemeral,
+          })
           .catch(() => {});
         return;
       }
@@ -7423,7 +7947,9 @@ export class DiscordBot {
         info = null;
       }
       if (!info) {
-        await i.editReply({ content: `🎲 Rolled *${pick.name}* but couldn't resolve it — roll again.` }).catch(() => {});
+        await i
+          .editReply({ content: `🎲 Rolled *${pick.name}* but couldn't resolve it — roll again.` })
+          .catch(() => {});
         return;
       }
       const status = this.applySwap(this.sessionFor(ref.guildId), ref.addedBy, item, info, i.user.username);
@@ -7478,7 +8004,10 @@ export class DiscordBot {
         );
       await i.showModal(modal).catch(async (err) => {
         await i
-          .reply({ content: `❌ Could not open the swap box: ${err instanceof Error ? err.message : err}`, flags: MessageFlags.Ephemeral })
+          .reply({
+            content: `❌ Could not open the swap box: ${err instanceof Error ? err.message : err}`,
+            flags: MessageFlags.Ephemeral,
+          })
           .catch(() => {});
       });
       return;
@@ -7548,11 +8077,19 @@ export class DiscordBot {
     const candidates = await this.swapCandidates(item.query ?? item.label);
     if (candidates.length === 0) {
       await i
-        .editReply({ content: `🔍 No other results for \`${truncate(item.query ?? item.label, 60)}\` — use **Type it**.`, components: [] })
+        .editReply({
+          content: `🔍 No other results for \`${truncate(item.query ?? item.label, 60)}\` — use **Type it**.`,
+          components: [],
+        })
         .catch(() => {});
       return;
     }
-    this.pendingSearch.set(`swap-${token}`, { guildId: ref.guildId, userId: ref.userId, candidates, createdAt: Date.now() });
+    this.pendingSearch.set(`swap-${token}`, {
+      guildId: ref.guildId,
+      userId: ref.userId,
+      candidates,
+      createdAt: Date.now(),
+    });
     const menu = new StringSelectMenuBuilder()
       .setCustomId(`swapselect:${token}:${idx}`)
       .setPlaceholder('Pick the right track…')
@@ -7600,7 +8137,9 @@ export class DiscordBot {
     const ref = this.swapRefs.get(token);
     const item = ref?.items[parseInt(idxRaw, 10)];
     if (!ref || !item) {
-      await i.reply({ content: '⌛ That swap expired — add the track again.', flags: MessageFlags.Ephemeral }).catch(() => {});
+      await i
+        .reply({ content: '⌛ That swap expired — add the track again.', flags: MessageFlags.Ephemeral })
+        .catch(() => {});
       return;
     }
     const input = i.fields.getTextInputValue('swap-song').trim();
@@ -7612,7 +8151,9 @@ export class DiscordBot {
       track = undefined;
     }
     if (!track) {
-      await i.editReply({ content: `🔍 Couldn't find \`${truncate(input, 60)}\` — try a direct link.` }).catch(() => {});
+      await i
+        .editReply({ content: `🔍 Couldn't find \`${truncate(input, 60)}\` — try a direct link.` })
+        .catch(() => {});
       return;
     }
     if (ref.items.length === 1) this.swapRefs.delete(token);
@@ -7625,7 +8166,12 @@ export class DiscordBot {
     const token = interaction.customId.slice('vzsearch:'.length);
     const pending = this.pendingSearch.get(token);
     if (!pending) {
-      { const r = await interaction.update({ content: '⌛ This search expired — run the command again.', embeds: [], components: [] }).catch(() => null); if (r) this.autoExpireNotice(r); }
+      {
+        const r = await interaction
+          .update({ content: '⌛ This search expired — run the command again.', embeds: [], components: [] })
+          .catch(() => null);
+        if (r) this.autoExpireNotice(r);
+      }
       return;
     }
     this.pendingSearch.delete(token);
@@ -7864,7 +8410,11 @@ export class DiscordBot {
     const gid = message.guildId ?? '';
     const q = this.quizzes.get(gid);
     if (!q) return null;
-    const norm = (x: string): string => x.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    const norm = (x: string): string =>
+      x
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim();
     const g = norm(guess);
     const t = norm(q.name);
     if (g.length < 3) return 'Nope — too short.';
@@ -7980,12 +8530,8 @@ export class DiscordBot {
     cleanup.push(out);
 
     // 5 genuinely similar tracks to spread the vibe.
-    const seeds = [ra.uri, rb.uri]
-      .filter((u) => u.startsWith('spotify:track:'))
-      .map((u) => u.split(':')[2]);
-    const similar = seeds.length
-      ? await getRecommendations({ seedTracks: seeds, limit: 5 }).catch(() => [])
-      : [];
+    const seeds = [ra.uri, rb.uri].filter((u) => u.startsWith('spotify:track:')).map((u) => u.split(':')[2]);
+    const similar = seeds.length ? await getRecommendations({ seedTracks: seeds, limit: 5 }).catch(() => []) : [];
 
     const keyNote =
       fa && fb
@@ -8123,9 +8669,7 @@ export class DiscordBot {
         if (i < 2) await new Promise((res) => setTimeout(res, 700));
       }
       if (lastErr) {
-        console.warn(
-          `[mashup] could not resolve "${input}": ${lastErr instanceof Error ? lastErr.message : lastErr}`,
-        );
+        console.warn(`[mashup] could not resolve "${input}": ${lastErr instanceof Error ? lastErr.message : lastErr}`);
       }
       return undefined;
     };
@@ -8283,10 +8827,7 @@ export class DiscordBot {
 
     const keyA = createHash('sha1').update(ra.uri).digest('hex').slice(0, 16);
     const keyB = createHash('sha1').update(rb.uri).digest('hex').slice(0, 16);
-    const [sa, sb] = await Promise.all([
-      this.separateStems(ia, keyA, cleanup),
-      this.separateStems(ib, keyB, cleanup),
-    ]);
+    const [sa, sb] = await Promise.all([this.separateStems(ia, keyA, cleanup), this.separateStems(ib, keyB, cleanup)]);
     if (!sa || !sb) {
       const blend = await this.mashupTracks(a, b, 12);
       cleanup.push(...blend.cleanup);
@@ -8322,9 +8863,45 @@ export class DiscordBot {
       const ref = path.join(dir, `prep-${tag}-ref.wav`);
       const io = path.join(dir, `prep-${tag}-inst.wav`);
       cleanup.push(vo, ref, io);
-      await this.runFfmpeg(['-hide_banner', '-loglevel', 'error', '-i', voc, '-af', `${trim},aresample=48000`, '-c:a', 'pcm_s16le', '-y', vo]);
-      await this.runFfmpeg(['-hide_banner', '-loglevel', 'error', '-i', inst, '-af', `${trim},aresample=48000`, '-c:a', 'pcm_s16le', '-y', ref]);
-      await this.runFfmpeg(['-hide_banner', '-loglevel', 'error', '-i', ref, '-af', chain, '-c:a', 'pcm_s16le', '-y', io]);
+      await this.runFfmpeg([
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-i',
+        voc,
+        '-af',
+        `${trim},aresample=48000`,
+        '-c:a',
+        'pcm_s16le',
+        '-y',
+        vo,
+      ]);
+      await this.runFfmpeg([
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-i',
+        inst,
+        '-af',
+        `${trim},aresample=48000`,
+        '-c:a',
+        'pcm_s16le',
+        '-y',
+        ref,
+      ]);
+      await this.runFfmpeg([
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-i',
+        ref,
+        '-af',
+        chain,
+        '-c:a',
+        'pcm_s16le',
+        '-y',
+        io,
+      ]);
       return { voc: vo, ref, inst: io };
     };
     // `adelay` nudges the earlier side so the downbeats land together.
@@ -8372,13 +8949,10 @@ export class DiscordBot {
     }
     cleanup.push(v1, v2);
 
-    const seeds = [ra.uri, rb.uri]
-      .filter((u) => u.startsWith('spotify:track:'))
-      .map((u) => u.split(':')[2]);
-    const similar = seeds.length
-      ? await getRecommendations({ seedTracks: seeds, limit: 5 }).catch(() => [])
-      : [];
-    const keyNote = fa && fb ? ` · keys ${DiscordBot.KEY_NAMES[fa.key] ?? '?'}/${DiscordBot.KEY_NAMES[fb.key] ?? '?'}` : '';
+    const seeds = [ra.uri, rb.uri].filter((u) => u.startsWith('spotify:track:')).map((u) => u.split(':')[2]);
+    const similar = seeds.length ? await getRecommendations({ seedTracks: seeds, limit: 5 }).catch(() => []) : [];
+    const keyNote =
+      fa && fb ? ` · keys ${DiscordBot.KEY_NAMES[fa.key] ?? '?'}/${DiscordBot.KEY_NAMES[fb.key] ?? '?'}` : '';
     const tempoNote =
       tempoA && tempoB
         ? ` · ${Math.round(tempoA)}/${Math.round(tempoB)} BPM${(!fa?.tempo && tempoA > 0) || (!fb?.tempo && tempoB > 0) ? ' (detected)' : ''}`
@@ -8401,24 +8975,21 @@ export class DiscordBot {
   private mashupQueue = new Map<string, MashupJob[]>();
   /** Pending mashup results keyed by a short token, so a repick modal can
    *  re-render with one side swapped out (token -> job). */
-  private mashupPending = new Map<string, {
-    guildId: string;
-    channelId: string;
-    messageId: string;
-    a: string;
-    b: string;
-    userId: string;
-  }>();
+  private mashupPending = new Map<
+    string,
+    {
+      guildId: string;
+      channelId: string;
+      messageId: string;
+      a: string;
+      b: string;
+      userId: string;
+    }
+  >();
   private static readonly MASHUP_QUEUE_MAX = 5;
 
   /** Enqueue a mashup, or render it now when the guild is idle. */
-  private async startMashupRender(
-    send: MashupSend,
-    guildId: string,
-    a: string,
-    b: string,
-    by = '',
-  ): Promise<void> {
+  private async startMashupRender(send: MashupSend, guildId: string, a: string, b: string, by = ''): Promise<void> {
     if (this.mashupBusy.has(guildId)) {
       const q = this.mashupQueue.get(guildId) ?? [];
       if (q.length >= DiscordBot.MASHUP_QUEUE_MAX) {
@@ -8453,13 +9024,7 @@ export class DiscordBot {
   }
 
   /** Render a single mashup; the busy flag is held for its whole duration. */
-  private async renderMashupNow(
-    send: MashupSend,
-    guildId: string,
-    a: string,
-    b: string,
-    by = '',
-  ): Promise<void> {
+  private async renderMashupNow(send: MashupSend, guildId: string, a: string, b: string, by = ''): Promise<void> {
     this.mashupBusy.add(guildId);
     const cleanup: string[] = [];
     try {
@@ -8624,8 +9189,7 @@ export class DiscordBot {
     const others = tracks.filter((t) => t.uri !== a.uri);
     const b = others[Math.floor(Math.random() * others.length)];
     if (!a || !b) return null;
-    const q = (t: { name: string; artists?: string[] }): string =>
-      `${t.name} ${(t.artists ?? [])[0] ?? ''}`.trim();
+    const q = (t: { name: string; artists?: string[] }): string => `${t.name} ${(t.artists ?? [])[0] ?? ''}`.trim();
     return { a: q(a), b: q(b) };
   }
 
@@ -8634,7 +9198,9 @@ export class DiscordBot {
     if (this.mashupBusy.has(guildId)) {
       await send({
         embeds: [
-          new EmbedBuilder().setColor(this.themeColor()).setDescription('⏳ Already rendering a mashup here — give it a few minutes.'),
+          new EmbedBuilder()
+            .setColor(this.themeColor())
+            .setDescription('⏳ Already rendering a mashup here — give it a few minutes.'),
         ],
         files: [],
       }).catch(() => {});
@@ -8668,10 +9234,7 @@ export class DiscordBot {
           .setLabel('Vote v2')
           .setEmoji('2️⃣')
           .setStyle(ButtonStyle.Primary),
-        new ButtonBuilder()
-          .setCustomId(`mashreveal:${id}`)
-          .setLabel('Close & reveal')
-          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`mashreveal:${id}`).setLabel('Close & reveal').setStyle(ButtonStyle.Secondary),
       );
       const sent = await send({
         embeds: [
@@ -8738,11 +9301,7 @@ export class DiscordBot {
     const ch = await guild.channels.fetch(chanId).catch(() => null);
     const members =
       ch && 'members' in ch
-        ? [
-            ...(
-              ch as unknown as { members: Map<string, { id: string; user: { bot: boolean } }> }
-            ).members.values(),
-          ]
+        ? [...(ch as unknown as { members: Map<string, { id: string; user: { bot: boolean } }> }).members.values()]
         : [];
     const humans = members.filter((m) => !m.user.bot).map((m) => m.id);
     const voted = new Set([...st.v1, ...st.v2]);
@@ -8928,10 +9487,7 @@ export class DiscordBot {
           .setLabel('Repick B')
           .setStyle(ButtonStyle.Secondary)
           .setEmoji('🔄'),
-        new ButtonBuilder()
-          .setCustomId(`mashreclose:${token}`)
-          .setLabel('Close')
-          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`mashreclose:${token}`).setLabel('Close').setStyle(ButtonStyle.Secondary),
       ),
     ];
   }
@@ -9007,7 +9563,10 @@ export class DiscordBot {
 
   /** 🎨 Queue cover: a 2x2 mosaic of the queue's album art (ffmpeg xstack). */
   private async coverCard(s: Session): Promise<{ embed: EmbedBuilder; file: AttachmentBuilder } | string> {
-    const tracks = s.queue.getSnapshot().tracks.filter((t) => t.image).slice(0, 4);
+    const tracks = s.queue
+      .getSnapshot()
+      .tracks.filter((t) => t.image)
+      .slice(0, 4);
     if (tracks.length === 0) return 'No album art in the queue yet.';
     const dir = path.join(config.dataDir, 'tmp');
     await fs.mkdir(dir, { recursive: true });
@@ -9107,10 +9666,9 @@ export class DiscordBot {
         .slice(Math.max(0, snap.currentIndex - 4), Math.max(0, snap.currentIndex) + 1)
         .map((t) => ({ name: t.name, artists: t.artists }));
       if (recent.length > 0) {
-        cosineScore = await cosineRoomFit(
-          { name: track.name, artists: track.artists, uri: track.uri },
-          recent,
-        ).catch(() => undefined);
+        cosineScore = await cosineRoomFit({ name: track.name, artists: track.artists, uri: track.uri }, recent).catch(
+          () => undefined,
+        );
       }
     }
     const candidate = {
@@ -9122,7 +9680,9 @@ export class DiscordBot {
       source: track.source ?? 'spotify',
       cosineScore,
     };
-    const { total, terms } = EW.scoreBreakdown(candidate, targets, st.recentArtists ?? [], features, env, { jitter: false });
+    const { total, terms } = EW.scoreBreakdown(candidate, targets, st.recentArtists ?? [], features, env, {
+      jitter: false,
+    });
     return { fit: fitPercent(total), insufficient, reasons: explainFit(terms), features: !!features };
   }
 
@@ -9156,7 +9716,15 @@ export class DiscordBot {
       const found = await this.findTrackTrack(query);
       if (!found) return `🔎 Couldn't find “${query}”.`;
       s.queue.enqueue(
-        { uri: found.uri, name: found.name, artists: found.artists, album: found.album ?? '', durationMs: found.durationMs, source: found.source, image: found.image },
+        {
+          uri: found.uri,
+          name: found.name,
+          artists: found.artists,
+          album: found.album ?? '',
+          durationMs: found.durationMs,
+          source: found.source,
+          image: found.image,
+        },
         userName,
       );
       track = s.queue.getSnapshot().tracks.find((t) => t.uri === found.uri) ?? null;
@@ -9166,10 +9734,12 @@ export class DiscordBot {
     } else {
       track = this.lastPickBy(s, userName);
     }
-    if (!track) return 'Queue something first (`V@p <track>`), then bet on it with `V@stump`.\n_New here? `V@games` explains how these work._';
+    if (!track)
+      return 'Queue something first (`V@p <track>`), then bet on it with `V@stump`.\n_New here? `V@games` explains how these work._';
     const { fit, insufficient, reasons, features } = await this.trackFit(s, track);
     if (insufficient) {
-      const text = '🤖 Not enough listening history for me to judge a fit yet — play a few tracks, then try again. (No bet placed.)\n_New here? `V@games` explains how these work._';
+      const text =
+        '🤖 Not enough listening history for me to judge a fit yet — play a few tracks, then try again. (No bet placed.)\n_New here? `V@games` explains how these work._';
       return row ? { content: text, components: row } : text;
     }
     const prev = this.stumps.get(gid);
@@ -9253,7 +9823,9 @@ export class DiscordBot {
       if (!predicted) bits.push('🤖 The bot called it a dead heat — correct.');
     } else {
       const wins = gamesStore.addDuelWin(gid, winner);
-      bits.push(`🏆 **${winner}** takes the point (${wins} win${wins === 1 ? '' : 's'}) — the room let their pick play.`);
+      bits.push(
+        `🏆 **${winner}** takes the point (${wins} win${wins === 1 ? '' : 's'}) — the room let their pick play.`,
+      );
       if (predicted) {
         const right = predicted === winner;
         const acc = gamesStore.noteDuelOutcome(gid, right);
@@ -9326,7 +9898,7 @@ export class DiscordBot {
         )
         .setFooter({ text: 'Room fit is 0-100 (higher is better) · V@games for the rules' });
     }
-    if (opponent.toLowerCase() === me.toLowerCase()) return 'You can\'t duel yourself — pick someone else.';
+    if (opponent.toLowerCase() === me.toLowerCase()) return "You can't duel yourself — pick someone else.";
     const a = this.lastPickBy(s, me);
     const b = this.lastPickBy(s, opponent);
     if (!a || !b) {
@@ -9368,7 +9940,7 @@ export class DiscordBot {
       predicted
         ? `🤖 The bot predicts **${predicted}** — but the room has the final say: a track that plays through earns a point, a skipped one earns nothing.`
         : '🤖 The bot calls it a dead heat — the room decides.',
-      '_I\'ll post the verdict once both songs have played. `V@games` for the rules._',
+      "_I'll post the verdict once both songs have played. `V@games` for the rules._",
     ].join('\n');
   }
 
@@ -9376,9 +9948,21 @@ export class DiscordBot {
   private rouletteRow(nonce: string): ActionRowBuilder<ButtonBuilder>[] {
     return [
       new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder().setCustomId(`roulette:star:${nonce}`).setLabel('Save to Hall of Fame').setEmoji('⭐').setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId(`roulette:ban:${nonce}`).setLabel('Ban for everyone').setEmoji('🚫').setStyle(ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId(`roulette:spin:${nonce}`).setLabel('Spin again').setEmoji('🎲').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId(`roulette:star:${nonce}`)
+          .setLabel('Save to Hall of Fame')
+          .setEmoji('⭐')
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId(`roulette:ban:${nonce}`)
+          .setLabel('Ban for everyone')
+          .setEmoji('🚫')
+          .setStyle(ButtonStyle.Danger),
+        new ButtonBuilder()
+          .setCustomId(`roulette:spin:${nonce}`)
+          .setLabel('Spin again')
+          .setEmoji('🎲')
+          .setStyle(ButtonStyle.Secondary),
       ),
     ];
   }
@@ -9404,7 +9988,15 @@ export class DiscordBot {
     const found = await this.findTrackTrack(keyToQuery(key));
     if (!found) return `🎲 Pulled *${keyToQuery(key)}* from your history but couldn't find a playable match.`;
     s.queue.enqueue(
-      { uri: found.uri, name: found.name, artists: found.artists, album: found.album ?? '', durationMs: found.durationMs, source: found.source, image: found.image },
+      {
+        uri: found.uri,
+        name: found.name,
+        artists: found.artists,
+        album: found.album ?? '',
+        durationMs: found.durationMs,
+        source: found.source,
+        image: found.image,
+      },
       userName,
     );
     // Play it NEXT, so the decision and the song actually meet instead of the
@@ -9452,7 +10044,15 @@ export class DiscordBot {
     const [, action, nonce] = interaction.customId.split(':');
     const offer = nonce ? this.rouletteOffers.get(nonce) : undefined;
     if (!offer) {
-      { const r = await interaction.reply({ content: 'That roulette offer has expired — spin again with `V@roulette`.', flags: MessageFlags.Ephemeral }).catch(() => null); if (r) this.autoExpireNotice(r); }
+      {
+        const r = await interaction
+          .reply({
+            content: 'That roulette offer has expired — spin again with `V@roulette`.',
+            flags: MessageFlags.Ephemeral,
+          })
+          .catch(() => null);
+        if (r) this.autoExpireNotice(r);
+      }
       return;
     }
     const gid = offer.guildId;
@@ -9506,7 +10106,9 @@ export class DiscordBot {
         note = '.';
       }
     }
-    await interaction.reply({ content: `🚫 Banned **${offer.track.name}** from roulette${note}`, flags: MessageFlags.Ephemeral }).catch(() => {});
+    await interaction
+      .reply({ content: `🚫 Banned **${offer.track.name}** from roulette${note}`, flags: MessageFlags.Ephemeral })
+      .catch(() => {});
   }
 
   /** /similar — queue one or all of the cosine-similar candidates. */
@@ -9514,16 +10116,22 @@ export class DiscordBot {
     const [, action, nonce] = interaction.customId.split(':');
     const stash = nonce ? this.similarPending.get(nonce) : undefined;
     if (!stash || stash.tracks.length === 0) {
-      { const r = await interaction.reply({ content: 'That list expired — run `/similar` again.', flags: MessageFlags.Ephemeral }).catch(() => null); if (r) this.autoExpireNotice(r); }
+      {
+        const r = await interaction
+          .reply({ content: 'That list expired — run `/similar` again.', flags: MessageFlags.Ephemeral })
+          .catch(() => null);
+        if (r) this.autoExpireNotice(r);
+      }
       return;
     }
     if (!this.canUse('play', interaction)) {
-      await interaction.reply({ content: "⛔ You don't have permission to queue tracks.", flags: MessageFlags.Ephemeral }).catch(() => {});
+      await interaction
+        .reply({ content: "⛔ You don't have permission to queue tracks.", flags: MessageFlags.Ephemeral })
+        .catch(() => {});
       return;
     }
     const s = this.sessionFor(interaction.guildId);
-    const picks =
-      action === 'one' ? [stash.tracks[Math.floor(Math.random() * stash.tracks.length)]] : stash.tracks;
+    const picks = action === 'one' ? [stash.tracks[Math.floor(Math.random() * stash.tracks.length)]] : stash.tracks;
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     let queued = 0;
     let failed = 0;
@@ -9624,7 +10232,13 @@ export class DiscordBot {
       }
       case 'speed': {
         const f =
-          value === 'nightcore' ? 1.25 : value === 'slowed' ? 0.85 : !value || value === 'normal' ? 1 : Number.parseFloat(value);
+          value === 'nightcore'
+            ? 1.25
+            : value === 'slowed'
+              ? 0.85
+              : !value || value === 'normal'
+                ? 1
+                : Number.parseFloat(value);
         if (!Number.isFinite(f) || f <= 0) return 'speed: bad value';
         s.playback.setSpeed(f);
         return `speed ${f.toFixed(2)}×`;
@@ -9748,7 +10362,7 @@ export class DiscordBot {
         {
           name: '🎲 Track Roulette — `V@roulette`',
           value:
-            '1. The bot pulls a song out of **your own server\'s history**, leaning toward ones you rarely play, and queues it **next**.\n' +
+            "1. The bot pulls a song out of **your own server's history**, leaning toward ones you rarely play, and queues it **next**.\n" +
             '2. ⭐ **Save to Hall of Fame** — keeps it forever (a `Hall of Fame` playlist you can `V@load`).\n' +
             '3. 🚫 **Ban for everyone** — never spins that song here again.\n' +
             '4. Spin as often as you like — bans are remembered.',
@@ -9810,9 +10424,7 @@ export class DiscordBot {
 
   /** "See everything": every help line, packed into as few messages as Discord allows. */
   private helpAllEmbeds(): EmbedBuilder[] {
-    const fields = packCategoryFields(
-      HELP_CATEGORIES.map((c) => ({ name: `${c.emoji} ${c.name}`, lines: c.lines })),
-    );
+    const fields = packCategoryFields(HELP_CATEGORIES.map((c) => ({ name: `${c.emoji} ${c.name}`, lines: c.lines })));
     const pages = chunkFieldsIntoEmbeds(fields);
     return pages.map((page, i) =>
       new EmbedBuilder()
@@ -9842,7 +10454,11 @@ export class DiscordBot {
       const row = new ActionRowBuilder<ButtonBuilder>();
       for (const c of HELP_CATEGORIES.slice(i, i + 5)) {
         row.addComponents(
-          new ButtonBuilder().setCustomId(`vzhelp:${c.id}`).setLabel(c.name).setEmoji(c.emoji).setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId(`vzhelp:${c.id}`)
+            .setLabel(c.name)
+            .setEmoji(c.emoji)
+            .setStyle(ButtonStyle.Secondary),
         );
       }
       rows.push(row);
@@ -9929,7 +10545,9 @@ export class DiscordBot {
   /** Capture a short WebM clip from a visualizer window, then post it as a GIF. */
   private async handleBurst(interaction: ChatInputCommandInteraction): Promise<void> {
     if (!this.bridge.hasBurstSources()) {
-      await interaction.editReply('No visualizer viewer found. Open the web visualizer first (`/viz`), then run `/burst` again.');
+      await interaction.editReply(
+        'No visualizer viewer found. Open the web visualizer first (`/viz`), then run `/burst` again.',
+      );
       return;
     }
     await new Promise((r) => setTimeout(r, 250));
@@ -10051,7 +10669,9 @@ export class DiscordBot {
     if (cur) EW.markPlayed(s.endlessWave, cur.uri, cur.name, cur.artists);
     if (mode === 'smart' && cur) {
       void EW.fetchFeatures(cur)
-        .then((af) => { if (af) EW.recordFeatures(s.endlessWave, af); })
+        .then((af) => {
+          if (af) EW.recordFeatures(s.endlessWave, af);
+        })
         .catch(() => {});
     }
     void this.topUpWave(s).catch((err) => {
@@ -10143,9 +10763,7 @@ export class DiscordBot {
         let resolved: TrackInfo | null = null;
         for (let attempt = 0; attempt < 3 && !resolved; attempt++) {
           if (!EW.isAutoActive(s.endlessWave)) return;
-          const candidate = smart
-            ? await EW.pickNextTrack(s.endlessWave, recent, failed, upcoming)
-            : null;
+          const candidate = smart ? await EW.pickNextTrack(s.endlessWave, recent, failed, upcoming) : null;
           // Smart can dead-end (recommendations empty, or every candidate is a
           // dupe / on cooldown). Fall through to the search-based basic picker so
           // autoplay always queues something instead of stopping the music.
@@ -10199,7 +10817,9 @@ export class DiscordBot {
           generated: s.endlessWave.generated,
           mode: EW.modeOf(s.endlessWave),
         });
-        console.log(`[autoplay] queued: "${resolved.name}" — ${truncate(resolved.artists.join(', '), 80)} (#${s.endlessWave.generated})`);
+        console.log(
+          `[autoplay] queued: "${resolved.name}" — ${truncate(resolved.artists.join(', '), 80)} (#${s.endlessWave.generated})`,
+        );
         this.ewRetryAfter.delete(s.guildId);
       }
     } finally {
@@ -10369,9 +10989,9 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/resume` · `V@r` — resume',
       '`/toggle` · `V@t` — pause/resume',
       '`/skip` · `V@s` — skip (non-DJs start a vote)',
-      '`/nowplaying` · `V@np` — what\'s playing',
+      "`/nowplaying` · `V@np` — what's playing",
       '`/follow` · `V@follow` — the now-playing strip follows the active channel by default; this pins it here (`off` turns it off)',
-      '`/similar [track]` · `V@similar` — find tracks that sound like what\'s playing (cosine.club)',
+      "`/similar [track]` · `V@similar` — find tracks that sound like what's playing (cosine.club)",
       '`/volume <0-100>` · `V@v` — set the volume',
       '`/clear` · `V@c` — stop and clear the queue',
       '`/jump <lyric>` · `V@jump` — jump to a lyric line (e.g. "to the chorus")',
@@ -10381,7 +11001,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
     id: 'queue',
     emoji: '📜',
     name: 'Queue',
-    blurb: 'view and rearrange what\'s coming up',
+    blurb: "view and rearrange what's coming up",
     lines: [
       '`/queue` · `V@q` — view the queue (paged)',
       '`/shuffle` · `V@sh` — shuffle the queue',
@@ -10473,7 +11093,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`V@stump board` — human-vs-bot scoreboard',
       '`/duel [@user] [now]` · `V@duel` — DJ Duel: the bot scores both picks and predicts a winner, then the room decides (add `now` for an instant verdict)',
       '`V@duel board` — duel leaderboard + how often the bot called the room right',
-      '`/roulette` · `V@roulette` — a rarely-played track from this server\'s own history, queued next: ⭐ Hall of Fame or 🚫 Ban',
+      "`/roulette` · `V@roulette` — a rarely-played track from this server's own history, queued next: ⭐ Hall of Fame or 🚫 Ban",
       '`/quiz` · `V@quiz` — guess-the-song lyric game · `/guess <answer>` · `V@guess`',
     ],
   },
@@ -10501,7 +11121,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/wave` — waveform snapshot · `/burst` — animated clip',
       '`/screensaver` · `V@sc` — idle screensaver',
       '`/sensitivity <0.5-1.5>` · `V@sens` — beat reactivity',
-      '`/mood on|off` · `V@mood` — now-playing colors tinted by the track\'s mood',
+      "`/mood on|off` · `V@mood` — now-playing colors tinted by the track's mood",
       '`V@crossfade on|off|<seconds>` · `V@xfade` — crossfade + tail fade (0 = off, plays to the very end)',
       '`/dna` · `V@dna` — Song DNA radar card · `/cover` · `V@cover` — queue album-art mosaic',
     ],
@@ -10514,7 +11134,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
     lines: [
       '`/diag` · `V@diag` — diagnostics (gateway, voice, librespot)',
       '`/leaderboard` · `V@lb` — server listening stats (top DJs & artists)',
-      '`/wrapped [month]` · `V@wrapped` — this server\'s monthly Wrapped: hours, top tracks, artists, DJs',
+      "`/wrapped [month]` · `V@wrapped` — this server's monthly Wrapped: hours, top tracks, artists, DJs",
       '`/stats` — bot statistics',
       '`/sleep <30m|1h>` · `V@sleep` — sleep timer',
       '`/help` · `V@help` — this menu',
@@ -10535,9 +11155,7 @@ function renderCollage(inputs: string[], outPath: string): Promise<boolean> {
   while (imgs.length < 4) imgs.push(imgs[0]);
   const args: string[] = ['-hide_banner', '-loglevel', 'error'];
   for (const p of imgs) args.push('-i', p);
-  const parts = imgs.map(
-    (_, i) => `[${i}]scale=320:320:force_original_aspect_ratio=increase,crop=320:320[s${i}]`,
-  );
+  const parts = imgs.map((_, i) => `[${i}]scale=320:320:force_original_aspect_ratio=increase,crop=320:320[s${i}]`);
   parts.push('[s0][s1][s2][s3]xstack=inputs=4:layout=0_0|w0_0|0_h0|w0_h0[out]');
   args.push('-filter_complex', parts.join(';'), '-map', '[out]', '-frames:v', '1', '-y', outPath);
   return new Promise((resolve) => {

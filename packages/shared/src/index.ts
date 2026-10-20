@@ -197,7 +197,26 @@ export type InboundMessage =
   | CommandMessage;
 
 export type OutboundMessage =
-  | { type: 'snapshot'; state: PlaybackState; queue: QueueSnapshot; permissions?: PermissionSnapshot; voice?: { joined: boolean; channelId?: string }; theme?: VaporzrTheme; djEnabled?: boolean; primaryGuildId?: string; guilds?: Array<{ id: string; name: string }>; sensitivity?: number; presetCycle?: number; preset?: { name: string; index: number }; guest?: boolean; endlesswave?: boolean; endlesswaveMode?: 'off' | 'basic' | 'smart'; ambient?: boolean; voteSkip?: boolean; skipForward?: boolean }
+  | {
+      type: 'snapshot';
+      state: PlaybackState;
+      queue: QueueSnapshot;
+      permissions?: PermissionSnapshot;
+      voice?: { joined: boolean; channelId?: string };
+      theme?: VaporzrTheme;
+      djEnabled?: boolean;
+      primaryGuildId?: string;
+      guilds?: Array<{ id: string; name: string }>;
+      sensitivity?: number;
+      presetCycle?: number;
+      preset?: { name: string; index: number };
+      guest?: boolean;
+      endlesswave?: boolean;
+      endlesswaveMode?: 'off' | 'basic' | 'smart';
+      ambient?: boolean;
+      voteSkip?: boolean;
+      skipForward?: boolean;
+    }
   | { type: 'state:update'; state: PlaybackState; guildId?: string }
   /** Who is in the jam: distinct human names across connected clients, plus the
    *  names already credited on the queue. Generic client names (web-viz-xxxx,
@@ -205,7 +224,14 @@ export type OutboundMessage =
    *  `joinPath` is origin-relative on purpose — the bot is loopback-bound and has
    *  no idea which address a viewer reached it on, so each client prefixes its
    *  own origin to build the join link. */
-  | { type: 'jam:presence'; names: string[]; count: number; contributors: string[]; joinPath?: string; joinUrl?: string }
+  | {
+      type: 'jam:presence';
+      names: string[];
+      count: number;
+      contributors: string[];
+      joinPath?: string;
+      joinUrl?: string;
+    }
   | { type: 'queue:update'; queue: QueueSnapshot }
   | { type: 'perm:update'; permissions: PermissionSnapshot }
   | { type: 'dj:update'; enabled: boolean }

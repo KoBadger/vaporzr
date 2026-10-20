@@ -130,11 +130,7 @@ export class LibrespotManager implements SpotifyBackend {
     // A live librespot whose bridge DIED after connecting accepts play
     // commands but streams into the void — the silent-stall failure. Before
     // first connection the socket is legitimately null (lazy sink spawn).
-    return (
-      this.proc !== null &&
-      !this.proc.killed &&
-      (!this.bridgeEverConnected || this.socket !== null)
-    );
+    return this.proc !== null && !this.proc.killed && (!this.bridgeEverConnected || this.socket !== null);
   }
 
   /** Snapshot of the Spotify Connect device this bot registers as. */
@@ -391,7 +387,7 @@ export class LibrespotManager implements SpotifyBackend {
     console.log(
       `[librespot] starting: ${config.librespotPath} ${args
         .map((a, i) => (args[i - 1] === '--password' ? '***' : a))
-        .join(' ')}`
+        .join(' ')}`,
     );
     // Rotate / open a persistent stderr log so librespot's own errors are
     // visible. The Node spawn pipe wasn't surfacing them, making silent exits

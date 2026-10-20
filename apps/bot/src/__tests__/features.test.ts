@@ -106,7 +106,11 @@ describe('stream cache persistence', () => {
     expect(fs.existsSync(cacheFile())).toBe(false);
     t.advanceTimersByTime(STREAM_CACHE_SAVE_DEBOUNCE_MS + 50);
 
-    const saved = JSON.parse(fs.readFileSync(cacheFile(), 'utf8')) as Array<{ uri: string; savedAt: number; video: ResolvedVideo }>;
+    const saved = JSON.parse(fs.readFileSync(cacheFile(), 'utf8')) as Array<{
+      uri: string;
+      savedAt: number;
+      video: ResolvedVideo;
+    }>;
     expect(saved).toHaveLength(1);
     expect(saved[0].uri).toBe('spotify:track:omega');
     expect(saved[0].video.streamUrl).toBeTruthy();

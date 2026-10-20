@@ -96,7 +96,9 @@ describe('safeFetch', () => {
   it('follows a public redirect chain and returns the final response', async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(new Response(null, { status: 302, headers: { location: 'https://cdn.example.net/a.mp3' } }))
+      .mockResolvedValueOnce(
+        new Response(null, { status: 302, headers: { location: 'https://cdn.example.net/a.mp3' } }),
+      )
       .mockResolvedValueOnce(new Response(null, { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
     const res = await safeFetch('https://example.com/a.mp3', { method: 'HEAD' });

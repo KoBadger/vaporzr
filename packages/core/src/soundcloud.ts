@@ -119,7 +119,9 @@ export async function resolveSoundcloudVideo(input: string): Promise<ResolvedSou
     if (!/DRM/i.test(msg)) throw err;
     console.warn(`[soundcloud] DRM-protected track (${url}) — falling back to YouTube match`);
     // Best-effort query: real title if extractable, else the URL slug.
-    let query = decodeURIComponent(url.split('/').pop()?.split('?')[0] ?? '').replace(/[-_]+/g, ' ').trim();
+    let query = decodeURIComponent(url.split('/').pop()?.split('?')[0] ?? '')
+      .replace(/[-_]+/g, ' ')
+      .trim();
     try {
       const meta = await runYtDlp(['--no-warnings', '--print', '%(title)s', url]);
       const title = meta.trim().split(/\r?\n/)[0];
@@ -186,12 +188,14 @@ export async function resolveSoundcloudSet(input: string): Promise<ResolvedSound
   //    limits so a 100+ track set doesn't blow the 60s/4MB defaults.
   let lines: string[] = [];
   try {
-    const raw = await runYtDlp(
-      ['--no-warnings', '--print', '%(webpage_url)s|%(title)s|%(uploader)s', url],
-      1,
-      { timeoutMs: 180_000, maxBufferBytes: 16 * 1024 * 1024 },
-    );
-    lines = raw.trim().split(/\r?\n/).filter((l) => l.includes('|'));
+    const raw = await runYtDlp(['--no-warnings', '--print', '%(webpage_url)s|%(title)s|%(uploader)s', url], 1, {
+      timeoutMs: 180_000,
+      maxBufferBytes: 16 * 1024 * 1024,
+    });
+    lines = raw
+      .trim()
+      .split(/\r?\n/)
+      .filter((l) => l.includes('|'));
   } catch (err) {
     console.warn(
       `[soundcloud] full set extraction failed — trying flat listing: ${err instanceof Error ? err.message : err}`,
@@ -206,7 +210,10 @@ export async function resolveSoundcloudSet(input: string): Promise<ResolvedSound
         1,
         { timeoutMs: 90_000, maxBufferBytes: 8 * 1024 * 1024 },
       );
-      lines = raw.trim().split(/\r?\n/).filter((l) => l.includes('|'));
+      lines = raw
+        .trim()
+        .split(/\r?\n/)
+        .filter((l) => l.includes('|'));
     } catch (err) {
       console.warn(`[soundcloud] flat set listing failed: ${err instanceof Error ? err.message : err}`);
     }
@@ -220,8 +227,7 @@ export async function resolveSoundcloudSet(input: string): Promise<ResolvedSound
       const rawTitle = m?.[2] ?? '';
       const uploader = m?.[3] ?? '';
       if (!entryUrl) return null;
-      const title =
-        !rawTitle || /^(na|none|null)$/i.test(rawTitle.trim()) ? slugFromUrl(entryUrl) : rawTitle;
+      const title = !rawTitle || /^(na|none|null)$/i.test(rawTitle.trim()) ? slugFromUrl(entryUrl) : rawTitle;
       return {
         videoId: entryUrl,
         uri: toSoundcloudUri(entryUrl),

@@ -1,0 +1,11 @@
+node_modules
+package-lock.json
+vendor
+**/dist
+**/*.min.js
+**/*.min.css
+apps/bot/data
+apps/bot/public/vendor
+apps/player/www
+apps/spicetify/www
+**/*.md

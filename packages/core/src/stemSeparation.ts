@@ -150,7 +150,16 @@ async function download(url: string, dest: string): Promise<void> {
 async function mixStems(parts: string[], out: string): Promise<void> {
   const args = ['-hide_banner', '-loglevel', 'error'];
   for (const p of parts) args.push('-i', p);
-  args.push('-filter_complex', `amix=inputs=${parts.length}:duration=longest:normalize=0`, '-c:a', 'libmp3lame', '-b:a', '192k', '-y', out);
+  args.push(
+    '-filter_complex',
+    `amix=inputs=${parts.length}:duration=longest:normalize=0`,
+    '-c:a',
+    'libmp3lame',
+    '-b:a',
+    '192k',
+    '-y',
+    out,
+  );
   await new Promise<void>((resolve, reject) => {
     const p = spawn(config.ffmpegPath, args, { windowsHide: true });
     let err = '';

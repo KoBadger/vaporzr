@@ -89,14 +89,36 @@ async function main(): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const proc = spawn(
       config.ffmpegPath,
-      ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=8', '-ac', '2', '-ar', '48000', '-y', tonePath],
+      [
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-f',
+        'lavfi',
+        '-i',
+        'sine=frequency=440:duration=8',
+        '-ac',
+        '2',
+        '-ar',
+        '48000',
+        '-y',
+        tonePath,
+      ],
       { windowsHide: true },
     );
     proc.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`tone gen exited ${code}`))));
     proc.on('error', reject);
   });
   session.queue.enqueue(
-    { uri: 'local:test-tone', name: 'Test Tone', artists: [], album: '', durationMs: 8000, source: 'local', filePath: tonePath },
+    {
+      uri: 'local:test-tone',
+      name: 'Test Tone',
+      artists: [],
+      album: '',
+      durationMs: 8000,
+      source: 'local',
+      filePath: tonePath,
+    },
     'integration-test',
   );
   await session.playback.play();
@@ -108,7 +130,11 @@ async function main(): Promise<void> {
   await new Promise((r) => setTimeout(r, 2000));
   const pos2 = session.voice.getPositionMs();
   check('position advances', pos2 > pos1, `${pos1} -> ${pos2}`);
-  check('state positionMs tracked', session.queue.getState().positionMs > 0, `${session.queue.getState().positionMs}ms`);
+  check(
+    'state positionMs tracked',
+    session.queue.getState().positionMs > 0,
+    `${session.queue.getState().positionMs}ms`,
+  );
   check('tracksPlayed incremented', session.playback.tracksPlayed >= 1, `${session.playback.tracksPlayed}`);
 
   // 3. Pause / resume / volume / sfx while audio is flowing.
@@ -134,15 +160,29 @@ async function main(): Promise<void> {
     check('youtube stream url resolved', video.streamUrl.length > 0);
     const uri = `youtube:video:${ytId}`;
     session.queue.enqueue(
-      { uri, name: video.name, artists: video.artists ?? [], album: '', durationMs: video.durationMs, source: 'youtube' },
+      {
+        uri,
+        name: video.name,
+        artists: video.artists ?? [],
+        album: '',
+        durationMs: video.durationMs,
+        source: 'youtube',
+      },
       'integration-test',
     );
     while (session.queue.getCurrentTrack()?.uri !== uri) {
       if (!session.queue.next()) break;
     }
     await session.playback.play();
-    const ytStreamed = await waitFor(() => session.queue.getState().source === 'youtube' && session.voice.getPositionMs() > 500, 30_000);
-    check('youtube streaming', ytStreamed, `${session.queue.getCurrentTrack()?.name} @ ${session.voice.getPositionMs()}ms`);
+    const ytStreamed = await waitFor(
+      () => session.queue.getState().source === 'youtube' && session.voice.getPositionMs() > 500,
+      30_000,
+    );
+    check(
+      'youtube streaming',
+      ytStreamed,
+      `${session.queue.getCurrentTrack()?.name} @ ${session.voice.getPositionMs()}ms`,
+    );
     check('tracksPlayed incremented again', session.playback.tracksPlayed >= 2, `${session.playback.tracksPlayed}`);
   }
 

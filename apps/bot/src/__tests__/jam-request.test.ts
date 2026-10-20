@@ -67,11 +67,7 @@ describe('Bridge.requestTrack (jam page) duplicate handling', () => {
       'user',
     );
     // B is already queued; A and C are fresh and must keep their order.
-    const b = bridgeWith(q, [
-      yt('youtube:video:a', 'A'),
-      yt('youtube:video:b', 'B'),
-      yt('youtube:video:c', 'C'),
-    ]);
+    const b = bridgeWith(q, [yt('youtube:video:a', 'A'), yt('youtube:video:b', 'B'), yt('youtube:video:c', 'C')]);
     const res = await b.requestTrack('a set', 'Guest');
     expect(res.ok).toBe(true);
     expect(res.name).toContain('2 tracks');

@@ -18,12 +18,12 @@ for (const stream of [process.stdout, process.stderr]) {
 }
 
 process.on('unhandledRejection', (reason) => {
-  console.error('[vaporzr] unhandled rejection:', reason instanceof Error ? reason.stack ?? reason.message : reason);
+  console.error('[vaporzr] unhandled rejection:', reason instanceof Error ? (reason.stack ?? reason.message) : reason);
 });
 // A lone unhandled 'error' (e.g. EPIPE on a socket whose peer vanished) must not
 // take the whole bot down — the voice watchdog self-heals the feed afterwards.
 process.on('uncaughtException', (err) => {
-  console.error('[vaporzr] uncaught exception:', err instanceof Error ? err.stack ?? err.message : err);
+  console.error('[vaporzr] uncaught exception:', err instanceof Error ? (err.stack ?? err.message) : err);
 });
 
 /** True when another process is already listening on config.port (single-instance guard). */

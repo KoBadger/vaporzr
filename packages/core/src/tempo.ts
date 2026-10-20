@@ -162,12 +162,14 @@ export function alignLagFrames(a: Float64Array, b: Float64Array, maxLag: number)
  * BPM and still sit half a beat apart, which reads as "sloppy" rather than
  * "wrong". This measures the residual offset from the onset envelopes.
  */
-export async function beatAlignLagMs(aFile: string, bFile: string, maxLagMs = 1500, timeoutMs = 30_000): Promise<number> {
+export async function beatAlignLagMs(
+  aFile: string,
+  bFile: string,
+  maxLagMs = 1500,
+  timeoutMs = 30_000,
+): Promise<number> {
   try {
-    const [pa, pb] = await Promise.all([
-      decodeMono(aFile, RATE, timeoutMs),
-      decodeMono(bFile, RATE, timeoutMs),
-    ]);
+    const [pa, pb] = await Promise.all([decodeMono(aFile, RATE, timeoutMs), decodeMono(bFile, RATE, timeoutMs)]);
     if (!pa || !pb) return 0;
     const frames = alignLagFrames(onsetEnvelope(pa, HOP), onsetEnvelope(pb, HOP), Math.round(maxLagMs / 10));
     return frames * 10;

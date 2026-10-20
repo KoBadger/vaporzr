@@ -31,7 +31,10 @@ describe('downloadToTempFile', () => {
   });
 
   it('returns null and leaves no file when the server rejects the request', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => ({ status: 403, arrayBuffer: async () => new ArrayBuffer(0) })));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ status: 403, arrayBuffer: async () => new ArrayBuffer(0) })),
+    );
     expect(await downloadToTempFile('https://example.test/media')).toBeNull();
   });
 });

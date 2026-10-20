@@ -471,7 +471,11 @@ export class GoLibrespotManager implements SpotifyBackend {
 
   /** Rename the device: rewrites config.yml and restarts go-librespot. */
   setDeviceName(name: string): void {
-    const clean = name.replace(/[\r\n"]/g, '').slice(0, 32).trim() || 'Vaporzr';
+    const clean =
+      name
+        .replace(/[\r\n"]/g, '')
+        .slice(0, 32)
+        .trim() || 'Vaporzr';
     try {
       const cfgPath = path.join(config.goLibrespotConfigDir, 'config.yml');
       let cfg = fs.readFileSync(cfgPath, 'utf8');

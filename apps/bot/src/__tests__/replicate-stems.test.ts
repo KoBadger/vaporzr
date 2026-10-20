@@ -46,7 +46,11 @@ describe('replicate stem separation', () => {
         if (u.endsWith('/predictions/p1')) {
           polls++;
           return new Response(
-            JSON.stringify({ id: 'p1', status: 'succeeded', output: { vocals: 'https://out.example/v.mp3', no_vocals: 'https://out.example/nv.mp3' } }),
+            JSON.stringify({
+              id: 'p1',
+              status: 'succeeded',
+              output: { vocals: 'https://out.example/v.mp3', no_vocals: 'https://out.example/nv.mp3' },
+            }),
             { status: 200 },
           );
         }
@@ -78,7 +82,8 @@ describe('replicate stem separation', () => {
       'fetch',
       vi.fn(async (url: string | URL, init?: RequestInit) => {
         const u = String(url);
-        if (u.endsWith('/files')) return new Response(JSON.stringify({ urls: { get: 'https://files.example/abc' } }), { status: 200 });
+        if (u.endsWith('/files'))
+          return new Response(JSON.stringify({ urls: { get: 'https://files.example/abc' } }), { status: 200 });
         if (u.endsWith('/predictions') && init?.method === 'POST') {
           return new Response(JSON.stringify({ id: 'p2', status: 'failed', error: 'boom' }), { status: 200 });
         }
@@ -100,7 +105,8 @@ describe('replicate stem separation', () => {
       'fetch',
       vi.fn(async (url: string | URL, init?: RequestInit) => {
         const u = String(url);
-        if (u.endsWith('/files')) return new Response(JSON.stringify({ urls: { get: 'https://files.example/abc' } }), { status: 200 });
+        if (u.endsWith('/files'))
+          return new Response(JSON.stringify({ urls: { get: 'https://files.example/abc' } }), { status: 200 });
         if (u.endsWith('/models/cjwbw/demucs')) {
           return new Response(JSON.stringify({ latest_version: { id: 'ver-429' } }), { status: 200 });
         }
@@ -109,10 +115,10 @@ describe('replicate stem separation', () => {
           if (creates === 1) {
             // The exact shape Replicate returns on a low-credit account: the
             // throttle body carries `retry_after` in seconds.
-            return new Response(
-              JSON.stringify({ detail: 'Request was throttled.', retry_after: 1, status: 429 }),
-              { status: 429, headers: { 'retry-after': '1' } },
-            );
+            return new Response(JSON.stringify({ detail: 'Request was throttled.', retry_after: 1, status: 429 }), {
+              status: 429,
+              headers: { 'retry-after': '1' },
+            });
           }
           return new Response(
             JSON.stringify({
@@ -150,7 +156,8 @@ describe('replicate stem separation', () => {
       'fetch',
       vi.fn(async (url: string | URL, init?: RequestInit) => {
         const u = String(url);
-        if (u.endsWith('/files')) return new Response(JSON.stringify({ urls: { get: 'https://files.example/abc' } }), { status: 200 });
+        if (u.endsWith('/files'))
+          return new Response(JSON.stringify({ urls: { get: 'https://files.example/abc' } }), { status: 200 });
         if (u.endsWith('/models/cjwbw/demucs')) {
           return new Response(JSON.stringify({ latest_version: { id: 'ver-serial' } }), { status: 200 });
         }

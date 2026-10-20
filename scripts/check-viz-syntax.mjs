@@ -53,11 +53,11 @@ try {
 
   for (const required of [
     '/vendor/embedded-app-sdk.mjs',
-    "sdk.ready()",
+    'sdk.ready()',
     'setOrientationLockState',
     'THERMAL_STATE_UPDATE',
-    "window.__VZ_ACTIVITY__=1",
-    "type=\"module\"",
+    'window.__VZ_ACTIVITY__=1',
+    'type="module"',
   ]) {
     if (!body.includes(required)) throw new Error(`handshake no longer contains: ${required}`);
   }

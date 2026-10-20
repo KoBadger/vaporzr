@@ -51,7 +51,6 @@ export function socketHasShareKey(
 ): boolean {
   if (!shareKey) return true; // unset key ⇒ open access (matches HTTP behaviour)
   return (
-    secretEquals(keyFromCookieHeader(cookieHeader), shareKey) ||
-    secretEquals(keyFromRequestUrl(requestUrl), shareKey)
+    secretEquals(keyFromCookieHeader(cookieHeader), shareKey) || secretEquals(keyFromRequestUrl(requestUrl), shareKey)
   );
 }

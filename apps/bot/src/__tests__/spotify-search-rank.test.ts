@@ -30,7 +30,10 @@ describe('scorePlayResult prefers the original over a variant', () => {
   it('ranks the original above a dash-form remix (second real case)', () => {
     const q = 'seven nation army - the white stripes';
     const original = scorePlayResult(t('Seven Nation Army', ['The White Stripes']), q);
-    const remix = scorePlayResult(t('Seven Nation Army - The Glitch Mob Remix', ['The White Stripes', 'The Glitch Mob']), q);
+    const remix = scorePlayResult(
+      t('Seven Nation Army - The Glitch Mob Remix', ['The White Stripes', 'The Glitch Mob']),
+      q,
+    );
     expect(original).toBeLessThan(remix);
   });
 

@@ -236,7 +236,7 @@ export class SynthOverlay {
       c.lineWidth = 1;
       const streaks = Math.round(6 + energy * 18);
       for (let i = 0; i < streaks; i++) {
-        const sy = ((nowMs * 0.06 * (0.5 + energy) + (i * 97) % 1000) / 1000) % 1;
+        const sy = ((nowMs * 0.06 * (0.5 + energy) + ((i * 97) % 1000)) / 1000) % 1;
         const sx = ((i * 53) % 100) / 100;
         const len = W * (0.05 + 0.12 * energy);
         c.beginPath();
@@ -313,12 +313,7 @@ export class SynthOverlay {
   }
 
   /** Draw the wallpaper with `object-fit: cover` semantics. */
-  private drawVideoCover(
-    c: CanvasRenderingContext2D,
-    video: HTMLVideoElement,
-    W: number,
-    H: number,
-  ): void {
+  private drawVideoCover(c: CanvasRenderingContext2D, video: HTMLVideoElement, W: number, H: number): void {
     const vw = video.videoWidth || 16;
     const vh = video.videoHeight || 9;
     const scale = Math.max(W / vw, H / vh);

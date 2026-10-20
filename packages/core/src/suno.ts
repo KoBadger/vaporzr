@@ -50,9 +50,7 @@ async function proxyFetch(url: string, init: RequestInit = {}): Promise<Response
 
 /** Probe a remote audio URL's duration via ffmpeg (reads headers only). */
 export function probeDuration(url: string, proxy = ''): Promise<number | null> {
-  const env = Object.fromEntries(
-    Object.entries(process.env).filter(([k]) => !k.toLowerCase().endsWith('_proxy')),
-  );
+  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.toLowerCase().endsWith('_proxy')));
   if (proxy) env.http_proxy = proxy;
   return new Promise((resolve) => {
     const proc = spawn(config.ffmpegPath, ['-hide_banner', '-i', url], { windowsHide: true, env });
@@ -193,7 +191,11 @@ function probePlayable(url: string): Promise<boolean> {
 export async function resolveSuno(input: string): Promise<ResolvedVideo> {
   const trimmed = input.trim();
   const uuidOnly = !/^https?:/i.test(trimmed) && UUID_RE.test(trimmed);
-  const url = uuidOnly ? `https://suno.com/song/${trimmed}` : trimmed.startsWith('http') ? trimmed : `https://${trimmed}`;
+  const url = uuidOnly
+    ? `https://suno.com/song/${trimmed}`
+    : trimmed.startsWith('http')
+      ? trimmed
+      : `https://${trimmed}`;
   if (!/(^|[./])suno\.(com|ai)\//.test(url) && !UUID_RE.test(url)) {
     throw new SunoError('That does not look like a Suno link.');
   }

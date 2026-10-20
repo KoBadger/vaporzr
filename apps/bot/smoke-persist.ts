@@ -44,7 +44,10 @@ mgr2.attachLibrespot(null);
 const s2 = mgr2.get('guild1');
 const snap = s2.queue.getSnapshot();
 check(snap.tracks.length === 2, `restored 2 tracks (got ${snap.tracks.length})`);
-check(snap.tracks[0].uri === 'youtube:video:aaa' && snap.tracks[1].uri === 'youtube:video:bbb', 'track order preserved');
+check(
+  snap.tracks[0].uri === 'youtube:video:aaa' && snap.tracks[1].uri === 'youtube:video:bbb',
+  'track order preserved',
+);
 check(snap.currentIndex === 1, `currentIndex preserved (got ${snap.currentIndex})`);
 check(snap.state.playing === false, 'starts paused (no auto-resume)');
 check(snap.state.positionMs === 42_000, `position preserved (got ${snap.state.positionMs})`);

@@ -150,9 +150,7 @@ function inSun(x: number, y: number): boolean {
 
 function sunColor(y: number): Rgba {
   const k = Math.max(0, Math.min(1, (y - (SUN.cy - SUN.r)) / (2 * SUN.r)));
-  return k < 0.5
-    ? mix(rgba(0xfff0a0), rgba(0xffab54), k * 2)
-    : mix(rgba(0xffab54), rgba(0xff4f6d), (k - 0.5) * 2);
+  return k < 0.5 ? mix(rgba(0xfff0a0), rgba(0xffab54), k * 2) : mix(rgba(0xffab54), rgba(0xff4f6d), (k - 0.5) * 2);
 }
 
 /** Rows of the ground grid; spacing grows with depth for a cheap perspective. */
@@ -217,9 +215,7 @@ function drawText(buf: Buffer, text: string, x: number, y: number, scale: number
     return gx >= 0 && gy >= 0 && gx < gw && gy < 7 && mask[gy * gw + gx] === 1;
   };
   const pad =
-    2 +
-    (opts.outlineW ?? 0) +
-    (opts.shadow ? Math.max(Math.abs(opts.shadow.dx), Math.abs(opts.shadow.dy)) : 0);
+    2 + (opts.outlineW ?? 0) + (opts.shadow ? Math.max(Math.abs(opts.shadow.dx), Math.abs(opts.shadow.dy)) : 0);
   const x0 = x - pad;
   const y0 = y - pad;
   const x1 = x + gw * scale + pad;
@@ -227,7 +223,16 @@ function drawText(buf: Buffer, text: string, x: number, y: number, scale: number
 
   if (opts.shadow) {
     const { dx, dy, color } = opts.shadow;
-    paint(buf, x0, y0, x1, y1, (px, py) => on(px - dx, py - dy), () => color, color[3] / 255);
+    paint(
+      buf,
+      x0,
+      y0,
+      x1,
+      y1,
+      (px, py) => on(px - dx, py - dy),
+      () => color,
+      color[3] / 255,
+    );
   }
   const ow = opts.outlineW ?? 0;
   if (opts.outline && ow > 0) {
@@ -351,7 +356,9 @@ export function renderJamCardRgba(url: string): JamCardArt {
     py0 - 4,
     px1 + 4,
     py1 + 4,
-    (x, y) => roundInside(x, y, px0, py0, px1, py1, PANEL.r) && !roundInside(x, y, px0 + 2.5, py0 + 2.5, px1 - 2.5, py1 - 2.5, PANEL.r - 2),
+    (x, y) =>
+      roundInside(x, y, px0, py0, px1, py1, PANEL.r) &&
+      !roundInside(x, y, px0 + 2.5, py0 + 2.5, px1 - 2.5, py1 - 2.5, PANEL.r - 2),
     () => PINK,
   );
 
@@ -402,8 +409,24 @@ export function renderJamCardRgba(url: string): JamCardArt {
   const chipY0 = Math.round(chipCy - chipHalf);
   const chipX1 = Math.round(chipCx + chipHalf);
   const chipY1 = Math.round(chipCy + chipHalf);
-  paint(buf, chipX0 - 4, chipY0 - 4, chipX1 + 4, chipY1 + 4, (x, y) => roundInside(x, y, chipX0 - 2.5, chipY0 - 2.5, chipX1 + 2.5, chipY1 + 2.5, 7), () => PINK);
-  paint(buf, chipX0 - 4, chipY0 - 4, chipX1 + 4, chipY1 + 4, (x, y) => roundInside(x, y, chipX0, chipY0, chipX1, chipY1, 5), () => OUTLINE);
+  paint(
+    buf,
+    chipX0 - 4,
+    chipY0 - 4,
+    chipX1 + 4,
+    chipY1 + 4,
+    (x, y) => roundInside(x, y, chipX0 - 2.5, chipY0 - 2.5, chipX1 + 2.5, chipY1 + 2.5, 7),
+    () => PINK,
+  );
+  paint(
+    buf,
+    chipX0 - 4,
+    chipY0 - 4,
+    chipX1 + 4,
+    chipY1 + 4,
+    (x, y) => roundInside(x, y, chipX0, chipY0, chipX1, chipY1, 5),
+    () => OUTLINE,
+  );
   drawText(buf, 'JAM', Math.round(chipCx - textWidth('JAM', 1) / 2), Math.round(chipCy - 3.5), 1, {
     fill: rgba(0xffffff),
   });
@@ -456,9 +479,16 @@ export function renderJamCardRgba(url: string): JamCardArt {
     () => CYAN,
     0.6,
   );
-  drawText(buf, scan, chipX + Math.round((chipW - scanW) / 2), chipY + Math.round((chipH - 7 * scanScale) / 2), scanScale, {
-    fill: rgba(0xffffff),
-  });
+  drawText(
+    buf,
+    scan,
+    chipX + Math.round((chipW - scanW) / 2),
+    chipY + Math.round((chipH - 7 * scanScale) / 2),
+    scanScale,
+    {
+      fill: rgba(0xffffff),
+    },
+  );
 
   // Frame: neon pink, with a thin cyan line inside.
   for (let y = 0; y < CARD_H; y++) {

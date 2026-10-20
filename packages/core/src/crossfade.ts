@@ -87,11 +87,7 @@ export function linearIn(t: number): number {
  * still describes THIS stream: if the remaining playtime has since dropped below
  * it we have moved on, and a stale value must not strip a later track's fade.
  */
-export function tailFadeSeconds(
-  fadeOutSec: number,
-  remainingMs: number,
-  suppressedRemainingMs: number,
-): number {
+export function tailFadeSeconds(fadeOutSec: number, remainingMs: number, suppressedRemainingMs: number): number {
   if (suppressedRemainingMs > 0 && remainingMs >= suppressedRemainingMs) return 0;
   return fadeOutSec;
 }

@@ -2,9 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { QueueManager, type QueueListener } from '@vaporzr/core/queue';
 import type { OutboundMessage } from '@vaporzr/shared';
 
-const listeners: QueueListener[] = [
-  { onQueueChanged: () => {}, onStateChanged: () => {} },
-];
+const listeners: QueueListener[] = [{ onQueueChanged: () => {}, onStateChanged: () => {} }];
 const mk = () => new QueueManager(listeners);
 
 function track(uri: string, name: string) {
@@ -62,11 +60,7 @@ describe('shuffle placement honours who added the track', () => {
       q.enqueue(track('spotify:track:b', 'B'), 'user');
       q.setState({ shuffle: true });
       q.enqueueMany(
-        [
-          track('spotify:track:x1', 'X1'),
-          track('spotify:track:x2', 'X2'),
-          track('spotify:track:x3', 'X3'),
-        ],
+        [track('spotify:track:x1', 'X1'), track('spotify:track:x2', 'X2'), track('spotify:track:x3', 'X3')],
         'user',
       );
       const uris = q.getSnapshot().tracks.map((t) => t.uri);
@@ -111,7 +105,8 @@ describe('shuffle placement honours who added the track', () => {
     q.enqueue(track('spotify:track:a', 'A'), 'user');
     q.setState({ playing: true });
     for (let i = 0; i < 5; i++) q.enqueue(track(`spotify:track:u${i}`, `U${i}`), 'user');
-    for (let i = 0; i < 5; i++) q.enqueue(track(`spotify:track:ew${i}`, `EW${i}`), 'endless-wave', { keepCursor: true });
+    for (let i = 0; i < 5; i++)
+      q.enqueue(track(`spotify:track:ew${i}`, `EW${i}`), 'endless-wave', { keepCursor: true });
     q.shuffleUpcoming();
     const uris = q.getSnapshot().tracks.map((t) => t.uri);
     const userIdx = uris.map((u, i) => (u.includes('track:u') ? i : -1)).filter((i) => i >= 0);

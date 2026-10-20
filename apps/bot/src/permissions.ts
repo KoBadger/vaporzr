@@ -50,7 +50,8 @@ const DEFAULT_COMMAND_LEVELS: Record<string, PermissionLevel> = {
   player: 'admin',
   screensaver: 'admin',
   theme: 'user',
-  wave: 'user',  burst: 'user',
+  wave: 'user',
+  burst: 'user',
   lyrics: 'user',
   skip: 'user',
   remove: 'user',
@@ -175,10 +176,7 @@ export class PermissionsManager {
     this.save(guildId);
   }
 
-  getLevel(
-    guild: Guild,
-    member: { id: string; roles: { cache: ReadonlyMap<string, unknown> } },
-  ): PermissionLevel {
+  getLevel(guild: Guild, member: { id: string; roles: { cache: ReadonlyMap<string, unknown> } }): PermissionLevel {
     // The bot's owner outranks everyone in every server — no role setup needed.
     const owner = this.ownerOverride ?? config.ownerId;
     if (owner && member.id === owner) return 'admin';
@@ -189,11 +187,7 @@ export class PermissionsManager {
     return 'user';
   }
 
-  can(
-    command: string,
-    guild: Guild,
-    member: { id: string; roles: { cache: ReadonlyMap<string, unknown> } },
-  ): boolean {
+  can(command: string, guild: Guild, member: { id: string; roles: { cache: ReadonlyMap<string, unknown> } }): boolean {
     const required = this.requiredLevel(command, guild.id);
     const level = this.getLevel(guild, member);
     return LEVEL_RANK[level] >= LEVEL_RANK[required];
@@ -296,10 +290,7 @@ export class PermissionsManager {
   }
 
   /** True when a member may act as DJ: mod/admin/owner, or a holder of the DJ role. */
-  isDj(
-    guild: Guild,
-    member: { id: string; roles: { cache: ReadonlyMap<string, unknown> } },
-  ): boolean {
+  isDj(guild: Guild, member: { id: string; roles: { cache: ReadonlyMap<string, unknown> } }): boolean {
     if (this.getLevel(guild, member) !== 'user') return true;
     const dj = this.load(guild.id).djRole;
     if (!dj) return false;

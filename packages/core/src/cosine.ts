@@ -71,9 +71,7 @@ async function getJson<T>(path: string): Promise<T | null> {
 
 /** Find a track by artist/title. */
 export async function cosineSearch(query: string, limit = 5): Promise<CosineTrack[]> {
-  const json = await getJson<{ data?: CosineTrack[] }>(
-    `/search?q=${encodeURIComponent(query)}&limit=${limit}`,
-  );
+  const json = await getJson<{ data?: CosineTrack[] }>(`/search?q=${encodeURIComponent(query)}&limit=${limit}`);
   return json?.data ?? [];
 }
 
@@ -87,9 +85,7 @@ export async function cosineSimilar(id: string, limit = 30): Promise<CosineScore
 
 /** Resolve a YouTube/Discogs/SoundCloud page URL to a catalog track. */
 export async function cosineLookupByUrl(url: string): Promise<CosineTrack[]> {
-  const json = await getJson<{ data?: CosineTrack[] }>(
-    `/tracks/lookup?url=${encodeURIComponent(url)}`,
-  );
+  const json = await getJson<{ data?: CosineTrack[] }>(`/tracks/lookup?url=${encodeURIComponent(url)}`);
   return json?.data ?? [];
 }
 
@@ -105,7 +101,11 @@ function videoId(url?: string): string | null {
  * Resolve a track to its cosine catalog id — exact YouTube id first, else an
  * artist+title search. Cached. Best-effort: null when unknown.
  */
-export async function cosineResolveId(seed: { name: string; artists?: string[]; uri?: string }): Promise<string | null> {
+export async function cosineResolveId(seed: {
+  name: string;
+  artists?: string[];
+  uri?: string;
+}): Promise<string | null> {
   if (!cosineEnabled()) return null;
   const ytId = seed.uri?.match(/^youtube:video:(.+)$/)?.[1];
   if (ytId) {
