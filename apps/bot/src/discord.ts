@@ -112,7 +112,7 @@ import { estimateTempo, beatAlignLagMs } from '@vaporzr/core/tempo';
 import { renderRadarGif, type RadarMetric } from '@vaporzr/core/images';
 import { parseVibe, vibeIsSteerable, type ParsedVibe } from '@vaporzr/core/vibe';
 import { buildJamInviteCard, type JamInviteInfo } from './jamInvite.js';
-import { askAmok } from './amok.js';
+import { askAmokRich, synthWeaselVoice } from './amok.js';
 
 /** First non-internal IPv4 address of this machine — reachable from the LAN. */
 function localIp(): string {
@@ -778,6 +778,10 @@ export class DiscordBot {
   /** guildId -> fire a short SFX on strong beats (auto-hype). */
   private hypeGuilds = new Set<string>();
   private lastHypeAt = new Map<string, number>();
+  /** guildId -> Weasel Auto-VJ spoken track intros enabled (`v@w vj on`). */
+  private weaselVjGuilds = new Set<string>();
+  /** Message IDs sent by Amok ("The Weasel") so users can reply without `v@w`. */
+  private amokMessageIds = new Set<string>();
   /** guildId -> active lyric guess-the-song quiz. */
   private quizzes = new Map<string, { name: string; artists: string[]; timer: NodeJS.Timeout }>();
   /** guildId -> (track uri|name) whose lyrics were last broadcast, so a
@@ -2718,14 +2722,15 @@ export class DiscordBot {
         if (!this.requireLevel(name, interaction)) return this.deny(interaction);
         const prompt = interaction.options.getString('message', true);
         await interaction.deferReply();
-        const cur = s.queue.getState().track;
-        const nowPlaying = cur ? `"${cur.name}" by ${(cur.artists ?? []).join(', ')}` : null;
-        const reply = await askAmok(prompt, {
+        const reply = await this.handleWeaselRequest(s, prompt, {
           scopeId: interaction.guildId ?? interaction.channelId ?? 'dm',
+          guildId: interaction.guildId,
           userId: interaction.user.id,
-          nowPlaying,
+          username: interaction.user.username,
+          ensureJoin: () => this.ensureJoinedForPlayback(interaction, s),
         });
-        await interaction.editReply(reply);
+        const sent = await interaction.editReply(reply);
+        if (sent?.id) this.rememberAmokMessage(sent.id);
         break;
       }
 
@@ -3320,6 +3325,8 @@ export class DiscordBot {
       rest = raw.slice(2).trimStart();
     } else if (me && (raw.startsWith(`<@${me}>`) || raw.startsWith(`<@!${me}>`))) {
       rest = raw.replace(/^<@!?\d+>/, '').trimStart();
+    } else if (message.reference?.messageId && this.amokMessageIds.has(message.reference.messageId) && raw.trim()) {
+      rest = `weasel ${raw.trim()}`;
     }
     if (rest === null) return;
 
@@ -4039,14 +4046,15 @@ export class DiscordBot {
           if ('sendTyping' in message.channel) {
             void message.channel.sendTyping().catch(() => {});
           }
-          const cur = s.queue.getState().track;
-          const nowPlaying = cur ? `"${cur.name}" by ${(cur.artists ?? []).join(', ')}` : null;
-          const reply = await askAmok(prompt, {
+          const reply = await this.handleWeaselRequest(s, prompt, {
             scopeId: message.guildId ?? message.channelId ?? 'dm',
+            guildId: message.guildId,
             userId: message.author.id,
-            nowPlaying,
+            username: message.author.username,
+            ensureJoin: () => this.ensureJoinedForMessage(message, s),
           });
-          await message.reply(reply);
+          const sent = await message.reply(reply);
+          if (sent?.id) this.rememberAmokMessage(sent.id);
           break;
         }
 
@@ -10652,12 +10660,205 @@ export class DiscordBot {
     EW.markPlayed(s.endlessWave, track.uri, track.name, track.artists);
   }
 
+  /** Track message IDs sent by Amok so users can reply directly without `v@w`. */
+  private rememberAmokMessage(messageId: string): void {
+    this.amokMessageIds.add(messageId);
+    if (this.amokMessageIds.size > 500) {
+      const oldest = this.amokMessageIds.values().next().value;
+      if (oldest !== undefined) this.amokMessageIds.delete(oldest);
+    }
+  }
+
+  /** Speak a short Weasel line over the active voice stream with music ducking. */
+  private async speakWeaselInVoice(s: Session, text: string): Promise<boolean> {
+    if (!s.voice.isJoined()) return false;
+    try {
+      const clip = await synthWeaselVoice(text);
+      if (!clip || !s.voice.isJoined()) return false;
+      s.voice.duckFor(clip.durationMs + 400);
+      s.voice.queueSfxPcm(clip.pcm);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Full smart dispatcher for `/weasel`, `/amok`, `V@weasel` (`V@w`), and
+   * direct replies to The Weasel:
+   *  - `vj [on|off]`: toggle spoken MTV VJ track announcements in voice
+   *  - `say <prompt>`: speak out loud in the voice channel + reply in text
+   *  - `roast` / `rate`: roast or hype the current queue and server DJs
+   *  - `play` / `dj` / `spin` / natural song requests: auto-resolve & queue tracks
+   *  - live Google Search grounding + room context
+   */
+  private async handleWeaselRequest(
+    s: Session,
+    rawPrompt: string,
+    opts: {
+      scopeId: string;
+      guildId: string | null;
+      userId: string;
+      username: string;
+      ensureJoin: () => Promise<unknown>;
+    },
+  ): Promise<string> {
+    const trimmed = rawPrompt.trim();
+    const gid = opts.guildId ?? '';
+
+    // 1. `v@w vj [on|off]` — toggle automatic spoken Weasel VJ intros on track changes
+    const vjMatch = /^vj(?:\s+(on|off|toggle|status))?$/i.exec(trimmed);
+    if (vjMatch) {
+      if (!gid) return 'Must be used inside a server.';
+      const mode = (vjMatch[1] ?? 'toggle').toLowerCase();
+      if (mode === 'on') this.weaselVjGuilds.add(gid);
+      else if (mode === 'off') this.weaselVjGuilds.delete(gid);
+      else if (mode === 'toggle') {
+        if (this.weaselVjGuilds.has(gid)) this.weaselVjGuilds.delete(gid);
+        else this.weaselVjGuilds.add(gid);
+      }
+      const active = this.weaselVjGuilds.has(gid);
+      return active
+        ? "🎙️ **Weasel Auto-VJ is ON, buuuddy!** I'll hop on the mic and drop 90s MTV Spring Break intros in voice when tracks kick off. (`V@w vj off` to chill)"
+        : '🔇 **Weasel Auto-VJ is OFF** — keeping the mic quiet during track changes, broham.';
+    }
+
+    // Build rich room context (current track, upcoming queue with addedBy, top DJs)
+    const st = s.queue.getState();
+    const cur = st.track;
+    const snap = s.queue.getSnapshot();
+    const nowPlaying = cur
+      ? `"${cur.name}" by ${(cur.artists ?? []).join(', ')}${cur.addedBy ? ` (queued by ${cur.addedBy})` : ''}`
+      : null;
+    const upcomingQueue = snap.tracks
+      .slice(0, 8)
+      .map(
+        (t, i) => `${i + 1}. "${t.name}" by ${(t.artists ?? []).join(', ')}${t.addedBy ? ` [DJ: ${t.addedBy}]` : ''}`,
+      );
+    let leaderboardSummary: string | null = null;
+    if (gid) {
+      const topUsers = this.stats.topUsers(gid, 5);
+      const topArtists = this.stats.topArtists(gid, 5);
+      const parts: string[] = [];
+      if (topUsers.length > 0) {
+        parts.push(`Top DJs: ${topUsers.map(([u, c]) => `${u} (${c.queued} queued)`).join(', ')}`);
+      }
+      if (topArtists.length > 0) {
+        parts.push(`Top artists: ${topArtists.map(([a, c]) => `${a} (${c})`).join(', ')}`);
+      }
+      if (parts.length > 0) leaderboardSummary = parts.join(' · ');
+    }
+
+    // 2. `v@w say ...` — speak out loud in the voice channel
+    const sayMatch = /^(?:say|speak|mic|announce)(?:\s+(.*))?$/i.exec(trimmed);
+    if (sayMatch) {
+      const topic = (sayMatch[1] ?? '').trim();
+      const voicePrompt = topic
+        ? `Give a short, punchy 1-2 sentence 90s MTV VJ radio drop to say out loud on the microphone about: ${topic}`
+        : cur
+          ? `Give a short, punchy 1-2 sentence 90s MTV VJ radio intro to say out loud on the microphone for the song currently playing: ${nowPlaying}`
+          : 'Give a short, punchy 1-2 sentence 90s MTV VJ shoutout to the Discord voice channel!';
+      const res = await askAmokRich(voicePrompt, {
+        scopeId: opts.scopeId,
+        userId: opts.userId,
+        username: opts.username,
+        nowPlaying,
+        upcomingQueue,
+        leaderboardSummary,
+        forceRoomContext: true,
+      });
+      if (!s.voice.isJoined()) {
+        try {
+          await opts.ensureJoin();
+        } catch {
+          /* user might not be in voice */
+        }
+      }
+      const spoke = await this.speakWeaselInVoice(s, res.text);
+      return spoke
+        ? `🎙️ *On the mic in voice:*\n${res.text}`
+        : `${res.text}\n-# (Join a voice channel to hear me on the mic!)`;
+    }
+
+    // 3. `v@w roast` / `v@w rate` — roast or rate the room's queue & DJs
+    const isRoast = /^(?:roast|rate)(?:\s+(.*))?$/i.exec(trimmed);
+    const effectivePrompt = isRoast
+      ? `Roast and rate our Discord server's current music queue and DJs by name! Call out specific songs and who queued them${isRoast[1] ? ` (focus on: ${isRoast[1].trim()})` : ''}.`
+      : trimmed;
+
+    const result = await askAmokRich(effectivePrompt, {
+      scopeId: opts.scopeId,
+      userId: opts.userId,
+      username: opts.username,
+      nowPlaying,
+      upcomingQueue,
+      leaderboardSummary,
+      forceRoomContext: Boolean(isRoast),
+    });
+
+    // 4. VJ Weasel Auto-DJ — resolve & queue any `WEASEL_QUEUE:` tracks
+    const queuedLabels: string[] = [];
+    if (result.queueQueries.length > 0 && gid) {
+      const resolved: ResolvedTrack[] = [];
+      for (const q of result.queueQueries.slice(0, 4)) {
+        try {
+          const hits = await resolvePlayInput(q);
+          if (hits.length > 0) resolved.push(hits[0]);
+        } catch {
+          /* skip unresolvable pick */
+        }
+      }
+      const fresh = s.queue.filterNew(resolved);
+      if (fresh.length > 0) {
+        s.queue.insertUserBatch(fresh, 'The Weasel 🦦');
+        this.stats.noteQueued(
+          gid,
+          opts.username,
+          fresh.flatMap((t) => t.artists),
+        );
+        try {
+          await opts.ensureJoin();
+          if (!s.queue.getState().playing) await s.playback.play();
+        } catch {
+          /* queued even if not in a voice channel yet */
+        }
+        for (const [idx, t] of fresh.entries()) {
+          queuedLabels.push(`${idx + 1}. **${t.name}** — ${(t.artists ?? []).join(', ')}`);
+        }
+        if (s.voice.isJoined()) {
+          const first = fresh[0];
+          void this.speakWeaselInVoice(
+            s,
+            `Hey buuuddy! The Weasel just lined up ${first.name} by ${(first.artists ?? []).slice(0, 2).join(' and ')}! Keep wheezin the juice!`,
+          );
+        }
+      }
+    }
+
+    if (queuedLabels.length > 0) {
+      return `${result.text}\n\n🎧 **The Weasel queued:**\n${queuedLabels.join('\n')}`;
+    }
+    return result.text;
+  }
+
   /**
    * Optional TTS DJ: speak a short "now playing" line when a new track starts.
-   * Strictly opt-in per guild (`/tts on`), deduped per track, and only if a TTS
-   * engine is configured. The music ducks under the clip, then releases.
+   * Strictly opt-in per guild (`/tts on` or `V@w vj on`), deduped per track.
+   * The music ducks under the clip, then releases.
    */
   private maybeAnnounceTts(s: Session, track: TrackInfo): void {
+    if (this.weaselVjGuilds.has(s.guildId)) {
+      if (this.ttsAnnounced.get(s.guildId) === track.uri) return;
+      this.ttsAnnounced.set(s.guildId, track.uri);
+      const artists = (track.artists ?? []).filter(Boolean).slice(0, 2).join(' and ');
+      const dj = track.addedBy && track.addedBy !== 'Endless Wave' ? ` queued up by ${track.addedBy},` : '';
+      const line = `Hey buuuddy! Coming up on the crustacean station,${dj} we got ${track.name}${artists ? ` by ${artists}` : ''}! Keep wheezin the juice!`;
+      setTimeout(() => {
+        if (s.queue.getCurrentTrack()?.uri !== track.uri) return;
+        void this.speakWeaselInVoice(s, line);
+      }, 1500);
+      return;
+    }
     if (!ttsEngine.enabled || !this.perms.getTts(s.guildId)) return;
     if (this.ttsAnnounced.get(s.guildId) === track.uri) return;
     this.ttsAnnounced.set(s.guildId, track.uri);
@@ -11141,7 +11342,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`V@duel board` — duel leaderboard + how often the bot called the room right',
       "`/roulette` · `V@roulette` — a rarely-played track from this server's own history, queued next: ⭐ Hall of Fame or 🚫 Ban",
       '`/quiz` · `V@quiz` — guess-the-song lyric game · `/guess <answer>` · `V@guess`',
-      '`/weasel <message>` · `/amok` · `V@weasel` (`V@amok`, `V@pauly`, `V@w`) — chat with Amok ("The Weasel", 90s Pauly Shore AI)',
+      '`/weasel <message>` · `V@w` (`V@weasel`, `V@amok`, `V@pauly`) — chat with The Weasel, `V@w play <vibe>` to auto-DJ, `V@w roast` to roast the queue, `V@w say <text>` / `V@w vj on` for voice mic drops, or reply to his messages',
     ],
   },
   {
