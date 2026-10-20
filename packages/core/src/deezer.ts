@@ -64,7 +64,7 @@ export function estimateFeatures(t: DeezerTrack): AudioFeatures {
   // energy too. Valence is unknown so keep it neutral.
   const energy =
     t.rank != null && t.rank >= 0
-      ? Math.min(1, Math.max(0, 0.3 + (t.rank / 1_000_000) + (tempo - 120) / 250))
+      ? Math.min(1, Math.max(0, 0.3 + t.rank / 1_000_000 + (tempo - 120) / 250))
       : Math.min(1, Math.max(0, 0.4 + (tempo - 120) / 220));
   return {
     tempo,
@@ -98,9 +98,7 @@ function mapTrack(t: DeezerTrack): ResolvedTrack {
 
 function toTracks(list?: unknown): ResolvedTrack[] {
   const arr = (list as { data?: DeezerTrack[] } | undefined)?.data ?? [];
-  return arr
-    .filter((t): t is DeezerTrack => !!t && !!t.title && (t.duration ?? 0) > 0)
-    .map(mapTrack);
+  return arr.filter((t): t is DeezerTrack => !!t && !!t.title && (t.duration ?? 0) > 0).map(mapTrack);
 }
 
 /**
@@ -114,9 +112,7 @@ export async function deezerRelatedTracks(artistName: string): Promise<ResolvedT
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value;
 
-  const search = await getJson<{ data?: DeezerArtist[] }>(
-    `/search/artist?q=${encodeURIComponent(artistName)}&limit=1`,
-  );
+  const search = await getJson<{ data?: DeezerArtist[] }>(`/search/artist?q=${encodeURIComponent(artistName)}&limit=1`);
   // A failed/latency-aborted request returns null — do NOT cache that as an
   // empty result, or a transient Deezer hiccup blacklists the artist for the
   // whole TTL. Only cache a definitive "no such artist".
@@ -168,7 +164,11 @@ const profileInflight = new Map<string, Promise<ArtistProfile>>();
  *  Scoring runs on the hot path and must never block on the network, so readers
  *  use this and the data is warmed in the background instead. */
 export function peekArtistProfile(artist: string): ArtistProfile | null {
-  const hit = profileCache.get(String(artist ?? '').toLowerCase().trim());
+  const hit = profileCache.get(
+    String(artist ?? '')
+      .toLowerCase()
+      .trim(),
+  );
   return hit ? hit.value : null;
 }
 
@@ -179,7 +179,9 @@ export function peekArtistProfile(artist: string): ArtistProfile | null {
  * awaited on the scoring path.
  */
 export async function deezerArtistProfile(artist: string): Promise<ArtistProfile | null> {
-  const key = String(artist ?? '').toLowerCase().trim();
+  const key = String(artist ?? '')
+    .toLowerCase()
+    .trim();
   if (key.length < 2) return null;
   const hit = profileCache.get(key);
   if (hit && Date.now() - hit.at < PROFILE_TTL_MS) return hit.value;
@@ -189,9 +191,7 @@ export async function deezerArtistProfile(artist: string): Promise<ArtistProfile
   const run = (async (): Promise<ArtistProfile> => {
     const empty: ArtistProfile = { name: artist, genres: [], related: [] };
     try {
-      const search = await getJson<{ data?: DeezerArtist[] }>(
-        `/search/artist?q=${encodeURIComponent(artist)}&limit=1`,
-      );
+      const search = await getJson<{ data?: DeezerArtist[] }>(`/search/artist?q=${encodeURIComponent(artist)}&limit=1`);
       // Network failure: don't cache — a transient Deezer hiccup must not
       // blacklist the artist for the whole TTL.
       if (search === null) return empty;
@@ -221,13 +221,7 @@ export async function deezerArtistProfile(artist: string): Promise<ArtistProfile
       const value: ArtistProfile = {
         name: found.name,
         genres: [...genres],
-        related: [
-          ...new Set(
-            (related?.data ?? [])
-              .map((r) => (r?.name ?? '').toLowerCase().trim())
-              .filter(Boolean),
-          ),
-        ],
+        related: [...new Set((related?.data ?? []).map((r) => (r?.name ?? '').toLowerCase().trim()).filter(Boolean))],
       };
       profileCache.set(key, { at: Date.now(), value });
       if (profileCache.size > 400) {

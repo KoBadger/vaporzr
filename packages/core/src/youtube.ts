@@ -51,7 +51,11 @@ const MUSIC_HINT_RE =
   /\b(official audio|official video|lyric video|lyrics?|audio|topic|visuali[sz]er|music video|remix|instrumental|acoustic|cover|live at|session)\b/i;
 
 export function isYoutubeUrl(input: string): boolean {
-  return /(^|[./])youtube\.com\//.test(input) || /(^|[./])youtu\.be\//.test(input) || /(^|[./])music\.youtube\.com\//.test(input);
+  return (
+    /(^|[./])youtube\.com\//.test(input) ||
+    /(^|[./])youtu\.be\//.test(input) ||
+    /(^|[./])music\.youtube\.com\//.test(input)
+  );
 }
 
 export function isYoutubePlaylistUrl(input: string): boolean {
@@ -139,9 +143,7 @@ export function syncConfiguredCookies(): { from: string; to: string; bytes: numb
     const now = new Date();
     fs.utimesSync(live, now, now);
     const bytes = fs.statSync(live).size;
-    console.log(
-      `[youtube] live cookie jar refreshed from ${configured} (${bytes} bytes) — the mounted jar was newer`,
-    );
+    console.log(`[youtube] live cookie jar refreshed from ${configured} (${bytes} bytes) — the mounted jar was newer`);
     return { from: configured, to: live, bytes };
   } catch {
     return null;
@@ -175,10 +177,7 @@ function stageCookieCopy(): string | null {
   const src = activeCookiesPath();
   if (!src) return null;
   try {
-    const file = path.join(
-      os.tmpdir(),
-      `vz-cookies-${process.pid}-${++cookieCopySeq}.txt`,
-    );
+    const file = path.join(os.tmpdir(), `vz-cookies-${process.pid}-${++cookieCopySeq}.txt`);
     fs.copyFileSync(src, file);
     return file;
   } catch {
@@ -294,7 +293,8 @@ export async function proxyReachable(url: string, timeoutMs = 4000): Promise<boo
   });
 }
 
-/** Age of the YouTube cookies file in days (null when unset or missing). */export function cookieAgeDays(): number | null {
+/** Age of the YouTube cookies file in days (null when unset or missing). */ export function cookieAgeDays():
+  number | null {
   try {
     const src = activeCookiesPath();
     if (!src) return null;
@@ -339,10 +339,13 @@ export function rotateYoutubeFallbackProxy(): string {
     if (Number.isFinite(n) && n >= 10000 && n <= 20000) {
       // Stay inside the sticky range; 1..9999 offset so we never land on the
       // same port (which would keep the flagged exit).
-      const next = 10000 + (((n - 10000) + 1 + Math.floor(Math.random() * 9998)) % 10000);
+      const next = 10000 + ((n - 10000 + 1 + Math.floor(Math.random() * 9998)) % 10000);
       out = cur.replace(/:(\d{4,5})(\/?)$/, `:${next}$2`);
     } else {
-      out = cur.replace(/^(https?:\/\/)([^:@/]+)/i, (_m, scheme: string, user: string) => `${scheme}${user};sessid.${sess}`);
+      out = cur.replace(
+        /^(https?:\/\/)([^:@/]+)/i,
+        (_m, scheme: string, user: string) => `${scheme}${user};sessid.${sess}`,
+      );
     }
   }
   config.youtubeProxyFallback = out;
@@ -362,8 +365,7 @@ export function youtubeProxyHops(): string[] {
 
 /** Public, no-internals one-liner for the anti-bot wall — what Discord shows.
  *  `describeBotWall()` below holds the actionable diagnosis for the logs. */
-export const YOUTUBE_BUSY_TEXT =
-  "Couldn't load that one from YouTube — try again in a moment, or use a Spotify link.";
+export const YOUTUBE_BUSY_TEXT = "Couldn't load that one from YouTube — try again in a moment, or use a Spotify link.";
 
 /** Actionable text for the anti-bot wall.
  *
@@ -499,15 +501,7 @@ async function runYtDlp(args: string[], retries = 2, route?: string): Promise<st
  * JS runtime, PO-token provider) so failures — expired cookies, a dead solver, a
  * broken proxy — are caught by a probe instead of the next song.
  */
-export type YoutubeHealth =
-  | 'ok'
-  | 'auth'
-  | 'blocked'
-  | 'proxy'
-  | 'exhausted'
-  | 'bridge'
-  | 'down'
-  | 'unknown';
+export type YoutubeHealth = 'ok' | 'auth' | 'blocked' | 'proxy' | 'exhausted' | 'bridge' | 'down' | 'unknown';
 
 /** How a configured proxy hop is named in alerts, by position in the chain. */
 export type YoutubeHopName = 'primary' | 'alt' | 'fallback';
@@ -535,7 +529,9 @@ export function youtubeHealth(): { status: YoutubeHealth; checkedAt: number } {
 }
 
 /** Register a callback fired only when the status actually changes. */
-export function setYoutubeHealthListener(cb: ((status: YoutubeHealth, context: YoutubeHealthContext) => void) | null): void {
+export function setYoutubeHealthListener(
+  cb: ((status: YoutubeHealth, context: YoutubeHealthContext) => void) | null,
+): void {
   ytHealthListener = cb;
 }
 
@@ -893,7 +889,10 @@ export async function resolveYoutubePlaylist(input: string): Promise<ResolvedVid
     `https://www.youtube.com/playlist?list=${playlistId}`,
   ]);
 
-  const lines = raw.trim().split(/\r?\n/).filter((l) => l.includes(SEP));
+  const lines = raw
+    .trim()
+    .split(/\r?\n/)
+    .filter((l) => l.includes(SEP));
   if (lines.length === 0) throw new YoutubeError('That playlist appears to be empty or unavailable.');
 
   const tracks: ResolvedVideo[] = [];
@@ -929,14 +928,40 @@ const LIVE_RE = /\b(live|unplugged|concert|festival|tiny\s*desk|kexp|radio\s*1|o
 
 /** Edition/quality noise that must not affect whether a title is the song. */
 const TITLE_NOISE = new Set([
-  'version', 'single', 'audio', 'hq', 'hd', 'official', 'video', 'lyric', 'lyrics',
-  'the', 'a', 'an', 'feat', 'ft', 'featuring', 'remaster', 'remastered', 'edit', 'mix',
-  'original', 'album', 'radio', 'extended', 'mv', 'topic', 'visualizer', 'visualiser',
+  'version',
+  'single',
+  'audio',
+  'hq',
+  'hd',
+  'official',
+  'video',
+  'lyric',
+  'lyrics',
+  'the',
+  'a',
+  'an',
+  'feat',
+  'ft',
+  'featuring',
+  'remaster',
+  'remastered',
+  'edit',
+  'mix',
+  'original',
+  'album',
+  'radio',
+  'extended',
+  'mv',
+  'topic',
+  'visualizer',
+  'visualiser',
 ]);
 
 /** The song-name words that actually matter, edition noise removed. */
 function significantTokens(s: string): string[] {
-  return normText(s).split(' ').filter((w) => w.length > 1 && !TITLE_NOISE.has(w));
+  return normText(s)
+    .split(' ')
+    .filter((w) => w.length > 1 && !TITLE_NOISE.has(w));
 }
 
 function normText(s: string): string {
@@ -1057,12 +1082,7 @@ async function flatSearchUncached(query: string): Promise<FlatHit[]> {
   return hits;
 }
 
-export function scoreHit(
-  hit: FlatHit,
-  rank: number,
-  query: string,
-  opts: YoutubeSearchOptions,
-): number {
+export function scoreHit(hit: FlatHit, rank: number, query: string, opts: YoutubeSearchOptions): number {
   const t = normText(hit.title);
   // Artist presence is also checked against the parens-preserving form: a
   // canonical release often credits the artist inside "(…)" (see
@@ -1078,7 +1098,10 @@ export function scoreHit(
   let missing = 0;
   for (const w of nameTokens) {
     if (t.includes(w)) score += 2;
-    else { score -= 4; missing++; }
+    else {
+      score -= 4;
+      missing++;
+    }
   }
   // Over half the title words absent = this is almost certainly the wrong song.
   if (nameTokens.length > 0 && missing > nameTokens.length / 2) score -= 10;
@@ -1087,7 +1110,7 @@ export function scoreHit(
     const na = normText(artist);
     if (!na) continue;
     // "Artist - Topic" channels are YouTube's auto-generated official audio.
-    if (ch === `${na} topic` || ch.endsWith(' topic') && ch.includes(na)) score += 6;
+    if (ch === `${na} topic` || (ch.endsWith(' topic') && ch.includes(na))) score += 6;
     else if (ch.includes(na)) score += 4;
     else if (tAll.includes(na)) score += 2;
     else score -= 1;
@@ -1142,13 +1165,7 @@ export function scoreHit(
  * resolved fast.
  */
 export function isClearlyWrongMatch(video: ResolvedVideo, query: string, opts: YoutubeSearchOptions): boolean {
-  return looksWrong(
-    video.name,
-    video.durationMs ?? 0,
-    video.channel ?? video.artists?.[0] ?? 'YouTube',
-    query,
-    opts,
-  );
+  return looksWrong(video.name, video.durationMs ?? 0, video.channel ?? video.artists?.[0] ?? 'YouTube', query, opts);
 }
 
 /** The hard, safe-to-enforce checks: a video that isn't music at all, or is a
@@ -1338,9 +1355,7 @@ async function doSearchAndResolve(
       // ("This video is not available", age-gated, region-locked…) — a single
       // dead top pick must not fail the whole search. A hard budget keeps the
       // accuracy path from stalling playback for tens of seconds.
-      const byScore = hits
-        .map((h, i) => ({ h, s: scoreHit(h, i, query, opts) }))
-        .sort((a, b) => b.s - a.s);
+      const byScore = hits.map((h, i) => ({ h, s: scoreHit(h, i, query, opts) })).sort((a, b) => b.s - a.s);
       // Prefer candidates that pass the full guard. If none do, fall back to the
       // best one that is at least real music of roughly the right length —
       // skipping a real song is worse than a slightly imperfect match.
@@ -1387,7 +1402,9 @@ async function doSearchAndResolve(
     // right song — never settle for an obvious mismatch.
     if (!video && fusedVideo) {
       if (isClearlyWrongMatch(fusedVideo, query, opts)) {
-        console.log(`[youtube] fast-path result "${fusedVideo.name}" is a poor match for "${query}" — not settling; skipping`);
+        console.log(
+          `[youtube] fast-path result "${fusedVideo.name}" is a poor match for "${query}" — not settling; skipping`,
+        );
       } else {
         console.log(`[youtube] resolve budget hit — using fast-path result "${fusedVideo.name}"`);
         video = fusedVideo;
@@ -1438,15 +1455,25 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
     const timer = setTimeout(() => resolve(null), ms);
     timer.unref?.();
     p.then(
-      (v) => { clearTimeout(timer); resolve(v); },
-      () => { clearTimeout(timer); resolve(null); },
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(null);
+      },
     );
   });
 }
 
 interface SearchItem {
   id?: { videoId?: string };
-  snippet?: { title?: string; channelTitle?: string; thumbnails?: { high?: { url?: string }; medium?: { url?: string } } };
+  snippet?: {
+    title?: string;
+    channelTitle?: string;
+    thumbnails?: { high?: { url?: string }; medium?: { url?: string } };
+  };
 }
 
 /** Search YouTube via the Data API v3 key. Returns lightweight tracks (no stream URL). */
@@ -1542,7 +1569,12 @@ export async function refreshYoutubeCookies(
           config.ytDlpPath,
           ['--cookies-from-browser', b, '--cookies', target, '--skip-download', '--no-warnings', 'ytsearch1:test'],
           { windowsHide: true, timeout: 60_000, maxBuffer: 4 * 1024 * 1024 },
-          (err) => (err ? reject(new YoutubeError(`yt-dlp cookie export from "${b}" failed: ${(err as Error).message.slice(0, 200)}`)) : resolve()),
+          (err) =>
+            err
+              ? reject(
+                  new YoutubeError(`yt-dlp cookie export from "${b}" failed: ${(err as Error).message.slice(0, 200)}`),
+                )
+              : resolve(),
         );
       });
       const raw = await fs.promises.readFile(target, 'utf8');

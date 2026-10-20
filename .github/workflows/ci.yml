@@ -32,6 +32,9 @@ jobs:
       - name: Typecheck (shared, core, bot, spicetify)
         run: npm run typecheck -w @vaporzr/shared && npm run typecheck -w @vaporzr/core && npm run typecheck -w @vaporzr/bot && npm run typecheck -w @vaporzr/spicetify-app
 
+      - name: Format check
+        run: npm run format:check
+
       - name: Unit tests (bot)
         working-directory: apps/bot
         run: npm test

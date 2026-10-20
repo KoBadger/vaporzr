@@ -228,17 +228,23 @@ function video(overrides: Partial<ResolvedVideo>): ResolvedVideo {
 describe('isClearlyWrongMatch (speed fallback guard)', () => {
   it('accepts an exact title/artist match', () => {
     const v = video({ name: 'End Of Summer - Tame Impala', channel: 'Tame Impala - Topic' });
-    expect(isClearlyWrongMatch(v, 'End Of Summer', { name: 'End Of Summer', artists: ['Tame Impala'], durationMs: 432_000 })).toBe(false);
+    expect(
+      isClearlyWrongMatch(v, 'End Of Summer', { name: 'End Of Summer', artists: ['Tame Impala'], durationMs: 432_000 }),
+    ).toBe(false);
   });
 
   it('accepts a near-exact match (case/punctuation differences)', () => {
     const v = video({ name: 'End Of Summer (Official Audio) - Tame Impala', channel: 'Tame Impala - Topic' });
-    expect(isClearlyWrongMatch(v, 'End Of Summer', { name: 'End Of Summer', artists: ['Tame Impala'], durationMs: 432_000 })).toBe(false);
+    expect(
+      isClearlyWrongMatch(v, 'End Of Summer', { name: 'End Of Summer', artists: ['Tame Impala'], durationMs: 432_000 }),
+    ).toBe(false);
   });
 
   it('rejects a completely unrelated video', () => {
     const v = video({ name: 'GRANT LEADS THE UNION ARMY TO VICTORY | Documentary', channel: 'History' });
-    expect(isClearlyWrongMatch(v, 'Grant Fix It', { name: 'Fix It', artists: ['Grant'], durationMs: 198_000 })).toBe(true);
+    expect(isClearlyWrongMatch(v, 'Grant Fix It', { name: 'Fix It', artists: ['Grant'], durationMs: 198_000 })).toBe(
+      true,
+    );
   });
 
   it('rejects a different song by the same artist (name phrase missing)', () => {
@@ -248,8 +254,14 @@ describe('isClearlyWrongMatch (speed fallback guard)', () => {
   });
 
   it('rejects an egregiously longer cut (album-length mix vs a single)', () => {
-    const v = video({ name: 'End Of Summer - Tame Impala (Full Album Mix)', durationMs: 2400_000, channel: 'Some Channel' });
-    expect(isClearlyWrongMatch(v, 'End Of Summer', { name: 'End Of Summer', artists: ['Tame Impala'], durationMs: 432_000 })).toBe(true);
+    const v = video({
+      name: 'End Of Summer - Tame Impala (Full Album Mix)',
+      durationMs: 2400_000,
+      channel: 'Some Channel',
+    });
+    expect(
+      isClearlyWrongMatch(v, 'End Of Summer', { name: 'End Of Summer', artists: ['Tame Impala'], durationMs: 432_000 }),
+    ).toBe(true);
   });
 
   it('rejects a non-music video that matches the song name (esports/podcast)', () => {
@@ -258,12 +270,16 @@ describe('isClearlyWrongMatch (speed fallback guard)', () => {
       durationMs: 960_000,
       channel: 'Esports Highlights',
     });
-    expect(isClearlyWrongMatch(v, 'liquid game', { name: 'liquid game', artists: ['Sweeps'], durationMs: 195_000 })).toBe(true);
+    expect(
+      isClearlyWrongMatch(v, 'liquid game', { name: 'liquid game', artists: ['Sweeps'], durationMs: 195_000 }),
+    ).toBe(true);
   });
 
   it('rejects a 12-minute video for a 4-minute song', () => {
     const v = video({ name: 'Liquid Game - Sweeps (Full Set)', durationMs: 720_000, channel: 'Sweeps - Topic' });
-    expect(isClearlyWrongMatch(v, 'liquid game', { name: 'liquid game', artists: ['Sweeps'], durationMs: 240_000 })).toBe(true);
+    expect(
+      isClearlyWrongMatch(v, 'liquid game', { name: 'liquid game', artists: ['Sweeps'], durationMs: 240_000 }),
+    ).toBe(true);
   });
 
   it('rejects a festival live set when the query does not ask for live', () => {
@@ -316,7 +332,11 @@ describe('isClearlyWrongMatch (speed fallback guard)', () => {
       channel: 'Charlotte de Witte',
     });
     expect(
-      isClearlyWrongMatch(v, 'The Age Of Love', { name: 'The Age Of Love', artists: ['Age Of Love'], durationMs: 489_000 }),
+      isClearlyWrongMatch(v, 'The Age Of Love', {
+        name: 'The Age Of Love',
+        artists: ['Age Of Love'],
+        durationMs: 489_000,
+      }),
     ).toBe(true);
   });
 
@@ -328,17 +348,29 @@ describe('isClearlyWrongMatch (speed fallback guard)', () => {
   });
 
   it('still accepts a legitimately longer upload', () => {
-    const v = video({ name: 'End Of Summer - Tame Impala (Official Audio)', durationMs: 270_000, channel: 'Tame Impala - Topic' });
-    expect(isClearlyWrongMatch(v, 'End Of Summer', { name: 'End Of Summer', artists: ['Tame Impala'], durationMs: 240_000 })).toBe(false);
+    const v = video({
+      name: 'End Of Summer - Tame Impala (Official Audio)',
+      durationMs: 270_000,
+      channel: 'Tame Impala - Topic',
+    });
+    expect(
+      isClearlyWrongMatch(v, 'End Of Summer', { name: 'End Of Summer', artists: ['Tame Impala'], durationMs: 240_000 }),
+    ).toBe(false);
   });
 
   it('accepts a plausible same-title remix (not an obvious mismatch)', () => {
     const v = video({ name: 'End Of Summer (Remix) - Tame Impala', channel: 'Tame Impala - Topic' });
-    expect(isClearlyWrongMatch(v, 'End Of Summer', { name: 'End Of Summer', artists: ['Tame Impala'], durationMs: 432_000 })).toBe(false);
+    expect(
+      isClearlyWrongMatch(v, 'End Of Summer', { name: 'End Of Summer', artists: ['Tame Impala'], durationMs: 432_000 }),
+    ).toBe(false);
   });
 
   it('accepts the real song when the upload words the edition differently (regression)', () => {
-    const opts = { name: 'All Night Long (All Night) - Single Version', artists: ['Lionel Richie'], durationMs: 259_000 };
+    const opts = {
+      name: 'All Night Long (All Night) - Single Version',
+      artists: ['Lionel Richie'],
+      durationMs: 259_000,
+    };
     const query = 'All Night Long (All Night) - Single Version Lionel Richie';
     for (const title of [
       'Lionel Richie - All Night Long (All Night) [Single Version] [Audio HQ]',
@@ -351,8 +383,16 @@ describe('isClearlyWrongMatch (speed fallback guard)', () => {
   });
 
   it('accepts a remix the user explicitly asked for (regression)', () => {
-    const opts = { name: 'Is This Love - Montmartre Remix', artists: ['Bob Marley & The Wailers'], durationMs: 300_000 };
-    const v = video({ name: 'Bob Marley - Is This Love (Montmartre Remix)', channel: 'Bob Marley', durationMs: 300_000 });
+    const opts = {
+      name: 'Is This Love - Montmartre Remix',
+      artists: ['Bob Marley & The Wailers'],
+      durationMs: 300_000,
+    };
+    const v = video({
+      name: 'Bob Marley - Is This Love (Montmartre Remix)',
+      channel: 'Bob Marley',
+      durationMs: 300_000,
+    });
     expect(isClearlyWrongMatch(v, 'Is This Love - Montmartre Remix Bob Marley & The Wailers', opts)).toBe(false);
   });
 });
@@ -635,9 +675,7 @@ describe('search-result cache (protects the Data API quota)', () => {
         if (u.includes('/search?')) {
           return new Response(
             JSON.stringify({
-              items: [
-                { id: { videoId: 'vid00000001' }, snippet: { title: 'Cached Song', channelTitle: 'Artist' } },
-              ],
+              items: [{ id: { videoId: 'vid00000001' }, snippet: { title: 'Cached Song', channelTitle: 'Artist' } }],
             }),
             { status: 200 },
           );

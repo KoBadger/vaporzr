@@ -1,418 +1,840 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>Vaporzr — Request a song</title>
-<link rel="icon" type="image/png" href="/favicon.png">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png">
-<meta name="theme-color" content="#6a5cff">
-<style>
-:root{--accent:#6a5cff;--accent2:#00f0ff}
-*{box-sizing:border-box}
-html{-webkit-text-size-adjust:100%}
-body{margin:0;min-height:100vh;min-height:100dvh;display:flex;align-items:center;justify-content:center;
-  padding:calc(14px + env(safe-area-inset-top)) 14px calc(14px + env(safe-area-inset-bottom));
-  font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#e2e8f0;
-  background:#0b1026}
-.card{width:min(460px,94vw);background:rgba(16,22,46,.85);border:1px solid rgba(140,160,255,.22);
-  border-radius:18px;padding:26px 22px;box-shadow:0 20px 60px rgba(0,0,0,.5)}
-h1{margin:0 0 4px;font-size:16px;letter-spacing:3px;
-  background:linear-gradient(90deg,var(--accent2),var(--accent));-webkit-background-clip:text;background-clip:text;color:transparent}
-p.sub{margin:0 0 16px;font-size:12px;color:#94a3b8}
-.jam-head{display:flex;align-items:center;gap:12px;margin-bottom:10px}
-.jam-logo{width:54px;height:54px;flex:0 0 54px;border-radius:12px;
-  box-shadow:0 0 0 1px rgba(140,160,255,.25),0 8px 22px rgba(106,92,255,.35)}
-.jam-title{min-width:0}
-.jam-title h1{margin:0 0 3px}
-.jam-title p.sub{margin:0}
-#bars{width:100%;height:56px;display:block;border-radius:10px;margin:2px 0 14px;
-  background:rgba(10,14,32,.55);border:1px solid rgba(140,160,255,.16)}
-input{width:100%;padding:12px 14px;border-radius:11px;border:1px solid rgba(140,160,255,.3);
-  background:rgba(10,14,32,.7);color:#e2e8f0;font-size:16px;outline:none}
-input:focus{border-color:var(--accent)}
-#who{margin-bottom:8px}
-button{margin-top:12px;width:100%;min-height:46px;padding:12px;border:none;border-radius:11px;cursor:pointer;
-  background:linear-gradient(135deg,var(--accent),var(--accent2));color:#0b1026;font-weight:700;font-size:14px}
-button:disabled{opacity:.55;cursor:default}
-#msg{margin-top:14px;font-size:13px;min-height:18px}
-#msg.ok{color:#86efac}
-#msg.err{color:#fca5a5}
-/* Queue: read-only for everyone — title, artist, who asked, and how long to wait. */
-#queue{margin-top:18px;border-top:1px solid rgba(140,160,255,.18);padding-top:10px}
-.q-head{font-size:10px;letter-spacing:2px;color:#64748b;font-weight:700;margin:10px 0 4px;
-  display:flex;align-items:center;gap:6px}
-.q-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid rgba(140,160,255,.08)}
-.q-row:last-child{border-bottom:0}
-.q-num{width:16px;flex:0 0 16px;text-align:right;font-size:11px;color:#64748b}
-.q-art{position:relative;width:34px;height:34px;border-radius:6px;background:#1e293b;
-  object-fit:cover;flex:0 0 34px;display:flex;align-items:center;justify-content:center;overflow:hidden}
-.q-art.big{width:56px;height:56px;flex-basis:56px;border-radius:10px}
-.q-art .glyph{font-size:14px;color:var(--sc,#94a3b8);opacity:.85}
-.q-art.big .glyph{font-size:20px}
-.q-art img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
-.q-art .dot{position:absolute;right:0;top:0;width:8px;height:8px;border-radius:50%;
-  background:var(--sc,#64748b);box-shadow:0 0 0 2px rgba(10,14,32,.85)}
-.q-art.big .dot{display:none}
-.q-meta{min-width:0;flex:1}
-.q-name{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.q-sub{font-size:11px;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
-.q-by{color:#a5b4fc}
-.q-dur{color:#64748b}
-.q-est{color:#67e8f9}
-.q-badge{font-size:9px;font-weight:700;letter-spacing:1px;border:1px solid var(--sc,#64748b);
-  color:var(--sc,#94a3b8);border-radius:4px;padding:1px 4px;margin-left:6px;vertical-align:1px}
-.q-empty{font-size:12px;color:#64748b}
-.now-label{font-size:10px;letter-spacing:2px;font-weight:700;margin:10px 0 6px;color:#22d3ee;
-  display:flex;align-items:center;gap:6px}
-.now-label.paused{color:#fbbf24}
-.now-label.idle{color:#64748b}
-.now-card{display:flex;gap:12px;align-items:flex-start;background:rgba(12,18,40,.6);
-  border:1px solid rgba(34,211,238,.22);border-radius:14px;padding:10px}
-.now-card.paused{border-color:rgba(251,191,36,.25)}
-.now-card.idle{border-color:rgba(140,160,255,.16)}
-.bar{margin-top:8px;height:4px;border-radius:3px;background:rgba(140,160,255,.18);overflow:hidden}
-.bar-fill{height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:3px}
-.trow{display:flex;justify-content:space-between;font-size:10px;color:#7c8aa5;margin-top:4px}
-.eq{display:inline-flex;gap:2px;align-items:flex-end;height:11px}
-.eq i{width:2px;background:currentColor;border-radius:1px;height:4px;
-  animation:eq .9s ease-in-out infinite}
-.eq i:nth-child(2){animation-delay:.15s}
-.eq i:nth-child(3){animation-delay:.3s}
-@keyframes eq{0%,100%{height:3px}50%{height:11px}}
-/* Opening splash: the animated badge until the bars socket is up (or 1.6s). */
-#splash{position:fixed;inset:0;z-index:200;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:#0b1026;transition:opacity .45s ease}
-#splash.hide{opacity:0;pointer-events:none}
-#splash img{width:112px;height:112px;border-radius:26px;box-shadow:0 0 0 1px rgba(140,160,255,.25),0 18px 60px rgba(106,92,255,.45)}
-#splash span{font-size:12px;letter-spacing:6px;font-weight:800;padding-left:6px;background:linear-gradient(90deg,var(--accent2),var(--accent));-webkit-background-clip:text;background-clip:text;color:transparent}
-</style>
-</head>
-<body>
-<div id="splash" aria-hidden="true"><img src="/logo.gif" alt=""><span>VAPORZR</span></div>
-<div class="card">
-  <div class="jam-head">
-    <img class="jam-logo" src="/logo.gif" alt="Vaporzr" />
-    <div class="jam-title">
-      <h1>VAPORZR</h1>
-      <p class="sub" id="sub">Request a song — it gets queued for everyone.</p>
-    </div>
-  </div>
-  <canvas id="bars" aria-hidden="true"></canvas>
-  <input id="who" placeholder="Your name (shows on the queue)" autocomplete="off" maxlength="24" />
-  <input id="q" placeholder="Song, artist, or YouTube query…" autocomplete="off" autofocus />
-  <button id="go">＋ Request</button>
-  <div id="msg"></div>
-  <div id="queue">
-    <div id="q-now"></div>
-    <div id="q-list"></div>
-  </div>
-</div>
-<script>
-(function () {
-  /* Splash: the animated badge shows until the bars socket is up (or 1.6s,
-     whichever first) so a guest never stares at a blank page. */
-  var splash = document.getElementById('splash');
-  var splashGone = false;
-  function hideSplash() {
-    if (splashGone || !splash) return;
-    splashGone = true;
-    splash.classList.add('hide');
-    setTimeout(function () { if (splash.parentNode) splash.parentNode.removeChild(splash); }, 600);
-  }
-  setTimeout(hideSplash, 1600);
-  var q = document.getElementById('q'), go = document.getElementById('go'), msg = document.getElementById('msg');
-  var who = document.getElementById('who');
-  var REQ_BUILD = '{{BUILD}}';
-  function checkBuildUpdate() {
-    if (!REQ_BUILD || REQ_BUILD === 'dev' || REQ_BUILD.indexOf('{{') >= 0) return;
-    if (q && q.value && q.value.trim()) return;
-    fetch('/health', { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
-      if (!d || !d.build || d.build === 'dev' || d.build === REQ_BUILD) return;
-      try {
-        if (sessionStorage.getItem('vz_req_reload') === d.build) return;
-        sessionStorage.setItem('vz_req_reload', d.build);
-      } catch (e) {}
-      location.reload();
-    }).catch(function () {});
-  }
-  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') checkBuildUpdate(); });
-  // Remember the name so a guest types it once, not once per song.
-  try { var saved = localStorage.getItem('vzWho'); if (saved) who.value = saved; } catch (e) {}
-  // /jam is this same page with jam framing.
-  if (location.pathname === '/jam') {
-    document.getElementById('sub').textContent = 'Join the jam — your song joins everyone\u2019s queue.';
-    document.title = 'Vaporzr — Join the jam';
-  }
-  function say(text, cls) { msg.textContent = text; msg.className = cls || ''; }
-  function submit() {
-    if (go.disabled) return; // Enter + click double-fire guard
-    var v = q.value.trim();
-    if (!v) { q.focus(); return; }
-    go.disabled = true;
-    say('Searching…');
-    fetch('/api/request', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: v, name: who.value.trim() }),
-    })
-      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
-      .then(function (res) {
-        if (res.ok && res.d.ok) {
-          say('Added: ' + res.d.name, 'ok');
-          try { localStorage.setItem('vzWho', who.value.trim()); } catch (e) {}
-          q.value = '';
-          pollQueue();
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Vaporzr — Request a song</title>
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="theme-color" content="#6a5cff" />
+    <style>
+      :root {
+        --accent: #6a5cff;
+        --accent2: #00f0ff;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html {
+        -webkit-text-size-adjust: 100%;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        min-height: 100dvh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: calc(14px + env(safe-area-inset-top)) 14px calc(14px + env(safe-area-inset-bottom));
+        font-family:
+          system-ui,
+          -apple-system,
+          Segoe UI,
+          Roboto,
+          sans-serif;
+        color: #e2e8f0;
+        background: #0b1026;
+      }
+      .card {
+        width: min(460px, 94vw);
+        background: rgba(16, 22, 46, 0.85);
+        border: 1px solid rgba(140, 160, 255, 0.22);
+        border-radius: 18px;
+        padding: 26px 22px;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+      }
+      h1 {
+        margin: 0 0 4px;
+        font-size: 16px;
+        letter-spacing: 3px;
+        background: linear-gradient(90deg, var(--accent2), var(--accent));
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+      }
+      p.sub {
+        margin: 0 0 16px;
+        font-size: 12px;
+        color: #94a3b8;
+      }
+      .jam-head {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 10px;
+      }
+      .jam-logo {
+        width: 54px;
+        height: 54px;
+        flex: 0 0 54px;
+        border-radius: 12px;
+        box-shadow:
+          0 0 0 1px rgba(140, 160, 255, 0.25),
+          0 8px 22px rgba(106, 92, 255, 0.35);
+      }
+      .jam-title {
+        min-width: 0;
+      }
+      .jam-title h1 {
+        margin: 0 0 3px;
+      }
+      .jam-title p.sub {
+        margin: 0;
+      }
+      #bars {
+        width: 100%;
+        height: 56px;
+        display: block;
+        border-radius: 10px;
+        margin: 2px 0 14px;
+        background: rgba(10, 14, 32, 0.55);
+        border: 1px solid rgba(140, 160, 255, 0.16);
+      }
+      input {
+        width: 100%;
+        padding: 12px 14px;
+        border-radius: 11px;
+        border: 1px solid rgba(140, 160, 255, 0.3);
+        background: rgba(10, 14, 32, 0.7);
+        color: #e2e8f0;
+        font-size: 16px;
+        outline: none;
+      }
+      input:focus {
+        border-color: var(--accent);
+      }
+      #who {
+        margin-bottom: 8px;
+      }
+      button {
+        margin-top: 12px;
+        width: 100%;
+        min-height: 46px;
+        padding: 12px;
+        border: none;
+        border-radius: 11px;
+        cursor: pointer;
+        background: linear-gradient(135deg, var(--accent), var(--accent2));
+        color: #0b1026;
+        font-weight: 700;
+        font-size: 14px;
+      }
+      button:disabled {
+        opacity: 0.55;
+        cursor: default;
+      }
+      #msg {
+        margin-top: 14px;
+        font-size: 13px;
+        min-height: 18px;
+      }
+      #msg.ok {
+        color: #86efac;
+      }
+      #msg.err {
+        color: #fca5a5;
+      }
+      /* Queue: read-only for everyone — title, artist, who asked, and how long to wait. */
+      #queue {
+        margin-top: 18px;
+        border-top: 1px solid rgba(140, 160, 255, 0.18);
+        padding-top: 10px;
+      }
+      .q-head {
+        font-size: 10px;
+        letter-spacing: 2px;
+        color: #64748b;
+        font-weight: 700;
+        margin: 10px 0 4px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .q-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 7px 0;
+        border-bottom: 1px solid rgba(140, 160, 255, 0.08);
+      }
+      .q-row:last-child {
+        border-bottom: 0;
+      }
+      .q-num {
+        width: 16px;
+        flex: 0 0 16px;
+        text-align: right;
+        font-size: 11px;
+        color: #64748b;
+      }
+      .q-art {
+        position: relative;
+        width: 34px;
+        height: 34px;
+        border-radius: 6px;
+        background: #1e293b;
+        object-fit: cover;
+        flex: 0 0 34px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+      }
+      .q-art.big {
+        width: 56px;
+        height: 56px;
+        flex-basis: 56px;
+        border-radius: 10px;
+      }
+      .q-art .glyph {
+        font-size: 14px;
+        color: var(--sc, #94a3b8);
+        opacity: 0.85;
+      }
+      .q-art.big .glyph {
+        font-size: 20px;
+      }
+      .q-art img {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+      .q-art .dot {
+        position: absolute;
+        right: 0;
+        top: 0;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--sc, #64748b);
+        box-shadow: 0 0 0 2px rgba(10, 14, 32, 0.85);
+      }
+      .q-art.big .dot {
+        display: none;
+      }
+      .q-meta {
+        min-width: 0;
+        flex: 1;
+      }
+      .q-name {
+        font-size: 13px;
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .q-sub {
+        font-size: 11px;
+        color: #94a3b8;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        margin-top: 1px;
+      }
+      .q-by {
+        color: #a5b4fc;
+      }
+      .q-dur {
+        color: #64748b;
+      }
+      .q-est {
+        color: #67e8f9;
+      }
+      .q-badge {
+        font-size: 9px;
+        font-weight: 700;
+        letter-spacing: 1px;
+        border: 1px solid var(--sc, #64748b);
+        color: var(--sc, #94a3b8);
+        border-radius: 4px;
+        padding: 1px 4px;
+        margin-left: 6px;
+        vertical-align: 1px;
+      }
+      .q-empty {
+        font-size: 12px;
+        color: #64748b;
+      }
+      .now-label {
+        font-size: 10px;
+        letter-spacing: 2px;
+        font-weight: 700;
+        margin: 10px 0 6px;
+        color: #22d3ee;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .now-label.paused {
+        color: #fbbf24;
+      }
+      .now-label.idle {
+        color: #64748b;
+      }
+      .now-card {
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
+        background: rgba(12, 18, 40, 0.6);
+        border: 1px solid rgba(34, 211, 238, 0.22);
+        border-radius: 14px;
+        padding: 10px;
+      }
+      .now-card.paused {
+        border-color: rgba(251, 191, 36, 0.25);
+      }
+      .now-card.idle {
+        border-color: rgba(140, 160, 255, 0.16);
+      }
+      .bar {
+        margin-top: 8px;
+        height: 4px;
+        border-radius: 3px;
+        background: rgba(140, 160, 255, 0.18);
+        overflow: hidden;
+      }
+      .bar-fill {
+        height: 100%;
+        width: 0;
+        background: linear-gradient(90deg, var(--accent), var(--accent2));
+        border-radius: 3px;
+      }
+      .trow {
+        display: flex;
+        justify-content: space-between;
+        font-size: 10px;
+        color: #7c8aa5;
+        margin-top: 4px;
+      }
+      .eq {
+        display: inline-flex;
+        gap: 2px;
+        align-items: flex-end;
+        height: 11px;
+      }
+      .eq i {
+        width: 2px;
+        background: currentColor;
+        border-radius: 1px;
+        height: 4px;
+        animation: eq 0.9s ease-in-out infinite;
+      }
+      .eq i:nth-child(2) {
+        animation-delay: 0.15s;
+      }
+      .eq i:nth-child(3) {
+        animation-delay: 0.3s;
+      }
+      @keyframes eq {
+        0%,
+        100% {
+          height: 3px;
         }
-        else { say(res.d && res.d.error ? res.d.error : 'Request failed.', 'err'); }
-      })
-      .catch(function () { say('Network error — try again.', 'err'); })
-      .then(function () { go.disabled = false; q.focus(); });
-  }
-  go.onclick = submit;
-  q.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+        50% {
+          height: 11px;
+        }
+      }
+      /* Opening splash: the animated badge until the bars socket is up (or 1.6s). */
+      #splash {
+        position: fixed;
+        inset: 0;
+        z-index: 200;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+        background: #0b1026;
+        transition: opacity 0.45s ease;
+      }
+      #splash.hide {
+        opacity: 0;
+        pointer-events: none;
+      }
+      #splash img {
+        width: 112px;
+        height: 112px;
+        border-radius: 26px;
+        box-shadow:
+          0 0 0 1px rgba(140, 160, 255, 0.25),
+          0 18px 60px rgba(106, 92, 255, 0.45);
+      }
+      #splash span {
+        font-size: 12px;
+        letter-spacing: 6px;
+        font-weight: 800;
+        padding-left: 6px;
+        background: linear-gradient(90deg, var(--accent2), var(--accent));
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="splash" aria-hidden="true"><img src="/logo.gif" alt="" /><span>VAPORZR</span></div>
+    <div class="card">
+      <div class="jam-head">
+        <img class="jam-logo" src="/logo.gif" alt="Vaporzr" />
+        <div class="jam-title">
+          <h1>VAPORZR</h1>
+          <p class="sub" id="sub">Request a song — it gets queued for everyone.</p>
+        </div>
+      </div>
+      <canvas id="bars" aria-hidden="true"></canvas>
+      <input id="who" placeholder="Your name (shows on the queue)" autocomplete="off" maxlength="24" />
+      <input id="q" placeholder="Song, artist, or YouTube query…" autocomplete="off" autofocus />
+      <button id="go">＋ Request</button>
+      <div id="msg"></div>
+      <div id="queue">
+        <div id="q-now"></div>
+        <div id="q-list"></div>
+      </div>
+    </div>
+    <script>
+      (function () {
+        /* Splash: the animated badge shows until the bars socket is up (or 1.6s,
+     whichever first) so a guest never stares at a blank page. */
+        var splash = document.getElementById('splash');
+        var splashGone = false;
+        function hideSplash() {
+          if (splashGone || !splash) return;
+          splashGone = true;
+          splash.classList.add('hide');
+          setTimeout(function () {
+            if (splash.parentNode) splash.parentNode.removeChild(splash);
+          }, 600);
+        }
+        setTimeout(hideSplash, 1600);
+        var q = document.getElementById('q'),
+          go = document.getElementById('go'),
+          msg = document.getElementById('msg');
+        var who = document.getElementById('who');
+        var REQ_BUILD = '{{BUILD}}';
+        function checkBuildUpdate() {
+          if (!REQ_BUILD || REQ_BUILD === 'dev' || REQ_BUILD.indexOf('{{') >= 0) return;
+          if (q && q.value && q.value.trim()) return;
+          fetch('/health', { cache: 'no-store' })
+            .then(function (r) {
+              return r.ok ? r.json() : null;
+            })
+            .then(function (d) {
+              if (!d || !d.build || d.build === 'dev' || d.build === REQ_BUILD) return;
+              try {
+                if (sessionStorage.getItem('vz_req_reload') === d.build) return;
+                sessionStorage.setItem('vz_req_reload', d.build);
+              } catch (e) {}
+              location.reload();
+            })
+            .catch(function () {});
+        }
+        document.addEventListener('visibilitychange', function () {
+          if (document.visibilityState === 'visible') checkBuildUpdate();
+        });
+        // Remember the name so a guest types it once, not once per song.
+        try {
+          var saved = localStorage.getItem('vzWho');
+          if (saved) who.value = saved;
+        } catch (e) {}
+        // /jam is this same page with jam framing.
+        if (location.pathname === '/jam') {
+          document.getElementById('sub').textContent = 'Join the jam — your song joins everyone\u2019s queue.';
+          document.title = 'Vaporzr — Join the jam';
+        }
+        function say(text, cls) {
+          msg.textContent = text;
+          msg.className = cls || '';
+        }
+        function submit() {
+          if (go.disabled) return; // Enter + click double-fire guard
+          var v = q.value.trim();
+          if (!v) {
+            q.focus();
+            return;
+          }
+          go.disabled = true;
+          say('Searching…');
+          fetch('/api/request', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query: v, name: who.value.trim() }),
+          })
+            .then(function (r) {
+              return r.json().then(function (d) {
+                return { ok: r.ok, d: d };
+              });
+            })
+            .then(function (res) {
+              if (res.ok && res.d.ok) {
+                say('Added: ' + res.d.name, 'ok');
+                try {
+                  localStorage.setItem('vzWho', who.value.trim());
+                } catch (e) {}
+                q.value = '';
+                pollQueue();
+              } else {
+                say(res.d && res.d.error ? res.d.error : 'Request failed.', 'err');
+              }
+            })
+            .catch(function () {
+              say('Network error — try again.', 'err');
+            })
+            .then(function () {
+              go.disabled = false;
+              q.focus();
+            });
+        }
+        go.onclick = submit;
+        q.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            submit();
+          }
+        });
 
-  /* ---- The queue, live ----
+        /* ---- The queue, live ----
      Read-only: what is on now, what is next, who asked, and roughly how long
      until each song starts. Polled rather than streamed because this page is a
      plain form on a phone, with no socket; the progress bar interpolates
      locally between polls so it still moves smoothly. */
-  var qList = document.getElementById('q-list'), qNow = document.getElementById('q-now');
+        var qList = document.getElementById('q-list'),
+          qNow = document.getElementById('q-now');
 
-  // Source colours and fallback glyphs — same palette as the panel.
-  var SRC = {
-    youtube:    { c: '#ff4d5e', g: '\u25b6' },
-    spotify:    { c: '#1db954', g: '\u266a' },
-    soundcloud: { c: '#ff7700', g: '\u2601' },
-    apple:      { c: '#fa57c7', g: '\u266b' },
-    suno:       { c: '#8b5cf6', g: '\u273a' },
-    local:      { c: '#38bdf8', g: '\u2302' }
-  };
-  function srcOf(s) { return SRC[String(s || '')] || { c: '#64748b', g: '\u266b' }; }
+        // Source colours and fallback glyphs — same palette as the panel.
+        var SRC = {
+          youtube: { c: '#ff4d5e', g: '\u25b6' },
+          spotify: { c: '#1db954', g: '\u266a' },
+          soundcloud: { c: '#ff7700', g: '\u2601' },
+          apple: { c: '#fa57c7', g: '\u266b' },
+          suno: { c: '#8b5cf6', g: '\u273a' },
+          local: { c: '#38bdf8', g: '\u2302' },
+        };
+        function srcOf(s) {
+          return SRC[String(s || '')] || { c: '#64748b', g: '\u266b' };
+        }
 
-  function esc(s) {
-    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
-      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
-    });
-  }
-  function fmtMs(ms) {
-    var s = Math.max(0, Math.round((ms || 0) / 1000));
-    var m = Math.floor(s / 60), ss = s % 60;
-    return m + ':' + (ss < 10 ? '0' : '') + ss;
-  }
-  function mins(ms) { return Math.max(1, Math.round(ms / 60000)); }
+        function esc(s) {
+          return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+          });
+        }
+        function fmtMs(ms) {
+          var s = Math.max(0, Math.round((ms || 0) / 1000));
+          var m = Math.floor(s / 60),
+            ss = s % 60;
+          return m + ':' + (ss < 10 ? '0' : '') + ss;
+        }
+        function mins(ms) {
+          return Math.max(1, Math.round(ms / 60000));
+        }
 
-  // Artwork goes through the same relay the panel uses (handles CORS/expiry).
-  function artSrc(u) { return u && /^https?:\/\//.test(u) ? '/art?u=' + encodeURIComponent(u) : null; }
-  function artHtml(t, big) {
-    var s = srcOf(t.source), img = artSrc(t.image);
-    return '<div class="q-art' + (big ? ' big' : '') + '" style="--sc:' + s.c + '">' +
-      '<span class="glyph">' + s.g + '</span>' +
-      (img ? '<img src="' + esc(img) + '" alt="" loading="lazy" onerror="this.remove()">' : '') +
-      '<span class="dot"></span></div>';
-  }
-  function subHtml(t, extraBits) {
-    var bits = [esc(t.artists) || esc(t.album)];
-    if (t.addedBy) bits.push('<span class="q-by">' + esc(t.addedBy) + '</span>');
-    if (t.durationMs) bits.push('<span class="q-dur">' + fmtMs(t.durationMs) + '</span>');
-    (extraBits || []).forEach(function (b) { bits.push(b); });
-    return bits.filter(Boolean).join(' \u00b7 ');
-  }
-  function badgeHtml(t) {
-    return t.source ? '<span class="q-badge" style="--sc:' + srcOf(t.source).c + '">' +
-      esc(String(t.source).toUpperCase()) + '</span>' : '';
-  }
+        // Artwork goes through the same relay the panel uses (handles CORS/expiry).
+        function artSrc(u) {
+          return u && /^https?:\/\//.test(u) ? '/art?u=' + encodeURIComponent(u) : null;
+        }
+        function artHtml(t, big) {
+          var s = srcOf(t.source),
+            img = artSrc(t.image);
+          return (
+            '<div class="q-art' +
+            (big ? ' big' : '') +
+            '" style="--sc:' +
+            s.c +
+            '">' +
+            '<span class="glyph">' +
+            s.g +
+            '</span>' +
+            (img ? '<img src="' + esc(img) + '" alt="" loading="lazy" onerror="this.remove()">' : '') +
+            '<span class="dot"></span></div>'
+          );
+        }
+        function subHtml(t, extraBits) {
+          var bits = [esc(t.artists) || esc(t.album)];
+          if (t.addedBy) bits.push('<span class="q-by">' + esc(t.addedBy) + '</span>');
+          if (t.durationMs) bits.push('<span class="q-dur">' + fmtMs(t.durationMs) + '</span>');
+          (extraBits || []).forEach(function (b) {
+            bits.push(b);
+          });
+          return bits.filter(Boolean).join(' \u00b7 ');
+        }
+        function badgeHtml(t) {
+          return t.source
+            ? '<span class="q-badge" style="--sc:' +
+                srcOf(t.source).c +
+                '">' +
+                esc(String(t.source).toUpperCase()) +
+                '</span>'
+            : '';
+        }
 
-  // The now-playing bar: interpolated locally from the last poll, so it keeps
-  // moving between the 5 s updates. Only the bar animates — never on pause.
-  var bar = null;
-  function tickBar() {
-    if (!bar) return;
-    var fill = document.getElementById('bar-fill'), txt = document.getElementById('t-cur');
-    if (!fill || !txt) return;
-    var pos = bar.pos;
-    if (bar.playing) pos = Math.min(bar.pos + (Date.now() - bar.at), Math.max(bar.dur - 500, 0));
-    var pct = bar.dur > 0 ? Math.max(0, Math.min(100, (pos / bar.dur) * 100)) : 0;
-    fill.style.width = pct + '%';
-    txt.textContent = fmtMs(pos);
-  }
-  setInterval(tickBar, 1000);
+        // The now-playing bar: interpolated locally from the last poll, so it keeps
+        // moving between the 5 s updates. Only the bar animates — never on pause.
+        var bar = null;
+        function tickBar() {
+          if (!bar) return;
+          var fill = document.getElementById('bar-fill'),
+            txt = document.getElementById('t-cur');
+          if (!fill || !txt) return;
+          var pos = bar.pos;
+          if (bar.playing) pos = Math.min(bar.pos + (Date.now() - bar.at), Math.max(bar.dur - 500, 0));
+          var pct = bar.dur > 0 ? Math.max(0, Math.min(100, (pos / bar.dur) * 100)) : 0;
+          fill.style.width = pct + '%';
+          txt.textContent = fmtMs(pos);
+        }
+        setInterval(tickBar, 1000);
 
-  function renderQueue(d) {
-    var now = d && d.playing, tracks = (d && d.tracks) || [];
-    var playingNow = !!(d && d.playingNow), ended = !!(d && d.ended);
-    var pos = (d && d.positionMs) || 0, dur = (d && d.durationMs) || 0;
-    var total = (d && d.queueTotal) || 0;
+        function renderQueue(d) {
+          var now = d && d.playing,
+            tracks = (d && d.tracks) || [];
+          var playingNow = !!(d && d.playingNow),
+            ended = !!(d && d.ended);
+          var pos = (d && d.positionMs) || 0,
+            dur = (d && d.durationMs) || 0;
+          var total = (d && d.queueTotal) || 0;
 
-    // The cursor row exists even while nothing is playing, so its label tells
-    // the truth about what is (or is not) coming out of the speakers.
-    var paused = !playingNow && !ended && now && pos > 0 && dur > pos + 2000;
-    var label = playingNow ? 'NOW PLAYING' : paused ? 'PAUSED' : ended ? 'QUEUE FINISHED' : now ? 'UP NEXT' : '';
-    var cls = playingNow ? '' : paused ? ' paused' : ' idle';
+          // The cursor row exists even while nothing is playing, so its label tells
+          // the truth about what is (or is not) coming out of the speakers.
+          var paused = !playingNow && !ended && now && pos > 0 && dur > pos + 2000;
+          var label = playingNow ? 'NOW PLAYING' : paused ? 'PAUSED' : ended ? 'QUEUE FINISHED' : now ? 'UP NEXT' : '';
+          var cls = playingNow ? '' : paused ? ' paused' : ' idle';
 
-    qNow.innerHTML = now ? (
-      '<div class="now-label' + cls + '">' +
-        (playingNow ? '<span class="eq"><i></i><i></i><i></i></span>' : '') +
-        label + '</div>' +
-      '<div class="now-card' + cls + '">' +
-        artHtml(now, true) +
-        '<div class="q-meta">' +
-          '<div class="q-name">' + esc(now.name) + badgeHtml(now) + '</div>' +
-          '<div class="q-sub">' + subHtml(now) + '</div>' +
-          (playingNow || paused ? (
-            '<div class="bar"><div class="bar-fill" id="bar-fill"></div></div>' +
-            '<div class="trow"><span id="t-cur">' + fmtMs(pos) + '</span>' +
-            '<span>' + (dur > 0 ? fmtMs(dur) : '') + '</span></div>'
-          ) : '') +
-        '</div>' +
-      '</div>'
-    ) : '';
-    bar = (now && (playingNow || paused) && dur > 0)
-      ? { pos: Math.min(pos, dur), dur: dur, playing: playingNow, at: Date.now() }
-      : null;
-    tickBar();
+          qNow.innerHTML = now
+            ? '<div class="now-label' +
+              cls +
+              '">' +
+              (playingNow ? '<span class="eq"><i></i><i></i><i></i></span>' : '') +
+              label +
+              '</div>' +
+              '<div class="now-card' +
+              cls +
+              '">' +
+              artHtml(now, true) +
+              '<div class="q-meta">' +
+              '<div class="q-name">' +
+              esc(now.name) +
+              badgeHtml(now) +
+              '</div>' +
+              '<div class="q-sub">' +
+              subHtml(now) +
+              '</div>' +
+              (playingNow || paused
+                ? '<div class="bar"><div class="bar-fill" id="bar-fill"></div></div>' +
+                  '<div class="trow"><span id="t-cur">' +
+                  fmtMs(pos) +
+                  '</span>' +
+                  '<span>' +
+                  (dur > 0 ? fmtMs(dur) : '') +
+                  '</span></div>'
+                : '') +
+              '</div>' +
+              '</div>'
+            : '';
+          bar =
+            now && (playingNow || paused) && dur > 0
+              ? { pos: Math.min(pos, dur), dur: dur, playing: playingNow, at: Date.now() }
+              : null;
+          tickBar();
 
-    // "starts in ~N min" walks the queue: the current track's remaining time
-    // plus every song ahead of the row. Shown only while every duration in the
-    // chain is known — a gap would quietly understate the wait.
-    var acc = ended ? null : (now ? (playingNow || paused ? Math.max(0, dur - pos) : now.durationMs || 0) : 0);
-    if (acc === 0 && now) acc = null; // durations unknown — no estimates
+          // "starts in ~N min" walks the queue: the current track's remaining time
+          // plus every song ahead of the row. Shown only while every duration in the
+          // chain is known — a gap would quietly understate the wait.
+          var acc = ended ? null : now ? (playingNow || paused ? Math.max(0, dur - pos) : now.durationMs || 0) : 0;
+          if (acc === 0 && now) acc = null; // durations unknown — no estimates
 
-    var rows = tracks.map(function (t, i) {
-      var est = null;
-      if (acc !== null) {
-        est = '<span class="q-est">in ~' + mins(acc) + ' min</span>';
-        acc = t.durationMs > 0 ? acc + t.durationMs : null;
-      }
-      return '<div class="q-row">' +
-        '<span class="q-num">' + (i + 1) + '</span>' +
-        artHtml(t, false) +
-        '<div class="q-meta"><div class="q-name">' + esc(t.name) + '</div>' +
-        '<div class="q-sub">' + subHtml(t, est ? [est] : []) + '</div></div></div>';
-    }).join('');
+          var rows = tracks
+            .map(function (t, i) {
+              var est = null;
+              if (acc !== null) {
+                est = '<span class="q-est">in ~' + mins(acc) + ' min</span>';
+                acc = t.durationMs > 0 ? acc + t.durationMs : null;
+              }
+              return (
+                '<div class="q-row">' +
+                '<span class="q-num">' +
+                (i + 1) +
+                '</span>' +
+                artHtml(t, false) +
+                '<div class="q-meta"><div class="q-name">' +
+                esc(t.name) +
+                '</div>' +
+                '<div class="q-sub">' +
+                subHtml(t, est ? [est] : []) +
+                '</div></div></div>'
+              );
+            })
+            .join('');
 
-    if (rows) {
-      var known = tracks.filter(function (t) { return t.durationMs > 0; });
-      var totalMs = known.reduce(function (a, t) { return a + t.durationMs; }, 0);
-      if (now && !ended) totalMs += playingNow || paused ? Math.max(0, dur - pos) : now.durationMs || 0;
-      var head = 'UP NEXT \u00b7 ' + tracks.length + (totalMs > 0 ? ' \u00b7 ~' + mins(totalMs) + ' min' : '');
-      if (total > tracks.length) head += ' \u00b7 showing ' + tracks.length + ' of ' + total;
-      qList.innerHTML = '<div class="q-head">' + head + '</div>' + rows;
-    } else {
-      qList.innerHTML = !now
-        ? '<div class="q-head">QUEUE</div><div class="q-empty">Nothing queued yet \u2014 you could be first.</div>'
-        : ended
-          ? '<div class="q-empty" style="padding-top:8px">That\u2019s the whole queue \u2014 request the next one.</div>'
-          : '';
-    }
-  }
+          if (rows) {
+            var known = tracks.filter(function (t) {
+              return t.durationMs > 0;
+            });
+            var totalMs = known.reduce(function (a, t) {
+              return a + t.durationMs;
+            }, 0);
+            if (now && !ended) totalMs += playingNow || paused ? Math.max(0, dur - pos) : now.durationMs || 0;
+            var head = 'UP NEXT \u00b7 ' + tracks.length + (totalMs > 0 ? ' \u00b7 ~' + mins(totalMs) + ' min' : '');
+            if (total > tracks.length) head += ' \u00b7 showing ' + tracks.length + ' of ' + total;
+            qList.innerHTML = '<div class="q-head">' + head + '</div>' + rows;
+          } else {
+            qList.innerHTML = !now
+              ? '<div class="q-head">QUEUE</div><div class="q-empty">Nothing queued yet \u2014 you could be first.</div>'
+              : ended
+                ? '<div class="q-empty" style="padding-top:8px">That\u2019s the whole queue \u2014 request the next one.</div>'
+                : '';
+          }
+        }
 
-  /* ---- Mini live bars: the same 8 fps spectrum feed the panel and /viz draw.
+        /* ---- Mini live bars: the same 8 fps spectrum feed the panel and /viz draw.
      Connects as a read-only guest — the `vz-` name prefix keeps it out of the
      jam roster, and guests can watch but never command. Falls back to the idle
      travelling wave whenever nothing is playing. ---- */
-  var barsEl = document.getElementById('bars'), bctx = barsEl ? barsEl.getContext('2d') : null;
-  var bTarget = null, bDisp = [], bPeaks = [], bLast = 0, bWS = null;
-  var bDpr = Math.min(2, window.devicePixelRatio || 1);
-  function sizeBars() {
-    if (!barsEl) return;
-    var r = barsEl.getBoundingClientRect();
-    barsEl.width = Math.max(1, Math.round(r.width * bDpr));
-    barsEl.height = Math.max(1, Math.round(r.height * bDpr));
-  }
-  function initDisp(n) {
-    bDisp = []; bPeaks = [];
-    for (var i = 0; i < n; i++) { bDisp.push(0); bPeaks.push(0); }
-  }
-  function bRound(c, x, y, w, h, rad) {
-    c.beginPath();
-    c.moveTo(x + rad, y);
-    c.arcTo(x + w, y, x + w, y + h, rad);
-    c.arcTo(x + w, y + h, x, y + h, rad);
-    c.arcTo(x, y + h, x, y, rad);
-    c.arcTo(x, y, x + w, y, rad);
-    c.closePath();
-    c.fill();
-  }
-  function drawBars(now) {
-    if (bctx && !document.hidden) {
-      var W = barsEl.width, H = barsEl.height;
-      bctx.clearRect(0, 0, W, H);
-      var N = bDisp.length || 48;
-      if (!bDisp.length) initDisp(N);
-      var active = bLast > 0 && now - bLast < 2000;
-      var baseY = H * 0.72, maxH = H * 0.52, slot = W / N;
-      var barW = Math.max(2 * bDpr, Math.min(slot * 0.55, 8 * bDpr));
-      for (var i = 0; i < N; i++) {
-        var tv = active && bTarget ? (bTarget[i] || 0) : 0;
-        bDisp[i] += (tv - bDisp[i]) * 0.35;
-        if (active && tv > bPeaks[i]) bPeaks[i] = tv;
-        else bPeaks[i] = Math.max(bDisp[i], bPeaks[i] - 0.006);
-        var v = active
-          ? bDisp[i]
-          : (0.10 + 0.07 * Math.sin(now / 620 + i * 0.55) + 0.03 * Math.sin(now / 1430 - i * 0.31));
-        var h = Math.max(2 * bDpr, v * maxH), x = i * slot + (slot - barW) / 2;
-        var g = bctx.createLinearGradient(0, baseY, 0, baseY - h);
-        g.addColorStop(0, 'rgba(106,92,255,.95)');
-        g.addColorStop(1, 'rgba(0,240,255,.95)');
-        bctx.fillStyle = g;
-        bRound(bctx, x, baseY - h, barW, h, barW / 2);
-        bctx.fillStyle = 'rgba(246,250,255,.9)';
-        bctx.fillRect(x, baseY - h - 2 * bDpr, barW, 2 * bDpr);
-      }
-    }
-    requestAnimationFrame(drawBars);
-  }
-  function connectBars() {
-    if (bWS || document.hidden || !barsEl) return;
-    var url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
-    try { bWS = new WebSocket(url); } catch (e) { bWS = null; return; }
-    bWS.onopen = function () {
-      hideSplash();
-      checkBuildUpdate();
-      try {
-        bWS.send(JSON.stringify({ type: 'hello', role: 'panel', name: 'vz-jam' }));
-        bWS.send(JSON.stringify({ type: 'panel:subscribe', channels: ['visuals'] }));
-      } catch (e) {}
-    };
-    bWS.onmessage = function (ev) {
-      var m;
-      try { m = JSON.parse(ev.data); } catch (e) { return; }
-      if (m.type === 'visuals:bars' && m.bars && m.bars.length) {
-        if (bDisp.length !== m.bars.length) initDisp(m.bars.length);
-        bTarget = m.bars;
-        bLast = nowMs();
-      }
-    };
-    bWS.onclose = function () { bWS = null; if (!document.hidden) setTimeout(connectBars, 4000); };
-    bWS.onerror = function () { try { bWS.close(); } catch (e) {} };
-  }
-  function nowMs() { return window.performance && performance.now ? performance.now() : Date.now(); }
-  function initBars() {
-    if (!barsEl) return;
-    sizeBars();
-    initDisp(48);
-    requestAnimationFrame(drawBars);
-    window.addEventListener('resize', sizeBars);
-    connectBars();
-  }
+        var barsEl = document.getElementById('bars'),
+          bctx = barsEl ? barsEl.getContext('2d') : null;
+        var bTarget = null,
+          bDisp = [],
+          bPeaks = [],
+          bLast = 0,
+          bWS = null;
+        var bDpr = Math.min(2, window.devicePixelRatio || 1);
+        function sizeBars() {
+          if (!barsEl) return;
+          var r = barsEl.getBoundingClientRect();
+          barsEl.width = Math.max(1, Math.round(r.width * bDpr));
+          barsEl.height = Math.max(1, Math.round(r.height * bDpr));
+        }
+        function initDisp(n) {
+          bDisp = [];
+          bPeaks = [];
+          for (var i = 0; i < n; i++) {
+            bDisp.push(0);
+            bPeaks.push(0);
+          }
+        }
+        function bRound(c, x, y, w, h, rad) {
+          c.beginPath();
+          c.moveTo(x + rad, y);
+          c.arcTo(x + w, y, x + w, y + h, rad);
+          c.arcTo(x + w, y + h, x, y + h, rad);
+          c.arcTo(x, y + h, x, y, rad);
+          c.arcTo(x, y, x + w, y, rad);
+          c.closePath();
+          c.fill();
+        }
+        function drawBars(now) {
+          if (bctx && !document.hidden) {
+            var W = barsEl.width,
+              H = barsEl.height;
+            bctx.clearRect(0, 0, W, H);
+            var N = bDisp.length || 48;
+            if (!bDisp.length) initDisp(N);
+            var active = bLast > 0 && now - bLast < 2000;
+            var baseY = H * 0.72,
+              maxH = H * 0.52,
+              slot = W / N;
+            var barW = Math.max(2 * bDpr, Math.min(slot * 0.55, 8 * bDpr));
+            for (var i = 0; i < N; i++) {
+              var tv = active && bTarget ? bTarget[i] || 0 : 0;
+              bDisp[i] += (tv - bDisp[i]) * 0.35;
+              if (active && tv > bPeaks[i]) bPeaks[i] = tv;
+              else bPeaks[i] = Math.max(bDisp[i], bPeaks[i] - 0.006);
+              var v = active
+                ? bDisp[i]
+                : 0.1 + 0.07 * Math.sin(now / 620 + i * 0.55) + 0.03 * Math.sin(now / 1430 - i * 0.31);
+              var h = Math.max(2 * bDpr, v * maxH),
+                x = i * slot + (slot - barW) / 2;
+              var g = bctx.createLinearGradient(0, baseY, 0, baseY - h);
+              g.addColorStop(0, 'rgba(106,92,255,.95)');
+              g.addColorStop(1, 'rgba(0,240,255,.95)');
+              bctx.fillStyle = g;
+              bRound(bctx, x, baseY - h, barW, h, barW / 2);
+              bctx.fillStyle = 'rgba(246,250,255,.9)';
+              bctx.fillRect(x, baseY - h - 2 * bDpr, barW, 2 * bDpr);
+            }
+          }
+          requestAnimationFrame(drawBars);
+        }
+        function connectBars() {
+          if (bWS || document.hidden || !barsEl) return;
+          var url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
+          try {
+            bWS = new WebSocket(url);
+          } catch (e) {
+            bWS = null;
+            return;
+          }
+          bWS.onopen = function () {
+            hideSplash();
+            checkBuildUpdate();
+            try {
+              bWS.send(JSON.stringify({ type: 'hello', role: 'panel', name: 'vz-jam' }));
+              bWS.send(JSON.stringify({ type: 'panel:subscribe', channels: ['visuals'] }));
+            } catch (e) {}
+          };
+          bWS.onmessage = function (ev) {
+            var m;
+            try {
+              m = JSON.parse(ev.data);
+            } catch (e) {
+              return;
+            }
+            if (m.type === 'visuals:bars' && m.bars && m.bars.length) {
+              if (bDisp.length !== m.bars.length) initDisp(m.bars.length);
+              bTarget = m.bars;
+              bLast = nowMs();
+            }
+          };
+          bWS.onclose = function () {
+            bWS = null;
+            if (!document.hidden) setTimeout(connectBars, 4000);
+          };
+          bWS.onerror = function () {
+            try {
+              bWS.close();
+            } catch (e) {}
+          };
+        }
+        function nowMs() {
+          return window.performance && performance.now ? performance.now() : Date.now();
+        }
+        function initBars() {
+          if (!barsEl) return;
+          sizeBars();
+          initDisp(48);
+          requestAnimationFrame(drawBars);
+          window.addEventListener('resize', sizeBars);
+          connectBars();
+        }
 
-  function pollQueue() {
-    if (document.hidden) return; // no point polling a tab nobody is looking at
-    fetch('/api/queue', { cache: 'no-store' })
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (d) { if (d) renderQueue(d); })
-      .catch(function () {});
-  }
-  pollQueue();
-  setInterval(pollQueue, 5000);
-  initBars();
-  // Coming back to the tab should not show a 5 s stale queue — and the bars
-  // socket (already closed while hidden to save a phone's battery) reconnects.
-  document.addEventListener('visibilitychange', function () {
-    if (!document.hidden) { pollQueue(); connectBars(); }
-    else if (bWS) { try { bWS.close(); } catch (e) {} bWS = null; }
-  });
-})();
-</script>
-</body>
+        function pollQueue() {
+          if (document.hidden) return; // no point polling a tab nobody is looking at
+          fetch('/api/queue', { cache: 'no-store' })
+            .then(function (r) {
+              return r.ok ? r.json() : null;
+            })
+            .then(function (d) {
+              if (d) renderQueue(d);
+            })
+            .catch(function () {});
+        }
+        pollQueue();
+        setInterval(pollQueue, 5000);
+        initBars();
+        // Coming back to the tab should not show a 5 s stale queue — and the bars
+        // socket (already closed while hidden to save a phone's battery) reconnects.
+        document.addEventListener('visibilitychange', function () {
+          if (!document.hidden) {
+            pollQueue();
+            connectBars();
+          } else if (bWS) {
+            try {
+              bWS.close();
+            } catch (e) {}
+            bWS = null;
+          }
+        });
+      })();
+    </script>
+  </body>
 </html>

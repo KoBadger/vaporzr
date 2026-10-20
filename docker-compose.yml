@@ -4,8 +4,8 @@
 x-logging: &default-logging
   driver: json-file
   options:
-    max-size: "10m"
-    max-file: "3"
+    max-size: '10m'
+    max-file: '3'
 
 services:
   bot:
@@ -16,7 +16,7 @@ services:
     # stopped) via:
     #   docker compose --profile local-bot up -d
     # A bare `docker compose up` now starts just the visualizer.
-    profiles: ["local-bot"]
+    profiles: ['local-bot']
     build:
       context: .
       dockerfile: apps/bot/Dockerfile
@@ -26,7 +26,7 @@ services:
     env_file:
       - apps/bot/.env
     ports:
-      - "4876:4876"
+      - '4876:4876'
     volumes:
       - ./apps/bot/data:/app/data
     mem_limit: 768m
@@ -38,7 +38,7 @@ services:
     container_name: vaporzr_visualizer
     restart: unless-stopped
     ports:
-      - "8000:80"
+      - '8000:80'
     volumes:
       - ./apps/player/www:/usr/share/nginx/html:ro
     mem_limit: 32m

@@ -126,9 +126,7 @@ export class VoiceManager implements AudioTransport {
   /** ~1 second of 48 kHz stereo s16 PCM so bursts don't cause stutter. */
   static readonly STREAM_HIGH_WATER_MARK = 192_000;
 
-  constructor(
-    private onVoiceChange?: (joined: boolean, channelId: string | null) => void,
-  ) {}
+  constructor(private onVoiceChange?: (joined: boolean, channelId: string | null) => void) {}
 
   setPcmTap(cb: ((data: Buffer) => void) | null): void {
     this.pcmTap = cb;
@@ -280,7 +278,10 @@ export class VoiceManager implements AudioTransport {
         } catch {
           /* ignore */
         }
-        await new Promise((resolve) => { const t = setTimeout(resolve, 1500); t.unref?.(); });
+        await new Promise((resolve) => {
+          const t = setTimeout(resolve, 1500);
+          t.unref?.();
+        });
         connection = connect();
       }
     }
@@ -343,12 +344,11 @@ export class VoiceManager implements AudioTransport {
     }
     connection.on('stateChange', (oldS, newS) => {
       if (newS.status === oldS.status) return;
-      const reason = newS.status === VoiceConnectionStatus.Disconnected
-        ? (newS as unknown as { reason?: string }).reason
-        : undefined;
-      console.log(
-        `[voice] conn ${oldS.status} → ${newS.status}${reason ? ` (reason=${reason})` : ''}`,
-      );
+      const reason =
+        newS.status === VoiceConnectionStatus.Disconnected
+          ? (newS as unknown as { reason?: string }).reason
+          : undefined;
+      console.log(`[voice] conn ${oldS.status} → ${newS.status}${reason ? ` (reason=${reason})` : ''}`);
       if (newS.status === VoiceConnectionStatus.Ready && oldS.status !== VoiceConnectionStatus.Ready) {
         if (this.voiceLinkDown) {
           this.voiceLinkDown = false;
@@ -464,10 +464,7 @@ export class VoiceManager implements AudioTransport {
         }
       } else if (this.ffmpeg) {
         // Server-side stream: silence is normal between tracks; don't warn.
-      } else if (
-        this.expectingPcm &&
-        Date.now() - this.lastChunkAt > (this.everGotPcm ? 15_000 : 8_000)
-      ) {
+      } else if (this.expectingPcm && Date.now() - this.lastChunkAt > (this.everGotPcm ? 15_000 : 8_000)) {
         // The Spotify FIFO feed has no ffmpeg onEnd and briefly runs dry at
         // track boundaries; a short gap is normal once audio has started, so a
         // track that HAS played waits for a sustained ~30s outage (2 warnings)
@@ -552,11 +549,7 @@ export class VoiceManager implements AudioTransport {
   }
 
   /** Crossfade two source URLs into one continuous mix (ffmpeg acrossfade). */
-  playMix(
-    urlA: string,
-    urlB: string,
-    opts: { crossfadeSec?: number; volume?: number; cleanup?: string[] } = {},
-  ): void {
+  playMix(urlA: string, urlB: string, opts: { crossfadeSec?: number; volume?: number; cleanup?: string[] } = {}): void {
     if (!this.player) return;
     this.clearIdleTimer();
     this.stopStream();
@@ -566,10 +559,25 @@ export class VoiceManager implements AudioTransport {
       `[1:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[a1];` +
       `[a0][a1]acrossfade=d=${d}:c1=tri:c2=tri[out]`;
     const args = [
-      '-hide_banner', '-loglevel', 'error',
-      '-i', urlA, '-i', urlB,
-      '-filter_complex', filter,
-      '-map', '[out]', '-vn', '-ac', '2', '-ar', '48000', '-f', 's16le', 'pipe:1',
+      '-hide_banner',
+      '-loglevel',
+      'error',
+      '-i',
+      urlA,
+      '-i',
+      urlB,
+      '-filter_complex',
+      filter,
+      '-map',
+      '[out]',
+      '-vn',
+      '-ac',
+      '2',
+      '-ar',
+      '48000',
+      '-f',
+      's16le',
+      'pipe:1',
     ];
     const proc = spawn(config.ffmpegPath, args, { windowsHide: true });
     this.ffmpeg = proc;
@@ -663,8 +671,12 @@ export class VoiceManager implements AudioTransport {
     stream.on('error', (err) => {
       const code = (err as NodeJS.ErrnoException).code ?? '';
       const msg = err instanceof Error ? err.message : String(err);
-      if (code.startsWith('ERR_STREAM_WRITE_AFTER_END') || code === 'ERR_STREAM_PREMATURE_CLOSE'
-        || /premature close|write after end/i.test(msg)) return;
+      if (
+        code.startsWith('ERR_STREAM_WRITE_AFTER_END') ||
+        code === 'ERR_STREAM_PREMATURE_CLOSE' ||
+        /premature close|write after end/i.test(msg)
+      )
+        return;
       if (err) console.warn(`[voice] mix stream error: ${msg}`);
     });
     return stream;
@@ -777,9 +789,7 @@ export class VoiceManager implements AudioTransport {
     // Strip ambient proxy vars (Windows system proxies break yt-dlp/ffmpeg),
     // then re-add ours for proxied YouTube fetches — ffmpeg's http protocol
     // reads the lowercase `http_proxy` env and CONNECT-tunnels https.
-    const ffEnv = Object.fromEntries(
-      Object.entries(process.env).filter(([k]) => !k.toLowerCase().endsWith('_proxy')),
-    );
+    const ffEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.toLowerCase().endsWith('_proxy')));
     if (useYtProxy) ffEnv.http_proxy = config.youtubeProxy;
     else if (useSunoProxy) ffEnv.http_proxy = config.sunoProxy;
     const proc = spawn(config.ffmpegPath, args, { windowsHide: true, env: ffEnv });
@@ -800,7 +810,14 @@ export class VoiceManager implements AudioTransport {
       console.warn(`[voice] ffmpeg: ${line.slice(0, 800)}`);
       // Detect critical errors and trigger retry/refresh if applicable.
       const l = line.toLowerCase();
-      if ((l.includes('403') || l.includes('429') || l.includes('connection refused') || l.includes('connection reset') || l.includes('http error')) && token === this.streamToken) {
+      if (
+        (l.includes('403') ||
+          l.includes('429') ||
+          l.includes('connection refused') ||
+          l.includes('connection reset') ||
+          l.includes('http error')) &&
+        token === this.streamToken
+      ) {
         console.warn('[voice] critical ffmpeg error detected — will attempt stream refresh on exit');
         proc.emit('ffmpeg-critical-error');
       }
@@ -1133,9 +1150,7 @@ export class VoiceManager implements AudioTransport {
         });
         if (res.status === 416) break;
         if (res.status !== 206 && res.status !== 200) {
-          console.warn(
-            `[voice] crossfade head fetch: HTTP ${res.status} for ${url.slice(0, 60)}… — blend skipped`,
-          );
+          console.warn(`[voice] crossfade head fetch: HTTP ${res.status} for ${url.slice(0, 60)}… — blend skipped`);
           break;
         }
         const chunk = Buffer.from(await res.arrayBuffer());

@@ -9,7 +9,11 @@ export interface QueueListener {
  *  boilerplate that differs between sources ("Official Audio", "(Lyrics)", …)
  *  so the same song from a different upload collides on the same key. */
 export function trackKey(t: { name?: string; artists?: string[] }): string {
-  const norm = (x: string): string => x.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const norm = (x: string): string =>
+    x
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
   const name = norm(t.name ?? '')
     // Multi-word phrases run FIRST: "official music video" has to disappear as a
     // unit or the word-wise strip below would leave the "music" behind, and the
@@ -76,19 +80,13 @@ export class QueueManager {
   }
 
   /** Restore a persisted queue. Never auto-resumes — playback starts paused. */
-  restore(data: {
-    tracks: TrackInfo[];
-    currentIndex: number;
-    state: PlaybackState;
-    playedThrough?: boolean;
-  }): void {
+  restore(data: { tracks: TrackInfo[]; currentIndex: number; state: PlaybackState; playedThrough?: boolean }): void {
     if (!Array.isArray(data.tracks) || data.tracks.length === 0) return;
     this.tracks = data.tracks.map((t) => ({ ...t }));
     // A missing cursor defaults to the first track (a restored queue should have
     // a current track); an explicit -1 is kept so a finished queue stays finished.
-    this.currentIndex = data.currentIndex == null
-      ? 0
-      : Math.min(Math.max(data.currentIndex, -1), this.tracks.length - 1);
+    this.currentIndex =
+      data.currentIndex == null ? 0 : Math.min(Math.max(data.currentIndex, -1), this.tracks.length - 1);
     // Carry the finished marker across a restart so a queue that ran out before
     // the bot stopped does not silently look "not started" afterwards.
     this.playedThrough = data.playedThrough === true;
@@ -444,11 +442,7 @@ export class QueueManager {
    * "swap this pick" flow when a search resolved the wrong song. Returns the
    * track that was replaced, or undefined when `index` isn't an upcoming slot.
    */
-  replaceAt(
-    index: number,
-    track: Omit<TrackInfo, 'addedBy' | 'addedAt'>,
-    requestedBy: string,
-  ): TrackInfo | undefined {
+  replaceAt(index: number, track: Omit<TrackInfo, 'addedBy' | 'addedAt'>, requestedBy: string): TrackInfo | undefined {
     if (index < 0 || index >= this.tracks.length || index <= this.currentIndex) return undefined;
     const [prev] = this.tracks.splice(index, 1, { ...track, addedBy: requestedBy, addedAt: Date.now() });
     this.emitQueue();
@@ -484,10 +478,7 @@ export class QueueManager {
 
   /** Move a track from one position to another (panel reordering). */
   move(from: number, to: number): boolean {
-    if (
-      from < 0 || from >= this.tracks.length ||
-      to < 0 || to >= this.tracks.length || from === to
-    ) return false;
+    if (from < 0 || from >= this.tracks.length || to < 0 || to >= this.tracks.length || from === to) return false;
     const [item] = this.tracks.splice(from, 1);
     this.tracks.splice(to, 0, item);
     // Keep the playing cursor glued to its track.

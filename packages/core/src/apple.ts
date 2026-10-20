@@ -76,7 +76,9 @@ export async function resolveAppleMusicUrl(input: string): Promise<ResolvedApple
   if (results.length === 0) throw new AppleMusicError('Apple Music returned nothing for that link.');
 
   // A specific song (either a /song/ link or ?i= on an album link).
-  const song = results.find((r) => r.trackId?.toString() === id) ?? (kind === 'song' ? results.find((r) => r.trackName) : undefined);
+  const song =
+    results.find((r) => r.trackId?.toString() === id) ??
+    (kind === 'song' ? results.find((r) => r.trackName) : undefined);
   if (song && kind !== 'album' && kind !== 'playlist') {
     const t = toTrack(song);
     if (t) return [t];

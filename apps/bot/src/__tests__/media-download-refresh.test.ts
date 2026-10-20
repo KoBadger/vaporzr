@@ -31,7 +31,10 @@ describe('downloadToTempFile refresh-on-403', () => {
   });
 
   it('does not refresh on a non-retryable status (e.g. 404)', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 404 })));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('', { status: 404 })),
+    );
     let refreshed = 0;
     const file = await downloadToTempFile('https://x/one', undefined, async () => {
       refreshed++;
@@ -42,13 +45,19 @@ describe('downloadToTempFile refresh-on-403', () => {
   });
 
   it('returns null on 403 when no refresh callback is supplied', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 403 })));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('', { status: 403 })),
+    );
     const file = await downloadToTempFile('https://x/one');
     expect(file).toBeNull();
   });
 
   it('gives up gracefully when the refreshed URL is also rejected', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 403 })));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('', { status: 403 })),
+    );
     let refreshed = 0;
     const file = await downloadToTempFile('https://x/one', undefined, async () => {
       refreshed++;

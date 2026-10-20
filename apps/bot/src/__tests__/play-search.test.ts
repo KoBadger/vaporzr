@@ -148,12 +148,9 @@ describe('Bridge.playSearch (panel search box)', () => {
       sendToSocket: (_s: unknown, m: { level: string; text: string }) => direct.push(m),
     });
     const call = (q: string): Promise<void> =>
-      (h.b as unknown as { playSearch(q: string, now: boolean, gid?: string, requester?: unknown): Promise<void> }).playSearch(
-        q,
-        false,
-        undefined,
-        socket,
-      );
+      (
+        h.b as unknown as { playSearch(q: string, now: boolean, gid?: string, requester?: unknown): Promise<void> }
+      ).playSearch(q, false, undefined, socket);
     await call('mikado');
     expect(direct.at(-1)?.text).toBe('Added: Track 1');
     // A panel requester is already toasted by the broadcast — no duplicate.

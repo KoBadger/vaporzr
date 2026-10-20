@@ -146,7 +146,12 @@ export class StatsStore {
     this.scheduleSave(guildId);
   }
 
-  notePlayed(guildId: string, user: string, artists: string[], track?: { name: string; artists: string[]; durationMs: number }): void {
+  notePlayed(
+    guildId: string,
+    user: string,
+    artists: string[],
+    track?: { name: string; artists: string[]; durationMs: number },
+  ): void {
     if (!guildId) return;
     const d = this.load(guildId);
     const u = (d.users[user] ??= { queued: 0, played: 0 });
@@ -204,9 +209,15 @@ export class StatsStore {
       playedMs: m.playedMs,
       plays: m.plays,
       queued: m.queued,
-      topTracks: Object.entries(m.tracks).sort((a, b) => b[1] - a[1]).slice(0, 5),
-      topArtists: Object.entries(m.artists).sort((a, b) => b[1] - a[1]).slice(0, 5),
-      topDjs: Object.entries(m.djs).sort((a, b) => b[1] - a[1]).slice(0, 3),
+      topTracks: Object.entries(m.tracks)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5),
+      topArtists: Object.entries(m.artists)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5),
+      topDjs: Object.entries(m.djs)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3),
       biggestDay,
       allTimeMs,
       allTimeQueued: d.totalQueued,

@@ -52,8 +52,7 @@ describe('jam card art', () => {
       const [r, g, b] = at(px, py);
       return r < 128 && g < 128 && b < 160;
     };
-    const inChip = (px: number, py: number) =>
-      px >= chip.x0 && px <= chip.x1 && py >= chip.y0 && py <= chip.y1;
+    const inChip = (px: number, py: number) => px >= chip.x0 && px <= chip.x1 && py >= chip.y0 && py <= chip.y1;
     const half = Math.floor(scale / 2);
     for (let row = 0; row < modules; row++) {
       for (let col = 0; col < modules; col++) {

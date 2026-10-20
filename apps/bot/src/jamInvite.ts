@@ -6,13 +6,7 @@
  * Deliberately free of config and Discord-client state — the caller passes
  * every number in, so the whole card is testable without a guild.
  */
-import {
-  ActionRowBuilder,
-  AttachmentBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  EmbedBuilder,
-} from 'discord.js';
+import { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
 import { renderJamCardPng } from './jamCardArt.js';
 
 export const JAM_CARD_NAME = 'jam-card.png';

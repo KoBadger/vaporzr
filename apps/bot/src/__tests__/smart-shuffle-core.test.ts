@@ -49,7 +49,11 @@ function harness(): { b: DiscordBot; q: QueueManager } {
 const run = (b: DiscordBot, q: QueueManager, mode = 'flow') =>
   (
     b as unknown as {
-      smartShuffleCore(s: Session, mode: string, wasShuffle: boolean): Promise<{ embed?: unknown; skipReason?: string }>;
+      smartShuffleCore(
+        s: Session,
+        mode: string,
+        wasShuffle: boolean,
+      ): Promise<{ embed?: unknown; skipReason?: string }>;
     }
   ).smartShuffleCore({ queue: q } as unknown as Session, mode, false);
 

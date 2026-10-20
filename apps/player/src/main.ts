@@ -129,9 +129,7 @@ function createVisualizerWindow(): void {
   activeWindow = win;
   if (BROADCAST) {
     win.setMenuBarVisibility(false);
-    console.log(
-      `[player] broadcast mode ${width}x${height} → ${redactWs(WS_TARGET)}`,
-    );
+    console.log(`[player] broadcast mode ${width}x${height} → ${redactWs(WS_TARGET)}`);
   }
   if (DEBUG) {
     win.webContents.on('before-input-event', (_event, input) => {

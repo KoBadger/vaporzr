@@ -2,7 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { emptyState } from '@vaporzr/shared';
 import { QueueManager } from '@vaporzr/core/queue';
 
-function track(uri: string): { uri: string; name: string; artists: string[]; album: string; durationMs: number; addedBy: string; addedAt: number } {
+function track(uri: string): {
+  uri: string;
+  name: string;
+  artists: string[];
+  album: string;
+  durationMs: number;
+  addedBy: string;
+  addedAt: number;
+} {
   return { uri, name: uri, artists: ['Artist'], album: '', durationMs: 200_000, addedBy: 'user', addedAt: Date.now() };
 }
 

@@ -2,7 +2,15 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { GamesStore, describeFit, explainFit, fitPercent, keyToQuery, pickRoulette, pickRouletteWeighted } from '@vaporzr/core/games';
+import {
+  GamesStore,
+  describeFit,
+  explainFit,
+  fitPercent,
+  keyToQuery,
+  pickRoulette,
+  pickRouletteWeighted,
+} from '@vaporzr/core/games';
 import { config } from '@vaporzr/core/config';
 
 describe('game scoring helpers', () => {
@@ -110,7 +118,10 @@ describe('GamesStore', () => {
     g.star('g1', 'a');
     g.star('g1', 'a');
     g.star('g1', 'b');
-    expect(g.topOf(g.get('g1').starred)).toEqual([['a', 2], ['b', 1]]);
+    expect(g.topOf(g.get('g1').starred)).toEqual([
+      ['a', 2],
+      ['b', 1],
+    ]);
   });
 
   it('tracks duel model accuracy', () => {
@@ -151,7 +162,10 @@ describe('explainFit', () => {
 
 describe('pickRouletteWeighted (deep cuts)', () => {
   it('favours rarely-played tracks over heavily-played ones', () => {
-    const entries: Array<[string, number]> = [['hit', 100], ['deep', 1]];
+    const entries: Array<[string, number]> = [
+      ['hit', 100],
+      ['deep', 1],
+    ];
     // Weights are 0.01 vs 1.0, so anything above ~1% of the roll range lands on
     // the deep cut.
     expect(pickRouletteWeighted(entries, [], [], () => 0.5)).toBe('deep');
@@ -159,7 +173,11 @@ describe('pickRouletteWeighted (deep cuts)', () => {
   });
 
   it('still excludes banned and queued tracks', () => {
-    const entries: Array<[string, number]> = [['a', 1], ['b', 1], ['c', 1]];
+    const entries: Array<[string, number]> = [
+      ['a', 1],
+      ['b', 1],
+      ['c', 1],
+    ];
     for (let i = 0; i < 10; i++) {
       const pick = pickRouletteWeighted(entries, ['a'], ['b'], () => i / 10);
       expect(pick).toBe('c');

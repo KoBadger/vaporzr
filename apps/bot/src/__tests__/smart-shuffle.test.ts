@@ -69,21 +69,18 @@ describe('smart shuffle ordering', () => {
   // averaged 0.019, so the "vibe" pick was decided by noise. Reordering still
   // happened, so a naive "did the order change" assertion passed while the
   // result felt arbitrary. These tests assert the ordering is actually MUSICAL.
-  it.each(['flow', 'arc', 'key'] as const)(
-    'reduces adjacent vibe distance for %s on a tight playlist',
-    (mode) => {
-      const pl = playlist(40, 0.25);
-      const input = meanAdjacent(pl, mode);
-      const { ordered } = orderByVibe(pl, pl[0].f, mode, (t) => t.f);
-      const output = meanAdjacent(ordered, mode);
-      // A real ordering must beat the input order by a wide margin. 0.8 (a 20%
-      // improvement) is far too lenient: the old jitter-drowned code still
-      // cleared it, because a greedy nearest-neighbour pass improves the mean
-      // even when each individual pick is noise. The observed result is a 50%
-      // reduction, so assert most of that.
-      expect(output).toBeLessThan(input * 0.65);
-    },
-  );
+  it.each(['flow', 'arc', 'key'] as const)('reduces adjacent vibe distance for %s on a tight playlist', (mode) => {
+    const pl = playlist(40, 0.25);
+    const input = meanAdjacent(pl, mode);
+    const { ordered } = orderByVibe(pl, pl[0].f, mode, (t) => t.f);
+    const output = meanAdjacent(ordered, mode);
+    // A real ordering must beat the input order by a wide margin. 0.8 (a 20%
+    // improvement) is far too lenient: the old jitter-drowned code still
+    // cleared it, because a greedy nearest-neighbour pass improves the mean
+    // even when each individual pick is noise. The observed result is a 50%
+    // reduction, so assert most of that.
+    expect(output).toBeLessThan(input * 0.65);
+  });
 
   it('beats the input order even on a very tight (homogeneous) playlist', () => {
     // spread 0.10 is the worst case for signal-to-noise: everything sounds alike.
@@ -95,7 +92,10 @@ describe('smart shuffle ordering', () => {
 
   it('makes each mode reach a different ordering', () => {
     const pl = playlist(40, 0.25);
-    const asKey = (mode: ShuffleMode) => orderByVibe(pl, pl[0].f, mode, (t) => t.f).ordered.map((t) => t.uri).join(',');
+    const asKey = (mode: ShuffleMode) =>
+      orderByVibe(pl, pl[0].f, mode, (t) => t.f)
+        .ordered.map((t) => t.uri)
+        .join(',');
     const flow = asKey('flow');
     const arc = asKey('arc');
     const key = asKey('key');
@@ -120,10 +120,14 @@ describe('smart shuffle ordering', () => {
     let bestD = Infinity;
     pl.forEach((t, i) => {
       const d = vibeDistance(anchor, t.f, 'flow');
-      if (d < bestD) { bestD = d; bestIdx = i; }
+      if (d < bestD) {
+        bestD = d;
+        bestIdx = i;
+      }
     });
     const bestUris = new Set(
-      pl.map((t, i) => ({ i, d: vibeDistance(anchor, t.f, 'flow') }))
+      pl
+        .map((t, i) => ({ i, d: vibeDistance(anchor, t.f, 'flow') }))
         .filter((x) => x.d - bestD < 0.005) // tolerate genuine ties
         .map((x) => pl[x.i].uri),
     );

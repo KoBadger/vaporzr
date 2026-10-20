@@ -81,15 +81,17 @@ export function parseSyncedLines(lrc: string): SyncedLine[] {
  * clutter, non-ASCII punctuation, and extra whitespace.
  */
 function norm(s: string): string {
-  return s
-    .toLowerCase()
-    // Drop everything in parentheses/brackets — "(feat. X)", "(Remix)", "[…]".
-    .replace(/[([].*?[\])]/g, ' ')
-    // Collapse apostrophes & curly quotes.
-    .replace(/[''`]/g, '')
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return (
+    s
+      .toLowerCase()
+      // Drop everything in parentheses/brackets — "(feat. X)", "(Remix)", "[…]".
+      .replace(/[([].*?[\])]/g, ' ')
+      // Collapse apostrophes & curly quotes.
+      .replace(/[''`]/g, '')
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+  );
 }
 
 /** Candidate word variants (1..n grams) so "Let It Happen" also tries shorter cores. */
@@ -120,7 +122,12 @@ function scoreEntry(entry: LrcEntry, wantArtist: string, wantName: string): numb
 }
 
 /** LRCLIB lookup: exact get, then fuzzier searches with normalized variants. */
-async function lrcLyrics(track: { name: string; artists: string[]; album?: string; durationMs?: number }): Promise<LyricsResult | null> {
+async function lrcLyrics(track: {
+  name: string;
+  artists: string[];
+  album?: string;
+  durationMs?: number;
+}): Promise<LyricsResult | null> {
   const artists = (track.artists ?? []).map((a) => a.trim()).filter(Boolean);
   const durationSec = Math.round((track.durationMs ?? 0) / 1000);
   const name = track.name.trim();
@@ -217,7 +224,9 @@ async function ovhLyrics(track: { name: string; artists: string[] }): Promise<Ly
 }
 
 /** Look up lyrics for a track. Returns null when neither source has a hit. */
-export async function fetchLyrics(track: Pick<TrackInfo, 'name' | 'artists' | 'album' | 'durationMs'>): Promise<LyricsResult | null> {
+export async function fetchLyrics(
+  track: Pick<TrackInfo, 'name' | 'artists' | 'album' | 'durationMs'>,
+): Promise<LyricsResult | null> {
   const key = `${(track.artists[0] ?? '').toLowerCase()}~${track.name.toLowerCase()}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value;

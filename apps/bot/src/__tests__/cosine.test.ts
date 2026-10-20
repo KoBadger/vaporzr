@@ -37,9 +37,7 @@ describe('cosine.club client', () => {
   it('parses search results', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () =>
-        jsonResponse({ data: [{ id: '1', name: 'X', artist: 'A', track: 'A - X' }], success: true }),
-      ),
+      vi.fn(async () => jsonResponse({ data: [{ id: '1', name: 'X', artist: 'A', track: 'A - X' }], success: true })),
     );
     const hits = await cosineSearch('A X');
     expect(hits).toHaveLength(1);
@@ -60,7 +58,14 @@ describe('cosine.club client', () => {
             data: {
               source_track: {},
               similar_tracks: [
-                { id: 's1', name: 'Similar One', artist: 'B', track: 'B - Similar One', video_uri: 'https://www.youtube.com/watch?v=abc123XYZ', score: 0.9 },
+                {
+                  id: 's1',
+                  name: 'Similar One',
+                  artist: 'B',
+                  track: 'B - Similar One',
+                  video_uri: 'https://www.youtube.com/watch?v=abc123XYZ',
+                  score: 0.9,
+                },
                 { id: 's2', name: 'No Video', artist: 'C', track: 'C - No Video', score: 0.8 },
               ],
             },
@@ -71,10 +76,7 @@ describe('cosine.club client', () => {
       }),
     );
 
-    const out = await cosineSimilarCandidates(
-      { name: 'Seed', artists: ['A'], uri: 'youtube:video:seedvid01' },
-      30,
-    );
+    const out = await cosineSimilarCandidates({ name: 'Seed', artists: ['A'], uri: 'youtube:video:seedvid01' }, 30);
     expect(calls.some((c) => c.includes('/tracks/lookup'))).toBe(true);
     expect(out).toHaveLength(2);
     expect(out[0].uri).toBe('youtube:video:abc123XYZ');
@@ -107,13 +109,13 @@ describe('cosine.club client', () => {
   });
 
   it('returns [] on network failure (never throws)', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => {
-      throw new Error('boom');
-    }));
-    const out = await cosineSimilarCandidates(
-      { name: 'Seed', artists: ['A'], uri: 'youtube:video:seedvid01' },
-      10,
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new Error('boom');
+      }),
     );
+    const out = await cosineSimilarCandidates({ name: 'Seed', artists: ['A'], uri: 'youtube:video:seedvid01' }, 10);
     expect(out).toEqual([]);
   });
 
@@ -121,10 +123,7 @@ describe('cosine.club client', () => {
     delete process.env.COSINE_API_KEY;
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
-    const out = await cosineSimilarCandidates(
-      { name: 'Seed', artists: ['A'], uri: 'youtube:video:x' },
-      10,
-    );
+    const out = await cosineSimilarCandidates({ name: 'Seed', artists: ['A'], uri: 'youtube:video:x' }, 10);
     expect(out).toEqual([]);
     expect(fetchMock).not.toHaveBeenCalled();
   });

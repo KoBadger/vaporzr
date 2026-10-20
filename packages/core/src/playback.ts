@@ -495,10 +495,13 @@ export class PlaybackController {
     //     handoff either; that is scheduled when it starts.
     // Both are one-shot, so a stream that never gets a blend keeps its fade-out.
     this.voice.suppressCurrentTailFade(Math.max(0, durationMs - positionMs));
-    this.crossfadeTimer = setTimeout(() => {
-      this.crossfadeTimer = null;
-      void this.startCrossfade(outgoingUri, next, xfadeMs);
-    }, Math.min(plan.waitMs, 6 * 60 * 60 * 1000));
+    this.crossfadeTimer = setTimeout(
+      () => {
+        this.crossfadeTimer = null;
+        void this.startCrossfade(outgoingUri, next, xfadeMs);
+      },
+      Math.min(plan.waitMs, 6 * 60 * 60 * 1000),
+    );
     this.crossfadeTimer.unref?.();
   }
 
@@ -575,7 +578,11 @@ export class PlaybackController {
     const snapshot = this.queue.getSnapshot();
     const nextTrack = snapshot.tracks[snapshot.currentIndex + 1];
     if (!nextTrack) return;
-    const nextIsYt = nextTrack.source === 'youtube' || nextTrack.source === 'suno' || nextTrack.source === 'soundcloud' || nextTrack.source === 'apple';
+    const nextIsYt =
+      nextTrack.source === 'youtube' ||
+      nextTrack.source === 'suno' ||
+      nextTrack.source === 'soundcloud' ||
+      nextTrack.source === 'apple';
     // In prefer-YouTube mode a running librespot is irrelevant — Spotify tracks
     // still play via YouTube, so they need the same preload warming.
     const nextIsSpotifyFallback =
@@ -731,7 +738,15 @@ export class PlaybackController {
   /** True while audio is coming through the bot's own ffmpeg stream. */
   private usingServerStream(): boolean {
     const src = this.currentSource();
-    return src === 'youtube' || src === 'local' || src === 'direct' || src === 'suno' || src === 'soundcloud' || src === 'apple' || this.spotifyFallback;
+    return (
+      src === 'youtube' ||
+      src === 'local' ||
+      src === 'direct' ||
+      src === 'suno' ||
+      src === 'soundcloud' ||
+      src === 'apple' ||
+      this.spotifyFallback
+    );
   }
 
   /** Advance to the next track once a server-side stream naturally ends. */
@@ -793,7 +808,7 @@ export class PlaybackController {
     this.currentStartOffsetMs = xfadeSeek > 0 && current.source !== 'spotify' ? xfadeSeek : 0;
     if (this.currentStartOffsetMs > 0) this.voice.setStreamOffset(this.currentStartOffsetMs);
     if (!this.voice.isJoined()) {
-      throw new Error('I\'m not in a voice channel. Join one and try again.');
+      throw new Error("I'm not in a voice channel. Join one and try again.");
     }
     console.log(
       `[playback] start "${current.name}" (source=${current.source ?? '?'}${this.currentStartOffsetMs > 0 ? `, offset=${this.currentStartOffsetMs}ms` : ''})`,
@@ -834,12 +849,19 @@ export class PlaybackController {
     // fall back to YouTube.
     this.spotifyFallback = false;
     this.stopPositionTracker();
-    if (this.lastSource === 'youtube' || this.lastSource === 'local' || this.lastSource === 'suno' || this.lastSource === 'soundcloud' || this.lastSource === 'apple' || this.spotifyFallback) {
+    if (
+      this.lastSource === 'youtube' ||
+      this.lastSource === 'local' ||
+      this.lastSource === 'suno' ||
+      this.lastSource === 'soundcloud' ||
+      this.lastSource === 'apple' ||
+      this.spotifyFallback
+    ) {
       this.sendVisualizer({ type: 'cmd', command: 'stop' });
     }
-      const device = await this.resolveSpotifyDevice();
-      if (generation !== this.playGeneration || this.queue.getCurrentTrack()?.uri !== current.uri) return;
-      if (device) {
+    const device = await this.resolveSpotifyDevice();
+    if (generation !== this.playGeneration || this.queue.getCurrentTrack()?.uri !== current.uri) return;
+    if (device) {
       this.spotifyDeviceId = device.id;
       this.currentUri = current.uri;
       // Proactively confirm the device is registered before issuing play. A
@@ -1000,7 +1022,7 @@ export class PlaybackController {
     this.spotifyFallback = false;
     this.stopSpotifyFeed();
     this.stopSpotifyProgress();
-        this.pauseSpotifyAny();
+    this.pauseSpotifyAny();
     try {
       const cached = this.streamCache.get(current.uri);
       let video = cached;
@@ -1086,7 +1108,9 @@ export class PlaybackController {
     // every stall recovery fail and eventually stopped playback entirely.
     const restartingSameTrack = this.lastYoutubeVideoUri === current.uri;
     if (!restartingSameTrack && this.lastYoutubeVideoId && video.videoId === this.lastYoutubeVideoId) {
-      console.warn(`[playback] fallback for "${current.name}" resolved to the same YouTube video (${video.videoId}) as the previous track — skipping`);
+      console.warn(
+        `[playback] fallback for "${current.name}" resolved to the same YouTube video (${video.videoId}) as the previous track — skipping`,
+      );
       throw new SpotifyError(`Skipping "${current.name}" — it resolves to the same audio as the previous track.`);
     }
     this.currentUri = current.uri;
@@ -1121,7 +1145,7 @@ export class PlaybackController {
     this.spotifyFallback = false;
     this.stopSpotifyFeed();
     this.stopSpotifyProgress();
-        this.pauseSpotifyAny();
+    this.pauseSpotifyAny();
     const durationMs = (await probeLocalDuration(filePath)) ?? current.durationMs;
     this.currentUri = current.uri;
     this.queue.setState({
@@ -1150,7 +1174,7 @@ export class PlaybackController {
     this.spotifyFallback = false;
     this.stopSpotifyFeed();
     this.stopSpotifyProgress();
-        this.pauseSpotifyAny();
+    this.pauseSpotifyAny();
     const durationMs = (await probeDuration(current.streamUrl)) ?? current.durationMs;
     this.currentUri = current.uri;
     this.queue.setState({
@@ -1199,7 +1223,7 @@ export class PlaybackController {
     this.spotifyFallback = false;
     this.stopSpotifyFeed();
     this.stopSpotifyProgress();
-        this.pauseSpotifyAny();
+    this.pauseSpotifyAny();
     const durationMs = this.cappedDuration(video?.durationMs ?? current.durationMs, current.durationMs);
     this.currentUri = current.uri;
     this.currentVideo = video;
@@ -1254,7 +1278,7 @@ export class PlaybackController {
     this.spotifyFallback = false;
     this.stopSpotifyFeed();
     this.stopSpotifyProgress();
-        this.pauseSpotifyAny();
+    this.pauseSpotifyAny();
     const durationMs = this.cappedDuration(video.durationMs, current.durationMs);
     this.currentUri = current.uri;
     this.currentVideo = video;
@@ -1291,7 +1315,7 @@ export class PlaybackController {
     this.spotifyFallback = false;
     this.stopSpotifyFeed();
     this.stopSpotifyProgress();
-        this.pauseSpotifyAny();
+    this.pauseSpotifyAny();
     const durationMs = this.cappedDuration(video.durationMs, current.durationMs);
     this.currentUri = current.uri;
     this.currentVideo = video;
@@ -1411,9 +1435,7 @@ export class PlaybackController {
     // (the "previous song keeps playing after stop/clear" bug).
     const dev = this.spotifyDeviceId;
     if (dev) {
-      void import('@vaporzr/core/spotify')
-        .then((m) => m.spotifyPause(dev))
-        .catch(() => {});
+      void import('@vaporzr/core/spotify').then((m) => m.spotifyPause(dev)).catch(() => {});
     }
   }
 
@@ -1516,9 +1538,7 @@ export class PlaybackController {
         // YouTube match instead so the song actually comes back.
         if (this.stallReissueUri === playing.uri) {
           this.stallReissueUri = null;
-          console.warn(
-            `[playback] Spotify feed stalled again — falling back to YouTube for "${playing.name}"`,
-          );
+          console.warn(`[playback] Spotify feed stalled again — falling back to YouTube for "${playing.name}"`);
           void this.playYoutubeFallback(playing, this.playGeneration).catch((err) => {
             console.warn(`[playback] stall fallback failed: ${err instanceof Error ? err.message : err}`);
           });
@@ -1781,16 +1801,18 @@ export class PlaybackController {
       } catch (err) {
         if (this.currentUri !== current.uri) return;
         if (err instanceof SpotifyError && err.status === 429) {
-           this.deferSpotifyPlay(deviceId, current, err.retryAfter ?? this.nextRetryWait(), generation);
+          this.deferSpotifyPlay(deviceId, current, err.retryAfter ?? this.nextRetryWait(), generation);
           return;
         }
         if (err instanceof SpotifyError && err.status === 404) {
           this.spotifyDeviceId = undefined;
-           await this.playYoutubeFallback(current, generation).catch(() => {});
+          await this.playYoutubeFallback(current, generation).catch(() => {});
           return;
         }
         if (err instanceof SpotifyError && !err.status) {
-          console.warn(`[playback] deferred Spotify start: no OAuth token — using YouTube fallback for "${current.name}"`);
+          console.warn(
+            `[playback] deferred Spotify start: no OAuth token — using YouTube fallback for "${current.name}"`,
+          );
           this.spotifyDeviceId = undefined;
           await this.playYoutubeFallback(current, generation).catch(() => {});
           return;
@@ -1866,7 +1888,7 @@ export class PlaybackController {
       this.currentUri = null;
       this.spotifyFallback = false;
       this.sendVisualizer({ type: 'cmd', command: 'stop' });
-          this.pauseSpotifyAny();
+      this.pauseSpotifyAny();
       this.stopSpotifyFeed();
       this.stopSpotifyProgress();
       this.stopPositionTracker();
@@ -1883,7 +1905,13 @@ export class PlaybackController {
     const nextTrack = this.queue.getCurrentTrack();
     if (nextTrack) {
       // Publish the moved cursor before async Spotify/yt-dlp resolution finishes.
-      this.queue.setState({ playing: false, track: nextTrack, durationMs: nextTrack.durationMs, positionMs: 0, source: nextTrack.source });
+      this.queue.setState({
+        playing: false,
+        track: nextTrack,
+        durationMs: nextTrack.durationMs,
+        positionMs: 0,
+        source: nextTrack.source,
+      });
     }
     // The room abandoned the outgoing track before it finished.
     if (!wasNatural && outgoing && outgoing.uri !== nextTrack?.uri && this.onTrackSkipped) {
@@ -2001,7 +2029,7 @@ export class PlaybackController {
     }
     if (this.spotifyDeviceId) {
       if (this.librespot?.resumePlayback) void this.librespot.resumePlayback();
-    else void spotifyResume(this.spotifyDeviceId).catch(() => {});
+      else void spotifyResume(this.spotifyDeviceId).catch(() => {});
       const state = this.queue.getState();
       this.queue.setState({ playing: true });
       if (state.track) this.scheduleEnd(state.durationMs, state.positionMs);
@@ -2024,7 +2052,7 @@ export class PlaybackController {
       this.queue.setState({ positionMs });
     } else if (this.spotifyDeviceId) {
       if (this.librespot?.seekMs) void this.librespot.seekMs(positionMs);
-    else void spotifySeek(this.spotifyDeviceId, positionMs).catch(() => {});
+      else void spotifySeek(this.spotifyDeviceId, positionMs).catch(() => {});
       this.librespot?.setPositionMs(positionMs);
       // Rebase the wall-clock baseline too. The progress ticker treats a
       // position that runs ahead of "wall-clock since the track started" as a
@@ -2109,7 +2137,7 @@ export class PlaybackController {
     this.spotifyFallback = false;
     this.lastSource = null;
     this.sendVisualizer({ type: 'cmd', command: 'stop' });
-        this.pauseSpotifyAny();
+    this.pauseSpotifyAny();
     this.stopSpotifyFeed();
     this.stopSpotifyProgress();
     this.stopPositionTracker();

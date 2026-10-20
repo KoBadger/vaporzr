@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { canCrossfade, crossfadePcm, equalPowerIn, equalPowerOut, fadeInPcm, linearIn, planCrossfade, tailFadeSeconds, tempoMatchRatio } from '@vaporzr/core/crossfade';
+import {
+  canCrossfade,
+  crossfadePcm,
+  equalPowerIn,
+  equalPowerOut,
+  fadeInPcm,
+  linearIn,
+  planCrossfade,
+  tailFadeSeconds,
+  tempoMatchRatio,
+} from '@vaporzr/core/crossfade';
 
 describe('canCrossfade (the schedule gate)', () => {
   it('schedules whenever a non-zero crossfade is set, regardless of source', () => {
@@ -154,7 +164,7 @@ describe('tailFadeSeconds (the baked fade vs a real crossfade)', () => {
     expect(tailFadeSeconds(6, 279_000, 279_000)).toBe(0);
   });
 
-  it('ignores a stale flag rather than stripping a later track\'s fade', () => {
+  it("ignores a stale flag rather than stripping a later track's fade", () => {
     // A blend was scheduled for a stream with 285s left; this stream only has
     // 40s left, so it is a LATER track and must keep its fade-out. Reporting the
     // fade here is what prevents "every track after a crossfade stops fading".

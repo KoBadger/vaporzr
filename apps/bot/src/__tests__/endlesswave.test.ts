@@ -6,7 +6,11 @@ const mocks = vi.hoisted(() => ({
   getAudioFeatures: vi.fn(),
   searchAndResolveYoutube: vi.fn(),
   deezerRelatedTracks: vi.fn(),
-  deezerArtistProfile: vi.fn(async (..._args: unknown[]) => ({ name: '', genres: [] as string[], related: [] as string[] })),
+  deezerArtistProfile: vi.fn(async (..._args: unknown[]) => ({
+    name: '',
+    genres: [] as string[],
+    related: [] as string[],
+  })),
   peekArtistProfile: vi.fn((..._args: unknown[]): { name: string; genres: string[]; related: string[] } | null => null),
 }));
 
@@ -237,9 +241,7 @@ describe('rolling context — computeAverage', () => {
   });
 
   it('window caps at 5 tracks', () => {
-    const features = Array.from({ length: 8 }, (_, i) =>
-      fakeFeatures({ energy: i * 0.1 }),
-    );
+    const features = Array.from({ length: 8 }, (_, i) => fakeFeatures({ energy: i * 0.1 }));
     const avg = computeAverage(features);
     // Should only use the last 5
     expect(avg).toBeDefined();
@@ -473,8 +475,22 @@ describe('scoring', () => {
   it('prefers Spotify URIs', () => {
     const targets = {};
     const artists: string[] = [];
-    const spotify = { uri: 'spotify:track:x', name: 'T', artists: ['A'], album: '', durationMs: 200_000, source: 'spotify' as const };
-    const youtube = { uri: 'yt:x', name: 'T', artists: ['A'], album: '', durationMs: 200_000, source: 'youtube' as const };
+    const spotify = {
+      uri: 'spotify:track:x',
+      name: 'T',
+      artists: ['A'],
+      album: '',
+      durationMs: 200_000,
+      source: 'spotify' as const,
+    };
+    const youtube = {
+      uri: 'yt:x',
+      name: 'T',
+      artists: ['A'],
+      album: '',
+      durationMs: 200_000,
+      source: 'youtube' as const,
+    };
     const sScore = scoreCandidate(spotify, targets, artists);
     const yScore = scoreCandidate(youtube, targets, artists);
     // Spotify should score lower (better) by at least 10 points
@@ -483,7 +499,14 @@ describe('scoring', () => {
 
   it('penalizes on-cooldown artists', () => {
     const targets = {};
-    const track = { uri: 'spotify:track:x', name: 'T', artists: ['Repeated Artist'], album: '', durationMs: 200_000, source: 'spotify' as const };
+    const track = {
+      uri: 'spotify:track:x',
+      name: 'T',
+      artists: ['Repeated Artist'],
+      album: '',
+      durationMs: 200_000,
+      source: 'spotify' as const,
+    };
     const withCooldown = scoreCandidate(track, targets, ['repeated artist']);
     const withoutCooldown = scoreCandidate(track, targets, []);
     expect(withCooldown).toBeGreaterThan(withoutCooldown + 10);
@@ -492,8 +515,22 @@ describe('scoring', () => {
   it('penalizes tracks outside 2-7 min range', () => {
     const targets = {};
     const artists: string[] = [];
-    const short = { uri: 'spotify:track:x', name: 'T', artists: ['A'], album: '', durationMs: 60_000, source: 'spotify' as const };
-    const normal = { uri: 'spotify:track:y', name: 'T', artists: ['A'], album: '', durationMs: 200_000, source: 'spotify' as const };
+    const short = {
+      uri: 'spotify:track:x',
+      name: 'T',
+      artists: ['A'],
+      album: '',
+      durationMs: 60_000,
+      source: 'spotify' as const,
+    };
+    const normal = {
+      uri: 'spotify:track:y',
+      name: 'T',
+      artists: ['A'],
+      album: '',
+      durationMs: 200_000,
+      source: 'spotify' as const,
+    };
     const shortScore = scoreCandidate(short, targets, artists);
     const normalScore = scoreCandidate(normal, targets, artists);
     expect(shortScore).toBeGreaterThan(normalScore + 5);
@@ -502,7 +539,14 @@ describe('scoring', () => {
   it('pulls picks toward the feature targets when features are available', () => {
     const targets = { targetEnergy: 0.9, targetTempo: 140 };
     const artists: string[] = [];
-    const base = { uri: 'spotify:track:x', name: 'T', artists: ['A'], album: '', durationMs: 200_000, source: 'spotify' as const };
+    const base = {
+      uri: 'spotify:track:x',
+      name: 'T',
+      artists: ['A'],
+      album: '',
+      durationMs: 200_000,
+      source: 'spotify' as const,
+    };
     const close = scoreCandidate(base, targets, artists, fakeFeatures({ energy: 0.88, tempo: 138 }));
     const far = scoreCandidate(base, targets, artists, fakeFeatures({ energy: 0.2, tempo: 70 }));
     expect(close).toBeLessThan(far);
@@ -511,7 +555,14 @@ describe('scoring', () => {
   it('ignores feature scoring when no features are provided', () => {
     const targets = { targetEnergy: 0.9, targetTempo: 140 };
     const artists: string[] = [];
-    const base = { uri: 'spotify:track:x', name: 'T', artists: ['A'], album: '', durationMs: 200_000, source: 'spotify' as const };
+    const base = {
+      uri: 'spotify:track:x',
+      name: 'T',
+      artists: ['A'],
+      album: '',
+      durationMs: 200_000,
+      source: 'spotify' as const,
+    };
     const withTargets = scoreCandidate(base, targets, artists);
     const withoutTargets = scoreCandidate(base, {}, artists);
     // Same track, no features → targets must not change the score.
@@ -844,7 +895,14 @@ describe('pickNextTrack (smoke)', () => {
     mocks.getRecommendations.mockResolvedValue([]);
     mocks.searchTracks.mockResolvedValue([]);
     mocks.deezerRelatedTracks.mockResolvedValue([
-      { uri: 'deezer:track:1', name: 'Fresh Related Song', artists: ['Other Artist'], album: '', durationMs: 200000, source: 'youtube' },
+      {
+        uri: 'deezer:track:1',
+        name: 'Fresh Related Song',
+        artists: ['Other Artist'],
+        album: '',
+        durationMs: 200000,
+        source: 'youtube',
+      },
     ]);
     const recent = [fakeTrack({ uri: 'spotify:track:aaaaaaaaaaaaaaaaaaaaaa', name: 'Seed', artists: ['Seed Artist'] })];
     const pick = await pickNextTrack(s, recent);
@@ -860,8 +918,24 @@ describe('pickNextTrack (smoke)', () => {
     // Both candidates have no Spotify id, so features come solely from the
     // estimatedFeatures the Deezer layer attaches.
     mocks.deezerRelatedTracks.mockResolvedValue([
-      { uri: 'deezer:track:1', name: 'High Energy', artists: ['Artist A'], album: '', durationMs: 200000, source: 'youtube', estimatedFeatures: { ...fakeFeatures(), energy: 0.9, tempo: 128 } },
-      { uri: 'deezer:track:2', name: 'Low Energy', artists: ['Artist B'], album: '', durationMs: 200000, source: 'youtube', estimatedFeatures: { ...fakeFeatures(), energy: 0.2, tempo: 80 } },
+      {
+        uri: 'deezer:track:1',
+        name: 'High Energy',
+        artists: ['Artist A'],
+        album: '',
+        durationMs: 200000,
+        source: 'youtube',
+        estimatedFeatures: { ...fakeFeatures(), energy: 0.9, tempo: 128 },
+      },
+      {
+        uri: 'deezer:track:2',
+        name: 'Low Energy',
+        artists: ['Artist B'],
+        album: '',
+        durationMs: 200000,
+        source: 'youtube',
+        estimatedFeatures: { ...fakeFeatures(), energy: 0.2, tempo: 80 },
+      },
     ]);
     const recent = [fakeTrack({ uri: 'spotify:track:aaaaaaaaaaaaaaaaaaaaaa', name: 'Seed', artists: ['Seed Artist'] })];
     // Push the target high-energy by acknowledging a high-energy average.
@@ -895,10 +969,7 @@ describe('pickNextTrack (smoke)', () => {
     activate(s);
     const queued = 'spotify:track:rec000000000000000001';
     mocks.getRecommendations.mockResolvedValue([recCandidate({ uri: queued })]);
-    const recent = [
-      fakeTrack({ uri: 'spotify:track:aaaaaaaaaaaaaaaaaaaaaa' }),
-      fakeTrack({ uri: queued }),
-    ];
+    const recent = [fakeTrack({ uri: 'spotify:track:aaaaaaaaaaaaaaaaaaaaaa' }), fakeTrack({ uri: queued })];
     const pick = await pickNextTrack(s, recent);
     expect(pick).toBeNull();
     expect(mocks.searchTracks).toHaveBeenCalled();
@@ -1006,11 +1077,13 @@ describe('pickNextTrack (smoke)', () => {
     markPlayed(s, 'spotify:track:zzz000000000000000001', 'Magic', ['Coldplay']);
     mocks.getRecommendations.mockResolvedValue([]);
     // An empty-artist YouTube setlist that still names the on-cooldown artist.
-    mocks.searchTracks.mockResolvedValue([recCandidate({
-      uri: 'spotify:track:dddddddddddddddddddddd',
-      name: 'Best of Coldplay [Coldplay Concert Setlist]',
-      artists: [],
-    })]);
+    mocks.searchTracks.mockResolvedValue([
+      recCandidate({
+        uri: 'spotify:track:dddddddddddddddddddddd',
+        name: 'Best of Coldplay [Coldplay Concert Setlist]',
+        artists: [],
+      }),
+    ]);
     const recent = [fakeTrack({ uri: 'spotify:track:aaaaaaaaaaaaaaaaaaaaaa', name: 'Magic', artists: ['Coldplay'] })];
     const pick = await pickNextTrack(s, recent);
     expect(pick).toBeNull();
@@ -1072,10 +1145,12 @@ describe('pickNextTrack (smoke)', () => {
       recCandidate({ uri: 'spotify:track:aaaaaaaaaaaaaaaaaaaaaa', name: 'Chill Track' }),
       recCandidate({ uri: 'spotify:track:bbbbbbbbbbbbbbbbbbbbbb', name: 'Banger' }),
     ]);
-    mocks.getAudioFeatures.mockResolvedValue(new Map([
-      ['aaaaaaaaaaaaaaaaaaaaaa', fakeFeatures({ energy: 0.2, tempo: 80 })],
-      ['bbbbbbbbbbbbbbbbbbbbbb', fakeFeatures({ energy: 0.92, tempo: 142 })],
-    ]));
+    mocks.getAudioFeatures.mockResolvedValue(
+      new Map([
+        ['aaaaaaaaaaaaaaaaaaaaaa', fakeFeatures({ energy: 0.2, tempo: 80 })],
+        ['bbbbbbbbbbbbbbbbbbbbbb', fakeFeatures({ energy: 0.92, tempo: 142 })],
+      ]),
+    );
     const recent = [fakeTrack({ uri: 'spotify:track:cccccccccccccccccccccc' })];
     const pick = await pickNextTrack(s, recent);
     expect(pick?.name).toBe('Banger');
@@ -1088,7 +1163,9 @@ describe('pickNextTrack (smoke)', () => {
     mocks.getRecommendations.mockResolvedValue([]);
     // Only thing the search returns is the same remix variant of the just-played
     // song — Strategy 4 must reject it instead of re-queueing it in a loop.
-    mocks.searchTracks.mockResolvedValue([recCandidate({ uri: 'spotify:track:dddddddddddddddddddddd', name: 'Earlier Song' })]);
+    mocks.searchTracks.mockResolvedValue([
+      recCandidate({ uri: 'spotify:track:dddddddddddddddddddddd', name: 'Earlier Song' }),
+    ]);
     const recent = [fakeTrack({ uri: 'spotify:track:aaaaaaaaaaaaaaaaaaaaaa', name: 'Seed', artists: ['Seed Artist'] })];
     const pick = await pickNextTrack(s, recent);
     expect(pick).toBeNull();
@@ -1137,11 +1214,13 @@ describe('resolveCandidate (smoke)', () => {
   });
 
   it('passes through pre-resolved stream URLs (YouTube/SoundCloud picks)', async () => {
-    const out = await resolveCandidate(recCandidate({
-      uri: 'youtube:video:v2',
-      source: 'youtube',
-      streamUrl: 'https://example.com/direct',
-    }));
+    const out = await resolveCandidate(
+      recCandidate({
+        uri: 'youtube:video:v2',
+        source: 'youtube',
+        streamUrl: 'https://example.com/direct',
+      }),
+    );
     expect(out?.streamUrl).toBe('https://example.com/direct');
     expect(mocks.searchAndResolveYoutube).not.toHaveBeenCalled();
   });
@@ -1178,7 +1257,7 @@ describe('fetchFeatures (smoke)', () => {
 
 describe('isLongFormMix', () => {
   const t = (name: string, durationMs = 200_000): Parameters<typeof isLongFormMix>[0] =>
-    ({ name, durationMs } as Parameters<typeof isLongFormMix>[0]);
+    ({ name, durationMs }) as Parameters<typeof isLongFormMix>[0];
 
   it('flags mixes, sets and full albums', () => {
     expect(isLongFormMix(t('Essential Mix 2024'))).toBe(true);

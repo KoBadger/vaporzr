@@ -243,9 +243,7 @@ export function describeCalibration(state: EndlessWaveState): string {
   parts.push(`artist cooldown ${DEFAULT_CONFIG.artistCooldown}`);
   const cached = state.recentArtists.filter((x) => peekArtistProfile(x)).length;
   parts.push(
-    cached > 0
-      ? `${cached} genre/related profile${cached === 1 ? '' : 's'} warmed`
-      : 'genre signal warming up',
+    cached > 0 ? `${cached} genre/related profile${cached === 1 ? '' : 's'} warmed` : 'genre signal warming up',
   );
   return parts.join(' · ');
 }
@@ -255,7 +253,9 @@ export function noteWaveQueued(state: EndlessWaveState, artists: string[]): void
   state.runStreak++;
   if (state.runStreak > state.longestRun) state.longestRun = state.runStreak;
   for (const a of artists) {
-    const norm = String(a ?? '').toLowerCase().trim();
+    const norm = String(a ?? '')
+      .toLowerCase()
+      .trim();
     if (norm) state.artistSet.add(norm);
   }
 }
@@ -334,11 +334,7 @@ export function restoreState(data: Partial<EndlessWavePersist>): EndlessWaveStat
 /* ---------- Feature analysis ---------- */
 
 /** Record a track's audio features and recompute the rolling average. */
-export function recordFeatures(
-  state: EndlessWaveState,
-  features: AudioFeatures,
-  artist?: string,
-): void {
+export function recordFeatures(state: EndlessWaveState, features: AudioFeatures, artist?: string): void {
   state.recentFeatures.push(features);
   if (state.recentFeatures.length > DEFAULT_CONFIG.historyWindow) {
     state.recentFeatures.shift();
@@ -372,8 +368,13 @@ export function computeAverage(features: AudioFeatures[]): AudioFeatures {
   const nw = w.map((x) => x / wSum);
   const avg: AudioFeatures = { ...DEFAULT_AVG };
   const numKeys: (keyof AudioFeatures)[] = [
-    'danceability', 'energy', 'valence', 'acousticness',
-    'instrumentalness', 'liveness', 'speechiness',
+    'danceability',
+    'energy',
+    'valence',
+    'acousticness',
+    'instrumentalness',
+    'liveness',
+    'speechiness',
   ];
   for (const k of numKeys) {
     let sum = 0;
@@ -400,8 +401,13 @@ export function computeAverage(features: AudioFeatures[]): AudioFeatures {
 export function mixFeatures(a: AudioFeatures, b: AudioFeatures, w: number): AudioFeatures {
   const out: AudioFeatures = { ...a };
   const keys: (keyof AudioFeatures)[] = [
-    'danceability', 'energy', 'valence', 'acousticness',
-    'instrumentalness', 'liveness', 'speechiness',
+    'danceability',
+    'energy',
+    'valence',
+    'acousticness',
+    'instrumentalness',
+    'liveness',
+    'speechiness',
   ];
   for (const k of keys) out[k] = (a[k] as number) * (1 - w) + (b[k] as number) * w;
   out.tempo = a.tempo * (1 - w) + b.tempo * w;
@@ -410,19 +416,14 @@ export function mixFeatures(a: AudioFeatures, b: AudioFeatures, w: number): Audi
 
 export function evolveDirection(state: EndlessWaveState): void {
   const nudge = (Math.random() - 0.5) * DEFAULT_CONFIG.driftStep * 2;
-  state.genreDrift = Math.max(
-    -DEFAULT_CONFIG.maxDrift,
-    Math.min(DEFAULT_CONFIG.maxDrift, state.genreDrift + nudge),
-  );
+  state.genreDrift = Math.max(-DEFAULT_CONFIG.maxDrift, Math.min(DEFAULT_CONFIG.maxDrift, state.genreDrift + nudge));
 }
 
 export function buildTargets(state: EndlessWaveState): Partial<RecommendationParams> {
   // Blend the rolling average with the session anchor so the wave keeps circling
   // its opening vibe instead of drifting off into unrelated territory. Drift is
   // applied on top, so it still evolves — just around home.
-  const a = state.anchor
-    ? mixFeatures(state.avg, state.anchor, DEFAULT_CONFIG.anchorPull)
-    : state.avg;
+  const a = state.anchor ? mixFeatures(state.avg, state.anchor, DEFAULT_CONFIG.anchorPull) : state.avg;
   const d = state.genreDrift;
   return {
     targetEnergy: clamp(a.energy + d * 0.6),
@@ -446,16 +447,31 @@ export function normalizeTrackName(name: string): string {
     .toLowerCase()
     .replace(/['']/g, '')
     // Strip parenthesized/bracketed version markers: (Remix), (Edit), (Movie Version), etc.
-    .replace(/\s*[\(\[][^\)\]]*\b(remix|edit|vip|bootleg|flip|dub|radio edit|extended|club mix|sped up|slowed|reverb|movie version|film version|motion picture version|end credits|end title|closing credits|from the motion picture|from the film|soundtrack version|ost|single version|album version|bonus track|deluxe|remastered|remaster|anniversary edition|clean|explicit|radio version|video version)\b[^\)\]]*[\)\]]/gi, '')
+    .replace(
+      /\s*[\(\[][^\)\]]*\b(remix|edit|vip|bootleg|flip|dub|radio edit|extended|club mix|sped up|slowed|reverb|movie version|film version|motion picture version|end credits|end title|closing credits|from the motion picture|from the film|soundtrack version|ost|single version|album version|bonus track|deluxe|remastered|remaster|anniversary edition|clean|explicit|radio version|video version)\b[^\)\]]*[\)\]]/gi,
+      '',
+    )
     // Strip standalone dash version markers: - Remix, — Movie Version, etc.
-    .replace(/\s*[-–—]\s*(remix|edit|vip|bootleg|flip|dub|mix|radio edit|extended|club mix|sped up|slowed|reverb|movie version|film version|motion picture version|end credits|soundtrack version|soundtrack|ost|single version|album version|bonus|deluxe|remastered|clean|explicit|radio version|video version)\s*$/gi, '')
+    .replace(
+      /\s*[-–—]\s*(remix|edit|vip|bootleg|flip|dub|mix|radio edit|extended|club mix|sped up|slowed|reverb|movie version|film version|motion picture version|end credits|soundtrack version|soundtrack|ost|single version|album version|bonus|deluxe|remastered|clean|explicit|radio version|video version)\s*$/gi,
+      '',
+    )
     // Strip cover/live/acoustic markers in parens/brackets: (Acoustic), [Live], (Cover), etc.
-    .replace(/\s*[\(\[][^\)\]]*\b(cover|acoustic|live|unplugged|demo|alternate version|alternate mix|original mix|instrumental|a cappella)\b[^\)\]]*[\)\]]/gi, '')
+    .replace(
+      /\s*[\(\[][^\)\]]*\b(cover|acoustic|live|unplugged|demo|alternate version|alternate mix|original mix|instrumental|a cappella)\b[^\)\]]*[\)\]]/gi,
+      '',
+    )
     // Strip YouTube upload noise so the same song under an "Official Audio" /
     // "(Lyrics)" / "(Music Video)" title still matches its clean Spotify name.
-    .replace(/\s*[\(\[][^\)\]]*\b(official audio|official video|official music video|official lyric video|lyric video|lyrics|music video|visualizer|visualizer video|official visualizer)\b[^\)\]]*[\)\]]/gi, '')
+    .replace(
+      /\s*[\(\[][^\)\]]*\b(official audio|official video|official music video|official lyric video|lyric video|lyrics|music video|visualizer|visualizer video|official visualizer)\b[^\)\]]*[\)\]]/gi,
+      '',
+    )
     // Dash-form YouTube noise: "Song - Official Audio", "Song - Lyrics".
-    .replace(/\s*[-–—]\s*(official audio|official video|official music video|official lyric video|lyric video|lyrics|music video|visualizer|visualizer video|official visualizer)\s*$/gi, '')
+    .replace(
+      /\s*[-–—]\s*(official audio|official video|official music video|official lyric video|lyric video|lyrics|music video|visualizer|visualizer video|official visualizer)\s*$/gi,
+      '',
+    )
     // Strip feat/ft inside parens: (feat. Someone), (ft. Someone)
     .replace(/\s*[\(\[][^)\]]*\b(feat\.?|ft\.?|featuring)\b[^)\]]*[\)\]]/gi, '')
     // Strip bare feat/ft outside parens: feat. Someone, ft. Someone
@@ -464,7 +480,6 @@ export function normalizeTrackName(name: string): string {
     .trim();
   return n;
 }
-
 
 /** Check if a track is a remix/cover/variant of something already played.
  *  `artists` enables title-core matching: YouTube titles ("Nightcall - Kavinsky
@@ -492,7 +507,11 @@ function titleCore(norm: string, artists: string[] | undefined, recentArtists: s
   for (const na of names) {
     if (na.length >= 3) core = core.replace(new RegExp(`\\b${escapeRe(na)}\\b`, 'g'), ' ');
   }
-  return core.replace(/[-–—:,\s]+$/g, '').replace(/^[-–—:,\s]+/g, '').replace(/\s+/g, ' ').trim();
+  return core
+    .replace(/[-–—:,\s]+$/g, '')
+    .replace(/^[-–—:,\s]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 /** Every string a title could reasonably match against for repeat detection:
@@ -562,18 +581,20 @@ export function titleMentionsCooldownArtist(state: EndlessWaveState, name: strin
 export function isLongFormMix(track: ResolvedTrack): boolean {
   const title = String(track.name ?? '').toLowerCase();
   if ((track.durationMs ?? 0) > 10 * 60 * 1000) return true;
-  if (/\b(essential mix|dj set|continuous mix|full album|compilation|boiler room|radio show|radio mix|meg amix|mixtape|live set|session)\b/i.test(title)) return true;
+  if (
+    /\b(essential mix|dj set|continuous mix|full album|compilation|boiler room|radio show|radio mix|meg amix|mixtape|live set|session)\b/i.test(
+      title,
+    )
+  )
+    return true;
   if (/\b\d+\s*(hour|hr|min)\b/i.test(title)) return true;
-  return /\b(album review|review|reaction|reacts|interview|podcast|explained|analysis|commentary|documentary|making of|behind the scenes|tier list|ranked|countdown|top \d+|episode \d+)\b/i.test(title);
+  return /\b(album review|review|reaction|reacts|interview|podcast|explained|analysis|commentary|documentary|making of|behind the scenes|tier list|ranked|countdown|top \d+|episode \d+)\b/i.test(
+    title,
+  );
 }
 
 /** Mark a track as played. Trims old entries when the set gets huge. */
-export function markPlayed(
-  state: EndlessWaveState,
-  uri: string,
-  name: string,
-  artists: string[],
-): void {
+export function markPlayed(state: EndlessWaveState, uri: string, name: string, artists: string[]): void {
   warmArtistProfiles(artists);
   state.playedUris.add(uri);
   const norm = normalizeTrackName(name);
@@ -763,7 +784,8 @@ export function scoreBreakdown(
     terms.push({
       id: 'key',
       label: 'blends with the key that\u2019s playing',
-      points: harmonicDistance(features.key, features.mode, targets.targetKey, targets.targetMode) *
+      points:
+        harmonicDistance(features.key, features.mode, targets.targetKey, targets.targetMode) *
         DEFAULT_CONFIG.harmonicWeight,
     });
   }
@@ -813,7 +835,11 @@ export function scoreBreakdown(
     if (prof && prof.genres.length > 0 && env.genres.size > 0) {
       const overlap = prof.genres.reduce((n, g) => n + (env.genres.has(g) ? 1 : 0), 0);
       if (overlap > 0) {
-        terms.push({ id: 'genre', label: 'the right kind of genre', points: -Math.min(DEFAULT_CONFIG.genreWeight, overlap * 5) });
+        terms.push({
+          id: 'genre',
+          label: 'the right kind of genre',
+          points: -Math.min(DEFAULT_CONFIG.genreWeight, overlap * 5),
+        });
       } else {
         terms.push({ id: 'genre', label: 'a genre the room hasn\u2019t been playing', points: 6 });
       }
@@ -834,12 +860,7 @@ export function scoreBreakdown(
  *  played tracks (recommendation seeds) + `after` upcoming tracks (dedup).
  *  Played tracks are never removed from the queue array, so a naive
  *  slice(0, n) would grab the session's oldest tracks instead. */
-export function pickContext(
-  tracks: TrackInfo[],
-  currentIndex: number,
-  before = 3,
-  after = 3,
-): TrackInfo[] {
+export function pickContext(tracks: TrackInfo[], currentIndex: number, before = 3, after = 3): TrackInfo[] {
   if (tracks.length === 0) return [];
   const start = Math.max(0, currentIndex - before);
   const end = Math.min(tracks.length, currentIndex + after);
@@ -916,8 +937,7 @@ export async function pickNextTrack(
     new Set(state.recentArtists.slice(-window).map((a) => a.toLowerCase().trim()));
   let cooldownArtists = buildCooldown(DEFAULT_CONFIG.artistCooldown);
   for (const a of upcomingArtists) cooldownArtists.add(a);
-  const artistIsOnCooldown = (artist: string): boolean =>
-    cooldownArtists.has(artist.toLowerCase().trim());
+  const artistIsOnCooldown = (artist: string): boolean => cooldownArtists.has(artist.toLowerCase().trim());
   const titleMentionsAnyCooldownArtist = (name: string): boolean => {
     const norm = normalizeTrackName(name);
     if (!norm) return false;
@@ -926,20 +946,47 @@ export async function pickNextTrack(
 
   const viable = (candidates: ResolvedTrack[]): ResolvedTrack[] =>
     candidates.filter((c) => {
-      if (isLongFormMix(c)) { logReject(c.name, 'long-form mix/set'); return false; }
-      if (isDuplicate(state, c.uri)) { logReject(c.name, 'already played this session'); return false; }
-      if (upcomingUris.has(c.uri)) { logReject(c.name, 'already queued'); return false; }
+      if (isLongFormMix(c)) {
+        logReject(c.name, 'long-form mix/set');
+        return false;
+      }
+      if (isDuplicate(state, c.uri)) {
+        logReject(c.name, 'already played this session');
+        return false;
+      }
+      if (upcomingUris.has(c.uri)) {
+        logReject(c.name, 'already queued');
+        return false;
+      }
       // Audio-based dedup: cosine maps a recording to one id across uploads, so
       // the same song under a different video is caught even when the uri differs.
-      if (c.cosineId && state.queuedCosineIds.has(c.cosineId)) { logReject(c.name, 'same recording already queued (cosine)'); return false; }
-      if (excludeUris?.has(c.uri)) { logReject(c.name, 'previously failed to resolve'); return false; }
-      if (isRemixOrCover(state, c.name, c.artists)) { logReject(c.name, 'remix/cover of played track'); return false; }
-      if (nameVariants(normalizeTrackName(c.name), c.artists, state.recentArtists).some((v) => upcomingNames.has(v))) { logReject(c.name, 'variant already queued'); return false; }
+      if (c.cosineId && state.queuedCosineIds.has(c.cosineId)) {
+        logReject(c.name, 'same recording already queued (cosine)');
+        return false;
+      }
+      if (excludeUris?.has(c.uri)) {
+        logReject(c.name, 'previously failed to resolve');
+        return false;
+      }
+      if (isRemixOrCover(state, c.name, c.artists)) {
+        logReject(c.name, 'remix/cover of played track');
+        return false;
+      }
+      if (nameVariants(normalizeTrackName(c.name), c.artists, state.recentArtists).some((v) => upcomingNames.has(v))) {
+        logReject(c.name, 'variant already queued');
+        return false;
+      }
       const mainArtist = c.artists[0] ?? '';
-      if (mainArtist && artistIsOnCooldown(mainArtist)) { logReject(c.name, `artist "${mainArtist}" on cooldown`); return false; }
+      if (mainArtist && artistIsOnCooldown(mainArtist)) {
+        logReject(c.name, `artist "${mainArtist}" on cooldown`);
+        return false;
+      }
       // Compilation/setlist uploads with an empty artist field still mention the
       // artist in the title — treat them as a cooldown repeat.
-      if (titleMentionsAnyCooldownArtist(c.name)) { logReject(c.name, 'title mentions cooldown artist'); return false; }
+      if (titleMentionsAnyCooldownArtist(c.name)) {
+        logReject(c.name, 'title mentions cooldown artist');
+        return false;
+      }
       return true;
     });
 
@@ -986,10 +1033,7 @@ export async function pickNextTrack(
   if (cosineEnabled() && recentTracks.length > 0) {
     const last = recentTracks[recentTracks.length - 1];
     try {
-      const cos = await cosineSimilarCandidates(
-        { name: last.name, artists: last.artists, uri: last.uri },
-        30,
-      );
+      const cos = await cosineSimilarCandidates({ name: last.name, artists: last.artists, uri: last.uri }, 30);
       allCandidates.push(...cos);
       const cosViable = viable(cos);
       if (cosViable.length > 0) survivors = survivors.concat(cosViable);
@@ -1030,16 +1074,18 @@ export async function pickNextTrack(
       try {
         const video = await searchAndResolveYoutube(at.q, at.opts);
         if (video) {
-          candidates = [{
-            uri: video.uri || `yt:${video.name}`,
-            name: video.name,
-            artists: video.artists,
-            album: video.album,
-            durationMs: video.durationMs,
-            image: video.image,
-            source: 'youtube',
-            streamUrl: video.streamUrl,
-          }];
+          candidates = [
+            {
+              uri: video.uri || `yt:${video.name}`,
+              name: video.name,
+              artists: video.artists,
+              album: video.album,
+              durationMs: video.durationMs,
+              image: video.image,
+              source: 'youtube',
+              streamUrl: video.streamUrl,
+            },
+          ];
           allCandidates.push(...candidates);
           // Reject the same song outright (including its remix/cover variants).
           const v = candidates[0];
@@ -1063,21 +1109,44 @@ export async function pickNextTrack(
   if (survivors.length === 0 && recentTracks.length > 0) {
     stage = 4;
     const relax = (c: ResolvedTrack): boolean => {
-      if (isLongFormMix(c)) { logReject(c.name, 'long-form mix/set'); return false; }
-      if (isDuplicate(state, c.uri)) { logReject(c.name, 'already played this session'); return false; }
-      if (upcomingUris.has(c.uri)) { logReject(c.name, 'already queued'); return false; }
-      if (excludeUris?.has(c.uri)) { logReject(c.name, 'previously failed to resolve'); return false; }
-      if (isRemixOrCover(state, c.name, c.artists)) { logReject(c.name, 'remix/cover of played track'); return false; }
+      if (isLongFormMix(c)) {
+        logReject(c.name, 'long-form mix/set');
+        return false;
+      }
+      if (isDuplicate(state, c.uri)) {
+        logReject(c.name, 'already played this session');
+        return false;
+      }
+      if (upcomingUris.has(c.uri)) {
+        logReject(c.name, 'already queued');
+        return false;
+      }
+      if (excludeUris?.has(c.uri)) {
+        logReject(c.name, 'previously failed to resolve');
+        return false;
+      }
+      if (isRemixOrCover(state, c.name, c.artists)) {
+        logReject(c.name, 'remix/cover of played track');
+        return false;
+      }
       const variants = nameVariants(normalizeTrackName(c.name), c.artists, state.recentArtists);
-      if (variants.some((v) => upcomingNames.has(v))) { logReject(c.name, 'same song already queued'); return false; }
-      if (titleMentionsAnyCooldownArtist(c.name)) { logReject(c.name, 'title mentions cooldown artist'); return false; }
+      if (variants.some((v) => upcomingNames.has(v))) {
+        logReject(c.name, 'same song already queued');
+        return false;
+      }
+      if (titleMentionsAnyCooldownArtist(c.name)) {
+        logReject(c.name, 'title mentions cooldown artist');
+        return false;
+      }
       return true;
     };
     const last = recentTracks[recentTracks.length - 1];
     // If every known artist is currently cooled, do not immediately fall back
     // to the current artist. Wait for a genuinely different recommendation;
     // same-artist tracks can re-enter naturally after the cooldown window.
-    const q = (similarArtistSeed(state) || (state.recentArtists.length === 0 ? (last.artists[0] || last.name) : '')).trim();
+    const q = (
+      similarArtistSeed(state) || (state.recentArtists.length === 0 ? last.artists[0] || last.name : '')
+    ).trim();
     let pool: ResolvedTrack[] = [];
     if (q) {
       try {
@@ -1120,9 +1189,7 @@ export async function pickNextTrack(
   // what gives the wave a coherent musical arc instead of a random shuffle.
   if (survivors.length > 0) {
     let features: Map<string, AudioFeatures> | null = null;
-    const ids = survivors
-      .map((c) => extractSpotifyId(c.uri))
-      .filter((id): id is string => id !== null);
+    const ids = survivors.map((c) => extractSpotifyId(c.uri)).filter((id): id is string => id !== null);
     if (ids.length > 0) {
       try {
         features = (await getAudioFeatures(ids.slice(0, 50))) ?? null;
@@ -1236,9 +1303,9 @@ export async function pickBasicTrack(
   // like this" pick than a text search of the seed artist.
   if (cosineEnabled()) {
     try {
-      survivors = (
-        await cosineSimilarCandidates({ name: last.name, artists: last.artists, uri: last.uri }, 20)
-      ).filter(ok);
+      survivors = (await cosineSimilarCandidates({ name: last.name, artists: last.artists, uri: last.uri }, 20)).filter(
+        ok,
+      );
     } catch {
       survivors = [];
     }

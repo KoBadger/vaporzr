@@ -13,9 +13,7 @@ import { config } from '@vaporzr/core/config';
  */
 
 // Never route the tunnel through a local/system proxy.
-const CLEAN_ENV = Object.fromEntries(
-  Object.entries(process.env).filter(([k]) => !k.toLowerCase().endsWith('_proxy')),
-);
+const CLEAN_ENV = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.toLowerCase().endsWith('_proxy')));
 
 const MAX_RESTARTS = 5;
 
@@ -54,10 +52,13 @@ function launch(): void {
     ? ['tunnel', '--no-autoupdate', 'run', '--token', config.tunnelToken]
     : [
         'tunnel',
-        '--url', `http://127.0.0.1:${config.port}`,
+        '--url',
+        `http://127.0.0.1:${config.port}`,
         '--no-autoupdate',
-        '--edge-ip-version', '4',
-        '--protocol', 'http2',
+        '--edge-ip-version',
+        '4',
+        '--protocol',
+        'http2',
       ];
   console.log(`[tunnel] starting cloudflared (${config.tunnelToken ? 'named' : 'quick'}) tunnel...`);
   try {

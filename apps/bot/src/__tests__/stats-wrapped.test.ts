@@ -34,7 +34,10 @@ describe('StatsStore Wrapped (monthly aggregates)', () => {
     expect(w.topTracks[0][0]).toBe(trackKey('Kerala', ['Bonobo']));
     expect(w.topTracks).toHaveLength(2);
     expect(w.topArtists[0][0]).toBe('bonobo');
-    expect(w.topDjs).toEqual([['alice', 1], ['bob', 1]]);
+    expect(w.topDjs).toEqual([
+      ['alice', 1],
+      ['bob', 1],
+    ]);
     expect(w.biggestDay).not.toBeNull();
     expect(w.biggestDay![1]).toBe(540_000);
     expect(w.allTimeMs).toBe(540_000);

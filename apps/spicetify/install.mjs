@@ -26,11 +26,16 @@ fs.cpSync(src, target, { recursive: true });
 console.log(`Installed Vaporzr app to ${target}`);
 
 function currentCustomApps() {
-  const out = execSync('spicetify config').toString().replace(/\x1b\[[0-9;]*m/g, '');
+  const out = execSync('spicetify config')
+    .toString()
+    .replace(/\x1b\[[0-9;]*m/g, '');
   const line = out.split(/\r?\n/).find((l) => /^\s*custom_apps\b/.test(l));
   if (!line) return [];
   const value = line.replace(/^\s*custom_apps\s*/, '').trim();
-  return value.split('|').map((s) => s.trim()).filter(Boolean);
+  return value
+    .split('|')
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 try {

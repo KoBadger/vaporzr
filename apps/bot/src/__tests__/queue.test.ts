@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { emptyState } from '@vaporzr/shared';
 import { QueueManager, trackKey } from '@vaporzr/core/queue';
 
-function track(uri: string, name = uri): { uri: string; name: string; artists: string[]; album: string; durationMs: number } {
+function track(
+  uri: string,
+  name = uri,
+): { uri: string; name: string; artists: string[]; album: string; durationMs: number } {
   return { uri, name, artists: ['Artist'], album: '', durationMs: 200_000 };
 }
 
@@ -172,11 +175,7 @@ describe('QueueManager.enqueue cursor behavior', () => {
     // the newest tail track, which made an idle queue look "finished"; the next
     // add then inserted at the FRONT and songs landed out of order.
     expect(q.getSnapshot().currentIndex).toBe(0);
-    expect(q.getSnapshot().tracks.map((t) => t.uri)).toEqual([
-      'spotify:track:a',
-      'spotify:track:b',
-      'spotify:track:c',
-    ]);
+    expect(q.getSnapshot().tracks.map((t) => t.uri)).toEqual(['spotify:track:a', 'spotify:track:b', 'spotify:track:c']);
   });
 
   it('keepCursor enqueue while idle does not pin the cursor at the new tail', () => {
@@ -260,7 +259,12 @@ describe('QueueManager regressions', () => {
     // The cursor stays on track 0 while idle, so walk it to the end first.
     expect(q.next()).toBe(true); // 0 → 1
     let changes = 0;
-    q.subscribe({ onQueueChanged: () => { changes++; }, onStateChanged: () => {} });
+    q.subscribe({
+      onQueueChanged: () => {
+        changes++;
+      },
+      onStateChanged: () => {},
+    });
     expect(q.next()).toBe(false); // already at the end — no movement, no emit
     expect(changes).toBe(0);
     expect(q.previous()).toBe(true); // 1 → 0
@@ -330,11 +334,7 @@ describe('QueueManager.dedupe', () => {
     q.enqueue(track('spotify:track:a', 'A'), 'u');
     q.enqueue(track('spotify:track:c', 'C'), 'u');
     expect(q.dedupe()).toBe(1);
-    expect(q.getSnapshot().tracks.map((t) => t.uri)).toEqual([
-      'spotify:track:a',
-      'spotify:track:b',
-      'spotify:track:c',
-    ]);
+    expect(q.getSnapshot().tracks.map((t) => t.uri)).toEqual(['spotify:track:a', 'spotify:track:b', 'spotify:track:c']);
   });
 
   it('catches the same song from a different upload (title+artist)', () => {

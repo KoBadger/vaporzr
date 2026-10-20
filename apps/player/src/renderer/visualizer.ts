@@ -261,19 +261,21 @@ function setDjEnabled(enabled: boolean): void {
 // curve is restored — parity should flow from the player to the web, not the
 // other way round.
 const SENSITIVITY_CURVE: Record<number, number> = {
-  1.0:  0.82,
-  1.10: 0.78,
+  1.0: 0.82,
+  1.1: 0.78,
   1.15: 0.74,
-  1.25: 0.70,
-  1.50: 0.60,
+  1.25: 0.7,
+  1.5: 0.6,
 };
 
 function applySensitivity(multiplier: number): void {
   currentSensitivity = multiplier;
   if (sensitivityGain) sensitivityGain.gain.value = multiplier;
-  const smoothing = SENSITIVITY_CURVE[multiplier] ?? (0.82 - (multiplier - 1) * 0.44);
+  const smoothing = SENSITIVITY_CURVE[multiplier] ?? 0.82 - (multiplier - 1) * 0.44;
   if (analyser) analyser.smoothingTimeConstant = smoothing;
-  try { localStorage.setItem('vaporzr.sensitivity', String(multiplier)); } catch {}
+  try {
+    localStorage.setItem('vaporzr.sensitivity', String(multiplier));
+  } catch {}
   // Keep the slider honest when the value arrives from the bot (snapshot) or
   // another panel, not just from this window's own drag.
   if (sensSlider) sensSlider.value = String(multiplier);
@@ -294,7 +296,10 @@ function showNamedPreset(name: string, blend: number): boolean {
   const i = presetNames.indexOf(name);
   if (i < 0) return false;
   bridgeDriven = true;
-  if (presetCycle) { window.clearInterval(presetCycle); presetCycle = null; }
+  if (presetCycle) {
+    window.clearInterval(presetCycle);
+    presetCycle = null;
+  }
   loadPresetAt(i, blend);
   return true;
 }
@@ -315,7 +320,11 @@ function startPresetCycle(): void {
 /** Panel-driven dwell time — the same global setting the web visualizer uses. */
 function setPresetCycle(secs: number, persist = true): void {
   presetCycleSec = Math.max(0, Math.min(600, Math.round(secs || 0)));
-  if (persist) { try { localStorage.setItem('vaporzr.presetCycle', String(presetCycleSec)); } catch {} }
+  if (persist) {
+    try {
+      localStorage.setItem('vaporzr.presetCycle', String(presetCycleSec));
+    } catch {}
+  }
   startPresetCycle();
   updateVisualButtons();
   log(`Preset pace: ${presetCycleSec > 0 ? `${presetCycleSec}s per visual` : 'manual'}`);
@@ -336,8 +345,7 @@ let synthBpm = 124;
 let synthEnergy = 0;
 let freqData: Uint8Array<ArrayBuffer> | null = null;
 const prefersReducedMotion =
-  typeof window.matchMedia === 'function' &&
-  window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 /** Per-frame bass/mid/treble + kick/BPM estimate from the shared analyser. */
 function sampleLevels(): SynthLevels {
@@ -454,8 +462,7 @@ function updateNextLine(): void {
     next = q.tracks[i];
   }
   if (next?.name) {
-    ctrlNext.textContent =
-      next.name + (next.artists && next.artists.length > 0 ? ` — ${next.artists.join(', ')}` : '');
+    ctrlNext.textContent = next.name + (next.artists && next.artists.length > 0 ? ` — ${next.artists.join(', ')}` : '');
     ctrlNext.classList.remove('hidden');
   } else {
     ctrlNext.textContent = '';
@@ -485,7 +492,7 @@ function updateControls(): void {
   const st = latestState;
   const track = st.track;
   ctrlTitle.textContent = track?.name || 'Nothing playing';
-  ctrlMeta.textContent = track ? (track.artists?.join(', ') || 'Unknown artist') : '';
+  ctrlMeta.textContent = track ? track.artists?.join(', ') || 'Unknown artist' : '';
   btnPlay.textContent = st.playing ? '⏸' : '▶';
   btnShuffle.classList.toggle('active', st.shuffle);
 
@@ -558,16 +565,21 @@ function cyclePace(): void {
 let calm = false;
 function applyCalm(): void {
   document.body.classList.toggle('calm', calm);
-  try { localStorage.setItem('vaporzr.calm', calm ? '1' : '0'); } catch { /* storage unavailable */ }
+  try {
+    localStorage.setItem('vaporzr.calm', calm ? '1' : '0');
+  } catch {
+    /* storage unavailable */
+  }
   updateVisualButtons();
   log(calm ? 'Calm mode on — gentler brightness, stricter flash guard' : 'Calm mode off');
 }
 
 function updateVisualButtons(): void {
   btnPace.textContent = presetCycleSec > 0 ? `⏱${presetCycleSec}` : '⏱∞';
-  btnPace.title = presetCycleSec > 0
-    ? `Preset pace: ${presetCycleSec}s per visual (click to change)`
-    : 'Preset pace: manual — no auto-advance (click to change)';
+  btnPace.title =
+    presetCycleSec > 0
+      ? `Preset pace: ${presetCycleSec}s per visual (click to change)`
+      : 'Preset pace: manual — no auto-advance (click to change)';
   btnCalm.classList.toggle('on', calm);
   btnCalm.title = calm ? 'Calm mode on — click to disable' : 'Calm mode — gentler brightness, stricter flash guard';
   btnLock.textContent = presetLocked ? '🔒' : '🔓';
@@ -668,8 +680,7 @@ function renderJamQr(): void {
       'align-items:center;gap:5px;cursor:pointer;opacity:.32;transition:opacity .3s';
     const cv = document.createElement('canvas');
     cv.id = 'jam-qr';
-    cv.style.cssText =
-      'padding:6px;border-radius:10px;background:#fff;box-shadow:0 6px 30px rgba(0,0,0,.55)';
+    cv.style.cssText = 'padding:6px;border-radius:10px;background:#fff;box-shadow:0 6px 30px rgba(0,0,0,.55)';
     cv.title = 'Jam join code — click to hide';
     cv.addEventListener('click', () => setJamQr(false));
     wrap.appendChild(cv);
@@ -679,8 +690,14 @@ function renderJamQr(): void {
       'font-size:10px;color:#c7d2fe;text-decoration:none;letter-spacing:.3px;' +
       'background:rgba(10,15,30,.6);border:1px solid rgba(140,160,255,.3);border-radius:6px;' +
       'padding:2px 7px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
-    a.addEventListener('mouseenter', () => { a.style.color = '#fff'; a.style.textDecoration = 'underline'; });
-    a.addEventListener('mouseleave', () => { a.style.color = '#c7d2fe'; a.style.textDecoration = 'none'; });
+    a.addEventListener('mouseenter', () => {
+      a.style.color = '#fff';
+      a.style.textDecoration = 'underline';
+    });
+    a.addEventListener('mouseleave', () => {
+      a.style.color = '#c7d2fe';
+      a.style.textDecoration = 'none';
+    });
     // Handled in the main process: the overlay must never navigate itself, and a
     // plain link would spawn a stray Electron window.
     a.addEventListener('click', (e) => {
@@ -689,8 +706,12 @@ function renderJamQr(): void {
       if (url) vaporzrWindow.vaporzr?.openExternal?.(url);
     });
     wrap.appendChild(a);
-    wrap.addEventListener('mouseenter', () => { wrap.style.opacity = '1'; });
-    wrap.addEventListener('mouseleave', () => { wrap.style.opacity = '.32'; });
+    wrap.addEventListener('mouseenter', () => {
+      wrap.style.opacity = '1';
+    });
+    wrap.addEventListener('mouseleave', () => {
+      wrap.style.opacity = '.32';
+    });
     document.body.appendChild(wrap);
     jamQrCanvas = cv;
   }
@@ -712,7 +733,11 @@ function setJamQr(on: boolean): void {
   jamQrOn = on;
   renderJamQr();
   updateVisualButtons();
-  try { localStorage.setItem('vaporzr.jamqr', on ? '1' : '0'); } catch { /* storage unavailable */ }
+  try {
+    localStorage.setItem('vaporzr.jamqr', on ? '1' : '0');
+  } catch {
+    /* storage unavailable */
+  }
 }
 
 /** Connected without the share key: the bridge drops every command, so the add
@@ -811,10 +836,22 @@ function wireControls(): void {
     if (t && (presetPicker.contains(t) || t.id === 'btn-presets')) return;
     togglePresetPicker(false);
   });
-  try { calm = localStorage.getItem('vaporzr.calm') === '1'; } catch { /* storage unavailable */ }
+  try {
+    calm = localStorage.getItem('vaporzr.calm') === '1';
+  } catch {
+    /* storage unavailable */
+  }
   document.body.classList.toggle('calm', calm);
-  try { if (localStorage.getItem('vaporzr.bars') === '1') setBarMode(true); } catch { /* storage unavailable */ }
-  try { if (localStorage.getItem('vaporzr.jamqr') === '0') setJamQr(false); } catch { /* storage unavailable */ }
+  try {
+    if (localStorage.getItem('vaporzr.bars') === '1') setBarMode(true);
+  } catch {
+    /* storage unavailable */
+  }
+  try {
+    if (localStorage.getItem('vaporzr.jamqr') === '0') setJamQr(false);
+  } catch {
+    /* storage unavailable */
+  }
   buildSwatches();
   updateVisualButtons();
 
@@ -1144,7 +1181,10 @@ function handleCmd(msg: CommandMessage): void {
       reportYoutubeState();
       break;
     case 'resume':
-      if (ytUri) void currentVideo().play().catch(() => {});
+      if (ytUri)
+        void currentVideo()
+          .play()
+          .catch(() => {});
       reportYoutubeState();
       break;
     case 'seek':
@@ -1300,7 +1340,7 @@ function decodeBridgePcm(b64Data: string): AudioBuffer | null {
   const right = buf.getChannelData(1);
   const dv = new DataView(bytes.buffer);
   for (let i = 0; i < numSamples; i++) {
-    left[i]  = dv.getInt16(i * 4,     true) / 32768;
+    left[i] = dv.getInt16(i * 4, true) / 32768;
     right[i] = dv.getInt16(i * 4 + 2, true) / 32768;
   }
   return buf;
@@ -1347,7 +1387,10 @@ function playNextBridgePcmChunk(): void {
   src.onended = () => {
     src.disconnect();
     if (bridgePcmActive) playNextBridgePcmChunk();
-    else { pcmPlaying = false; pcmSourceNode = null; }
+    else {
+      pcmPlaying = false;
+      pcmSourceNode = null;
+    }
   };
   src.start();
 }
@@ -1437,9 +1480,11 @@ function refreshPresetNames(): void {
 }
 
 function idleCallback(fn: () => void): void {
-  const ric = (window as unknown as {
-    requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
-  }).requestIdleCallback;
+  const ric = (
+    window as unknown as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+    }
+  ).requestIdleCallback;
   if (ric) ric(fn, { timeout: 4000 });
   else window.setTimeout(fn, 1800);
 }
@@ -1452,8 +1497,7 @@ function loadPresetChunk(i: number, url: string): Promise<boolean> {
     s.async = true;
     s.onload = () => {
       const pack = (window as unknown as Record<string, unknown>)[`butterchurnPresetsChunk${i}`] as
-        | { getPresets?: () => Record<string, unknown> }
-        | undefined;
+        { getPresets?: () => Record<string, unknown> } | undefined;
       if (pack && typeof pack.getPresets === 'function') {
         try {
           const next = pack.getPresets();
@@ -1486,8 +1530,12 @@ async function loadCuratedPresets(): Promise<void> {
   // Curation first — it decides what the chunks are allowed to contribute.
   try {
     const [c, b] = await Promise.all([
-      fetch(`${base}/curated.json`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
-      fetch(`${base}/blank.json`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch(`${base}/curated.json`)
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null),
+      fetch(`${base}/blank.json`)
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null),
     ]);
     const cNames = (c as { names?: string[] } | null)?.names;
     const bNames = (b as { names?: string[] } | null)?.names;
@@ -1500,9 +1548,7 @@ async function loadCuratedPresets(): Promise<void> {
 
   let idx: { chunks?: string[] } | null = null;
   try {
-    idx = (await fetch(`${base}/index.json`).then((r) => (r.ok ? r.json() : null))) as
-      | { chunks?: string[] }
-      | null;
+    idx = (await fetch(`${base}/index.json`).then((r) => (r.ok ? r.json() : null))) as { chunks?: string[] } | null;
   } catch {
     /* offline — the bundled pack stays */
   }
@@ -1723,7 +1769,7 @@ function drawBars(now: number): void {
 
   const n = Math.min(24, synthBars.length);
   const dpr = Math.min(2, window.devicePixelRatio || 1);
-  const baseY = H * 0.70;
+  const baseY = H * 0.7;
   const maxH = H * 0.52;
   const slot = W / Math.max(1, n);
   const barW = Math.min(slot * 0.58, 30 * dpr);
@@ -1788,7 +1834,11 @@ function setBarMode(on: boolean): void {
   barsCanvas.style.display = on ? 'block' : 'none';
   canvas.style.display = on ? 'none' : 'block';
   updateVisualButtons();
-  try { localStorage.setItem('vaporzr.bars', on ? '1' : '0'); } catch { /* storage unavailable */ }
+  try {
+    localStorage.setItem('vaporzr.bars', on ? '1' : '0');
+  } catch {
+    /* storage unavailable */
+  }
   log(on ? 'Bar visuals on' : 'Bar visuals off');
 }
 
@@ -1949,13 +1999,16 @@ async function captureBurst(durationMs: number): Promise<void> {
     client.send({ type: 'burst:data', data: b64(buf) });
   };
   rec.start(250);
-  window.setTimeout(() => {
-    try {
-      rec.stop();
-    } catch {
-      /* already stopped */
-    }
-  }, Math.min(4000, Math.max(1000, durationMs)));
+  window.setTimeout(
+    () => {
+      try {
+        rec.stop();
+      } catch {
+        /* already stopped */
+      }
+    },
+    Math.min(4000, Math.max(1000, durationMs)),
+  );
 }
 
 let lastPlayingAt = 0;
@@ -1989,8 +2042,7 @@ function loadBaronPack(): Promise<void> {
     s.onload = () => {
       try {
         const P = (window as unknown as Record<string, unknown>).butterchurnPresetsBaron as
-          | { getPresets?: () => Record<string, unknown> }
-          | undefined;
+          { getPresets?: () => Record<string, unknown> } | undefined;
         const got = P && typeof P.getPresets === 'function' ? P.getPresets() : {};
         const cur = presetNames[currentPresetIndex];
         for (const k of Object.keys(got)) presets[`Baron #${k}`] = got[k];
@@ -1998,7 +2050,9 @@ function loadBaronPack(): Promise<void> {
         const i = cur ? presetNames.indexOf(cur) : -1;
         currentPresetIndex = i >= 0 ? i : presetNames.length ? 0 : -1;
         log(`${presetNames.length.toLocaleString()} visuals available`);
-      } catch { /* pack unavailable — the bundled set still works */ }
+      } catch {
+        /* pack unavailable — the bundled set still works */
+      }
       resolve();
     };
     s.onerror = () => resolve();

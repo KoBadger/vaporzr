@@ -38,58 +38,58 @@ export const config = {
   replicateDemucsModel: process.env.REPLICATE_DEMUCS_MODEL ?? 'cjwbw/demucs',
   /** Pin a specific Replicate model version; empty = look up the latest once. */
   replicateDemucsVersion: process.env.REPLICATE_DEMUCS_VERSION ?? '',
-ytDlpPath: process.env.YT_DLP_PATH ?? path.join(__dirname, '..', '..', '..', 'vendor', 'yt-dlp', 'yt-dlp'),
-   /** Path to a Netscape-format cookies.txt for YouTube. Authenticated requests
-    *  avoid most 403s and throttling that cause mid-track stream cuts. */
-   youtubeCookiesPath: process.env.YOUTUBE_COOKIES_PATH ?? '',
-   /**
-    * Optional FIRST proxy hop for YouTube traffic (yt-dlp resolve + the
-    * googlevideo stream fetch), tried only after a direct attempt fails — the
-    * VPS leaves it empty, but the old clean-IP bridge can still fill it. The
-    * direct route needs a clean host IP plus cookies + PO tokens; when it is
-    * walled, YOUTUBE_PROXY_ALT takes over first. Format:
-    * http://[user:pass@]host:port — empty = skipped.
-    */
-   youtubeProxy: process.env.YOUTUBE_PROXY ?? '',
-   /**
-    * Second proxy hop, tried when direct AND the first hop fail. The intended
-    * deployment is Cloudflare WARP running locally on the bot host (`warp-cli
-    * mode proxy`, default port 40000): free, unlimited, and a DIFFERENT egress
-    * than the host — so it covers a host IP YouTube has flagged without
-    * touching the metered fallback. Format: http://[user:pass@]host:port.
-    */
-   youtubeProxyAlt: process.env.YOUTUBE_PROXY_ALT ?? '',
-   /**
-    * Last-resort proxy hop, reached only when the direct route and every free
-    * hop fail. DataImpulse residential here: metered and pay-per-GB, so it
-    * spends its balance only on a real block, and on an `auth` alert its sticky
-    * session is rotated to land the retry on a fresh exit. Format:
-    * http://[user:pass@]host:port — empty = skipped.
-    */
-   youtubeProxyFallback: process.env.YOUTUBE_PROXY_FALLBACK ?? '',
-   /**
-    * How to name the FIRST proxy hop (YOUTUBE_PROXY) in the hop-down alert.
-    * Alerts name the WARP and metered hops with fixed wording; only the primary
-    * hop is free-form, because it has moved (PC → phone) without a code change:
-    * set YOUTUBE_PROXY_LABEL to whatever is actually running it.
-    */
-   youtubeProxyLabel: process.env.YOUTUBE_PROXY_LABEL ?? 'the primary YouTube proxy hop',
-   /**
-    * Ceiling on the YouTube audio bitrate to download. Discord re-encodes voice
-    * audio to 64-128 kbps opus, so capping the source a little above that roughly
-    * halves the metered proxy traffic for little audible loss. Raise it (e.g.
-    * 160) when fidelity matters more than bytes on the metered hops.
-    */
-   youtubeAudioMaxAbr: Number(process.env.YOUTUBE_AUDIO_MAX_ABR) || 80,
-   /**
-    * Public base URL for the jam join link and its QR code, e.g.
-    * https://vaporzr.duckdns.org. The bot binds to loopback behind a reverse
-    * proxy, so it cannot derive a reachable address for a guest's phone — the
-    * tunnel address (127.0.0.1) only works on the machine holding the tunnel.
-    * When empty the clients fall back to their own origin, which is correct for
-    * the Activity but wrong for the player and the tunnel-opened panel.
-    */
-   jamPublicBase: (process.env.JAM_PUBLIC_BASE ?? '').replace(/\/+$/, ''),
+  ytDlpPath: process.env.YT_DLP_PATH ?? path.join(__dirname, '..', '..', '..', 'vendor', 'yt-dlp', 'yt-dlp'),
+  /** Path to a Netscape-format cookies.txt for YouTube. Authenticated requests
+   *  avoid most 403s and throttling that cause mid-track stream cuts. */
+  youtubeCookiesPath: process.env.YOUTUBE_COOKIES_PATH ?? '',
+  /**
+   * Optional FIRST proxy hop for YouTube traffic (yt-dlp resolve + the
+   * googlevideo stream fetch), tried only after a direct attempt fails — the
+   * VPS leaves it empty, but the old clean-IP bridge can still fill it. The
+   * direct route needs a clean host IP plus cookies + PO tokens; when it is
+   * walled, YOUTUBE_PROXY_ALT takes over first. Format:
+   * http://[user:pass@]host:port — empty = skipped.
+   */
+  youtubeProxy: process.env.YOUTUBE_PROXY ?? '',
+  /**
+   * Second proxy hop, tried when direct AND the first hop fail. The intended
+   * deployment is Cloudflare WARP running locally on the bot host (`warp-cli
+   * mode proxy`, default port 40000): free, unlimited, and a DIFFERENT egress
+   * than the host — so it covers a host IP YouTube has flagged without
+   * touching the metered fallback. Format: http://[user:pass@]host:port.
+   */
+  youtubeProxyAlt: process.env.YOUTUBE_PROXY_ALT ?? '',
+  /**
+   * Last-resort proxy hop, reached only when the direct route and every free
+   * hop fail. DataImpulse residential here: metered and pay-per-GB, so it
+   * spends its balance only on a real block, and on an `auth` alert its sticky
+   * session is rotated to land the retry on a fresh exit. Format:
+   * http://[user:pass@]host:port — empty = skipped.
+   */
+  youtubeProxyFallback: process.env.YOUTUBE_PROXY_FALLBACK ?? '',
+  /**
+   * How to name the FIRST proxy hop (YOUTUBE_PROXY) in the hop-down alert.
+   * Alerts name the WARP and metered hops with fixed wording; only the primary
+   * hop is free-form, because it has moved (PC → phone) without a code change:
+   * set YOUTUBE_PROXY_LABEL to whatever is actually running it.
+   */
+  youtubeProxyLabel: process.env.YOUTUBE_PROXY_LABEL ?? 'the primary YouTube proxy hop',
+  /**
+   * Ceiling on the YouTube audio bitrate to download. Discord re-encodes voice
+   * audio to 64-128 kbps opus, so capping the source a little above that roughly
+   * halves the metered proxy traffic for little audible loss. Raise it (e.g.
+   * 160) when fidelity matters more than bytes on the metered hops.
+   */
+  youtubeAudioMaxAbr: Number(process.env.YOUTUBE_AUDIO_MAX_ABR) || 80,
+  /**
+   * Public base URL for the jam join link and its QR code, e.g.
+   * https://vaporzr.duckdns.org. The bot binds to loopback behind a reverse
+   * proxy, so it cannot derive a reachable address for a guest's phone — the
+   * tunnel address (127.0.0.1) only works on the machine holding the tunnel.
+   * When empty the clients fall back to their own origin, which is correct for
+   * the Activity but wrong for the player and the tunnel-opened panel.
+   */
+  jamPublicBase: (process.env.JAM_PUBLIC_BASE ?? '').replace(/\/+$/, ''),
   /**
    * Optional Suno session cookie (the `__client`/session pair from a logged-in
    * studio.suno.com). Without it the public clip API answers audio_url with
@@ -98,52 +98,52 @@ ytDlpPath: process.env.YT_DLP_PATH ?? path.join(__dirname, '..', '..', '..', 've
    * Sent to studio-api.prod.suno.com only — never to the CDN.
    */
   sunoCookie: (process.env.SUNO_COOKIE ?? '').trim(),
-   /**
-    * HTTP proxy for Suno (the suno.com page fetch + the cdn1.suno.ai audio
-    * stream). Suno's CDN blocks datacenter IPs with 403, so routing just Suno
-    * through a residential proxy restores playback. Format:
-    * http://[user:pass@]host:port — empty = direct.
-    */
-   sunoProxy: process.env.SUNO_PROXY ?? '',
-   /** Optional Netscape-format cookies.txt for SoundCloud (authenticated / Go+ sets). */
-   soundcloudCookiesPath: process.env.SOUNDCLOUD_COOKIES_PATH ?? '',
-   /** Optional lat/lon so `V@vibe` can pick a set by current weather (open-meteo). */
-   vibeLat: process.env.VIBE_LAT ?? '',
-   vibeLon: process.env.VIBE_LON ?? '',
-   /** ffmpeg binary used for server-side streaming + PCM resampling. */
-   ffmpegPath: process.env.FFMPEG_PATH ?? ffmpegStatic ?? 'ffmpeg',
-   /** Path to the librespot binary (the server-side Spotify "device"). Empty = disabled. */
-   librespotPath:
-     process.env.LIBRESPOT_PATH ?? path.join(__dirname, '..', '..', '..', 'vendor', 'librespot', 'librespot'),
+  /**
+   * HTTP proxy for Suno (the suno.com page fetch + the cdn1.suno.ai audio
+   * stream). Suno's CDN blocks datacenter IPs with 403, so routing just Suno
+   * through a residential proxy restores playback. Format:
+   * http://[user:pass@]host:port — empty = direct.
+   */
+  sunoProxy: process.env.SUNO_PROXY ?? '',
+  /** Optional Netscape-format cookies.txt for SoundCloud (authenticated / Go+ sets). */
+  soundcloudCookiesPath: process.env.SOUNDCLOUD_COOKIES_PATH ?? '',
+  /** Optional lat/lon so `V@vibe` can pick a set by current weather (open-meteo). */
+  vibeLat: process.env.VIBE_LAT ?? '',
+  vibeLon: process.env.VIBE_LON ?? '',
+  /** ffmpeg binary used for server-side streaming + PCM resampling. */
+  ffmpegPath: process.env.FFMPEG_PATH ?? ffmpegStatic ?? 'ffmpeg',
+  /** Path to the librespot binary (the server-side Spotify "device"). Empty = disabled. */
+  librespotPath:
+    process.env.LIBRESPOT_PATH ?? path.join(__dirname, '..', '..', '..', 'vendor', 'librespot', 'librespot'),
   /** Name librespot registers with Spotify — used to find it as a playback device. */
   librespotDeviceName: process.env.LIBRESPOT_DEVICE_NAME ?? 'Vaporzr',
-   /** Local TCP port librespot streams raw PCM to (must be space-free in the bridge command). */
-   librespotBridgePort: Number(process.env.LIBRESPOT_BRIDGE_PORT ?? 4789),
-   /**
-    * Spotify playback backend:
-    *  - 'librespot' (default): librespot-org, PCM via the TCP bridge.
-    *  - 'soloist': go-librespot, remote OAuth login, PCM captured from a
-    *    PulseAudio null-sink via parec.
-    *  - 'auto': prefer soloist, fall back to librespot.
-    */
-   spotifyBackend: (process.env.SPOTIFY_BACKEND ?? 'librespot').toLowerCase(),
-   /** Path to the go-librespot binary (soloist backend). */
-   goLibrespotPath: process.env.GO_LIBRESPOT_PATH ?? 'go-librespot',
-   /** PulseAudio null-sink name the soloist backend plays into and captures. */
-   pulseSinkName: process.env.PULSE_SINK_NAME ?? 'vaporzr',
-   /** go-librespot config dir (persists its Spotify credentials). */
-   goLibrespotConfigDir: process.env.GO_LIBRESPOT_CONFIG_DIR ?? path.join(process.env.DATA_DIR ?? 'data', 'go-librespot'),
-   /** go-librespot local control API port. */
-   goLibrespotApiPort: Number(process.env.GO_LIBRESPOT_API_PORT ?? 3678),
+  /** Local TCP port librespot streams raw PCM to (must be space-free in the bridge command). */
+  librespotBridgePort: Number(process.env.LIBRESPOT_BRIDGE_PORT ?? 4789),
+  /**
+   * Spotify playback backend:
+   *  - 'librespot' (default): librespot-org, PCM via the TCP bridge.
+   *  - 'soloist': go-librespot, remote OAuth login, PCM captured from a
+   *    PulseAudio null-sink via parec.
+   *  - 'auto': prefer soloist, fall back to librespot.
+   */
+  spotifyBackend: (process.env.SPOTIFY_BACKEND ?? 'librespot').toLowerCase(),
+  /** Path to the go-librespot binary (soloist backend). */
+  goLibrespotPath: process.env.GO_LIBRESPOT_PATH ?? 'go-librespot',
+  /** PulseAudio null-sink name the soloist backend plays into and captures. */
+  pulseSinkName: process.env.PULSE_SINK_NAME ?? 'vaporzr',
+  /** go-librespot config dir (persists its Spotify credentials). */
+  goLibrespotConfigDir:
+    process.env.GO_LIBRESPOT_CONFIG_DIR ?? path.join(process.env.DATA_DIR ?? 'data', 'go-librespot'),
+  /** go-librespot local control API port. */
+  goLibrespotApiPort: Number(process.env.GO_LIBRESPOT_API_PORT ?? 3678),
   /**
    * Hostname advertised in /viz, /panel, and /help links. Empty = auto-detect
    * the LAN IP. Set to a custom domain when running behind port forwarding.
    */
   publicHost: process.env.PUBLIC_HOST ?? '',
   /** cloudflared binary used to expose an HTTPS quick tunnel for /viz + /panel links. */
-cloudflaredPath:
-     process.env.CLOUDFLARED_PATH ??
-     path.join(__dirname, '..', '..', '..', 'vendor', 'cloudflared', 'cloudflared'),
+  cloudflaredPath:
+    process.env.CLOUDFLARED_PATH ?? path.join(__dirname, '..', '..', '..', 'vendor', 'cloudflared', 'cloudflared'),
   /** Set VIZ_TUNNEL=off to disable the automatic HTTPS secure-link tunnel. */
   vizTunnel: process.env.VIZ_TUNNEL !== 'off' && process.env.VIZ_TUNNEL !== '0',
   /** Cloudflare named-tunnel token (dashboard "install connector" token). Enables your own branded domain, e.g. viz.vaporzr.app. Empty = ephemeral trycloudflare.com URL. */
@@ -235,12 +235,11 @@ cloudflaredPath:
   /** sp_dc session cookie from open.spotify.com — unlocks FULL-length resolution of any public playlist. */
   spotifySpDc: process.env.SPOTIFY_SP_DC ?? '',
   /** TOTP secret bytes (comma-separated) for the web-player token endpoint; Spotify rotates this occasionally. */
-  spotifyTotpSecret:
-    process.env.SPOTIFY_TOTP_SECRET ?? '',
+  spotifyTotpSecret: process.env.SPOTIFY_TOTP_SECRET ?? '',
   /** TOTP version param for the web-player token endpoint. */
   spotifyTotpVer: process.env.SPOTIFY_TOTP_VER ?? '61',
   /** Player app directory (Electron) and binary used to open the player window. */
   playerDir: process.env.PLAYER_DIR ?? path.join(repoRoot, 'apps', 'player'),
-electronPath:
-     process.env.ELECTRON_PATH ?? path.join(__dirname, '..', '..', '..', 'node_modules', 'electron', 'dist', 'electron'),
+  electronPath:
+    process.env.ELECTRON_PATH ?? path.join(__dirname, '..', '..', '..', 'node_modules', 'electron', 'dist', 'electron'),
 };

@@ -50,11 +50,9 @@ async function egressIp(proxy: string, family: 4 | 6): Promise<string> {
   if (!pending) {
     pending = (async () => {
       try {
-        const res = await fetchViaProxy(
-          family === 6 ? 'https://api64.ipify.org' : 'https://api.ipify.org',
-          proxy,
-          { signal: AbortSignal.timeout(6000) },
-        );
+        const res = await fetchViaProxy(family === 6 ? 'https://api64.ipify.org' : 'https://api.ipify.org', proxy, {
+          signal: AbortSignal.timeout(6000),
+        });
         return res.ok ? (await res.text()).trim() : '';
       } catch {
         return '';

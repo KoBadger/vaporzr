@@ -241,7 +241,9 @@ export async function getAccessToken(forceRefresh = false): Promise<string> {
 
   const stored = tokenStore.load();
   if (!stored?.refresh_token) {
-    const loginUrl = config.staticBaseUrl ? `${config.staticBaseUrl}/login` : 'http://localhost:' + (process.env.PORT || 4876) + '/login';
+    const loginUrl = config.staticBaseUrl
+      ? `${config.staticBaseUrl}/login`
+      : 'http://localhost:' + (process.env.PORT || 4876) + '/login';
     throw new SpotifyError(`No Spotify account linked. Visit ${loginUrl} to authorize.`);
   }
 
@@ -366,13 +368,13 @@ function mapTrack(t: SpotifyTrack): ResolvedTrack {
 /** Score a search result by how closely its name matches the query (lower = better). */
 function scoreSearchResult(name: string, query: string): number {
   const n = name.toLowerCase().trim();
-  if (n === query) return 0;                     // exact match
-  if (n.startsWith(query)) return 1;              // starts with query
-  if (n.includes(query)) return 2;                // contains query
+  if (n === query) return 0; // exact match
+  if (n.startsWith(query)) return 1; // starts with query
+  if (n.includes(query)) return 2; // contains query
   // Fuzzy: count how many query words appear in the name.
   const qWords = query.split(/\s+/);
   const matchCount = qWords.filter((w) => n.includes(w)).length;
-  return 3 + (qWords.length - matchCount);        // fewer missing words = better
+  return 3 + (qWords.length - matchCount); // fewer missing words = better
 }
 
 /** Words that mark a track as a variant (remix/edit/live/movie version…) rather
@@ -414,7 +416,8 @@ export function scorePlayResult(track: ResolvedTrack, query: string): number {
   // the condition `core !== n` never held and Spotify's own ordering handed back
   // the remix as the top result for a plain "song - artist" query.
   if (VERSION_MARKER_RE.test(n)) {
-    if (!VERSION_MARKER_RE.test(q)) s += 6; // variant the user didn't ask for
+    if (!VERSION_MARKER_RE.test(q))
+      s += 6; // variant the user didn't ask for
     else if (core && (q.includes(core) || core.includes(q))) s -= 3; // asked for a variant of THIS song
   }
   if (track.artists.some((a) => a && q.includes(a.toLowerCase().trim()))) s -= 4;
@@ -439,7 +442,11 @@ async function apiGet<T>(path: string, token: string): Promise<T> {
     const wait = noteSpotifyRateLimit(res);
     // Also update the per-endpoint bucket so it stays in sync.
     await rateLimit.wait(`get:${path}`);
-    throw new SpotifyError(`Spotify API rate-limited — try again in about ${Math.max(1, Math.ceil(wait / 60))} min.`, 429, wait);
+    throw new SpotifyError(
+      `Spotify API rate-limited — try again in about ${Math.max(1, Math.ceil(wait / 60))} min.`,
+      429,
+      wait,
+    );
   }
   if (!res.ok) throw new SpotifyError(`Spotify API error (${res.status})`, res.status);
   return (await res.json()) as T;
@@ -473,7 +480,10 @@ interface EmbedEntity {
  * for a track/album/playlist/artist. Requires no auth and consumes no app quota.
  * Returns null when unavailable so callers fall back to the OAuth API.
  */
-async function fetchEmbedEntity(type: 'track' | 'album' | 'playlist' | 'artist', id: string): Promise<EmbedEntity | null> {
+async function fetchEmbedEntity(
+  type: 'track' | 'album' | 'playlist' | 'artist',
+  id: string,
+): Promise<EmbedEntity | null> {
   if (!config.spotifyUseAnonymous) return null;
   try {
     const res = await fetchWithTimeout(`https://open.spotify.com/embed/${type}/${id}`, {
@@ -526,8 +536,7 @@ function hotp6(secret: Buffer, counter: number): string {
   msg.writeBigUInt64BE(BigInt(counter));
   const hmac = crypto.createHmac('sha1', secret).update(msg).digest();
   const offset = hmac[hmac.length - 1] & 0x0f;
-  const bin =
-    ((hmac[offset] & 0x7f) << 24) | (hmac[offset + 1] << 16) | (hmac[offset + 2] << 8) | hmac[offset + 3];
+  const bin = ((hmac[offset] & 0x7f) << 24) | (hmac[offset + 1] << 16) | (hmac[offset + 2] << 8) | hmac[offset + 3];
   return String(bin % 1_000_000).padStart(6, '0');
 }
 
@@ -539,9 +548,7 @@ function hotp6(secret: Buffer, counter: number): string {
 async function fetchWebTotp(): Promise<{ key: Buffer; version: number } | null> {
   const ua = { 'User-Agent': ANON_USER_AGENT };
   const html = await (await fetchWithTimeout('https://open.spotify.com/', { headers: ua })).text();
-  const m = html.match(
-    /https:\/\/open\.spotifycdn\.com\/cdn\/build\/web-player\/web-player\.[a-f0-9]+\.js/,
-  );
+  const m = html.match(/https:\/\/open\.spotifycdn\.com\/cdn\/build\/web-player\/web-player\.[a-f0-9]+\.js/);
   if (!m) return null;
   const js = await (await fetchWithTimeout(m[0], { headers: ua })).text();
   const re = /secret:(?:'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)"),version:(\d+)/g;
@@ -606,7 +613,10 @@ async function getWebPlayerToken(): Promise<string | null> {
     if (!res.ok) return null;
     const d = (await res.json()) as { accessToken?: string; accessTokenExpirationTimestampMs?: number };
     if (!d.accessToken) return null;
-    cachedWebToken = { token: d.accessToken, expiresAt: d.accessTokenExpirationTimestampMs ?? Date.now() + 30 * 60 * 1000 };
+    cachedWebToken = {
+      token: d.accessToken,
+      expiresAt: d.accessTokenExpirationTimestampMs ?? Date.now() + 30 * 60 * 1000,
+    };
     return cachedWebToken.token;
   } catch {
     return null;
@@ -642,13 +652,23 @@ async function searchTracksAnonymous(query: string, limit: number): Promise<Reso
     });
     if (!res.ok) return null;
     const json = (await res.json()) as {
-      data?: { searchV2?: { tracksV2?: { items?: Array<{ item?: { data?: {
-        uri?: string;
-        name?: string;
-        artists?: { items?: Array<{ profile?: { name?: string } }> };
-        albumOfTrack?: { name?: string; coverArt?: { sources?: Array<{ url?: string }> } };
-        duration?: { totalMilliseconds?: number };
-      } } }> } } };
+      data?: {
+        searchV2?: {
+          tracksV2?: {
+            items?: Array<{
+              item?: {
+                data?: {
+                  uri?: string;
+                  name?: string;
+                  artists?: { items?: Array<{ profile?: { name?: string } }> };
+                  albumOfTrack?: { name?: string; coverArt?: { sources?: Array<{ url?: string }> } };
+                  duration?: { totalMilliseconds?: number };
+                };
+              };
+            }>;
+          };
+        };
+      };
     };
     const items = json.data?.searchV2?.tracksV2?.items ?? [];
     const out: ResolvedTrack[] = [];
@@ -774,12 +794,16 @@ export async function resolveTracks(input: string): Promise<ResolvedTrack[]> {
     const anon = await fetchEmbedEntity('album', id);
     let out = anon?.trackList?.length ? mapEmbedCollection(anon) : null;
     if (out && out.length >= EMBED_CAP && !cacheGet<boolean>(`nofull:album:${id}`)) {
-      const full = await collectionViaOAuth<SpotifyTrack>(`/albums/${id}/tracks?limit=50&offset={offset}`, (item) => mapTrack(item));
+      const full = await collectionViaOAuth<SpotifyTrack>(`/albums/${id}/tracks?limit=50&offset={offset}`, (item) =>
+        mapTrack(item),
+      );
       if (full) out = full;
       else cacheSet(`nofull:album:${id}`, true);
     }
     if (!out) {
-      out = await paginateSpotify<SpotifyTrack>(`/albums/${id}/tracks?limit=50&offset={offset}`, (item) => mapTrack(item));
+      out = await paginateSpotify<SpotifyTrack>(`/albums/${id}/tracks?limit=50&offset={offset}`, (item) =>
+        mapTrack(item),
+      );
     }
     cacheSet(`album:${id}`, out);
     return out;
@@ -836,7 +860,10 @@ export async function resolveTracks(input: string): Promise<ResolvedTrack[]> {
     const anon = await fetchEmbedEntity('artist', id);
     let out = anon?.trackList?.length ? mapEmbedCollection(anon, '') : null;
     if (!out) {
-      const data = await apiGet<{ tracks: SpotifyTrack[] }>(`/artists/${id}/top-tracks?country=US`, await getAccessToken());
+      const data = await apiGet<{ tracks: SpotifyTrack[] }>(
+        `/artists/${id}/top-tracks?country=US`,
+        await getAccessToken(),
+      );
       out = data.tracks.map(mapTrack);
     }
     cacheSet(`artist:${id}`, out);
@@ -851,7 +878,12 @@ export async function resolveTracks(input: string): Promise<ResolvedTrack[]> {
  * to a track, so extremely long playlists/albums resolve in full.
  * The `{offset}` placeholder in `path` is replaced with the page offset.
  */
-async function paginateRaw<T>(path: string, token: string, map: (item: T) => ResolvedTrack | null, limit = 100): Promise<ResolvedTrack[]> {
+async function paginateRaw<T>(
+  path: string,
+  token: string,
+  map: (item: T) => ResolvedTrack | null,
+  limit = 100,
+): Promise<ResolvedTrack[]> {
   const out: ResolvedTrack[] = [];
   let offset = 0;
   let total = Number.POSITIVE_INFINITY;
@@ -875,12 +907,20 @@ async function paginateRaw<T>(path: string, token: string, map: (item: T) => Res
 }
 
 /** Paginate using the user's OAuth token (throws on 404). */
-async function paginateSpotify<T>(path: string, map: (item: T) => ResolvedTrack | null, limit = 100): Promise<ResolvedTrack[]> {
+async function paginateSpotify<T>(
+  path: string,
+  map: (item: T) => ResolvedTrack | null,
+  limit = 100,
+): Promise<ResolvedTrack[]> {
   return paginateRaw(path, await getAccessToken(), map, limit);
 }
 
 /** Paginate with OAuth; returns null on failure (e.g. 404 for non-owned playlists). */
-async function collectionViaOAuth<T>(path: string, map: (item: T) => ResolvedTrack | null, limit = 100): Promise<ResolvedTrack[] | null> {
+async function collectionViaOAuth<T>(
+  path: string,
+  map: (item: T) => ResolvedTrack | null,
+  limit = 100,
+): Promise<ResolvedTrack[] | null> {
   try {
     return await paginateSpotify(path, map, limit);
   } catch {
@@ -889,7 +929,11 @@ async function collectionViaOAuth<T>(path: string, map: (item: T) => ResolvedTra
 }
 
 /** Paginate with OAuth; throws on failure. */
-async function collectionViaOAuthThrow<T>(path: string, map: (item: T) => ResolvedTrack | null, limit = 100): Promise<ResolvedTrack[]> {
+async function collectionViaOAuthThrow<T>(
+  path: string,
+  map: (item: T) => ResolvedTrack | null,
+  limit = 100,
+): Promise<ResolvedTrack[]> {
   return paginateSpotify(path, map, limit);
 }
 
@@ -975,11 +1019,17 @@ export function spotifyResume(deviceId: string): Promise<void> {
 }
 
 export function spotifySeek(deviceId: string, positionMs: number): Promise<void> {
-  return deviceCommand('PUT', `/me/player/seek?position_ms=${Math.round(positionMs)}&device_id=${encodeURIComponent(deviceId)}`);
+  return deviceCommand(
+    'PUT',
+    `/me/player/seek?position_ms=${Math.round(positionMs)}&device_id=${encodeURIComponent(deviceId)}`,
+  );
 }
 
 export function spotifySetVolume(deviceId: string, volumePercent: number): Promise<void> {
-  return deviceCommand('PUT', `/me/player/volume?volume_percent=${Math.round(volumePercent)}&device_id=${encodeURIComponent(deviceId)}`);
+  return deviceCommand(
+    'PUT',
+    `/me/player/volume?volume_percent=${Math.round(volumePercent)}&device_id=${encodeURIComponent(deviceId)}`,
+  );
 }
 
 export function spotifySetShuffle(deviceId: string, shuffle: boolean): Promise<void> {
@@ -1021,10 +1071,9 @@ async function reccoBeatsFeatures(
   for (let i = 0; i < ids.length; i += RECCO_MAX) {
     const chunk = ids.slice(i, i + RECCO_MAX);
     try {
-      const res = await fetchWithTimeout(
-        `https://api.reccobeats.com/v1/audio-features?ids=${chunk.join(',')}`,
-        { headers: { Accept: 'application/json' } },
-      );
+      const res = await fetchWithTimeout(`https://api.reccobeats.com/v1/audio-features?ids=${chunk.join(',')}`, {
+        headers: { Accept: 'application/json' },
+      });
       if (!res.ok) continue;
       for (const id of chunk) answered.add(id);
       const data = (await res.json()) as {
@@ -1087,10 +1136,9 @@ export async function getAudioFeatures(trackIds: string[]): Promise<Map<string, 
     // Spotify batches in chunks of 100.
     for (let i = 0; i < missing.length; i += 100) {
       const chunk = missing.slice(i, i + 100);
-      const res = await fetchWithTimeout(
-        `${API_URL}/audio-features?ids=${chunk.join(',')}`,
-        { headers: { Authorization: `Bearer ${token}` } },
-      );
+      const res = await fetchWithTimeout(`${API_URL}/audio-features?ids=${chunk.join(',')}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
       if (res.status === 429) {
         noteSpotifyRateLimit(res);
         console.warn('[spotify] /audio-features rate-limited — skipping the Spotify leg, using the mirror');
@@ -1162,11 +1210,9 @@ export interface RecommendationParams {
  *  repeated Endless Wave refills over the same context don't re-drain the app
  *  quota — which is exactly what triggers the multi-hour 429 lock. */
 export async function getRecommendations(params: RecommendationParams): Promise<ResolvedTrack[]> {
-  const seeds = [
-    ...(params.seedTracks ?? []),
-    ...(params.seedArtists ?? []),
-    ...(params.seedGenres ?? []),
-  ].sort().join(',');
+  const seeds = [...(params.seedTracks ?? []), ...(params.seedArtists ?? []), ...(params.seedGenres ?? [])]
+    .sort()
+    .join(',');
   if (seeds) {
     const cached = cacheGet<ResolvedTrack[]>(`recs:${seeds}`);
     if (cached) return cached;
@@ -1181,7 +1227,8 @@ export async function getRecommendations(params: RecommendationParams): Promise<
   if (params.targetValence !== undefined) q.set('target_valence', String(params.targetValence));
   if (params.targetDanceability !== undefined) q.set('target_danceability', String(params.targetDanceability));
   if (params.targetAcousticness !== undefined) q.set('target_acousticness', String(params.targetAcousticness));
-  if (params.targetInstrumentalness !== undefined) q.set('target_instrumentalness', String(params.targetInstrumentalness));
+  if (params.targetInstrumentalness !== undefined)
+    q.set('target_instrumentalness', String(params.targetInstrumentalness));
   if (params.targetKey !== undefined) q.set('target_key', String(params.targetKey));
   if (params.targetMode !== undefined) q.set('target_mode', String(params.targetMode));
   if (params.minTempo !== undefined) q.set('min_tempo', String(params.minTempo));

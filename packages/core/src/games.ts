@@ -168,9 +168,9 @@ export function fitPercent(score: number): number {
 /** Explain a fit number in one line, for the game posts. */
 export function describeFit(fit: number): string {
   if (fit >= 85) return 'a perfect fit for the room right now';
-  if (fit >= 70) return 'right in the room\'s lane';
+  if (fit >= 70) return "right in the room's lane";
   if (fit >= 55) return 'adjacent to the vibe — should land fine';
-  if (fit >= 40) return 'a bit of a stretch from what\'s playing';
+  if (fit >= 40) return "a bit of a stretch from what's playing";
   return 'a real curveball for this room';
 }
 
