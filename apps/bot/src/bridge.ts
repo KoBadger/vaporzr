@@ -157,9 +157,7 @@ export class Bridge {
     this.sessions.attachLibrespot(this.librespot);
 
     this.sessions.onPrimaryChanged(() => this.syncPrimary());
-    this.sessions.onSessionCreated((s) => {
-      if (s.guildId === this.sessions.guildId) this.syncPrimary();
-    });
+    this.sessions.onSessionCreated(() => this.syncQueueSubscriptions());
 
     this.wss.on('connection', (socket, req) => {
       // Share-key auth: keyed sockets get full control; keyless sockets connect
@@ -201,7 +199,6 @@ export class Bridge {
   }
 
   private fallback = new Session('__fallback__', null);
-  private unsubscribePrimary: (() => void) | null = null;
 
   get queue(): QueueManager {
     return (this.sessions.primary ?? this.fallback).queue;
@@ -226,25 +223,15 @@ export class Bridge {
   }
 
   private syncPrimary(): void {
-    this.unsubscribePrimary?.();
-    this.unsubscribePrimary = null;
     for (const other of this.sessions.all()) {
       other.setAnalyzer(false);
       other.setVisualizerSink(() => {});
-      other.voice.setOnVoiceChange(() => {});
       other.setPcmSink(() => {});
     }
     const s = this.sessions.primary;
     if (!s) return;
     s.setAnalyzer(true);
     s.setVisualizerSink((msg) => this.broadcastVisualizers(msg));
-    s.voice.setOnVoiceChange((joined, channelId) => {
-      this.broadcastPanels({ type: 'voice:update', joined, channelId: channelId ?? undefined });
-      // Joining starts a fresh jam. The roster belongs to the session, and the
-      // pill was carrying names over from the previous one — the same way the
-      // queue starts clean on a join.
-      if (joined) this.resetJamPresence();
-    });
     const gid = this.primaryGuildId || '__primary__';
     s.setPcmSink((data: Buffer) => {
       const hasPcmPanels = [...this.panels].some((p) => p.subscribedPcm);
@@ -252,28 +239,53 @@ export class Bridge {
       const b64 = data.toString('base64');
       this.broadcastPcm(gid, b64);
     });
-    const q = s.queue;
-    const onQueueChanged = (): void => {
-      this.lastQueue = { tracks: q.getSnapshot().tracks, currentIndex: q.getSnapshot().currentIndex };
-      this.broadcastPanels({ type: 'queue:update', queue: this.lastQueue });
-      // The desktop player (role 'visualizer') renders the same up-next line.
-      this.broadcastVisualizers({ type: 'queue:update', queue: this.lastQueue });
-      // New credits on the queue mean new jam contributors.
-      this.broadcastPresence();
-    };
-    const onStateChanged = (state: PlaybackState): void => {
-      this.lastState = state;
-      this.broadcastPanels({ type: 'state:update', state, guildId: this.primaryGuildId ?? undefined });
-      this.broadcastVisualizers({ type: 'state:update', state });
-    };
-    q.subscribe({ onQueueChanged, onStateChanged });
-    onQueueChanged();
-    onStateChanged(q.getState());
-    this.unsubscribePrimary = () => {
-      q.unsubscribe({ onQueueChanged, onStateChanged });
-      s.voice.setOnVoiceChange(() => {});
-      s.setPcmSink(() => {});
-    };
+    // Every session gets its own subscription (below) so a panel can mirror any
+    // server; the primary keeps the visualizer/analyzer/PCM taps set above.
+    this.syncQueueSubscriptions();
+  }
+
+  /** Guilds that already have a queue subscription + their unsubscribe fn. */
+  private queueSubs = new Map<string, () => void>();
+
+  /**
+   * Subscribe every session's queue/state/voice once, tagging each broadcast
+   * with its guild so panels only apply the server they are viewing. Called on
+   * boot, on session creation, and when the primary changes (idempotent).
+   */
+  private syncQueueSubscriptions(): void {
+    for (const s of this.sessions.all()) {
+      if (this.queueSubs.has(s.guildId)) continue;
+      const q = s.queue;
+      const gid = s.guildId;
+      const onQueueChanged = (): void => {
+        const snap = q.getSnapshot();
+        const queue = { tracks: snap.tracks, currentIndex: snap.currentIndex };
+        this.broadcastPanels({ type: 'queue:update', queue, guildId: gid }, gid);
+        if (gid === this.sessions.guildId) {
+          // The desktop player (role 'visualizer') mirrors the primary server.
+          this.broadcastVisualizers({ type: 'queue:update', queue });
+          // New credits on the queue mean new jam contributors.
+          this.broadcastPresence();
+        }
+      };
+      const onStateChanged = (state: PlaybackState): void => {
+        this.broadcastPanels({ type: 'state:update', state, guildId: gid }, gid);
+        if (gid === this.sessions.guildId) this.broadcastVisualizers({ type: 'state:update', state });
+      };
+      q.subscribe({ onQueueChanged, onStateChanged });
+      s.voice.setOnVoiceChange((joined, channelId) => {
+        this.broadcastPanels({ type: 'voice:update', joined, channelId: channelId ?? undefined }, gid);
+        // Joining starts a fresh jam. The roster belongs to the session, and the
+        // pill was carrying names over from the previous one.
+        if (gid === this.sessions.guildId && joined) this.resetJamPresence();
+      });
+      onQueueChanged();
+      onStateChanged(q.getState());
+      this.queueSubs.set(gid, () => {
+        q.unsubscribe({ onQueueChanged, onStateChanged });
+        s.voice.setOnVoiceChange(() => {});
+      });
+    }
   }
 
   private handleClose(socket: WebSocket): void {
@@ -494,22 +506,32 @@ export class Bridge {
     }
   }
 
+  /** Existing session for the guild a panel is viewing — never creates one. */
+  private sessionFor(guildId?: string): Session {
+    if (guildId) {
+      const s = this.sessions.all().find((x) => x.guildId === guildId);
+      if (s) return s;
+    }
+    return this.sessions.primary ?? this.fallback;
+  }
+
   /** Panel commands that need the bot in a voice channel first. Without this the
    *  play/resume buttons simply failed with "I'm not in a voice channel" — which
    *  is what made the panel look dead once the bot had been made to leave. The
    *  client's own guild is preferred, so a busier guild elsewhere cannot win. */
   private async ensureVoice(guildId?: string): Promise<boolean> {
+    const v = this.sessionFor(guildId).voice;
     // Only a Ready link can carry audio — isJoined() also accepts a dead
     // Disconnected/Connecting link, which silently skipped the rejoin and made
     // the panel's play button do nothing while claiming success.
-    if (this.voice.isConnectionReady()) return true;
+    if (v.isConnectionReady()) return true;
     if (!this.onEnsureJoined) return false;
     try {
       await this.onEnsureJoined(guildId);
     } catch (err) {
       console.warn(`[bridge] auto-join failed: ${err instanceof Error ? err.message : err}`);
     }
-    if (this.voice.isConnectionReady()) return true;
+    if (v.isConnectionReady()) return true;
     this.notice('error', "Couldn't join a voice channel — join one in Discord, then press play.");
     return false;
   }
@@ -524,61 +546,64 @@ export class Bridge {
   }
 
   private handlePanelCommand(socket: WebSocket, msg: InboundMessage & { type: 'cmd' }, guildId?: string): void {
+    // Playback commands act on the server this viewer is looking at (keyed
+    // panels can switch servers); global settings below stay global.
+    const s = this.sessionFor(guildId);
     switch (msg.command) {
       case 'play':
         if (msg.uris && msg.uris.length > 0) {
           for (const uri of msg.uris) {
             const source = uri.startsWith('youtube:') ? 'youtube' : 'spotify';
-            this.queue.enqueue({ uri, name: uri, artists: [], album: '', durationMs: 0, source }, 'panel');
+            s.queue.enqueue({ uri, name: uri, artists: [], album: '', durationMs: 0, source }, 'panel');
           }
           // Remember where we were. If the requested track cannot start, the
           // cursor must not be left parked on a track that never played — the
           // playback layer then treats it as current while the audio is still on
           // the old track, which silently disables every advance path.
-          const before = this.queue.getState().track?.uri ?? '';
+          const before = s.queue.getState().track?.uri ?? '';
           // focusUri moves the cursor in either direction; the old next() walk
           // could only go forward, so re-playing an earlier track (the standard
           // way to recover a stuck queue) silently did nothing.
-          this.queue.focusUri(msg.uris[0]);
+          s.queue.focusUri(msg.uris[0]);
           void (async () => {
             // Join first: a panel play is refused outright when the bot is not
             // in a voice channel, and the panel cannot supply one itself.
             if (!(await this.ensureVoice(guildId))) {
-              if (before) this.queue.focusUri(before);
+              if (before) s.queue.focusUri(before);
               return;
             }
             try {
-              await this.playback.play();
+              await s.playback.play();
             } catch (err) {
               console.error('[bridge] play failed:', err instanceof Error ? err.message : String(err));
-              if (before) this.queue.focusUri(before);
+              if (before) s.queue.focusUri(before);
             }
           })();
         }
         break;
       case 'pause':
-        this.playback.pause();
+        s.playback.pause();
         break;
       case 'resume':
         void (async () => {
           if (!(await this.ensureVoice(guildId))) return;
-          void this.playback.resume();
+          void s.playback.resume();
         })();
         break;
       case 'toggle':
         void (async () => {
           if (!(await this.ensureVoice(guildId))) return;
-          void this.playback.toggle();
+          void s.playback.toggle();
         })();
         break;
       case 'next':
-        this.playback.next();
+        s.playback.next();
         break;
       case 'previous':
-        this.playback.previous();
+        s.playback.previous();
         break;
       case 'seek':
-        if (msg.positionMs != null) this.playback.seek(msg.positionMs);
+        if (msg.positionMs != null) s.playback.seek(msg.positionMs);
         break;
       case 'share-jam': {
         void (async () => {
@@ -597,65 +622,63 @@ export class Bridge {
         break;
       }
       case 'volume':
-        if (msg.volume != null) this.playback.volume(msg.volume);
+        if (msg.volume != null) s.playback.volume(msg.volume);
         break;
       case 'shuffle':
-        if (msg.shuffle != null) this.playback.shuffle(msg.shuffle);
+        if (msg.shuffle != null) s.playback.shuffle(msg.shuffle);
         break;
       case 'repeat':
-        if (msg.repeat != null) this.playback.setRepeat(msg.repeat);
+        if (msg.repeat != null) s.playback.setRepeat(msg.repeat);
         break;
       case 'clear':
-        this.playback.stopAll();
-        this.queue.clear();
+        s.playback.stopAll();
+        s.queue.clear();
         break;
       case 'remove':
-        if (msg.index != null) (this.sessions.primary ?? this.fallback).removeFromQueue(msg.index);
+        if (msg.index != null) s.removeFromQueue(msg.index);
         break;
       case 'playAt':
-        if (msg.index != null) this.playback.playAt(msg.index);
+        if (msg.index != null) s.playback.playAt(msg.index);
         break;
       case 'queuePlay': {
         // V@qa "play": jump to this track and drop everything queued before it.
         if (msg.index != null) {
-          const s = this.sessions.primary ?? this.fallback;
           const track = s.queue.getSnapshot().tracks[msg.index];
           if (track) {
             s.queue.removeUpTo(msg.index);
-            this.playback.next();
+            s.playback.next();
           }
         }
         break;
       }
       case 'sfx':
-        if (msg.sfxId) void this.playback.playSoundEffect(msg.sfxId);
+        if (msg.sfxId) void s.playback.playSoundEffect(msg.sfxId);
         break;
       case 'dj':
-        if (msg.djEnabled != null && this.primaryGuildId) {
-          this.playback.setDjEnabled(this.primaryGuildId, msg.djEnabled);
+        if (msg.djEnabled != null && s.guildId) {
+          s.playback.setDjEnabled(s.guildId, msg.djEnabled);
           this.notifyDj();
         }
         break;
       case 'endlesswave': {
         // Prefer an explicit mode; fall back to the legacy boolean toggle.
         const mode = msg.mode ?? (msg.active != null ? (msg.active ? 'smart' : 'off') : null);
-        if (mode && this.primaryGuildId && this.endlessWaveToggle) {
-          this.endlessWaveToggle(this.primaryGuildId, mode);
+        if (mode && s.guildId && this.endlessWaveToggle) {
+          this.endlessWaveToggle(s.guildId, mode);
         }
         break;
       }
       case 'bass':
-        if (msg.db != null) this.playback.setBassBoost(Math.max(0, Math.min(12, msg.db)));
+        if (msg.db != null) s.playback.setBassBoost(Math.max(0, Math.min(12, msg.db)));
         break;
       case 'speed':
-        if (msg.factor != null && msg.factor > 0) this.playback.setSpeed(msg.factor);
+        if (msg.factor != null && msg.factor > 0) s.playback.setSpeed(msg.factor);
         break;
       case 'ambient': {
-        if (msg.ambient != null && this.primaryGuildId) {
-          this.perms.setAmbient(this.primaryGuildId, Boolean(msg.ambient));
-          const s = this.sessions.primary;
+        if (msg.ambient != null && s.guildId) {
+          this.perms.setAmbient(s.guildId, Boolean(msg.ambient));
           // Play the pad right away if the queue is already idle.
-          if (msg.ambient && s && s.voice.isJoined() && !this.queue.getState().playing) {
+          if (msg.ambient && s.voice.isJoined() && !s.queue.getState().playing) {
             void s.playback.startAmbient();
           }
           for (const vis of this.visualizers) this.sendSnapshot(vis.socket);
@@ -664,24 +687,31 @@ export class Bridge {
         break;
       }
       case 'voteskip':
-        if (msg.voteSkip != null && this.primaryGuildId) {
-          this.perms.setVoteSkip(this.primaryGuildId, Boolean(msg.voteSkip));
+        if (msg.voteSkip != null && s.guildId) {
+          this.perms.setVoteSkip(s.guildId, Boolean(msg.voteSkip));
         }
         break;
       case 'dedupe':
-        this.queue.dedupe();
+        s.queue.dedupe();
         break;
       case 'skipto':
         // Jump to a future queued track, dropping everything it skips.
         if (msg.index != null) {
-          this.queue.removeUpTo(msg.index);
-          this.playback.next();
+          s.queue.removeUpTo(msg.index);
+          s.playback.next();
         }
         break;
       case 'switchGuild':
-        if (msg.guildId) {
-          console.log(`[bridge] switching primary guild to ${msg.guildId}`);
-          this.setPrimaryGuildId(msg.guildId);
+        // Keyed panels may look at any server. This is per-client: the bot's own
+        // primary (audio, visuals, jam) is untouched, so one viewer switching
+        // never yanks another viewer's view.
+        if (msg.guildId && this.isAuthed(socket)) {
+          const client = this.clientOf(socket);
+          if (client) {
+            client.guildId = msg.guildId;
+            console.log(`[bridge] panel switched to guild ${msg.guildId}`);
+            this.sendSnapshot(socket);
+          }
         }
         break;
       case 'sensitivity':
@@ -717,7 +747,7 @@ export class Bridge {
         break;
       case 'move':
         if (msg.index != null && msg.to != null) {
-          if (!this.queue.move(msg.index, msg.to)) {
+          if (!s.queue.move(msg.index, msg.to)) {
             this.notice('error', 'Could not move that track.');
           }
         }
@@ -725,16 +755,18 @@ export class Bridge {
       case 'playSearch': {
         const q = (msg.query ?? '').trim();
         if (!q) break;
-        void this.playSearch(q, msg.now !== false, guildId, socket);
+        void this.playSearch(q, msg.now !== false, guildId, socket, msg.insert === true);
         break;
       }
+      case 'bulkSearch':
+        void this.bulkSearch(msg.queries, guildId, socket);
+        break;
       case 'saveVibe': {
         const name = (msg.name ?? '').trim();
         if (!name) {
           this.notice('error', 'Name the vibe first.');
           break;
         }
-        const s = this.sessions.primary ?? this.fallback;
         const tracks = s.queue.getSnapshot().tracks.map((t) => ({
           uri: t.uri,
           name: t.name,
@@ -757,7 +789,6 @@ export class Bridge {
           this.notice('error', 'Pick a saved vibe first.');
           break;
         }
-        const s = this.sessions.primary ?? this.fallback;
         const pl = playlistStore.get(s.guildId, name);
         if (!pl) {
           this.notice('error', `No saved vibe "${name}".`);
@@ -800,7 +831,17 @@ export class Bridge {
    *  YouTube search kept as the fallback so the bridge still works on its own.
    *  "Play now" starts the first fresh track; anything else a playlist-style
    *  resolve produced queues behind it. */
-  private async playSearch(q: string, playNow: boolean, guildId?: string, requester?: WebSocket): Promise<void> {
+  private async playSearch(
+    q: string,
+    playNow: boolean,
+    guildId?: string,
+    requester?: WebSocket,
+    insert = false,
+  ): Promise<void> {
+    // Panel commands act on the server this viewer is looking at, not on the
+    // globally-selected primary.
+    const session = this.sessionFor(guildId);
+    const queue = session.queue;
     try {
       let tracks: ResolvedTrack[];
       if (this.onResolveRequest) {
@@ -832,7 +873,7 @@ export class Bridge {
       // A playlist link can resolve to many tracks; cap it the same way the
       // jam page does, so one paste cannot flood the queue.
       const capped = tracks.slice(0, 25);
-      const fresh = this.queue.filterNew(capped);
+      const fresh = queue.filterNew(capped);
       if (fresh.length === 0) {
         // Already waiting — never stack a second copy. A "play now" for a
         // duplicate plays the copy that is already there (matching by uri or
@@ -840,26 +881,23 @@ export class Bridge {
         const label = capped.length === 1 ? `"${capped[0].name}" is` : 'Those tracks are';
         this.noticeTo(requester, 'info', `${label} already in the queue.`);
         if (playNow) {
-          const existing = this.queue
+          const existing = queue
             .getSnapshot()
             .tracks.find((t) =>
               capped.some((c) => t.uri === c.uri || (trackKey(t) !== '' && trackKey(t) === trackKey(c))),
             );
           if (existing && (await this.ensureVoice(guildId))) {
-            const before = this.queue.getState().track?.uri ?? '';
-            this.queue.focusUri(existing.uri);
-            void this.playback.play().catch((err) => {
+            const before = queue.getState().track?.uri ?? '';
+            queue.focusUri(existing.uri);
+            void session.playback.play().catch((err) => {
               console.error('[bridge] playSearch playback failed:', err instanceof Error ? err.message : err);
               this.noticeTo(requester, 'error', `Playback failed: ${err instanceof Error ? err.message : err}`);
-              if (before) this.queue.focusUri(before);
+              if (before) queue.focusUri(before);
             });
           }
         }
         return;
       }
-      // One placement decision for the whole batch (the same rule the Discord
-      // bulk add uses), so the resolve's internal order survives shuffle state.
-      this.queue.enqueueMany(fresh, 'panel');
       const skipped = capped.length - fresh.length;
       const extra = tracks.length - capped.length;
       const label =
@@ -867,6 +905,22 @@ export class Bridge {
           ? fresh[0].name
           : `${fresh.length} tracks${extra > 0 ? ` (+${extra} more not queued)` : ''}` +
             (skipped > 0 ? ` · ${skipped} already queued` : '');
+      if (insert) {
+        // Play-next: land the resolved batch right after the current track
+        // instead of at the end. Duplicate handling matches the add path.
+        queue.insertAfterCurrent(fresh, 'panel');
+        this.noticeTo(requester, 'success', `Playing next: ${label}`);
+        if (!queue.getState().playing && (await this.ensureVoice(guildId))) {
+          void session.playback.play().catch((err) => {
+            console.error('[bridge] insert playback failed:', err instanceof Error ? err.message : err);
+            this.noticeTo(requester, 'error', `Playback failed: ${err instanceof Error ? err.message : err}`);
+          });
+        }
+        return;
+      }
+      // One placement decision for the whole batch (the same rule the Discord
+      // bulk add uses), so the resolve's internal order survives shuffle state.
+      queue.enqueueMany(fresh, 'panel');
       this.noticeTo(requester, 'success', `${playNow ? 'Now playing' : 'Added'}: ${label}`);
       if (playNow) {
         // Join first: without a voice channel the play is refused outright,
@@ -875,18 +929,87 @@ export class Bridge {
         // Point the cursor at the first fresh track, then start. If it cannot
         // start, put the cursor back so it never diverges from the audio that
         // is actually playing.
-        const before = this.queue.getState().track?.uri ?? '';
-        this.queue.focusUri(fresh[0].uri);
-        void this.playback.play().catch((err) => {
+        const before = queue.getState().track?.uri ?? '';
+        queue.focusUri(fresh[0].uri);
+        void session.playback.play().catch((err) => {
           console.error('[bridge] playSearch playback failed:', err instanceof Error ? err.message : err);
           this.noticeTo(requester, 'error', `Playback failed: ${err instanceof Error ? err.message : err}`);
-          if (before) this.queue.focusUri(before);
+          if (before) queue.focusUri(before);
         });
       }
     } catch (err) {
       console.error('[bridge] playSearch failed:', err);
       this.noticeTo(requester, 'error', `Search failed: ${err instanceof Error ? err.message : err}`);
     }
+  }
+
+  /**
+   * Panel bulk add: resolve every pasted query in turn and queue the matches as
+   * one batch (mirrors `/bulk`: max 25 entries, duplicates dropped, partial
+   * failures reported). Never starts playback — the panel owns the Play button.
+   */
+  private async bulkSearch(queries: string[] | undefined, guildId?: string, requester?: WebSocket): Promise<void> {
+    const list = (Array.isArray(queries) ? queries : [])
+      .map((q) => (typeof q === 'string' ? q.trim() : ''))
+      .filter(Boolean)
+      .slice(0, 25);
+    if (list.length === 0) {
+      this.noticeTo(requester, 'error', 'Paste at least one song or link.');
+      return;
+    }
+    const queue = this.sessionFor(guildId).queue;
+    const resolved: ResolvedTrack[] = [];
+    const failed: string[] = [];
+    for (const query of list) {
+      try {
+        let found: ResolvedTrack[];
+        if (this.onResolveRequest) {
+          found = await this.onResolveRequest(query);
+        } else {
+          const video = await searchAndResolveYoutube(query);
+          found = video
+            ? [
+                {
+                  uri: video.uri,
+                  name: video.name,
+                  artists: video.artists,
+                  album: video.album,
+                  durationMs: video.durationMs,
+                  image: video.image,
+                  source: 'youtube' as const,
+                },
+              ]
+            : [];
+        }
+        if (found.length === 0) failed.push(query);
+        else resolved.push(...found);
+      } catch {
+        failed.push(query);
+      }
+    }
+    if (resolved.length === 0) {
+      this.noticeTo(
+        requester,
+        'error',
+        `Nothing found for ${list.length === 1 ? `"${list[0]}"` : `${list.length} entries`}.`,
+      );
+      return;
+    }
+    const capped = resolved.slice(0, 25);
+    const fresh = queue.filterNew(capped);
+    if (fresh.length === 0) {
+      this.noticeTo(requester, 'info', 'Those tracks are already in the queue.');
+      return;
+    }
+    queue.enqueueMany(fresh, 'panel');
+    const already = capped.length - fresh.length;
+    this.noticeTo(
+      requester,
+      'success',
+      `Bulk added ${fresh.length} track${fresh.length === 1 ? '' : 's'}` +
+        (already > 0 ? ` · ${already} already queued` : '') +
+        (failed.length > 0 ? ` · ${failed.length} not found` : ''),
+    );
   }
 
   /** Wired by the bot at startup to the full V@p resolver. A hook rather than an
@@ -1242,40 +1365,44 @@ export class Bridge {
   }
 
   private sendSnapshot(socket: WebSocket): void {
-    this.lastState = this.queue.getState();
-    this.lastQueue = {
-      tracks: this.queue.getSnapshot().tracks,
-      currentIndex: this.queue.getSnapshot().currentIndex,
-    };
-    // Privacy: only the CURRENT (primary) server is ever exposed to web
-    // clients — even key-authed users. Other servers' names (and existence)
-    // are never sent, so multi-server lists are hidden from every viewer.
-    const primaryId = this.primaryGuildId;
-    const guildList =
+    const client = this.clientOf(socket);
+    // Which server this client is looking at: its own selection (set by the
+    // switcher), else the primary one.
+    const selectedId = client?.guildId || this.primaryGuildId || undefined;
+    const s = this.sessionFor(selectedId);
+    const state = s.queue.getState();
+    const snap = s.queue.getSnapshot();
+    const queue = { tracks: snap.tracks, currentIndex: snap.currentIndex };
+    if (s === this.sessions.primary) {
+      this.lastState = state;
+      this.lastQueue = queue;
+    }
+    // Privacy: guests (and anonymous /viz viewers) only ever see the server they
+    // are looking at, labelled generically. Key-authed panels — the people the
+    // owner handed a /key give link — get the full switcher list.
+    const allGuilds =
       this.guildList.length > 0
         ? this.guildList
         : this.sessions
             .all()
-            .filter((s) => s.guildId !== '__fallback__')
-            .map((s) => ({ id: s.guildId, name: s.guildId }));
-    const current =
-      guildList.find((g) => g.id === primaryId) ?? (primaryId ? { id: primaryId, name: primaryId } : undefined);
-    // Anonymous /viz viewers (viewing is deliberately keyless) still get a
-    // generic label — the id stays so the guild switcher keeps working.
+            .filter((x) => x.guildId !== '__fallback__')
+            .map((x) => ({ id: x.guildId, name: x.guildId }));
     const authed = this.isAuthed(socket);
-    const guildsForClient = current ? [authed ? current : { id: current.id, name: 'Server' }] : [];
-    const primaryEw = this.primaryGuildId ? this.sessions.get(this.primaryGuildId)?.endlessWave : undefined;
+    const selected =
+      allGuilds.find((g) => g.id === selectedId) ?? (selectedId ? { id: selectedId, name: selectedId } : undefined);
+    const guildsForClient = authed ? allGuilds : selected ? [{ id: selected.id, name: 'Server' }] : [];
+    const ew = s.endlessWave;
     const out: OutboundMessage = {
       type: 'snapshot',
-      state: this.lastState,
-      queue: this.lastQueue,
+      state,
+      queue,
       voice: {
-        joined: this.voice.isJoined(),
-        channelId: this.voice.getChannelId() ?? undefined,
+        joined: s.voice.isJoined(),
+        channelId: s.voice.getChannelId() ?? undefined,
       },
       theme: this.theme,
-      djEnabled: this.primaryGuildId ? this.playback.isDjEnabled(this.primaryGuildId) : false,
-      primaryGuildId: this.primaryGuildId ?? undefined,
+      djEnabled: s.guildId ? s.playback.isDjEnabled(s.guildId) : false,
+      primaryGuildId: selectedId ?? undefined,
       guilds: guildsForClient.length > 0 ? guildsForClient : undefined,
       sensitivity: this.sensitivity,
       presetCycle: this.presetCycleSec,
@@ -1284,11 +1411,11 @@ export class Bridge {
           ? { name: this.presetNames[this.presetIdx], index: this.presetIdx }
           : undefined,
       guest: config.shareKey ? !authed : undefined,
-      endlesswave: primaryEw ? primaryEw.active : undefined,
-      endlesswaveMode: primaryEw ? (primaryEw.active ? 'smart' : primaryEw.basic ? 'basic' : 'off') : undefined,
-      ambient: this.primaryGuildId ? this.perms.getAmbient(this.primaryGuildId) : undefined,
-      voteSkip: this.primaryGuildId ? this.perms.getVoteSkip(this.primaryGuildId) : undefined,
-      skipForward: this.primaryGuildId ? this.perms.getSkipForward(this.primaryGuildId) : undefined,
+      endlesswave: ew ? ew.active : undefined,
+      endlesswaveMode: ew ? (ew.active ? 'smart' : ew.basic ? 'basic' : 'off') : undefined,
+      ambient: s.guildId ? this.perms.getAmbient(s.guildId) : undefined,
+      voteSkip: s.guildId ? this.perms.getVoteSkip(s.guildId) : undefined,
+      skipForward: s.guildId ? this.perms.getSkipForward(s.guildId) : undefined,
     };
     this.sendToSocket(socket, out);
   }
@@ -1362,8 +1489,13 @@ export class Bridge {
     for (const vis of this.visualizers) this.sendToSocket(vis.socket, msg);
   }
 
-  private broadcastPanels(msg: OutboundMessage): void {
-    for (const panel of this.panels) this.sendToSocket(panel.socket, msg);
+  private broadcastPanels(msg: OutboundMessage, guildId?: string): void {
+    for (const panel of this.panels) {
+      // A panel with no explicit selection mirrors the primary server; a panel
+      // that has switched gets only that server's updates.
+      if (guildId && (panel.guildId ?? this.primaryGuildId ?? guildId) !== guildId) continue;
+      this.sendToSocket(panel.socket, msg);
+    }
   }
 
   /**

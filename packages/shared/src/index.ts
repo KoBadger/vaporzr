@@ -111,6 +111,7 @@ export type CommandName =
   | 'theme'
   | 'move'
   | 'playSearch'
+  | 'bulkSearch'
   | 'saveVibe'
   | 'loadVibe'
   | 'bass'
@@ -165,6 +166,10 @@ export interface CommandMessage {
   to?: number;
   /** Search text for command: 'playSearch'. */
   query?: string;
+  /** For 'playSearch': insert right after the current track instead of appending. */
+  insert?: boolean;
+  /** Search queries for command: 'bulkSearch' (each resolved, max 25). */
+  queries?: string[];
   /** Vibe (saved playlist) name for commands: 'saveVibe' / 'loadVibe'. */
   name?: string;
   /** For 'playSearch': false = add to queue only, true = start playing now. */
@@ -232,7 +237,7 @@ export type OutboundMessage =
       joinPath?: string;
       joinUrl?: string;
     }
-  | { type: 'queue:update'; queue: QueueSnapshot }
+  | { type: 'queue:update'; queue: QueueSnapshot; guildId?: string }
   | { type: 'perm:update'; permissions: PermissionSnapshot }
   | { type: 'dj:update'; enabled: boolean }
   | { type: 'visuals:frame'; data: string; guildId?: string }
