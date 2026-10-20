@@ -401,6 +401,32 @@
         color: rgba(148, 163, 184, 0.55);
       }
 
+      /* bulk add */
+      #bulk-panel {
+        display: none;
+        margin-top: 8px;
+      }
+      #bulk-input {
+        width: 100%;
+        min-height: 74px;
+        resize: vertical;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        background: rgba(10, 14, 32, 0.7);
+        color: var(--text);
+        padding: 9px 12px;
+        font: inherit;
+        font-size: 12px;
+        outline: none;
+      }
+      #bulk-input:focus {
+        border-color: color-mix(in srgb, var(--accent) 65%, transparent);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+      }
+      #btn-bulk-add {
+        margin-top: 6px;
+      }
+
       /* queue */
       #queue-info {
         display: flex;
@@ -1781,12 +1807,22 @@
           <div class="section-label">🔎 SEARCH &amp; PLAY</div>
           <div id="search-row">
             <input id="search" placeholder="Song, artist, or link (Spotify, YouTube, Suno…)" autocomplete="off" />
+            <button id="btn-q-insert" data-tip="Queue next — plays right after the current track">⤴ Next</button>
             <button id="btn-q-add" data-tip="Add best match to the queue (Enter)">＋ Queue</button>
             <button id="btn-q-play" class="primary" data-tip="Search &amp; play right now">▶</button>
           </div>
           <div class="sub" style="margin-top: 8px">
             Searches Spotify &amp; YouTube, or paste a link (Spotify, YouTube, SoundCloud, Apple, Suno…). Playlists
-            queue up to 25.
+            queue up to 25. Shift+Enter = play next.
+          </div>
+          <div style="margin-top: 8px">
+            <a href="#" id="bulk-toggle" style="color: var(--accent); font-size: 11px; text-decoration: none"
+              >＋ Bulk add (one song per line, max 25)</a
+            >
+          </div>
+          <div id="bulk-panel">
+            <textarea id="bulk-input" placeholder="Paste songs or links — one per line, or separated by ;"></textarea>
+            <button id="btn-bulk-add" class="primary" data-tip="Resolve and queue every line">Queue all</button>
           </div>
         </div>
 
@@ -2104,8 +2140,13 @@
           'btn-jump',
           'empty',
           'search',
+          'btn-q-insert',
           'btn-q-add',
           'btn-q-play',
+          'bulk-toggle',
+          'bulk-panel',
+          'bulk-input',
+          'btn-bulk-add',
           'lyrics',
           'lyrics-plain',
           'lyrics-card',
@@ -2142,7 +2183,8 @@
           state = null,
           queue = [],
           djEnabled = false,
-          connected = false;
+          connected = false,
+          currentGuildId = null;
         var sensitivity = 1.0,
           themeId = 'vaporzr',
           presetCycleSec = 45;
@@ -2186,10 +2228,39 @@
           b.id = 'guest-banner';
           b.style.cssText =
             'position:fixed;left:50%;transform:translateX(-50%);bottom:14px;z-index:99;' +
-            'background:rgba(15,15,25,.92);border:1px solid rgba(255,255,255,.14);border-radius:10px;' +
-            'padding:8px 14px;font:12px/1.4 system-ui,sans-serif;color:#cbd5e1;' +
-            'box-shadow:0 4px 16px rgba(0,0,0,.45);pointer-events:none;white-space:nowrap';
-          b.textContent = '👁 View-only — ask for a /key give link to control playback';
+            'background:rgba(15,15,25,.95);border:1px solid rgba(255,255,255,.14);border-radius:10px;' +
+            'padding:8px 10px;font:12px/1.4 system-ui,sans-serif;color:#cbd5e1;' +
+            'box-shadow:0 4px 16px rgba(0,0,0,.45);display:flex;gap:8px;align-items:center;white-space:nowrap';
+          var label = document.createElement('span');
+          label.textContent = '👁 View-only —';
+          b.appendChild(label);
+          var inp = document.createElement('input');
+          inp.id = 'guest-key';
+          inp.placeholder = 'access key';
+          inp.autocomplete = 'off';
+          inp.style.cssText =
+            'width:150px;height:26px;border-radius:7px;border:1px solid rgba(255,255,255,.18);' +
+            'background:rgba(10,14,32,.8);color:#e2e8f0;padding:0 8px;font:inherit';
+          b.appendChild(inp);
+          var btn = document.createElement('button');
+          btn.textContent = 'Unlock';
+          btn.className = 'primary';
+          btn.style.cssText = 'height:26px;min-width:64px;font-size:11px';
+          btn.onclick = function () {
+            var v = (inp.value || '').trim();
+            if (!v) {
+              inp.focus();
+              return;
+            }
+            // Remember the key the same way the /key give link does, then reload
+            // so the socket reconnects authenticated (green dot, live controls).
+            document.cookie = 'vz_key=' + encodeURIComponent(v) + '; path=/; max-age=31536000; SameSite=Lax';
+            location.reload();
+          };
+          b.appendChild(btn);
+          inp.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') btn.click();
+          });
           document.body.appendChild(b);
         }
         function fmt(ms) {
@@ -2900,6 +2971,7 @@
               case 'snapshot':
                 state = msg.state;
                 queue = (msg.queue && msg.queue.tracks) || [];
+                currentGuildId = msg.primaryGuildId || null;
                 if (msg.guest && !GUEST) {
                   GUEST = true;
                   enableGuestMode();
@@ -2922,6 +2994,8 @@
                 renderWave();
                 break;
               case 'state:update':
+                // Another server's update must never repaint the one on screen.
+                if (msg.guildId && currentGuildId && msg.guildId !== currentGuildId) break;
                 state = msg.state;
                 render();
                 updateLyricHighlight(lyricPos());
@@ -2931,6 +3005,7 @@
                 buildLyrics();
                 break;
               case 'queue:update':
+                if (msg.guildId && currentGuildId && msg.guildId !== currentGuildId) break;
                 queue = (msg.queue && msg.queue.tracks) || [];
                 render();
                 break;
@@ -3265,23 +3340,55 @@
         el['btn-q-add'].onclick = function () {
           doSearch(false);
         };
+        el['btn-q-insert'].onclick = function () {
+          doSearch(false, true);
+        };
         el.search.addEventListener('keydown', function (e) {
           if (e.key === 'Enter') {
             e.preventDefault();
-            doSearch(false);
+            if (e.shiftKey) doSearch(false, true);
+            else doSearch(false);
           }
         });
-        function doSearch(now) {
+        function doSearch(now, insert) {
           var q = el.search.value.trim();
           if (!q) {
             toast('error', 'Type something to search first');
             el.search.focus();
             return;
           }
-          cmd('playSearch', { query: q, now: now });
-          toast('info', (now ? 'Searching & playing' : 'Adding') + ' "' + q + '"…');
+          cmd('playSearch', { query: q, now: now, insert: !!insert });
+          toast('info', (insert ? 'Queuing next' : now ? 'Searching & playing' : 'Adding') + ' "' + q + '"…');
           el.search.value = '';
         }
+
+        /* ---------- bulk add ---------- */
+        el['bulk-toggle'].onclick = function (e) {
+          e.preventDefault();
+          var open = el['bulk-panel'].style.display === 'block';
+          el['bulk-panel'].style.display = open ? 'none' : 'block';
+          if (!open) el['bulk-input'].focus();
+        };
+        el['btn-bulk-add'].onclick = function () {
+          var raw = el['bulk-input'].value || '';
+          var items = raw
+            .split(/[\n;]+/)
+            .map(function (s) {
+              return s.trim();
+            })
+            .filter(Boolean);
+          if (!items.length) {
+            toast('error', 'Paste a few songs or links first');
+            return;
+          }
+          if (items.length > 25) {
+            items = items.slice(0, 25);
+            toast('info', 'Only the first 25 entries will be queued');
+          }
+          cmd('bulkSearch', { queries: items });
+          toast('info', 'Adding ' + items.length + ' track' + (items.length === 1 ? '' : 's') + '…');
+          el['bulk-input'].value = '';
+        };
 
         /* ---------- leaderboard stats ---------- */
         function renderStats(d) {
