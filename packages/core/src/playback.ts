@@ -1456,7 +1456,14 @@ export class PlaybackController {
     // near-mute while the panel still shows the saved level (observed: the
     // device sitting at 1% with the UI reading 50). Re-apply the queue's volume
     // on every Spotify track start so an external change self-corrects.
-    void this.librespot.setVolume?.(this.queue.getState().volume);
+    const vol = this.queue.getState().volume;
+    void this.librespot.setVolume?.(vol);
+    // Classic librespot exposes no control-channel volume setter (setVolume is
+    // go-librespot only), so an external Spotify client can leave this device at
+    // 0% — the queue and NP advance while the output is pure silence. The Web
+    // API works for every Connect device, so re-assert the queue volume here on
+    // every track start.
+    if (this.spotifyDeviceId) void spotifySetVolume(this.spotifyDeviceId, vol).catch(() => {});
     let ff = this.resampler;
     if (!ff) {
       ff = spawn(config.ffmpegPath, RESAMPLE_ARGS(this.audioFxFilter()), {
