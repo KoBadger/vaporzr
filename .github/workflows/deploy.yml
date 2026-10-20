@@ -31,7 +31,7 @@ jobs:
   build-and-push:
     # A rollback dispatch (sha input given) skips the build — that image tag already exists.
     if: ${{ !github.event.inputs.sha }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
@@ -102,7 +102,7 @@ jobs:
 
   deploy-vps:
     needs: build-and-push
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Push/tag deploys as before; a rollback dispatch runs with the build job
     # skipped, so `always()` keeps this job from being skipped along with it.
     if: |
