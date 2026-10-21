@@ -33,6 +33,8 @@ export interface AmokRoomContext {
   voiceMembers?: string[];
   ewSteerDirective?: string | null;
   forceRoomContext?: boolean;
+  /** Extra context notes that should be appended (e.g. roast-target memory profiles). */
+  extraContextNotes?: string[];
 }
 
 export interface AmokResult {
@@ -829,6 +831,11 @@ export async function askAmokRich(prompt: string, opts: AmokRoomContext): Promis
     if (facts) {
       contextNotes.push(`Live web facts as of today: ${facts}`);
     }
+  }
+
+  // 5. Extra context notes from the caller (roast-target memory, etc.)
+  if (opts.extraContextNotes) {
+    for (const note of opts.extraContextNotes) contextNotes.push(note);
   }
 
   // Background non-blocking learning from what the user said
