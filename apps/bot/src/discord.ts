@@ -105,6 +105,7 @@ import { V_ALIASES, V_DISPATCH_ALIASES } from './aliases.js';
 import { buildSwapItems, swapLabel, trackQuery } from './swapItems.js';
 import { ttsEngine } from '@vaporzr/core/tts';
 import { pushBroadcast, pushSubscriptionCount } from './push.js';
+import { fallbackOpusModule, opusPlan, opusTelemetry } from './opusStream.js';
 import { downloadToTempFile } from '@vaporzr/core/mediaDownload';
 import { safeFetch, BlockedFetchError } from '@vaporzr/core/net';
 import { separateStemsReplicate, replicateStemsEnabled } from '@vaporzr/core/stemSeparation';
@@ -1922,7 +1923,7 @@ export class DiscordBot {
         try {
           s.playback.stopAll();
           s.queue.clear();
-          await s.voice.join(guild.id, channel.id, guild.voiceAdapterCreator);
+          await s.voice.join(guild.id, channel.id, guild.voiceAdapterCreator, channel);
           await interaction.editReply(`🔊 Joined **${channel.name}** — queue cleared, ready to stream.`);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -3792,7 +3793,7 @@ export class DiscordBot {
           try {
             s.playback.stopAll();
             s.queue.clear();
-            await s.voice.join(message.guild!.id, channel.id, message.guild!.voiceAdapterCreator);
+            await s.voice.join(message.guild!.id, channel.id, message.guild!.voiceAdapterCreator, channel);
             await message.reply(`🔊 Joined **${channel.name}** — queue cleared, ready to stream.`);
           } catch (err) {
             await message.reply(`❌ Could not join: ${err instanceof Error ? err.message : String(err)}`);
@@ -5230,7 +5231,7 @@ export class DiscordBot {
       throw this.joinFailedError();
     }
     try {
-      await s.voice.join(message.guild!.id, channel.id, message.guild!.voiceAdapterCreator);
+      await s.voice.join(message.guild!.id, channel.id, message.guild!.voiceAdapterCreator, channel);
     } catch (err) {
       // Joins can time out transiently (voice gateway hiccup); the internal
       // retry usually lands seconds later — auto-resume queued playback then.
@@ -5331,7 +5332,7 @@ export class DiscordBot {
       }
       const track = s.queue.getCurrentTrack();
       if (!track) return; // finished queue — nothing to pick back up
-      await s.voice.join(guild.id, channel.id, guild.voiceAdapterCreator);
+      await s.voice.join(guild.id, channel.id, guild.voiceAdapterCreator, channel);
       // join() resolves only once the link is Ready, so audio can flow.
       joined = true;
       this.perms.setNpAuto(s.guildId, true);
@@ -5489,7 +5490,7 @@ export class DiscordBot {
       console.warn('[discord] auto-join: requester is not in a voice channel');
       throw this.joinFailedError();
     }
-    await s.voice.join(interaction.guild!.id, channel.id, interaction.guild!.voiceAdapterCreator);
+    await s.voice.join(interaction.guild!.id, channel.id, interaction.guild!.voiceAdapterCreator, channel);
     const state = s.queue.getState();
     if (state.playing) void s.playback.reattachAfterRejoin();
     console.log('[discord] auto-joined voice channel');
@@ -5546,7 +5547,13 @@ export class DiscordBot {
     if (s.voice.isConnectionReady()) return true; // Only a Ready link can carry audio — see ensureJoinedForMessage.
     const guild = this.client.guilds.cache.get(best.guildId);
     if (!guild) return false;
-    await s.voice.join(guild.id, best.channelId, guild.voiceAdapterCreator);
+    const bitrateTarget = guild.channels.cache.get(best.channelId);
+    await s.voice.join(
+      guild.id,
+      best.channelId,
+      guild.voiceAdapterCreator,
+      bitrateTarget && 'bitrate' in bitrateTarget ? bitrateTarget : undefined,
+    );
     const state = s.queue.getState();
     if (state.playing) void s.playback.reattachAfterRejoin();
     this.perms.setNpAuto(s.guildId, true);
@@ -7314,6 +7321,11 @@ export class DiscordBot {
         },
         { name: 'Web Push', value: `${pushSubscriptionCount()} subscriber(s)`, inline: true },
         {
+          name: 'Opus',
+          value: this.opusLine(s),
+          inline: true,
+        },
+        {
           name: 'Audio',
           value: st?.track ? `${st.playing ? '▶️' : '⏸️'} ${st.track.name}`.slice(0, 100) : '`idle`',
           inline: false,
@@ -7322,6 +7334,26 @@ export class DiscordBot {
       .setFooter({
         text: 'Two instances sharing one token fight over the gateway session — run only one.',
       });
+  }
+
+  /**
+   * One line describing the voice encoder for /diag: which Opus implementation
+   * is in use, at what bitrate, and the channel cap it was negotiated against.
+   * Worth surfacing because the difference between the native module and the
+   * opusscript fallback is audible, and neither is visible in the logs otherwise.
+   */
+  private opusLine(s: Session | null | undefined): string {
+    const plan = opusPlan();
+    const status = s?.voice.opusStatus();
+    const channel = status?.channel ? ` · ch \`${Math.round(status.channel / 1000)}k\`` : '';
+    const meter = opusTelemetry();
+    const live =
+      meter.frames === 0 ? '' : meter.kbps === null ? ' · `live…`' : ` · \`${Math.round(meter.kbps)}k live\``;
+    if (plan) {
+      return `\`@discordjs/opus\` · \`${Math.round(plan.bitrate / 1000)}k\`${plan.fec ? ' · fec' : ''}${channel}${live}`;
+    }
+    if (config.voiceOpusEncoder === 'off') return '`off` (wanted: raw PCM path)';
+    return `\`missing\` → \`${fallbackOpusModule()}\`${meter.frames > 0 ? ' · raw-PCM path' : ''}`;
   }
 
   /** Human-readable autoplay status block shared by `/autoplay`, `/endwav`, `V@autoplay`, `V@ew`. */

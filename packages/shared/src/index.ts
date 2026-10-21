@@ -255,7 +255,12 @@ export type OutboundMessage =
   /** Current preset a visualizer is showing (for the panel's now-showing label). */
   | { type: 'visuals:preset'; name: string; index?: number; total?: number; guildId?: string }
   | { type: 'audio:forward'; enabled: boolean }
-  | { type: 'audio:pcm'; guildId: string; data: string }
+  /**
+   * Raw playback PCM (48 kHz stereo Int16, base64). `ts` is the sender's
+   * epoch-ms clock at broadcast, used by the browser listener to buffer and
+   * report end-to-end latency; optional because older senders omit it.
+   */
+  | { type: 'audio:pcm'; guildId: string; data: string; ts?: number }
   | { type: 'guilds:list'; guilds: Array<{ id: string; name: string }> }
   | { type: 'voice:update'; joined: boolean; channelId?: string }
   | { type: 'theme'; theme: VaporzrTheme }

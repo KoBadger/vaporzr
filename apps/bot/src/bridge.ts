@@ -1472,7 +1472,7 @@ export class Bridge {
   }
 
   private broadcastPcm(guildId: string, data: string): void {
-    const msg: OutboundMessage = { type: 'audio:pcm', guildId, data };
+    const msg: OutboundMessage = { type: 'audio:pcm', guildId, data, ts: Date.now() };
     for (const vis of this.visualizers) {
       if (!vis.guildId || vis.guildId === guildId) {
         this.sendToSocket(vis.socket, msg);

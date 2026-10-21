@@ -70,7 +70,7 @@ async function main(): Promise<void> {
   let joined = false;
   for (let attempt = 1; attempt <= 4 && !joined; attempt++) {
     try {
-      await session.voice.join(guild.id, voiceCh.id, guild.voiceAdapterCreator);
+      await session.voice.join(guild.id, voiceCh.id, guild.voiceAdapterCreator, voiceCh);
       joined = true;
     } catch (err) {
       console.log(`  join attempt ${attempt} failed: ${err instanceof Error ? err.message : String(err)}`);

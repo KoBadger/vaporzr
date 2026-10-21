@@ -1,4 +1,19 @@
-import { describe, expect, it } from 'vitest';
+import { rmSync } from 'node:fs';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+
+// The Weasel's memory store persists to config.dataDir/weasel-memory.json, and
+// this file writes to it. Point DATA_DIR at a throwaway directory BEFORE
+// ../amok.js (and the config it imports) is evaluated — otherwise the artist
+// counters accumulate across runs and the second `npm test` on one machine fails
+// with "Sublime (4x)" instead of "(2x)". It passes in CI only because the
+// workspace is fresh every run.
+vi.hoisted(() => {
+  const g = globalThis as { __amokPrevDataDir?: string };
+  const base = process.env.TEMP || process.env.TMPDIR || '/tmp';
+  g.__amokPrevDataDir = process.env.DATA_DIR;
+  process.env.DATA_DIR = `${base}/vaporzr-amok-test-${process.pid}`;
+});
+
 import {
   amokSessionId,
   buildWeaselSsml,
@@ -15,6 +30,14 @@ import {
   shouldGroundOnWeb,
 } from '../amok.js';
 import { V_ALIASES, V_DISPATCH_ALIASES } from '../aliases.js';
+
+afterAll(() => {
+  const g = globalThis as { __amokPrevDataDir?: string };
+  const dir = process.env.DATA_DIR;
+  if (dir) rmSync(dir, { recursive: true, force: true });
+  if (g.__amokPrevDataDir === undefined) delete process.env.DATA_DIR;
+  else process.env.DATA_DIR = g.__amokPrevDataDir;
+});
 
 describe('Amok ("The Weasel") Discord integration', () => {
   it('registers V@weasel, V@amok, V@pauly, and V@w aliases', () => {

@@ -15,6 +15,7 @@ A Discord music bot with a branded web control panel and a browser-based MilkDro
 - **🎛️ Web control panel** (`/panel`) — search-and-play, queue reordering, repeat, themes, reactivity, keyboard shortcuts; works from any device through an HTTPS link
 - **👁 Guest mode** — the visualizer and a **view-only panel** are open to anyone with the URL; only *control* requires a key (enforced server-side)
 - **🌈 Web visualizer** (`/viz`) — Butterchurn (MilkDrop 2) in the browser, ~1,700 presets, motion-skip + strobe-guard + 🌙 Calm mode, standalone (no desktop app needed)
+- **Hi-fi listener** (`/listen`) — hear the bot's playback in a browser at the source's full 48 kHz stereo, straight from the PCM tap (ahead of Discord's lossy relay), with live bitrate, buffer and arrival-lag readouts
 - **Discord button panel** (`V@pan`) — custom icon emojis, live-updating embed, NOW PLAYING confirmations, secure link buttons; postable by **server admins**
 - **🔴 Mini now-playing** — a compact strip auto-posts wherever commands are used the moment music starts; updates in place, re-anchors to the bottom on every track change
 - **🔑 Share keys** — `SHARE_KEY` gates panel control behind a cookie; `/key give` (admin-level by default) hands pre-authorized links to trusted users, `/key rotate` (owner-only) kills them all
@@ -38,6 +39,7 @@ The bot serves its panel/visualizer on `http://localhost:4876`. For links that w
 
 ```bash
 npm ci                 # Node 22 (see .nvmrc)
+npm run doctor         # audio stack check: native opus, ffmpeg, voice settings
 npm run typecheck      # all workspaces (the player needs vendor/electron-ecs)
 npm run format         # Prettier
 npm run format:check   # what CI enforces
@@ -46,7 +48,28 @@ npm test -w @vaporzr/bot
 npm test -w @vaporzr/core
 ```
 
-CI (`.github/workflows/ci.yml`) runs typecheck, the Prettier check, the visualizer syntax check, and both test suites on every push.
+CI (`.github/workflows/ci.yml`) runs typecheck, the Prettier check, the visualizer syntax check, and both test suites on every push; a second job installs on **Node 26** and runs `npm run doctor -- --strict` to prove the audio stack still comes up on a Node with no Opus prebuilts.
+
+### Node versions and the audio stack
+
+Node 22 is the supported default (`.nvmrc`), and newer Node works too. The one sharp edge is native Opus: `@discordjs/opus` publishes prebuilts only up to Node 22's ABI, and its own source-build fallback is broken on current toolchains (node-pre-gyp cannot spawn node-gyp on modern Windows, and node-gyp does not recognise VS 18). Without intervention voice silently degrades to opusscript at 64 kbps. So:
+
+- `@discordjs/opus` is an **optional** dependency — as a required one, a failed native build aborts `npm install` before anything can repair it.
+- The root `postinstall` (`scripts/install-opus-prebuild.mjs`) bootstraps whatever npm removed and stages the ABI-agnostic Node 22 N-API binding for the running ABI. Set `OPUS_SHIM_DISABLE=1` to opt out; it never fails an install.
+- **Do not install with `--ignore-scripts`**: that skips the shim *and* the `ffmpeg-static` binary download, and every audio path spawns ffmpeg. If you already did, run `npm install` again.
+- `npm run doctor` checks the whole stack — Node/ABI, native Opus, the optional-dependency wiring, ffmpeg, effective voice settings — and prints the fix for anything wrong. `--strict` exits non-zero.
+
+### Voice quality
+
+Music is encoded by the bot itself (48 kHz stereo, 20 ms frames) instead of being handed to `@discordjs/voice`'s fixed encoder, and the voice channel's own bitrate is raised to its boost tier's maximum on join. `/diag` shows the encoder, the negotiated channel bitrate, and the **live measured bitrate** of the last 30 s.
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `VOICE_OPUS_BITRATE` | `0` | Encoder target in bit/s; `0` follows the channel's bitrate. Clamped to 64k–512k. |
+| `VOICE_RAISE_CHANNEL_BITRATE` | on | Raise the channel to its boost tier's max (up to 384k) on join. `0` leaves channels untouched. |
+| `VOICE_OPUS_FEC` | on | In-band FEC tuned for 10% expected loss. `0` disables. |
+| `VOICE_OPUS_ENCODER` | `native` | `off` forces the legacy raw-PCM path (debugging only — much worse). |
+| `YOUTUBE_AUDIO_MAX_ABR` | `160` | Highest YouTube audio bitrate the fallback/download path will pick, in kbps. |
 
 ## Secure links
 

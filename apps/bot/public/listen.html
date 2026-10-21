@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Vaporzr - Hi-Fi Listener</title>
+    <meta name="theme-color" content="#0b0d12" />
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0d12;
+        --panel: #12151d;
+        --line: #232a38;
+        --text: #e8ecf6;
+        --dim: #93a0b8;
+        --accent: #7ee0c2;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: radial-gradient(1200px 600px at 50% -10%, #18202e 0%, var(--bg) 60%);
+        color: var(--text);
+        font:
+          15px/1.5 ui-sans-serif,
+          system-ui,
+          'Segoe UI',
+          Roboto,
+          sans-serif;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+      }
+      main {
+        width: min(560px, 100%);
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 26px 26px 22px;
+        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+      }
+      h1 {
+        margin: 0 0 2px;
+        font-size: 18px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        font-weight: 700;
+      }
+      h1 span {
+        color: var(--dim);
+        font-weight: 400;
+        letter-spacing: 0.06em;
+      }
+      p {
+        margin: 10px 0 0;
+        color: var(--dim);
+        font-size: 13.5px;
+      }
+      button#listen {
+        width: 100%;
+        margin: 22px 0 16px;
+        padding: 16px 18px;
+        border-radius: 12px;
+        border: 1px solid #2c4a44;
+        background: linear-gradient(180deg, #1d3a35, #152924);
+        color: #d9fff4;
+        font: 600 16px/1 inherit;
+        letter-spacing: 0.04em;
+        cursor: pointer;
+      }
+      button#listen:hover {
+        border-color: #3f6f65;
+      }
+      button#listen.on {
+        background: linear-gradient(180deg, #14332b, #0e241f);
+        color: var(--accent);
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-top: 14px;
+      }
+      .row label {
+        color: var(--dim);
+        font-size: 13px;
+        min-width: 64px;
+      }
+      input[type='range'] {
+        flex: 1;
+        accent-color: var(--accent);
+      }
+      #status {
+        margin-top: 18px;
+        border-top: 1px solid var(--line);
+        padding-top: 14px;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px 18px;
+        font-variant-numeric: tabular-nums;
+      }
+      #status div {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        font-size: 13px;
+      }
+      #status b {
+        color: var(--dim);
+        font-weight: 500;
+      }
+      #status i {
+        font-style: normal;
+      }
+      .ok {
+        color: var(--accent);
+      }
+      .warn {
+        color: #f2c14e;
+      }
+      .bad {
+        color: #f2777a;
+      }
+      #hint {
+        margin-top: 14px;
+        font-size: 12.5px;
+        color: var(--dim);
+      }
+      code {
+        background: #0e1118;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        padding: 1px 5px;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Vaporzr <span>· hi-fi listener</span></h1>
+      <p>Plays the bot's raw playback stream: 48 kHz stereo, straight from the source, before Discord's lossy relay.</p>
+
+      <button id="listen">▶ Start listening</button>
+
+      <div class="row">
+        <label for="vol">Volume</label>
+        <input id="vol" type="range" min="0" max="100" value="90" />
+      </div>
+
+      <div id="status">
+        <div><b>stream</b><i id="s-conn">connecting…</i></div>
+        <div><b>format</b><i id="s-fmt">–</i></div>
+        <div><b>bitrate</b><i id="s-kbps">–</i></div>
+        <div><b>buffer</b><i id="s-buf">–</i></div>
+        <div><b>arrival lag</b><i id="s-lag">–</i></div>
+        <div><b>audio</b><i id="s-audio">paused</i></div>
+      </div>
+
+      <div id="hint">
+        Nothing to hear yet? Start a track in Discord — the stream only exists while the bot is playing. Build
+        <code>{{BUILD}}</code>
+      </div>
+    </main>
+
+    <script>
+      (function () {
+        'use strict';
+        var SAMPLE_RATE = 48000,
+          CHANNELS = 2;
+        var LEAD = 0.25; // seconds of buffer scheduled ahead of the clock
+        var MIN_LEAD = 0.03; // below this we are about to underrun: rebuffer
+        var MAX_LEAD = 1.5; // above this the tab drifted: drop the backlog
+
+        var btn = document.getElementById('listen');
+        var vol = document.getElementById('vol');
+        var el = {
+          conn: document.getElementById('s-conn'),
+          fmt: document.getElementById('s-fmt'),
+          kbps: document.getElementById('s-kbps'),
+          buf: document.getElementById('s-buf'),
+          lag: document.getElementById('s-lag'),
+          audio: document.getElementById('s-audio'),
+        };
+
+        var ws = null,
+          retry = 0,
+          retryTimer = null;
+        var ctx = null,
+          master = null,
+          nextTime = 0;
+        var running = false,
+          chunks = 0,
+          skipped = 0;
+        var arrivals = []; // [{t, bytes, lag}] within the last 30 s
+        var lastDraw = 0;
+
+        function setText(node, text, cls) {
+          node.textContent = text;
+          if (cls) node.className = cls;
+        }
+
+        function connect() {
+          var url = window.__VZ_WS__ || (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
+          setText(el.conn, 'connecting…');
+          try {
+            ws = new WebSocket(url);
+          } catch (e) {
+            scheduleReconnect();
+            return;
+          }
+          ws.onopen = function () {
+            retry = 0;
+            setText(el.conn, 'connected', 'ok');
+            ws.send(JSON.stringify({ type: 'hello', role: 'visualizer', name: 'hifi-listener' }));
+          };
+          ws.onclose = function () {
+            setText(el.conn, 'disconnected', 'bad');
+            scheduleReconnect();
+          };
+          ws.onerror = function () {
+            try {
+              ws.close();
+            } catch (e) {}
+          };
+          ws.onmessage = function (ev) {
+            var msg;
+            try {
+              msg = JSON.parse(ev.data);
+            } catch (e) {
+              return;
+            }
+            if (msg.type !== 'audio:pcm' || !msg.data) return;
+            if (msg.ts) arrivals.push({ t: performance.now(), bytes: msg.data.length, lag: Date.now() - msg.ts });
+            else arrivals.push({ t: performance.now(), bytes: msg.data.length, lag: null });
+            if (running) play(msg.data);
+          };
+        }
+        function scheduleReconnect() {
+          retry = Math.min(retry + 1, 6);
+          clearTimeout(retryTimer);
+          retryTimer = setTimeout(connect, 500 * Math.pow(1.7, retry));
+        }
+
+        /** base64 -> Int16 PCM -> a WebAudio buffer, scheduled back-to-back. */
+        function play(b64) {
+          if (!ctx) return;
+          var bin = atob(b64),
+            n = bin.length;
+          var bytes = new Uint8Array(n);
+          for (var i = 0; i < n; i++) bytes[i] = bin.charCodeAt(i);
+          var pcm = new Int16Array(bytes.buffer, 0, Math.floor(n / 2));
+          var frames = Math.floor(pcm.length / CHANNELS);
+          if (!frames) return;
+
+          var buf = ctx.createBuffer(CHANNELS, frames, SAMPLE_RATE);
+          var L = buf.getChannelData(0),
+            R = buf.getChannelData(1);
+          for (var f = 0; f < frames; f++) {
+            L[f] = pcm[f * CHANNELS] / 32768;
+            R[f] = pcm[f * CHANNELS + 1] / 32768;
+          }
+
+          var now = ctx.currentTime;
+          if (nextTime < now + MIN_LEAD || nextTime > now + MAX_LEAD) {
+            // Underrun or drift: realign instead of letting the lead collapse/balloon.
+            if (nextTime > now + MAX_LEAD) skipped++;
+            nextTime = now + LEAD;
+          }
+          var src = ctx.createBufferSource();
+          src.buffer = buf;
+          src.connect(master);
+          src.start(nextTime);
+          nextTime += frames / SAMPLE_RATE;
+          chunks++;
+        }
+
+        btn.addEventListener('click', function () {
+          if (running) {
+            stop();
+            return;
+          }
+          start();
+        });
+
+        function start() {
+          var AC = window.AudioContext || window.webkitAudioContext;
+          if (!AC) {
+            setText(el.audio, 'WebAudio unavailable', 'bad');
+            return;
+          }
+          if (!ctx) {
+            ctx = new AC({ sampleRate: SAMPLE_RATE, latencyHint: 'playback' });
+            master = ctx.createGain();
+            master.gain.value = Number(vol.value) / 100;
+            master.connect(ctx.destination);
+          }
+          ctx.resume();
+          nextTime = ctx.currentTime + LEAD;
+          running = true;
+          btn.classList.add('on');
+          btn.textContent = '■ Stop listening';
+          setText(el.audio, 'playing', 'ok');
+          setText(el.fmt, SAMPLE_RATE / 1000 + ' kHz · stereo', '');
+        }
+        function stop() {
+          running = false;
+          btn.classList.remove('on');
+          btn.textContent = '▶ Start listening';
+          setText(el.audio, 'paused', '');
+          setText(el.buf, '–');
+        }
+        vol.addEventListener('input', function () {
+          if (master) master.gain.value = Number(vol.value) / 100;
+        });
+
+        /** Stats: kbps over 30 s, buffer lead, arrival lag. */
+        function draw() {
+          var now = performance.now();
+          if (now - lastDraw < 250) return;
+          lastDraw = now;
+
+          var cutoff = now - 30000;
+          while (arrivals.length && arrivals[0].t < cutoff) arrivals.shift();
+          if (arrivals.length > 1) {
+            var span = Math.max(1000, now - arrivals[0].t); // ms actually covered
+            var bytes = 0,
+              lag = 0,
+              lags = 0;
+            for (var i = 0; i < arrivals.length; i++) {
+              bytes += arrivals[i].bytes;
+              if (arrivals[i].lag !== null) {
+                lag += arrivals[i].lag;
+                lags++;
+              }
+            }
+            setText(el.kbps, Math.round((bytes * 8) / span) + ' kbps', 'ok');
+            if (lags) setText(el.lag, Math.round(lag / lags) + ' ms', '');
+          } else if (arrivals.length === 0) {
+            setText(el.kbps, '–', '');
+          }
+
+          if (running && ctx) {
+            var lead = nextTime - ctx.currentTime;
+            if (lead < 0) lead = 0;
+            setText(
+              el.buf,
+              Math.round(lead * 1000) + ' ms' + (skipped ? ' · ' + skipped + ' skips' : ''),
+              lead > 0.6 ? 'warn' : '',
+            );
+          }
+        }
+        setInterval(draw, 250);
+
+        connect();
+      })();
+    </script>
+  </body>
+</html>
