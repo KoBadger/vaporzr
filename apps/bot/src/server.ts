@@ -840,6 +840,23 @@ async function handleRoute(
         break;
       }
 
+      case '/listen':
+      case '/listen.html': {
+        try {
+          const build = (process.env.VAPORZR_BUILD ?? 'dev').slice(0, 7);
+          const file = fs
+            .readFileSync(path.join(__dirname, '..', 'public', 'listen.html'), 'utf8')
+            .replace(/\{\{ORIGIN\}\}/g, origin)
+            .replace(/\{\{BUILD\}\}/g, build);
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+          res.end(file);
+        } catch {
+          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('Listener not found.');
+        }
+        break;
+      }
+
       case '/privacy':
       case '/privacy.html': {
         try {
