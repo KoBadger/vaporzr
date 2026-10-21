@@ -27,12 +27,13 @@
 #   OAuth link, copy apps/bot/data (tokens.json) into the vaporzr-data volume.
 # - The bot runs TypeScript directly (tsx), so no compile step is needed.
 # - Keep the base image on node:22 unless you have checked that @discordjs/opus
-#   ships a prebuilt binding for the new ABI. A brand-new Node major does not,
-#   the native build fails, and voice silently degrades to the opusscript
-#   fallback (~64 kbps, audibly worse). The boot log and /diag both say which one
-#   is in use. build-essential is installed above, so a source build is only a
-#   slow build away — but it needs the prebuild to be absent, not the ABI to
-#   mismatch.
+#   ships a prebuilt binding for the new ABI. Newer Node ABIs (24/25/26) have no
+#   release asset, the installer falls back to a broken source compile, and
+#   voice degrades to opusscript (~64 kbps). Dev machines are covered by the
+#   root `postinstall` (scripts/install-opus-prebuild.mjs): it stages the
+#   ABI-agnostic N-API redistribution of the Node 22 binding into the folder
+#   node-pre-gyp expects. The image stays on node:22, so the shim exits after
+#   a quick load check. The boot log and /diag both say which backend is in use.
 
 FROM node:22-trixie-slim AS build
 

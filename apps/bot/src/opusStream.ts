@@ -158,7 +158,9 @@ export function logOpusStartup(): void {
     console.warn(
       `[opus] native @discordjs/opus unavailable on node ${process.version} — ` +
         `voice falls back to ${fallbackOpusModule()} (~64 kbps). ` +
-        'Check that this Node version has a prebuild; the Docker image pins node:22 for this reason.',
+        'Check that this Node version has a prebuild; if this is a dev machine, ' +
+        'run `npm install` again - the root postinstall shim stages the ABI-agnostic ' +
+        'Node 22 binding for newer Node ABIs (scripts/install-opus-prebuild.mjs).',
     );
     return;
   }
