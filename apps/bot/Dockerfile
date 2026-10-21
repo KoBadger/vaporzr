@@ -56,6 +56,10 @@ COPY packages/core ./packages/core
 COPY apps/bot ./apps/bot
 COPY apps/player ./apps/player
 COPY apps/spicetify ./apps/spicetify
+# Root postinstall (scripts/install-opus-prebuild.mjs stages the ABI-agnostic
+# Opus prebuild). Without this COPY the postinstall cannot resolve itself and
+# `npm ci` fails with MODULE_NOT_FOUND.
+COPY scripts ./scripts
 
 RUN npm ci --omit=dev
 
