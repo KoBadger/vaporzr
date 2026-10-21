@@ -12,8 +12,7 @@
  * node-gyp. That fallback is broken on current Windows toolchains twice over:
  * node-pre-gyp 0.4.5 dies with `spawn EINVAL` (it cannot spawn the node-gyp
  * .cmd shim on post-CVE Windows Node), and even a manual `node-gyp@11` build
- * cannot find Visual Studio 18 ("unknown version"). Result: `npm ci` with
- * scripts enabled fails outright, and the voice pipeline degrades to
+ * cannot find Visual Studio 18 ("unknown version"). Result: voice degrades to
  * opusscript, which encodes at libopus' 64 kbps default (and prism-media caps
  * any bitrate request at 128k).
  *
@@ -26,19 +25,154 @@
  * So: if the native module does not load, fetch the published Node 22
  * (node-v127) tarball, and place opus.node in the folder this Node expects.
  *
- * Usage: add `node scripts/install-opus-prebuild.mjs` as the root
- * `postinstall`. Env: set OPUS_SHIM_DISABLE=1 to opt out. The install never
- * fails because of this script — on any problem it warns and exits 0, leaving
- * opusscript as the runtime fallback.
+ * Because @discordjs/opus is an *optional* dependency of the bot (it must be:
+ * as a required one, a failing install script aborts the whole `npm install`
+ * before any postinstall can run), npm deletes the package directory on a
+ * failed build. So when the package is missing entirely, this script also
+ * bootstraps it from the npm registry tarball first — pure JS, no install
+ * scripts — and then stages the binding into it.
+ *
+ * Usage: root `postinstall`. Env: OPUS_SHIM_DISABLE=1 opts out. The install
+ * never fails because of this script — on any problem it warns and exits 0,
+ * leaving opusscript as the runtime fallback.
  */
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { existsSync, mkdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import os from 'node:os';
 
 const log = (msg) => console.log(`[opus-shim] ${msg}`);
+const REGISTRY = 'https://registry.npmjs.org/@discordjs/opus';
+
+/**
+ * Download `url` to a temp file. Node's own fetch first; on Windows a
+ * PowerShell fallback, because corporate TLS interception breaks Node's
+ * bundled CA list while the Windows store still has the proxy's root.
+ * Returns the file path, or null.
+ */
+async function download(url, suffix) {
+  const dest = join(os.tmpdir(), `opus-shim-${process.pid}-${Date.now()}-${suffix}`);
+  const tmp = `${dest}.part`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    writeFileSync(tmp, Buffer.from(await res.arrayBuffer()));
+    renameSync(tmp, dest);
+    return dest;
+  } catch (err) {
+    if (process.platform === 'win32') {
+      try {
+        execFileSync(
+          'powershell.exe',
+          [
+            '-NoProfile',
+            '-Command',
+            `[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; ` +
+              `Invoke-WebRequest -Uri '${url}' -OutFile '${dest}' -UseBasicParsing`,
+          ],
+          { stdio: 'ignore' },
+        );
+        if (existsSync(dest)) return dest;
+      } catch {
+        /* fall through */
+      }
+    }
+    log(`warn: could not download ${url} (${err.message})`);
+    return null;
+  }
+}
+
+/** Version the repo asks for, so the shim matches package.json when it can. */
+function wantedVersion() {
+  for (const rel of [join('apps', 'bot', 'package.json'), 'package.json']) {
+    try {
+      const pkg = JSON.parse(readFileSync(join(process.cwd(), rel), 'utf8'));
+      const spec = { ...pkg.dependencies, ...pkg.optionalDependencies }['@discordjs/opus'];
+      const clean = String(spec ?? '').replace(/^[~^=\s]+/, '');
+      if (/^\d+\.\d+\.\d+$/.test(clean)) return clean;
+    } catch {
+      /* try next candidate */
+    }
+  }
+  return null; // caller falls back to the registry's latest
+}
+
+/** Recreate the package npm deleted, from the registry tarball (no scripts). */
+async function bootstrapPackage() {
+  let version = wantedVersion();
+  if (!version) {
+    try {
+      const res = await fetch(`${REGISTRY}/latest`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      version = JSON.parse(await res.text()).version;
+    } catch (err) {
+      log(`warn: could not determine a version to bootstrap (${err.message})`);
+      return null;
+    }
+  }
+  const dest = join(process.cwd(), 'node_modules', '@discordjs', 'opus');
+  const tgz = await download(`${REGISTRY}/-/opus-${version}.tgz`, 'opus-npm.tgz');
+  if (!tgz) return null;
+  try {
+    mkdirSync(dest, { recursive: true });
+    execFileSync('tar', ['-xzf', tgz, '-C', dest, '--strip-components=1'], { stdio: 'ignore' });
+    if (!existsSync(join(dest, 'package.json'))) throw new Error('tarball had no package.json');
+    return dest;
+  } catch (err) {
+    rmSync(dest, { recursive: true, force: true });
+    log(`warn: could not unpack @discordjs/opus ${version} (${err.message})`);
+    return null;
+  } finally {
+    rmSync(tgz, { force: true });
+  }
+}
+
+/**
+ * The opus loader is two lines: `require('@discordjs/node-pre-gyp').find(pkg)`.
+ * npm drops that dependency too when it deletes the failed optional package, so
+ * a bootstrapped copy cannot load without it. Installing the real tree from
+ * here would mean a nested `npm install` inside a postinstall; instead drop in
+ * a minimal stand-in that implements exactly the `find()` contract, which is
+ * just "path of the binding for this ABI". Only created when it is missing.
+ */
+function ensureNodePreGyp(pkgRoot) {
+  try {
+    require.resolve('@discordjs/node-pre-gyp/package.json');
+    return; // real dependency present
+  } catch {
+    /* install the stand-in below */
+  }
+  const dir = join(pkgRoot, '..', 'node-pre-gyp');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, 'package.json'),
+    JSON.stringify({ name: '@discordjs/node-pre-gyp', version: '0.0.0-vaporzr-shim', main: 'index.js' }, null, 2),
+  );
+  writeFileSync(
+    join(dir, 'index.js'),
+    `// Installed by vaporzr scripts/install-opus-prebuild.mjs: minimal stand-in for
+// @discordjs/node-pre-gyp, which npm removed together with the optional
+// @discordjs/opus package. Implements only the find() contract: return the
+// absolute path of the native binding for the running ABI.
+'use strict';
+const { join, dirname } = require('node:path');
+const { existsSync } = require('node:fs');
+
+exports.find = (packageJsonPath) => {
+  const root = dirname(packageJsonPath);
+  const libc = process.platform === 'win32' || process.platform === 'darwin' ? 'unknown-unknown' : 'unknown-unknown';
+  const abi = 'node-v' + process.versions.modules + '-napi-v3-' + process.platform + '-' + process.arch + '-' + libc;
+  const candidates = [join(root, 'prebuild', abi, 'opus.node'), join(root, 'build', 'Release', 'opus.node')];
+  const hit = candidates.find((p) => existsSync(p));
+  if (!hit) throw new Error('native binding not found for ' + abi + ' (looked in ' + candidates.join(', ') + ')');
+  return hit;
+};
+`,
+  );
+  log('installed a minimal @discordjs/node-pre-gyp stand-in (the real one was removed with the package)');
+}
 
 try {
   const require = createRequire(import.meta.url);
@@ -48,31 +182,15 @@ try {
     process.exit(0);
   }
 
-  // Locate the package (monorepo-hoisted node_modules).
-  let pkgJsonPath;
-  let pkgRoot;
-  try {
-    pkgJsonPath = require.resolve('@discordjs/opus/package.json');
-    pkgRoot = join(pkgJsonPath, '..'); // .../<node_modules>/@discordjs/opus
-  } catch {
-    process.exit(0); // not installed -> nothing to do
-  }
-
   // Already loading natively? Nothing to do (quiet, so installs stay clean).
-  let loaded = false;
   try {
     require('@discordjs/opus');
-    loaded = true;
+    process.exit(0);
   } catch {
     /* fall through to the shim */
   }
-  if (loaded) {
-    process.exit(0);
-  }
 
-  const pkg = JSON.parse(require('node:fs').readFileSync(pkgJsonPath, 'utf8'));
   const { platform, arch } = process;
-
   // File naming includes libc; only win32/macOS use "unknown-unknown".
   const toolchain = platform === 'win32' || platform === 'darwin' ? 'unknown-unknown' : null;
   if (!toolchain || !['x64', 'arm64'].includes(arch)) {
@@ -80,6 +198,24 @@ try {
     process.exit(0);
   }
 
+  // Find the package. npm deletes a failed *optional* dependency, so on a
+  // newer ABI the folder is usually gone by the time this runs: recreate it.
+  let pkgRoot = null;
+  try {
+    pkgRoot = join(require.resolve('@discordjs/opus/package.json'), '..');
+  } catch {
+    pkgRoot = await bootstrapPackage();
+    if (!pkgRoot) {
+      log('warn: @discordjs/opus is not installed and could not be bootstrapped; staying on opusscript');
+      process.exit(0);
+    }
+    log(`bootstrapped @discordjs/opus from the npm registry (the installer had removed it)`);
+  }
+
+  // npm removes the package's own dependencies along with it.
+  ensureNodePreGyp(pkgRoot);
+
+  const pkg = JSON.parse(readFileSync(join(pkgRoot, 'package.json'), 'utf8'));
   const prebuildDir = join(
     pkgRoot,
     'prebuild',
@@ -103,44 +239,9 @@ try {
   const innerPrefix = `node-${LEGACY_ABI}-napi-v3-${platform}-${arch}-${toolchain}`;
   const innerOpus = `${innerPrefix}/opus.node`;
 
-  const gzPath = join(os.tmpdir(), tarballName);
-  const gzTmp = `${gzPath}.${process.pid}.download`;
-  let body;
-  try {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
-    body = Buffer.from(await res.arrayBuffer());
-  } catch (err) {
-    // Corporate TLS interception can break Node's own fetch; fall back to the
-    // system downloader (Windows) once before giving up.
-    if (platform === 'win32') {
-      try {
-        execFileSync(
-          'powershell.exe',
-          [
-            '-NoProfile',
-            '-Command',
-            `[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; ` +
-              `Invoke-WebRequest -Uri '${url}' -OutFile '${gzTmp}' -UseBasicParsing`,
-          ],
-          { stdio: 'ignore' },
-        );
-        if (!existsSync(gzTmp)) throw new Error('powershell download produced nothing');
-        body = null; // content already on disk
-      } catch (err2) {
-        log(`warn: could not download the prebuild (fetch: ${err.message}; powershell: ${err2.message})`);
-        log('staying on opusscript');
-        process.exit(0);
-      }
-    } else {
-      log(`warn: could not download the prebuild (${err.message}); staying on opusscript`);
-      process.exit(0);
-    }
-  }
-  if (body) writeFileSync(gzTmp, body);
-  if (body && body.length < 1000) {
-    log(`warn: downloaded ${body.length} bytes, not a tarball; staying on opusscript`);
-    unlinkSync(gzTmp);
+  const gz = await download(url, tarballName);
+  if (!gz) {
+    log('warn: no prebuild downloaded; staying on opusscript');
     process.exit(0);
   }
 
@@ -148,7 +249,7 @@ try {
   mkdirSync(prebuildDir, { recursive: true });
   try {
     // Tarball layout: "<innerPrefix>/opus.node" (+ .lib et al). Keep only the binding.
-    execFileSync('tar', ['-xzf', gzTmp, '-C', prebuildDir, '--strip-components=1', innerOpus], {
+    execFileSync('tar', ['-xzf', gz, '-C', prebuildDir, '--strip-components=1', innerOpus], {
       stdio: 'ignore',
     });
   } catch {
@@ -158,31 +259,27 @@ try {
     try {
       rmSync(workDir, { recursive: true, force: true });
       mkdirSync(workDir, { recursive: true });
-      execFileSync('tar', ['-xzf', gzTmp, '-C', workDir], { stdio: 'ignore' });
+      execFileSync('tar', ['-xzf', gz, '-C', workDir], { stdio: 'ignore' });
       renameSync(join(workDir, innerOpus), join(prebuildDir, 'opus.node'));
     } catch (err3) {
       log(`warn: extraction failed (${err3.message}); staying on opusscript`);
       process.exit(0);
     } finally {
       rmSync(workDir, { recursive: true, force: true });
+      rmSync(gz, { force: true });
     }
   }
+  rmSync(gz, { force: true });
 
   // Verify in a fresh process (this one may have a failed-require cache entry).
-  const check = spawnSync(
-    process.execPath,
-    ['-e', `try { require(${JSON.stringify(pkgRoot)}) } catch (e) { console.error(e.message); process.exit(1) }`],
-    { stdio: 'pipe' },
-  );
+  const check = spawnSync(process.execPath, ['-e', "require('@discordjs/opus')"], { stdio: 'pipe' });
   if (check.status !== 0) {
     log(`warn: placed prebuild still does not load (${String(check.stderr).trim()}); staying on opusscript`);
-    unlinkSync(join(prebuildDir, 'opus.node'));
+    rmSync(join(prebuildDir, 'opus.node'), { force: true });
     process.exit(0);
   }
 
-  log(
-    `installed ${tarballName} as ${join(prebuildDir, 'opus.node').replace(process.cwd(), '.')} -> native opus ready on ${process.version}`,
-  );
+  log(`native opus ready on ${process.version} (${tarballName} -> ${prebuildDir.replace(process.cwd(), '.')})`);
 } catch (err) {
   console.log(`[opus-shim] warn: unexpected failure (${err.message}) — staying on opusscript`);
 }
