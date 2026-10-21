@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -301,8 +302,29 @@ export function parseWeaselResponse(raw: string): AmokResult {
     }
   }
 
-  const text = keptLines.join('\n').trim();
+  const text = compactWeaselText(keptLines.join('\n').trim());
   return { text, queueQueries };
+}
+
+/**
+ * Keep The Weasel's replies short, punchy, and conversational (1-3 sentences,
+ * max ~340 chars) instead of multi-paragraph essays.
+ */
+export function compactWeaselText(raw: string): string {
+  const oneParagraph = raw.split(/\r?\n\s*\r?\n/)[0]?.trim() ?? raw.trim();
+  const collapsed = oneParagraph.replace(/\s+/g, ' ').trim();
+  if (collapsed.length <= 320) return collapsed;
+  const sentences = collapsed.match(/[^.!?]+[.!?]+(?:\s|$)/g);
+  if (sentences && sentences.length > 0) {
+    let out = '';
+    for (const s of sentences) {
+      if ((out + s).trim().length > 320 && out.length > 0) break;
+      out += s;
+      if (out.length >= 220) break;
+    }
+    if (out.trim()) return out.trim();
+  }
+  return `${collapsed.slice(0, 319)}…`;
 }
 
 /** True when a user prompt likely benefits from live Google Search grounding. */
@@ -476,13 +498,118 @@ export function pcmMono48kToWav(pcm: Buffer): Buffer {
   return Buffer.concat([header, pcm]);
 }
 
+let cachedPaulyRefDataUri: string | null | undefined;
+
+function getPaulyVoiceRefDataUri(): string | null {
+  if (cachedPaulyRefDataUri !== undefined) return cachedPaulyRefDataUri;
+  const refPath = process.env.AMOK_VOICE_REF_PATH || path.join(config.dataDir, 'pauly-voice-ref.wav');
+  try {
+    if (fs.existsSync(refPath)) {
+      const b64 = fs.readFileSync(refPath).toString('base64');
+      cachedPaulyRefDataUri = `data:audio/wav;base64,${b64}`;
+      return cachedPaulyRefDataUri;
+    }
+  } catch {
+    /* fall through */
+  }
+  cachedPaulyRefDataUri = null;
+  return null;
+}
+
+/** Resample an arbitrary audio buffer (WAV/MP3) to 48 kHz stereo Int16 PCM via ffmpeg. */
+function decodeAudioToStereo48k(audioBytes: Buffer): Promise<{ pcm: Buffer; durationMs: number } | null> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const chunks: Buffer[] = [];
+    const finish = (res: { pcm: Buffer; durationMs: number } | null): void => {
+      if (settled) return;
+      settled = true;
+      resolve(res);
+    };
+    try {
+      const ff = spawn(
+        config.ffmpegPath,
+        ['-hide_banner', '-loglevel', 'error', '-i', 'pipe:0', '-ac', '2', '-ar', '48000', '-f', 's16le', 'pipe:1'],
+        { windowsHide: true },
+      );
+      const timer = setTimeout(() => {
+        try {
+          ff.kill();
+        } catch {}
+        finish(null);
+      }, 10_000);
+      timer.unref?.();
+      ff.stdout.on('data', (d: Buffer) => chunks.push(d));
+      ff.once('error', () => {
+        clearTimeout(timer);
+        finish(null);
+      });
+      ff.once('close', (code) => {
+        clearTimeout(timer);
+        if (code !== 0 || chunks.length === 0) return finish(null);
+        const pcm = Buffer.concat(chunks);
+        const durationMs = Math.round((pcm.length / (48_000 * 4)) * 1000);
+        finish({ pcm, durationMs });
+      });
+      ff.stdin.end(audioBytes);
+    } catch {
+      finish(null);
+    }
+  });
+}
+
 /**
- * Synthesize spoken Weasel audio via Google Cloud Text-to-Speech (`en-US-Casual-K`
- * with SSML surfer prosody shaping) as 48 kHz stereo Int16 PCM.
+ * Synthesize speech using Zero-Shot Voice Cloning (`resemble-ai/chatterbox` on Replicate)
+ * trained on `/app/data/pauly-voice-ref.wav` so it sounds like Pauly Shore's real voice.
+ */
+async function synthClonedPaulyVoice(cleanText: string): Promise<{ pcm: Buffer; durationMs: number } | null> {
+  const repToken = (process.env.REPLICATE_API_TOKEN ?? '').trim();
+  const audioPrompt = (process.env.AMOK_VOICE_SAMPLE_URL ?? '').trim() || getPaulyVoiceRefDataUri();
+  if (!repToken || !audioPrompt) return null;
+
+  try {
+    const res = await fetch('https://api.replicate.com/v1/models/resemble-ai/chatterbox/predictions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${repToken}`,
+        'Content-Type': 'application/json',
+        Prefer: 'wait=20',
+      },
+      body: JSON.stringify({
+        input: {
+          prompt: cleanText.slice(0, 240),
+          audio_prompt: audioPrompt,
+          exaggeration: 0.65,
+          cfg_weight: 0.45,
+        },
+      }),
+      signal: AbortSignal.timeout(22_000),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { output?: string };
+    if (!data.output || typeof data.output !== 'string') return null;
+    const wavRes = await fetch(data.output, { signal: AbortSignal.timeout(10_000) });
+    if (!wavRes.ok) return null;
+    const wavBuf = Buffer.from(await wavRes.arrayBuffer());
+    return await decodeAudioToStereo48k(wavBuf);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Synthesize spoken Weasel audio:
+ * 1. Primary: Zero-Shot Voice Cloning (`resemble-ai/chatterbox`) using Pauly Shore's
+ *    real voice reference (`/app/data/pauly-voice-ref.wav`).
+ * 2. Fallback: Google Cloud TTS (`en-US-Casual-K`) with SSML surfer prosody shaping.
  */
 export async function synthWeaselVoice(text: string): Promise<{ pcm: Buffer; durationMs: number } | null> {
   const clean = cleanWeaselSpeechText(text);
   if (!clean) return null;
+
+  const cloned = await synthClonedPaulyVoice(clean);
+  if (cloned) return cloned;
+
   const projectId = (process.env.AMOK_PROJECT_ID ?? DEFAULT_PROJECT_ID).trim();
   const voiceName = (process.env.AMOK_TTS_VOICE ?? DEFAULT_TTS_VOICE).trim();
   const { token, quotaProject } = await getAccessToken(projectId);
@@ -653,7 +780,7 @@ export async function askAmokRich(prompt: string, opts: AmokRoomContext): Promis
   const host = location === 'global' ? 'dialogflow.googleapis.com' : `${location}-dialogflow.googleapis.com`;
   const url = `https://${host}/v3/projects/${encodeURIComponent(projectId)}/locations/${encodeURIComponent(location)}/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}:detectIntent`;
 
-  const contextNotes: string[] = [];
+  const contextNotes: string[] = ['Keep reply ultra-short: 1-2 punchy sentences max (under 40 words)'];
   if (opts.username) {
     contextNotes.push(`Speaker: ${opts.username}`);
   }

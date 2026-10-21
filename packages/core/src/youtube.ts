@@ -185,7 +185,7 @@ function stageCookieCopy(): string | null {
   }
 }
 
-function ytDlpOnce(args: string[], proxy = ''): Promise<string> {
+function ytDlpOnce(args: string[], proxy = '', skipCookies = false): Promise<string> {
   return new Promise((resolve, reject) => {
     const noProxyEnv = Object.fromEntries(
       Object.entries(process.env).filter(([k]) => !k.toLowerCase().endsWith('_proxy')),
@@ -201,7 +201,7 @@ function ytDlpOnce(args: string[], proxy = ''): Promise<string> {
     // The proxy's exit IP resolves the URL AND downloads it (ffmpeg uses the
     // same proxy — googlevideo URLs are IP-bound). An empty value = direct.
     if (proxy) flags.push('--proxy', proxy);
-    const cookieCopy = stageCookieCopy();
+    const cookieCopy = skipCookies ? null : stageCookieCopy();
     if (cookieCopy) flags.push('--cookies', cookieCopy);
     execFile(
       config.ytDlpPath,
@@ -238,7 +238,7 @@ function ytDlpOnce(args: string[], proxy = ''): Promise<string> {
  *  when YouTube has flagged the bot's IP, OR when the PO token is missing —
  *  knowing which is what makes it actionable. */
 export function isBotWall(msg: string): boolean {
-  return /Sign in to confirm|not a bot/i.test(msg);
+  return /Sign in to confirm|not a bot/i.test(msg) || msg === YOUTUBE_BUSY_TEXT;
 }
 
 /** A proxy-side failure (dead credentials, unreachable tunnel, 407). */
@@ -452,13 +452,20 @@ async function runYtDlp(args: string[], retries = 2, route?: string): Promise<st
 
   /** Retry a single network path (`proxy` = '' is a direct connection). */
   const attemptOn = async (proxy: string, tries: number, rotating = false): Promise<string> => {
+    let curProxy = proxy;
     for (let attempt = 0; attempt <= tries; attempt++) {
       try {
-        return await ytDlpOnce(args, proxy);
+        // On a rotating residential fallback retry, drop the cookie jar so a
+        // flagged/invalidated session cookie doesn't poison the clean exit IP.
+        return await ytDlpOnce(args, curProxy, rotating && attempt > 0);
       } catch (err) {
         lastErr = err;
         const msg = err instanceof Error ? err.message : String(err);
-        if (!shouldRetryYtDlp(msg, { attempt, maxAttempts: tries, hasProxy: !!proxy, rotating })) break;
+        if (!shouldRetryYtDlp(msg, { attempt, maxAttempts: tries, hasProxy: !!curProxy, rotating })) break;
+        if (rotating && isBotWall(msg)) {
+          const rotated = rotateYoutubeFallbackProxy();
+          if (rotated) curProxy = rotated;
+        }
         await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
       }
     }
