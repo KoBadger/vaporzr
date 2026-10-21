@@ -1,2 +1,6 @@
-# Shell scripts must keep LF endings — CRLF breaks bash on Linux VPS targets.
+# Normalize line endings in the working tree on all platforms so the Prettier
+# check (endOfLine: lf) matches CI when the repo is checked out on Windows.
+* text=auto eol=lf
+
+# Shell scripts must keep LF endings - CRLF breaks bash on Linux VPS targets.
 *.sh text eol=lf

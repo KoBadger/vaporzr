@@ -1,4 +1,4 @@
-# vaporzr bot + visualizer -- fixed from broken C:\Users\joshv\docker-compose.yml
+# vaporzr bot + visualizer (local development)
 # Secrets via apps/bot/.env (env_file) -- never enter image or compose file.
 
 x-logging: &default-logging
