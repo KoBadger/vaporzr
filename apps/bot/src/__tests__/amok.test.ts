@@ -110,9 +110,11 @@ describe('Amok ("The Weasel") Discord integration', () => {
   });
 
   it('stores and summarizes long-term user and server memory', () => {
-    noteWeaselUserArtists('u-test-1', 'Josh', ['Sublime', 'Sublime', 'Pennywise']);
-    rememberWeaselFact('g-test-1', 'u-test-1', 'Josh', 'Loves 90s SoCal skate punk');
-    const summary = getWeaselMemorySummary('g-test-1', 'u-test-1', 'Josh');
+    const uid = `u-test-${Date.now()}`;
+    const gid = `g-test-${Date.now()}`;
+    noteWeaselUserArtists(uid, 'Josh', ['Sublime', 'Sublime', 'Pennywise']);
+    rememberWeaselFact(gid, uid, 'Josh', 'Loves 90s SoCal skate punk');
+    const summary = getWeaselMemorySummary(gid, uid, 'Josh');
     expect(summary).toContain('Sublime (2x)');
     expect(summary).toContain('Loves 90s SoCal skate punk');
   });
