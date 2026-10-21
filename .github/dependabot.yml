@@ -17,6 +17,9 @@ updates:
       interval: weekly
     commit-message:
       prefix: 'ci(deps)'
+    groups:
+      github-actions:
+        patterns: ['*']
 
   - package-ecosystem: docker
     directory: /apps/bot

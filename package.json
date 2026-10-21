@@ -17,7 +17,8 @@
     "typecheck": "npm run typecheck -w @vaporzr/shared && npm run typecheck -w @vaporzr/core && npm run typecheck -w @vaporzr/bot && npm run typecheck -w @vaporzr/player && npm run typecheck -w @vaporzr/spicetify-app",
     "install:spicetify": "npm run install-app -w @vaporzr/spicetify-app",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "viz:check": "node scripts/check-viz-syntax.mjs"
   },
   "devDependencies": {
     "prettier": "^3.9.10"

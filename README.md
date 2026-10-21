@@ -34,6 +34,20 @@ npm run dev -w @vaporzr/bot
 
 The bot serves its panel/visualizer on `http://localhost:4876`. For links that work from other devices, see **Secure links** below.
 
+## Development
+
+```bash
+npm ci                 # Node 22 (see .nvmrc)
+npm run typecheck      # all workspaces (the player needs vendor/electron-ecs)
+npm run format         # Prettier
+npm run format:check   # what CI enforces
+npm run viz:check      # compiles viz.html's inline scripts
+npm test -w @vaporzr/bot
+npm test -w @vaporzr/core
+```
+
+CI (`.github/workflows/ci.yml`) runs typecheck, the Prettier check, the visualizer syntax check, and both test suites on every push.
+
 ## Secure links
 
 | Mode | Config |
@@ -79,4 +93,4 @@ Access: `/key give` `/key rotate` `/perms` (admin) — `/nickname` (🥚)
 - Vendor binaries (`yt-dlp`, `librespot`, `cloudflared`) are downloaded separately into `vendor/` (gitignored). Keep `yt-dlp` updated (`vendor/yt-dlp/yt-dlp -U` on Linux/macOS, `vendor\yt-dlp\yt-dlp.exe -U` on Windows) — extractors rot against site changes.
 - Every guild's queue persists across restarts (`apps/bot/data/queues/`), restored paused. Panel/now-playing registrations persist too (`apps/bot/data/panels.json`).
 - Set `OWNER_ID=<your Discord user id>` in `apps/bot/.env` to pin owner rank (otherwise auto-detected from the app record, with retries).
-- Docker: `docker build -f apps/bot/Dockerfile -t vaporzr-bot .` (see Dockerfile header for caveats).
+- Docker: on Windows use `scripts/docker-build.ps1` (mirrors the repo to %TEMP% first — BuildKit cannot stream a OneDrive-backed context); on Linux/macOS `docker build -f apps/bot/Dockerfile -t vaporzr-bot .` works directly. See the Dockerfile header for caveats.

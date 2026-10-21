@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   # Opt into the Node 24 action runtime early (GitHub forces it regardless) so
   # the deprecated-Node-20 warnings go away.
@@ -34,6 +38,9 @@ jobs:
 
       - name: Format check
         run: npm run format:check
+
+      - name: Visualizer syntax check
+        run: npm run viz:check
 
       - name: Unit tests (bot)
         working-directory: apps/bot
