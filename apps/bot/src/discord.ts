@@ -11048,11 +11048,40 @@ export class DiscordBot {
         : `${res.text}\n-# (Join a voice channel to hear me on the mic!)`;
     }
 
-    // 7. `v@w roast` / `v@w rate` — roast or rate the room's queue & DJs
+    // 7. `v@w roast [target]` / `v@w rate [target]` — savage 90s MTV Roast of any target
+    //    Target can be: empty (roast the queue + DJs), @mention, or a typed name/thing.
     const isRoast = /^(?:roast|rate)(?:\s+(.*))?$/i.exec(trimmed);
-    const effectivePrompt = isRoast
-      ? `Roast and rate our Discord server's current music queue, DJs, and channel vibe by name! Call out specific songs and who queued them${isRoast[1] ? ` (focus on: ${isRoast[1].trim()})` : ''}.`
-      : trimmed;
+    let effectivePrompt = trimmed;
+    let roastTargetNotes: string[] = [];
+    if (isRoast) {
+      const arg = (isRoast[1] ?? '').trim();
+      const targets: string[] = [];
+      const mentionIds: string[] = [];
+      if (arg) {
+        // Pull every @mention in the raw prompt and resolve to display names
+        const mentionRe = /<@!?(\d+)>/g;
+        let m: RegExpExecArray | null;
+        while ((m = mentionRe.exec(arg)) !== null) mentionIds.push(m[1]);
+        const cleanedArg = arg.replace(mentionRe, '').replace(/\s+/g, ' ').trim();
+        if (mentionIds.length > 0 && (opts as { guildId?: string | null }).guildId) {
+          const guild = this.client.guilds.cache.get((opts as { guildId?: string | null }).guildId!);
+          for (const id of mentionIds) {
+            const member = guild?.members.cache.get(id);
+            const name = member?.displayName ?? member?.user.username ?? id;
+            targets.push(name);
+            // Load this target's memory profile so burns are personal
+            const mem = getWeaselMemorySummary(gid || null, id, name);
+            if (mem) roastTargetNotes.push(`Roast target ${name}: ${mem}`);
+          }
+        }
+        if (cleanedArg) targets.push(cleanedArg);
+      }
+      const targetPhrase =
+        targets.length > 0
+          ? `Roast/Rate these specific targets BY NAME and go HARD: ${targets.join(', ')}. Use their music taste, queued songs, username, and anything you remember about them.`
+          : `Roast and rate the current music queue, DJs, and channel vibe by name.`;
+      effectivePrompt = `${targetPhrase} ${arg && targets.length > 0 ? `Extra roast direction: ${arg}.` : ''} Lay down the burns like a 90s MTV Spring Break Roast — witty, sharp, specific, savage but never slurs/bigotry/threats/real-appearance. 1-3 punchy sentences max.`;
+    }
 
     const result = await askAmokRich(effectivePrompt, {
       scopeId: opts.scopeId,
@@ -11066,6 +11095,7 @@ export class DiscordBot {
       voiceMembers,
       ewSteerDirective: this.ewSteerPrompt.get(gid) ?? null,
       forceRoomContext: Boolean(isRoast),
+      extraContextNotes: roastTargetNotes.length > 0 ? roastTargetNotes : undefined,
     });
 
     // 8. VJ Weasel Auto-DJ — resolve & queue any `WEASEL_QUEUE:` tracks
@@ -11664,7 +11694,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`V@duel board` — duel leaderboard + how often the bot called the room right',
       "`/roulette` · `V@roulette` — a rarely-played track from this server's own history, queued next: ⭐ Hall of Fame or 🚫 Ban",
       '`/quiz` · `V@quiz` — guess-the-song lyric game · `/guess <answer>` · `V@guess`',
-      '`/weasel <message>` · `V@w` (`V@weasel`, `V@amok`, `V@pauly`) — chat with The Weasel, `V@w play <vibe>` to auto-DJ, `V@w roast` to roast the queue, `V@w say <text>` / `V@w vj on` for voice mic drops, or reply to his messages',
+      '`/weasel <message>` · `V@w` (`V@weasel`, `V@amok`, `V@pauly`) — chat with The Weasel, `V@w play <vibe>` to auto-DJ, `V@w roast [@user|target]` for savage 90s MTV roasts of anyone, `V@w say <text>` / `V@w vj on` for voice mic drops, or reply to his messages',
     ],
   },
   {
