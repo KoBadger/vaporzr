@@ -9,6 +9,7 @@
   ],
   "scripts": {
     "postinstall": "node scripts/install-opus-prebuild.mjs",
+    "doctor": "node scripts/doctor.mjs",
     "dev:bot": "npm run dev -w @vaporzr/bot",
     "dev:player": "npm run dev -w @vaporzr/player",
     "build:bot": "npm run build -w @vaporzr/bot",
@@ -37,6 +38,8 @@
   "allowScripts": {
     "electron@33.4.11": true,
     "ffmpeg-static@*": true,
-    "esbuild@*": true
+    "esbuild@*": true,
+    "@discordjs/opus@*": false,
+    "core-js@*": false
   }
 }

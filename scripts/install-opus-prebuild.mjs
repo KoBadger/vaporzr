@@ -130,6 +130,24 @@ async function bootstrapPackage() {
 }
 
 /**
+ * libc tags for linux, which differ: the published asset is tagged with the
+ * glibc it was *built against* (2.31 / 2.35), but node-pre-gyp's find() looks
+ * in a folder named after the *runtime* glibc version (e.g. glibc-2.41).
+ */
+function linuxTags() {
+  const header = process.report?.getReport?.()?.header ?? {};
+  const runtime = header.glibcVersionRuntime; // e.g. "2.41"; absent on musl
+  if (!runtime) return null;
+  const [major, minor] = String(runtime).split('.').map(Number);
+  // Newer glibc runs older binaries, so the newest asset that fits wins.
+  let asset = null;
+  if (major > 2 || (major === 2 && minor >= 35)) asset = 'glibc-2.35';
+  else if (major === 2 && minor >= 31) asset = 'glibc-2.31';
+  if (!asset) return null;
+  return { asset, dir: `glibc-${runtime}` };
+}
+
+/**
  * The opus loader is two lines: `require('@discordjs/node-pre-gyp').find(pkg)`.
  * npm drops that dependency too when it deletes the failed optional package, so
  * a bootstrapped copy cannot load without it. Installing the real tree from
@@ -138,13 +156,10 @@ async function bootstrapPackage() {
  * just "path of the binding for this ABI". Only created when it is missing.
  */
 function ensureNodePreGyp(pkgRoot) {
-  try {
-    require.resolve('@discordjs/node-pre-gyp/package.json');
-    return; // real dependency present
-  } catch {
-    /* install the stand-in below */
-  }
   const dir = join(pkgRoot, '..', 'node-pre-gyp');
+  // Plain file check, not require.resolve: packages with an `exports` map
+  // reject the '/package.json' subpath even though the file is right there.
+  if (existsSync(join(dir, 'package.json'))) return; // real dependency present
   mkdirSync(dir, { recursive: true });
   writeFileSync(
     join(dir, 'package.json'),
@@ -158,15 +173,26 @@ function ensureNodePreGyp(pkgRoot) {
 // absolute path of the native binding for the running ABI.
 'use strict';
 const { join, dirname } = require('node:path');
-const { existsSync } = require('node:fs');
+const { existsSync, readdirSync } = require('node:fs');
 
 exports.find = (packageJsonPath) => {
   const root = dirname(packageJsonPath);
-  const libc = process.platform === 'win32' || process.platform === 'darwin' ? 'unknown-unknown' : 'unknown-unknown';
-  const abi = 'node-v' + process.versions.modules + '-napi-v3-' + process.platform + '-' + process.arch + '-' + libc;
-  const candidates = [join(root, 'prebuild', abi, 'opus.node'), join(root, 'build', 'Release', 'opus.node')];
+  const prebuild = join(root, 'prebuild');
+  // The libc tag in the folder name differs per platform, so scan for the
+  // folder that matches this ABI rather than rebuilding the naming rules.
+  const prefix = 'node-v' + process.versions.modules + '-napi-v3-' + process.platform + '-' + process.arch + '-';
+  let dirs = [];
+  try {
+    dirs = readdirSync(prebuild).filter((d) => d.startsWith(prefix));
+  } catch {
+    /* no prebuild dir at all */
+  }
+  const candidates = [
+    ...dirs.map((d) => join(prebuild, d, 'opus.node')),
+    join(root, 'build', 'Release', 'opus.node'),
+  ];
   const hit = candidates.find((p) => existsSync(p));
-  if (!hit) throw new Error('native binding not found for ' + abi + ' (looked in ' + candidates.join(', ') + ')');
+  if (!hit) throw new Error('native binding not found for ' + prefix + '* (looked in ' + candidates.join(', ') + ')');
   return hit;
 };
 `,
@@ -191,9 +217,23 @@ try {
   }
 
   const { platform, arch } = process;
-  // File naming includes libc; only win32/macOS use "unknown-unknown".
-  const toolchain = platform === 'win32' || platform === 'darwin' ? 'unknown-unknown' : null;
-  if (!toolchain || !['x64', 'arm64'].includes(arch)) {
+
+  // Prebuild file naming carries a libc tag. win32/macOS use "unknown-unknown";
+  // Linux needs two different ones: `assetTag` names the published tarball
+  // (tagged with the glibc it was built against), `dirTag` is the local folder
+  // node-pre-gyp's find() looks in (named after the runtime glibc version).
+  let assetTag = null;
+  let dirTag = null;
+  if (platform === 'win32' || platform === 'darwin') {
+    assetTag = dirTag = 'unknown-unknown';
+  } else if (platform === 'linux') {
+    const tags = linuxTags();
+    if (tags) {
+      assetTag = tags.asset;
+      dirTag = tags.dir;
+    }
+  }
+  if (!assetTag || !dirTag || !['x64', 'arm64'].includes(arch)) {
     log(`warn: no prebuild layout known for ${platform}-${arch}; staying on opusscript`);
     process.exit(0);
   }
@@ -219,7 +259,7 @@ try {
   const prebuildDir = join(
     pkgRoot,
     'prebuild',
-    `node-v${process.versions.modules}-napi-v3-${platform}-${arch}-${toolchain}`,
+    `node-v${process.versions.modules}-napi-v3-${platform}-${arch}-${dirTag}`,
   );
 
   // Something is in place but does not load - do not chase that here.
@@ -232,11 +272,11 @@ try {
   // (node-v127) runs everywhere it covers — the ABI only matters for the
   // folder name node-pre-gyp looks in.
   const LEGACY_ABI = 'v127';
-  const tarballName = `opus-v${pkg.version}-node-${LEGACY_ABI}-napi-v3-${platform}-${arch}-${toolchain}.tar.gz`;
+  const tarballName = `opus-v${pkg.version}-node-${LEGACY_ABI}-napi-v3-${platform}-${arch}-${assetTag}.tar.gz`;
   const url = `https://github.com/discordjs/opus/releases/download/v${pkg.version}/${tarballName}`;
   // The tarball's internal folder name omits the package/version prefix used
   // by the .tar.gz filename itself.
-  const innerPrefix = `node-${LEGACY_ABI}-napi-v3-${platform}-${arch}-${toolchain}`;
+  const innerPrefix = `node-${LEGACY_ABI}-napi-v3-${platform}-${arch}-${assetTag}`;
   const innerOpus = `${innerPrefix}/opus.node`;
 
   const gz = await download(url, tarballName);
