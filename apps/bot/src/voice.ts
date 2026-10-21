@@ -21,6 +21,26 @@ import { tailFadeSeconds } from '@vaporzr/core/crossfade';
 import type { AudioTransport } from '@vaporzr/core/transport';
 import { youtubeProxyHops } from '@vaporzr/core/youtube';
 import { safeFetch } from '@vaporzr/core/net';
+import { createMusicResource } from './opusStream.js';
+
+/**
+ * The slice of a discord.js voice channel the bitrate negotiation needs, kept
+ * structural so VoiceManager stays free of discord.js state (it is unit-tested
+ * and integration-tested without a client).
+ */
+export interface VoiceChannelTarget {
+  bitrate: number;
+  guild: { premiumTier: number };
+  setBitrate(bitrate: number): Promise<unknown>;
+}
+
+/** Discord's per-tier voice bitrate ceiling, in bits per second. */
+export function maxVoiceBitrate(premiumTier: number): number {
+  if (premiumTier >= 3) return 384_000;
+  if (premiumTier === 2) return 256_000;
+  if (premiumTier === 1) return 128_000;
+  return 96_000;
+}
 
 /**
  * User-Agent used when the bot itself (Node fetch) pulls a media stream.
@@ -85,6 +105,12 @@ export class VoiceManager implements AudioTransport {
   private voiceLinkDown = false;
   /** Loudness applied to every new audio resource (0–100). */
   private volumePercent = 100;
+  /** Opus bitrate the current channel can carry, in bits/s. */
+  private opusBitrate = 96_000;
+  /** The channel's bitrate as last observed (null = never negotiated). */
+  private channelBitrate: number | null = null;
+  /** Warn once, not per track, when the native encoder is missing. */
+  private opusFallbackWarned = false;
 
   /** Active sequential volume fade-out (sequential crossfade fallback). */
   private fadeOutTimer: NodeJS.Timeout | null = null;
@@ -241,8 +267,17 @@ export class VoiceManager implements AudioTransport {
     this.clearIdleTimer();
   }
 
-  async join(guildId: string, channelId: string, adapterCreator: DiscordGatewayAdapterCreator): Promise<boolean> {
+  async join(
+    guildId: string,
+    channelId: string,
+    adapterCreator: DiscordGatewayAdapterCreator,
+    channel?: VoiceChannelTarget,
+  ): Promise<boolean> {
     this.leave();
+    // Negotiate the bitrate BEFORE connecting: the encoder is built when the
+    // first track starts, and a channel raised afterwards would only take effect
+    // for listeners on the next track.
+    await this.resolveChannelBitrate(channel);
     const connect = (): VoiceConnection => {
       const connection = joinVoiceChannel({ channelId, guildId, adapterCreator, selfDeaf: false });
       this.connection = connection;
@@ -536,6 +571,70 @@ export class VoiceManager implements AudioTransport {
     console.log(`[voice] left voice channel (via: ${caller})`);
   }
 
+  /**
+   * Negotiate the Opus bitrate for this channel.
+   *
+   * Discord's default channel bitrate is 64 kbps, and the encoder used to run at
+   * libopus's own default (~64 kbps) regardless — so a boosted server's extra
+   * bandwidth went unused. Raise the channel to the guild's ceiling (best effort:
+   * needs Manage Channels) and remember what we can actually encode at.
+   */
+  private async resolveChannelBitrate(channel?: VoiceChannelTarget): Promise<void> {
+    const ceiling = maxVoiceBitrate(channel?.guild?.premiumTier ?? 0);
+    const wanted = config.voiceOpusBitrate > 0 ? Math.min(config.voiceOpusBitrate, maxVoiceBitrate(3)) : ceiling;
+    let current = channel ? channel.bitrate : Math.min(wanted, 96_000);
+
+    if (channel && config.voiceRaiseChannelBitrate && current < wanted) {
+      const before = current;
+      try {
+        const updated = (await channel.setBitrate(wanted)) as { bitrate?: number } | undefined;
+        current = updated?.bitrate ?? wanted;
+        console.log(`[voice] channel bitrate ${Math.round(before / 1000)} -> ${Math.round(current / 1000)} kbps`);
+      } catch (err) {
+        // Missing Manage Channels is normal on a server you don't administer;
+        // encoding at the channel's existing cap is the correct fallback.
+        console.warn(
+          `[voice] could not raise channel bitrate to ${Math.round(wanted / 1000)} kbps ` +
+            `(${err instanceof Error ? err.message : String(err)}) - using the channel's current cap`,
+        );
+      }
+    }
+
+    this.channelBitrate = channel ? current : null;
+    this.opusBitrate = Math.max(16_000, Math.min(wanted, current));
+    if (config.voiceOpusEncoder !== 'off') {
+      console.log(
+        `[voice] opus target ${Math.round(this.opusBitrate / 1000)} kbps ` +
+          `(channel ${Math.round(current / 1000)} kbps, boost tier ${channel?.guild?.premiumTier ?? 0})`,
+      );
+    }
+  }
+
+  /**
+   * Wrap a PCM stream in an audio resource.
+   *
+   * Preferred path: encode Opus here at the negotiated bitrate and hand
+   * @discordjs/voice finished frames, which also skips its own encoder (~50 JS
+   * encodes/second per guild). Falls back to raw PCM when the native module is
+   * missing: lower quality, but it still plays.
+   */
+  private makeResource(pcm: Readable): AudioResource {
+    if (config.voiceOpusEncoder !== 'off') {
+      const encoded = createMusicResource(pcm, { bitrate: this.opusBitrate, fec: config.voiceOpusFec });
+      if (encoded) return encoded;
+      if (!this.opusFallbackWarned) {
+        this.opusFallbackWarned = true;
+        console.warn('[voice] native @discordjs/opus unavailable - falling back to raw PCM (lower quality)');
+      }
+    }
+    return createAudioResource(pcm, { inputType: StreamType.Raw, inlineVolume: true });
+  }
+
+  /** Encoder and channel bitrate in bits/s, for /diag. */
+  opusStatus(): { encoder: number; channel: number | null } {
+    return { encoder: this.opusBitrate, channel: this.channelBitrate };
+  }
+
   /** Create a fresh streaming resource. Safe to call repeatedly. */
   startStream(): void {
     if (!this.player) return;
@@ -546,7 +645,7 @@ export class VoiceManager implements AudioTransport {
     this.streamStartTime = Date.now();
     this.pausedPositionMs = 0;
     this.everGotPcm = false;
-    const resource = createAudioResource(stream, { inputType: StreamType.Raw, inlineVolume: true });
+    const resource = this.makeResource(stream);
     this.resource = resource;
     this.applyVolumeToResource();
     this.player.play(resource);
@@ -599,7 +698,7 @@ export class VoiceManager implements AudioTransport {
       if (l) console.warn(`[voice] mix: ${l.slice(0, 200)}`);
     });
     proc.stdout.pipe(stream);
-    const resource = createAudioResource(stream, { inputType: StreamType.Raw, inlineVolume: true });
+    const resource = this.makeResource(stream);
     this.resource = resource;
     if (opts.volume !== undefined) this.volumePercent = opts.volume;
     this.applyVolumeToResource();
@@ -829,7 +928,7 @@ export class VoiceManager implements AudioTransport {
     });
     proc.stdout.pipe(stream);
     if (fetchSelf) this.fetchIntoStdin(url, proc, token);
-    const resource = createAudioResource(stream, { inputType: StreamType.Raw, inlineVolume: true });
+    const resource = this.makeResource(stream);
     this.resource = resource;
     if (opts.volume !== undefined) this.volumePercent = opts.volume;
     this.applyVolumeToResource();

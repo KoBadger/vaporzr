@@ -75,12 +75,12 @@ export const config = {
    */
   youtubeProxyLabel: process.env.YOUTUBE_PROXY_LABEL ?? 'the primary YouTube proxy hop',
   /**
-   * Ceiling on the YouTube audio bitrate to download. Discord re-encodes voice
-   * audio to 64-128 kbps opus, so capping the source a little above that roughly
-   * halves the metered proxy traffic for little audible loss. Raise it (e.g.
-   * 160) when fidelity matters more than bytes on the metered hops.
+   * Ceiling on the YouTube audio bitrate to download. The voice encoder now runs
+   * at the channel's real ceiling (see `voiceOpusBitrate`), up to 384 kbps, so
+   * the old 80 kbps cap was throwing away detail the pipe can carry. Lower it
+   * (e.g. 80) when the metered proxy hops matter more than fidelity.
    */
-  youtubeAudioMaxAbr: Number(process.env.YOUTUBE_AUDIO_MAX_ABR) || 80,
+  youtubeAudioMaxAbr: Number(process.env.YOUTUBE_AUDIO_MAX_ABR) || 160,
   /**
    * Public base URL for the jam join link and its QR code, e.g.
    * https://vaporzr.duckdns.org. The bot binds to loopback behind a reverse
@@ -193,6 +193,30 @@ export const config = {
    * old behavior or "loudnorm=I=-14:TP=-1.5:LRA=14" for a milder dynamic one.
    */
   audioNormFilter: process.env.AUDIO_NORM_FILTER ?? 'alimiter=limit=0.95',
+  /**
+   * Opus bitrate for the music encoder, in bits/s. `0` (default) = whatever the
+   * voice channel is allowed to carry (96 kbps free, then 128/256/384 by server
+   * boost level). Discord's own default is 64 kbps — about a sixth of the
+   * ceiling on a level-3 server, which is why this exists.
+   */
+  voiceOpusBitrate: Number(process.env.VOICE_OPUS_BITRATE) || 0,
+  /**
+   * Raise the voice channel's bitrate to the guild's cap when joining, so the
+   * higher encoder bitrate is actually usable by listeners. Needs Manage
+   * Channels; set `VOICE_RAISE_CHANNEL_BITRATE=0` to leave channels untouched.
+   */
+  voiceRaiseChannelBitrate: process.env.VOICE_RAISE_CHANNEL_BITRATE !== '0',
+  /**
+   * Enable Opus in-band FEC (forward error correction) on the music stream.
+   * Costs a few kbps of redundancy and buys resistance to packet loss.
+   */
+  voiceOpusFec: process.env.VOICE_OPUS_FEC !== '0',
+  /**
+   * `native` (default) encodes with @discordjs/opus and sends pre-encoded Opus.
+   * `off` restores the old path: raw PCM handed to @discordjs/voice, which
+   * encodes at libopus's default and caps any explicit bitrate at 128 kbps.
+   */
+  voiceOpusEncoder: (process.env.VOICE_OPUS_ENCODER ?? 'native') === 'off' ? 'off' : 'native',
   /** Opt-in true crossfade (overlap) for decoded tracks; off by default. */
   crossfadeOverlap: process.env.CROSSFADE_OVERLAP === '1' || process.env.CROSSFADE_OVERLAP === 'true',
   /**
