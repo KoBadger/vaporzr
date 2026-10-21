@@ -28,6 +28,7 @@
 import { createAudioResource, StreamType, type AudioResource } from '@discordjs/voice';
 import { createRequire } from 'node:module';
 import { Transform, type Readable } from 'node:stream';
+import { config } from '@vaporzr/core/config';
 
 /** 20 ms at 48 kHz — Discord's packet size. */
 export const FRAME_SAMPLES = 960;
@@ -138,6 +139,30 @@ export function fallbackOpusModule(): string {
 /** What the last created stream actually used, for /diag. Null if never used. */
 export function opusPlan(): OpusPlan | null {
   return lastPlan;
+}
+
+/**
+ * Announce the encoder at boot.
+ *
+ * The native module is the difference between "fine" and audibly worse, and it
+ * degrades silently: @discordjs/opus loads a prebuilt binary matched to the Node
+ * ABI, so a brand-new Node major quietly leaves prism on opusscript. Discovering
+ * that from a boot log beats discovering it by ear on the first track.
+ */
+export function logOpusStartup(): void {
+  if (config.voiceOpusEncoder === 'off') {
+    console.log('[opus] VOICE_OPUS_ENCODER=off — raw PCM path (discord.js default bitrate)');
+    return;
+  }
+  if (!nativeModule(defaultLoadNative)) {
+    console.warn(
+      `[opus] native @discordjs/opus unavailable on node ${process.version} — ` +
+        `voice falls back to ${fallbackOpusModule()} (~64 kbps). ` +
+        'Check that this Node version has a prebuild; the Docker image pins node:22 for this reason.',
+    );
+    return;
+  }
+  console.log(`[opus] native @discordjs/opus ready (node ${process.version})`);
 }
 
 export function clampBitrate(bitrate: number): number {

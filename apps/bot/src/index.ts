@@ -3,6 +3,7 @@ import { SessionManager } from './session.js';
 import { PermissionsManager } from './permissions.js';
 import { startServer } from './server.js';
 import { DiscordBot } from './discord.js';
+import { logOpusStartup } from './opusStream.js';
 import net from 'node:net';
 
 // Windows console/redirect writes can mangle non-ASCII (e.g. "Böhmer" → "B?hmer")
@@ -45,6 +46,8 @@ async function main(): Promise<void> {
   }
 
   console.log(`[vaporzr] instance role: ${config.botPrimary ? 'PRIMARY' : 'SECONDARY'}`);
+  // Which Opus encoder voice will use, before anyone plays anything.
+  logOpusStartup();
   // Single-instance guard: only the PRIMARY instance runs by default. A second
   // login on the same token fights the primary for the gateway session (missed
   // events + duplicate replies). Set ALLOW_SECONDARY=1 to run a non-primary

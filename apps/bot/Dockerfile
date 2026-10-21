@@ -26,6 +26,13 @@
 #   full-length public playlists, set SPOTIFY_SP_DC in .env. To keep an existing
 #   OAuth link, copy apps/bot/data (tokens.json) into the vaporzr-data volume.
 # - The bot runs TypeScript directly (tsx), so no compile step is needed.
+# - Keep the base image on node:22 unless you have checked that @discordjs/opus
+#   ships a prebuilt binding for the new ABI. A brand-new Node major does not,
+#   the native build fails, and voice silently degrades to the opusscript
+#   fallback (~64 kbps, audibly worse). The boot log and /diag both say which one
+#   is in use. build-essential is installed above, so a source build is only a
+#   slow build away — but it needs the prebuild to be absent, not the ABI to
+#   mismatch.
 
 FROM node:22-trixie-slim AS build
 
