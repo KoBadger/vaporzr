@@ -214,11 +214,63 @@ export class PcmGain extends Transform {
   }
 }
 
+/**
+ * Rolling encoder telemetry: how many bytes actually left the encoder recently.
+ *
+ * Opus is VBR - the configured bitrate is a ceiling, not a promise - and a
+ * silent fallback to opusscript would look identical in every log line written
+ * so far. This is the number that answers "is the channel really carrying the
+ * bitrate we asked for?" without having to listen.
+ */
+export class OpusRateMeter {
+  private samples: Array<{ t: number; bytes: number }> = [];
+  private totalFrames = 0;
+  private totalBytes = 0;
+
+  constructor(readonly windowMs = 30_000) {}
+
+  push(bytes: number, now = Date.now()): void {
+    this.totalFrames += 1;
+    this.totalBytes += bytes;
+    this.samples.push({ t: now, bytes });
+    this.trim(now);
+  }
+
+  private trim(now: number): void {
+    const cutoff = now - this.windowMs;
+    while (this.samples.length > 0 && this.samples[0].t < cutoff) this.samples.shift();
+  }
+
+  /** kbps over the rolling window; null until there is at least a second of audio. */
+  kbps(now = Date.now()): number | null {
+    this.trim(now);
+    if (this.samples.length === 0) return null;
+    const span = Math.min(this.windowMs, now - this.samples[0].t);
+    if (span < 1000) return null; // one frame is not a rate
+    const bytes = this.samples.reduce((n, s) => n + s.bytes, 0);
+    return (bytes * 8) / span; // bytes per millisecond == kbps
+  }
+
+  get totals(): { frames: number; bytes: number } {
+    return { frames: this.totalFrames, bytes: this.totalBytes };
+  }
+}
+
+const sharedMeter = new OpusRateMeter();
+
+/** What the encoder is really producing right now, for /diag. */
+export function opusTelemetry(): { kbps: number | null; frames: number; bytes: number; windowMs: number } {
+  return { kbps: sharedMeter.kbps(), ...sharedMeter.totals, windowMs: sharedMeter.windowMs };
+}
+
 /** Re-frames an arbitrary PCM byte stream into exact 20 ms Opus packets. */
 export class OpusFrameEncoder extends Transform {
   private pending: Buffer = Buffer.alloc(0);
 
-  constructor(private readonly encoder: NativeEncoder) {
+  constructor(
+    private readonly encoder: NativeEncoder,
+    private readonly meter?: OpusRateMeter,
+  ) {
     super({ readableObjectMode: true });
   }
 
@@ -227,7 +279,9 @@ export class OpusFrameEncoder extends Transform {
     let offset = 0;
     try {
       while (buf.length - offset >= BYTES_PER_FRAME) {
-        this.push(this.encoder.encode(buf.subarray(offset, offset + BYTES_PER_FRAME), FRAME_SAMPLES));
+        const packet = this.encoder.encode(buf.subarray(offset, offset + BYTES_PER_FRAME), FRAME_SAMPLES);
+        this.meter?.push(packet.length);
+        this.push(packet);
         offset += BYTES_PER_FRAME;
       }
     } catch (err) {
@@ -275,7 +329,7 @@ export function createMusicResource(pcm: Readable, opts: MusicResourceOptions): 
   }
 
   const gain = new PcmGain();
-  const frames = new OpusFrameEncoder(encoder);
+  const frames = new OpusFrameEncoder(encoder, sharedMeter);
   // An encoder error must take the source down with it, or the player would
   // sit on a dead resource until the watchdog fires.
   frames.once('error', () => pcm.destroy());

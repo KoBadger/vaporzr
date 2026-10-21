@@ -105,7 +105,7 @@ import { V_ALIASES, V_DISPATCH_ALIASES } from './aliases.js';
 import { buildSwapItems, swapLabel, trackQuery } from './swapItems.js';
 import { ttsEngine } from '@vaporzr/core/tts';
 import { pushBroadcast, pushSubscriptionCount } from './push.js';
-import { fallbackOpusModule, opusPlan } from './opusStream.js';
+import { fallbackOpusModule, opusPlan, opusTelemetry } from './opusStream.js';
 import { downloadToTempFile } from '@vaporzr/core/mediaDownload';
 import { safeFetch, BlockedFetchError } from '@vaporzr/core/net';
 import { separateStemsReplicate, replicateStemsEnabled } from '@vaporzr/core/stemSeparation';
@@ -7346,11 +7346,14 @@ export class DiscordBot {
     const plan = opusPlan();
     const status = s?.voice.opusStatus();
     const channel = status?.channel ? ` · ch \`${Math.round(status.channel / 1000)}k\`` : '';
+    const meter = opusTelemetry();
+    const live =
+      meter.frames === 0 ? '' : meter.kbps === null ? ' · `live…`' : ` · \`${Math.round(meter.kbps)}k live\``;
     if (plan) {
-      return `\`@discordjs/opus\` · \`${Math.round(plan.bitrate / 1000)}k\`${plan.fec ? ' · fec' : ''}${channel}`;
+      return `\`@discordjs/opus\` · \`${Math.round(plan.bitrate / 1000)}k\`${plan.fec ? ' · fec' : ''}${channel}${live}`;
     }
     if (config.voiceOpusEncoder === 'off') return '`off` (wanted: raw PCM path)';
-    return `\`missing\` → \`${fallbackOpusModule()}\``;
+    return `\`missing\` → \`${fallbackOpusModule()}\`${meter.frames > 0 ? ' · raw-PCM path' : ''}`;
   }
 
   /** Human-readable autoplay status block shared by `/autoplay`, `/endwav`, `V@autoplay`, `V@ew`. */

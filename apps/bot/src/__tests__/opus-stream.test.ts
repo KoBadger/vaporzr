@@ -4,6 +4,7 @@ import {
   BYTES_PER_FRAME,
   CTL,
   OpusFrameEncoder,
+  OpusRateMeter,
   PcmGain,
   clampBitrate,
   createMusicResource,
@@ -191,5 +192,53 @@ describe('createMusicResource', () => {
     volume.setVolume(0.25);
     expect(volume.volume).toBe(0.25);
     pcm.destroy();
+  });
+});
+
+describe('OpusRateMeter (live bitrate for /diag)', () => {
+  it('reports nothing until there is at least a second of audio', () => {
+    const meter = new OpusRateMeter();
+    expect(meter.kbps(0)).toBeNull();
+    meter.push(100, 1_000);
+    expect(meter.kbps(1_100)).toBeNull(); // one frame is not a rate
+  });
+
+  it('measures bytes per millisecond over the window', () => {
+    const meter = new OpusRateMeter();
+    // 100-byte packets every 100 ms for 1 s -> 1000 B/s -> 8 kbps.
+    for (let i = 0; i <= 10; i++) meter.push(100, i * 100);
+    // span = 1000 ms, bytes = 1100 -> 8.8 kbps.
+    expect(meter.kbps(1_000)).toBeCloseTo(8.8, 1);
+  });
+
+  it('forgets samples that fall out of the window', () => {
+    const meter = new OpusRateMeter(5_000);
+    meter.push(500, 0);
+    meter.push(500, 1_000);
+    // Both samples inside a full 5 s window: 1000 B / 5000 ms = 1.6 kbps.
+    expect(meter.kbps(5_000)).toBeCloseTo(1.6, 1);
+    // Past 5 s the first sample ages out; the span clamps to the window.
+    expect(meter.kbps(6_000)).toBeCloseTo(0.8, 1);
+    // Long after the fact everything has aged out.
+    expect(meter.kbps(60_000)).toBeNull();
+  });
+
+  it('keeps lifetime totals independent of the window', () => {
+    const meter = new OpusRateMeter(1_000);
+    meter.push(10, 0);
+    meter.push(20, 2_000);
+    meter.push(30, 4_000);
+    expect(meter.totals).toEqual({ frames: 3, bytes: 60 });
+  });
+
+  it('is fed by the frame encoder', () => {
+    const meter = new OpusRateMeter();
+    const encoder = new FakeEncoder();
+    const frames = new OpusFrameEncoder(encoder, meter);
+    const pcm = Buffer.alloc(BYTES_PER_FRAME * 3);
+    frames.write(pcm);
+    expect(meter.totals.frames).toBe(3);
+    expect(meter.totals.bytes).toBe(12); // FakeEncoder emits 4-byte packets
+    frames.destroy();
   });
 });
