@@ -8,12 +8,16 @@
     <style>
       :root {
         color-scheme: dark;
-        --bg: #0b0d12;
-        --panel: #12151d;
-        --line: #232a38;
-        --text: #e8ecf6;
-        --dim: #93a0b8;
+        --bg: #0a0c11;
+        --panel: #10131b;
+        --panel-2: #0d1016;
+        --line: #222835;
+        --text: #e9edf6;
+        --dim: #8b97ad;
         --accent: #7ee0c2;
+        --accent-dim: #2c5a50;
+        --warn: #f2c14e;
+        --bad: #f2777a;
       }
       * {
         box-sizing: border-box;
@@ -21,8 +25,8 @@
       body {
         margin: 0;
         min-height: 100vh;
-        background: radial-gradient(1200px 600px at 50% -10%, #18202e 0%, var(--bg) 60%);
         color: var(--text);
+        background: radial-gradient(1100px 520px at 50% -12%, #151d2a 0%, var(--bg) 62%);
         font:
           15px/1.5 ui-sans-serif,
           system-ui,
@@ -31,74 +35,153 @@
           sans-serif;
         display: grid;
         place-items: center;
-        padding: 24px;
+        padding: 22px;
       }
       main {
-        width: min(560px, 100%);
+        width: min(620px, 100%);
         background: var(--panel);
         border: 1px solid var(--line);
         border-radius: 18px;
-        padding: 26px 26px 22px;
-        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+        padding: 24px 24px 20px;
+        box-shadow: 0 26px 90px rgba(0, 0, 0, 0.5);
       }
-      h1 {
-        margin: 0 0 2px;
+      .brand {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+      }
+      .brand b {
         font-size: 18px;
-        letter-spacing: 0.14em;
+        letter-spacing: 0.16em;
         text-transform: uppercase;
-        font-weight: 700;
       }
-      h1 span {
+      .brand span {
         color: var(--dim);
-        font-weight: 400;
-        letter-spacing: 0.06em;
+        font-size: 12.5px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
       }
-      p {
+      .brand i {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--accent);
+        box-shadow: 0 0 12px var(--accent);
+        display: inline-block;
+      }
+      .lede {
         margin: 10px 0 0;
         color: var(--dim);
         font-size: 13.5px;
       }
-      button#listen {
+      #listen {
         width: 100%;
-        margin: 22px 0 16px;
-        padding: 16px 18px;
+        margin: 20px 0 18px;
+        padding: 16px;
         border-radius: 12px;
-        border: 1px solid #2c4a44;
-        background: linear-gradient(180deg, #1d3a35, #152924);
+        cursor: pointer;
+        border: 1px solid var(--accent-dim);
         color: #d9fff4;
         font: 600 16px/1 inherit;
         letter-spacing: 0.04em;
-        cursor: pointer;
+        background: linear-gradient(180deg, #1b3733, #132520);
       }
-      button#listen:hover {
-        border-color: #3f6f65;
+      #listen:hover {
+        border-color: #3f7268;
       }
-      button#listen.on {
-        background: linear-gradient(180deg, #14332b, #0e241f);
+      #listen.on {
         color: var(--accent);
+        background: linear-gradient(180deg, #122c26, #0d1e1a);
+      }
+
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: var(--panel-2);
+        padding: 16px;
+      }
+      .panel h2 {
+        margin: 0 0 12px;
+        font-size: 11.5px;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--dim);
+        font-weight: 600;
       }
       .row {
         display: flex;
         align-items: center;
         gap: 12px;
-        margin-top: 14px;
+        margin: 10px 0;
+        flex-wrap: wrap;
       }
-      .row label {
+      .row > label {
         color: var(--dim);
-        font-size: 13px;
-        min-width: 64px;
+        font-size: 12.5px;
+        min-width: 56px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
       }
       input[type='range'] {
         flex: 1;
+        min-width: 140px;
         accent-color: var(--accent);
+        height: 28px;
       }
+      .chip {
+        padding: 9px 13px;
+        border-radius: 9px;
+        border: 1px solid var(--line);
+        background: #141924;
+        color: var(--text);
+        font: 500 13px/1 inherit;
+        cursor: pointer;
+        min-height: 38px;
+      }
+      .chip.on {
+        border-color: var(--accent-dim);
+        color: var(--accent);
+        background: #102420;
+      }
+      .seg {
+        display: flex;
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        overflow: hidden;
+      }
+      .seg button {
+        padding: 9px 13px;
+        border: 0;
+        background: #141924;
+        color: var(--dim);
+        cursor: pointer;
+        font: 500 13px/1 inherit;
+        min-height: 38px;
+      }
+      .seg button + button {
+        border-left: 1px solid var(--line);
+      }
+      .seg button.on {
+        background: #102420;
+        color: var(--accent);
+      }
+      .hint {
+        margin: 2px 0 0;
+        color: var(--dim);
+        font-size: 12.5px;
+        min-height: 34px;
+      }
+      .actions {
+        margin-top: 14px;
+      }
+
       #status {
-        margin-top: 18px;
+        margin-top: 16px;
         border-top: 1px solid var(--line);
         padding-top: 14px;
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 8px 18px;
+        gap: 8px 20px;
         font-variant-numeric: tabular-nums;
       }
       #status div {
@@ -118,18 +201,35 @@
         color: var(--accent);
       }
       .warn {
-        color: #f2c14e;
+        color: var(--warn);
       }
       .bad {
-        color: #f2777a;
+        color: var(--bad);
       }
-      #hint {
-        margin-top: 14px;
-        font-size: 12.5px;
+
+      details {
+        margin-top: 16px;
+        border-top: 1px solid var(--line);
+        padding-top: 12px;
+      }
+      summary {
+        cursor: pointer;
         color: var(--dim);
+        font-size: 12.5px;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+      }
+      details p {
+        margin: 10px 0 0;
+        color: var(--dim);
+        font-size: 13px;
+      }
+      details b {
+        color: var(--text);
+        font-weight: 600;
       }
       code {
-        background: #0e1118;
+        background: #0d1016;
         border: 1px solid var(--line);
         border-radius: 5px;
         padding: 1px 5px;
@@ -139,15 +239,39 @@
   </head>
   <body>
     <main>
-      <h1>Vaporzr <span>· hi-fi listener</span></h1>
-      <p>Plays the bot's raw playback stream: 48 kHz stereo, straight from the source, before Discord's lossy relay.</p>
+      <div class="brand"><i></i><b>Vaporzr</b><span>hi-fi listener</span></div>
+      <p class="lede">
+        The bot's raw playback stream — 48 kHz stereo, straight from the source, before Discord's lossy relay.
+      </p>
 
       <button id="listen">▶ Start listening</button>
 
-      <div class="row">
-        <label for="vol">Volume</label>
-        <input id="vol" type="range" min="0" max="100" value="90" />
-      </div>
+      <section class="panel">
+        <h2>sound check</h2>
+
+        <div class="row">
+          <label for="vol">Volume</label>
+          <input id="vol" type="range" min="0" max="100" value="90" aria-label="Volume" />
+          <button class="chip" id="boost" aria-pressed="false">Boost +6 dB</button>
+          <button class="chip" id="mono" aria-pressed="false">Mono</button>
+        </div>
+
+        <div class="row">
+          <label>Delay</label>
+          <div class="seg" id="latency" role="group" aria-label="Buffer size">
+            <button data-ms="80">Instant</button>
+            <button data-ms="250" class="on">Balanced</button>
+            <button data-ms="500">Safe</button>
+          </div>
+        </div>
+        <p class="hint" id="latency-hint"></p>
+
+        <div class="row actions">
+          <button class="chip" id="tone">Test tone</button>
+          <button class="chip" id="reconnect">Reconnect stream</button>
+          <button class="chip" id="reset">Reset</button>
+        </div>
+      </section>
 
       <div id="status">
         <div><b>stream</b><i id="s-conn">connecting…</i></div>
@@ -158,23 +282,42 @@
         <div><b>audio</b><i id="s-audio">paused</i></div>
       </div>
 
-      <div id="hint">
-        Nothing to hear yet? Start a track in Discord — the stream only exists while the bot is playing. Build
-        <code>{{BUILD}}</code>
-      </div>
+      <details>
+        <summary>no sound? start here</summary>
+        <p>
+          <b>Silence everywhere</b> — press Start listening (browsers block audio until a tap), check the phone's
+          volume, then hit Test tone. If the tone plays, this page is fine and the bot simply isn't playing.
+        </p>
+        <p><b>Stutter or crackle</b> — pick Safe, keep this tab in the foreground, and turn Boost off.</p>
+        <p><b>Only one side</b> — turn Mono on (sums both channels into one).</p>
+        <p>
+          <b>Echo or double audio</b> — mute Vaporzr in the Discord voice channel while listening here; otherwise you
+          hear Discord's copy and this stream together.
+        </p>
+        <p><b>Behind Discord</b> — pick Instant to shave ~170 ms.</p>
+        <p>Build <code>{{BUILD}}</code></p>
+      </details>
     </main>
 
     <script>
       (function () {
         'use strict';
-        var SAMPLE_RATE = 48000,
-          CHANNELS = 2;
-        var LEAD = 0.25; // seconds of buffer scheduled ahead of the clock
-        var MIN_LEAD = 0.03; // below this we are about to underrun: rebuffer
-        var MAX_LEAD = 1.5; // above this the tab drifted: drop the backlog
+        var SAMPLE_RATE = 48000;
+        var CHANNELS = 2;
+        var DEFAULT_SETTINGS = { vol: 90, boost: false, mono: false, leadMs: 250 };
+        var STORE_KEY = 'vz-listen-settings';
+        var HINTS = {
+          80: 'Instant · ~80 ms buffer. Snappiest, but weak mobile connections may stutter.',
+          250: 'Balanced · ~250 ms buffer. The default; right for phones and call audio.',
+          500: 'Safe · ~500 ms buffer. Use if you hear dropouts; adds half a second of delay.',
+        };
 
         var btn = document.getElementById('listen');
         var vol = document.getElementById('vol');
+        var boostBtn = document.getElementById('boost');
+        var monoBtn = document.getElementById('mono');
+        var seg = document.getElementById('latency');
+        var hint = document.getElementById('latency-hint');
         var el = {
           conn: document.getElementById('s-conn'),
           fmt: document.getElementById('s-fmt'),
@@ -184,21 +327,78 @@
           audio: document.getElementById('s-audio'),
         };
 
+        var S = load();
         var ws = null,
           retry = 0,
           retryTimer = null;
         var ctx = null,
-          master = null,
-          nextTime = 0;
-        var running = false,
-          chunks = 0,
+          gainNode = null,
+          limiter = null,
+          tone = null;
+        var nextTime = 0,
+          running = false,
           skipped = 0;
-        var arrivals = []; // [{t, bytes, lag}] within the last 30 s
+        var arrivals = []; // { t, bytes, lag } within the last 30 s
         var lastDraw = 0;
+
+        function load() {
+          try {
+            var saved = JSON.parse(localStorage.getItem(STORE_KEY) || '{}');
+            return Object.assign({}, DEFAULT_SETTINGS, saved);
+          } catch (e) {
+            return Object.assign({}, DEFAULT_SETTINGS);
+          }
+        }
+        function save() {
+          try {
+            localStorage.setItem(STORE_KEY, JSON.stringify(S));
+          } catch (e) {
+            /* private mode */
+          }
+        }
+        function leadSeconds() {
+          return S.leadMs / 1000;
+        }
+        function minLead() {
+          return Math.min(0.05, leadSeconds());
+        }
 
         function setText(node, text, cls) {
           node.textContent = text;
-          if (cls) node.className = cls;
+          node.className = cls || '';
+        }
+
+        /** Push the settings into the UI and the audio graph. */
+        function applySettings() {
+          vol.value = String(S.vol);
+          boostBtn.classList.toggle('on', S.boost);
+          boostBtn.setAttribute('aria-pressed', String(S.boost));
+          monoBtn.classList.toggle('on', S.mono);
+          monoBtn.setAttribute('aria-pressed', String(S.mono));
+          [].forEach.call(seg.querySelectorAll('button'), function (b) {
+            b.classList.toggle('on', Number(b.dataset.ms) === S.leadMs);
+          });
+          hint.textContent = HINTS[S.leadMs] || HINTS[250];
+          if (gainNode) gainNode.gain.value = (S.vol / 100) * (S.boost ? 2 : 1);
+          save();
+        }
+
+        function ensureGraph() {
+          if (gainNode) return;
+          var AC = window.AudioContext || window.webkitAudioContext;
+          if (!AC) return;
+          ctx = new AC({ sampleRate: SAMPLE_RATE, latencyHint: 'playback' });
+          // A limiter after the gain keeps "Boost" from clipping into distortion.
+          limiter = ctx.createDynamicsCompressor();
+          limiter.threshold.value = -6;
+          limiter.knee.value = 0;
+          limiter.ratio.value = 20;
+          limiter.attack.value = 0.003;
+          limiter.release.value = 0.25;
+          gainNode = ctx.createGain();
+          gainNode.gain.value = (S.vol / 100) * (S.boost ? 2 : 1);
+          gainNode.connect(limiter);
+          limiter.connect(ctx.destination);
         }
 
         function connect() {
@@ -232,8 +432,7 @@
               return;
             }
             if (msg.type !== 'audio:pcm' || !msg.data) return;
-            if (msg.ts) arrivals.push({ t: performance.now(), bytes: msg.data.length, lag: Date.now() - msg.ts });
-            else arrivals.push({ t: performance.now(), bytes: msg.data.length, lag: null });
+            arrivals.push({ t: performance.now(), bytes: msg.data.length, lag: msg.ts ? Date.now() - msg.ts : null });
             if (running) play(msg.data);
           };
         }
@@ -258,46 +457,39 @@
           var L = buf.getChannelData(0),
             R = buf.getChannelData(1);
           for (var f = 0; f < frames; f++) {
-            L[f] = pcm[f * CHANNELS] / 32768;
-            R[f] = pcm[f * CHANNELS + 1] / 32768;
+            var l = pcm[f * CHANNELS] / 32768;
+            var r = pcm[f * CHANNELS + 1] / 32768;
+            if (S.mono) {
+              var m = (l + r) / 2;
+              L[f] = m;
+              R[f] = m;
+            } else {
+              L[f] = l;
+              R[f] = r;
+            }
           }
 
           var now = ctx.currentTime;
-          if (nextTime < now + MIN_LEAD || nextTime > now + MAX_LEAD) {
+          if (nextTime < now + minLead() || nextTime > now + Math.max(1.5, leadSeconds() * 3)) {
             // Underrun or drift: realign instead of letting the lead collapse/balloon.
-            if (nextTime > now + MAX_LEAD) skipped++;
-            nextTime = now + LEAD;
+            if (nextTime > now + Math.max(1.5, leadSeconds() * 3)) skipped++;
+            nextTime = now + leadSeconds();
           }
           var src = ctx.createBufferSource();
           src.buffer = buf;
-          src.connect(master);
+          src.connect(gainNode);
           src.start(nextTime);
           nextTime += frames / SAMPLE_RATE;
-          chunks++;
         }
 
-        btn.addEventListener('click', function () {
-          if (running) {
-            stop();
-            return;
-          }
-          start();
-        });
-
         function start() {
-          var AC = window.AudioContext || window.webkitAudioContext;
-          if (!AC) {
+          ensureGraph();
+          if (!ctx) {
             setText(el.audio, 'WebAudio unavailable', 'bad');
             return;
           }
-          if (!ctx) {
-            ctx = new AC({ sampleRate: SAMPLE_RATE, latencyHint: 'playback' });
-            master = ctx.createGain();
-            master.gain.value = Number(vol.value) / 100;
-            master.connect(ctx.destination);
-          }
           ctx.resume();
-          nextTime = ctx.currentTime + LEAD;
+          nextTime = ctx.currentTime + leadSeconds();
           running = true;
           btn.classList.add('on');
           btn.textContent = '■ Stop listening';
@@ -311,9 +503,79 @@
           setText(el.audio, 'paused', '');
           setText(el.buf, '–');
         }
-        vol.addEventListener('input', function () {
-          if (master) master.gain.value = Number(vol.value) / 100;
+
+        /** A short 440 Hz tone through the same graph: proves output works. */
+        function testTone() {
+          ensureGraph();
+          if (!ctx) return;
+          ctx.resume();
+          if (tone) {
+            try {
+              tone.stop();
+            } catch (e) {}
+            tone = null;
+          }
+          var osc = ctx.createOscillator();
+          var env = ctx.createGain();
+          var t = ctx.currentTime + 0.05;
+          osc.frequency.value = 440;
+          osc.type = 'sine';
+          env.gain.setValueAtTime(0.0001, t);
+          env.gain.exponentialRampToValueAtTime(0.22, t + 0.05);
+          env.gain.setValueAtTime(0.22, t + 0.9);
+          env.gain.exponentialRampToValueAtTime(0.0001, t + 1.25);
+          osc.connect(env);
+          env.connect(gainNode);
+          osc.start(t);
+          osc.stop(t + 1.3);
+          tone = osc;
+          setText(el.audio, running ? 'playing · test tone' : 'test tone', 'ok');
+          setTimeout(function () {
+            if (!running) setText(el.audio, 'paused', '');
+          }, 1400);
+        }
+
+        function reconnect() {
+          clearTimeout(retryTimer);
+          try {
+            ws && ws.close();
+          } catch (e) {}
+          ws = null;
+          arrivals = [];
+          skipped = 0;
+          if (ctx) nextTime = ctx.currentTime + leadSeconds();
+          connect();
+        }
+
+        function reset() {
+          S = Object.assign({}, DEFAULT_SETTINGS);
+          applySettings();
+        }
+
+        btn.addEventListener('click', function () {
+          running ? stop() : start();
         });
+        vol.addEventListener('input', function () {
+          S.vol = Number(vol.value);
+          applySettings();
+        });
+        boostBtn.addEventListener('click', function () {
+          S.boost = !S.boost;
+          applySettings();
+        });
+        monoBtn.addEventListener('click', function () {
+          S.mono = !S.mono;
+          applySettings();
+        });
+        seg.addEventListener('click', function (ev) {
+          var b = ev.target.closest('button');
+          if (!b || !b.dataset.ms) return;
+          S.leadMs = Number(b.dataset.ms);
+          applySettings();
+        });
+        document.getElementById('tone').addEventListener('click', testTone);
+        document.getElementById('reconnect').addEventListener('click', reconnect);
+        document.getElementById('reset').addEventListener('click', reset);
 
         /** Stats: kbps over 30 s, buffer lead, arrival lag. */
         function draw() {
@@ -324,7 +586,7 @@
           var cutoff = now - 30000;
           while (arrivals.length && arrivals[0].t < cutoff) arrivals.shift();
           if (arrivals.length > 1) {
-            var span = Math.max(1000, now - arrivals[0].t); // ms actually covered
+            var span = Math.max(1000, now - arrivals[0].t);
             var bytes = 0,
               lag = 0,
               lags = 0;
@@ -347,12 +609,13 @@
             setText(
               el.buf,
               Math.round(lead * 1000) + ' ms' + (skipped ? ' · ' + skipped + ' skips' : ''),
-              lead > 0.6 ? 'warn' : '',
+              lead > leadSeconds() * 2.4 ? 'warn' : '',
             );
           }
         }
-        setInterval(draw, 250);
 
+        applySettings();
+        setInterval(draw, 250);
         connect();
       })();
     </script>
