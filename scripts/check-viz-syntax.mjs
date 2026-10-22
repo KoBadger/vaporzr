@@ -24,19 +24,23 @@ import fs from 'node:fs';
 const AsyncFn = Object.getPrototypeOf(async function () {}).constructor;
 let bad = 0;
 
-const html = fs.readFileSync('apps/bot/public/viz.html', 'utf8');
-const blocks = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)];
-console.log(`viz.html inline script blocks: ${blocks.length}`);
-blocks.forEach((m, i) => {
-  const line = html.slice(0, m.index).split('\n').length;
-  try {
-    new AsyncFn(m[1]);
-    console.log(`  block ${i} (line ${line}): OK (${m[1].length}b)`);
-  } catch (e) {
-    bad++;
-    console.log(`  block ${i} (line ${line}): SYNTAX ERROR -> ${e.message}`);
-  }
-});
+// Both hand-written pages: a syntax error in either leaves the page chrome
+// rendering while the script is dead - a silent failure otherwise.
+for (const page of ['apps/bot/public/viz.html', 'apps/bot/public/listen.html']) {
+  const html = fs.readFileSync(page, 'utf8');
+  const blocks = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)];
+  console.log(`${page} inline script blocks: ${blocks.length}`);
+  blocks.forEach((m, i) => {
+    const line = html.slice(0, m.index).split('\n').length;
+    try {
+      new AsyncFn(m[1]);
+      console.log(`  block ${i} (line ${line}): OK (${m[1].length}b)`);
+    } catch (e) {
+      bad++;
+      console.log(`  block ${i} (line ${line}): SYNTAX ERROR -> ${e.message}`);
+    }
+  });
+}
 
 // Structural sanity on the handshake source: a stray brace would break every
 // platform, and this catches it without trying to execute TS as JS.
@@ -64,8 +68,9 @@ try {
   console.log('  activity handshake: structural checks OK');
 
   // The page must still carry the placeholders activityHtml substitutes.
+  const vizHtml = fs.readFileSync('apps/bot/public/viz.html', 'utf8');
   for (const ph of ['{{ORIGIN}}', '{{BUILD}}']) {
-    if (!html.includes(ph)) throw new Error(`viz.html lost its ${ph} placeholder`);
+    if (!vizHtml.includes(ph)) throw new Error(`viz.html lost its ${ph} placeholder`);
   }
 } catch (e) {
   bad++;
