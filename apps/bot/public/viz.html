@@ -699,6 +699,7 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
     };
     ws.onclose=function(){setConnected(false);scheduleReconnect()};
     ws.onerror=function(){ws.close()};
+  window.__vzReconnect=function(){try{ws&&ws.close()}catch(e){}};
   }
 
   function markVisual(){

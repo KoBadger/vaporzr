@@ -338,6 +338,36 @@ export function webAccessAllowed(hostHeader: string | undefined): boolean {
   return false;
 }
 
+/** Human sentence for a scope, used by the new-device DM and /key list. */
+export function describeScope(scope: AccessScope): string {
+  if (scope === 'control') return 'full control - can play music, change settings and open every page';
+  if (scope === 'view')
+    return 'watch + listen only - can see the visualizer and hear the hi-fi stream, but cannot change anything';
+  return 'song requests only - can add songs to the queue, nothing else';
+}
+
+/** Turn internal labels into something a human reads once and understands. */
+export function describeLabel(label: string): string {
+  if (label === 'remembered device') return 'a device that was already signed in';
+  if (label === 'owner link') return 'the master-key link';
+  if (label === 'panel link') return 'a link created from the control panel';
+  if (label === 'visualizer link' || label === 'listener link') return `a ${label}`;
+  if (label === 'jam card') return 'a jam QR code';
+  const invited = /^discord:(.+)$/.exec(label);
+  if (invited) return `an invite created by ${invited[1]} in Discord`;
+  return label;
+}
+
+/** Masked address -> plain words where possible. */
+export function describeAddress(ip: string | undefined): string {
+  if (!ip) return 'address unknown';
+  if (/^127\./.test(ip)) return 'this computer';
+  if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(ip) || ip.startsWith('fd7a:115c:a1e0:')) {
+    return 'your Tailscale network';
+  }
+  return ip;
+}
+
 /* ------------------------------------------------------------------ */
 /* Failed-attempt throttle: 10 tries per minute per client address.    */
 /* ------------------------------------------------------------------ */

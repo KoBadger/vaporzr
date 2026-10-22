@@ -98,6 +98,7 @@ export type CommandName =
   | 'clear'
   | 'playAt'
   | 'queuePlay'
+  | 'remember'
   | 'prime'
   | 'preload'
   | 'stop'

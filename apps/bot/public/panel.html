@@ -1699,6 +1699,40 @@
         background-clip: text;
         color: transparent;
       }
+      /* Queue context menu: right-click on desktop, long-press on touch. */
+      #qctx {
+        position: fixed;
+        z-index: 9999;
+        min-width: 188px;
+        padding: 6px;
+        border: 1px solid #222835;
+        border-radius: 10px;
+        background: #10131b;
+        box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      #qctx button {
+        text-align: left;
+        background: none;
+        border: 0;
+        color: #e9edf6;
+        padding: 8px 10px;
+        border-radius: 7px;
+        font: 500 13px/1.2 inherit;
+        cursor: pointer;
+      }
+      #qctx button:hover {
+        background: #18202c;
+      }
+      #qctx button:disabled {
+        opacity: 0.35;
+        cursor: default;
+      }
+      #queue li {
+        -webkit-touch-callout: none;
+      }
     </style>
   </head>
   <body>
@@ -1756,6 +1790,7 @@
               <button data-ambient="toggle">🌙 Lo-fi intermission: <span id="amb-state">off</span></button>
               <button data-voteskip="toggle">🗳 Vote-skip: <span id="vs-state">on</span></button>
               <a href="/viz" target="_blank" rel="noopener">🎬 Open visualizer</a>
+              <a href="/listen" target="_blank" rel="noopener">Hi-fi listener</a>
               <button data-reload="1">⟳ Reload panel</button>
             </div>
           </div>
@@ -1791,8 +1826,8 @@
         <div id="time"><span id="t-now">0:00</span><span id="t-dur">0:00</span></div>
         <canvas id="spectrum"></canvas>
         <div class="row" style="margin-top: 10px">
-          <button id="btn-clear" class="danger" data-tip="Stop playback and clear the whole queue">
-            🗑 Clear queue
+          <button id="btn-clear" class="danger" data-tip="Clear the upcoming queue - the current song keeps playing">
+            🗑 Clear upcoming
           </button>
           <div id="vol-wrap" class="row" style="margin-left: auto; color: var(--muted); font-size: 12px">
             <span data-tip="Playback volume">🔉</span
@@ -1890,6 +1925,7 @@
             <button id="q-sel-remove" class="danger">✕ Remove</button>
             <button id="q-sel-clear" class="icon">Clear</button>
           </div>
+          <div id="qctx" hidden role="menu"></div>
           <ul id="queue">
             <li id="empty" style="color: var(--muted); font-size: 12px">Nothing queued.</li>
           </ul>
@@ -2078,6 +2114,17 @@
           <input id="key-listen" type="text" readonly spellcheck="false" />
           <button id="key-copy-listen" data-tip="Copy listener link">listen</button>
         </div>
+        <div class="key-h2">Discord Activity</div>
+        <div class="key-row">
+          <input
+            id="activity-code"
+            type="text"
+            placeholder="code from the Activity"
+            spellcheck="false"
+            autocomplete="off"
+          />
+          <button id="btn-activity" data-tip="Approve the code shown inside the Discord Activity">Connect</button>
+        </div>
         <div class="key-foot">
           <button id="key-signout">Sign out this device</button>
           <button id="key-close">Close</button>
@@ -2133,6 +2180,8 @@
           'key-listen',
           'key-copy-listen',
           'key-signout',
+          'activity-code',
+          'btn-activity',
           'key-close',
           'btn-play',
           'btn-shuffle',
@@ -2553,6 +2602,108 @@
           renderQueue();
         };
 
+        // ---- queue context menu (right-click / long-press / "..." button) ----
+        var qctx = document.getElementById('qctx');
+        function closeQctx() {
+          qctx.hidden = true;
+        }
+        function qctxItem(label, fn, disabled) {
+          var b = document.createElement('button');
+          b.type = 'button';
+          b.textContent = label;
+          b.disabled = !!disabled;
+          b.onclick = function (ev) {
+            ev.stopPropagation();
+            closeQctx();
+            fn();
+          };
+          return b;
+        }
+        function openQctx(i, x, y) {
+          var snap = queue;
+          var cur = -1;
+          if (state && state.track) {
+            for (var k = 0; k < snap.length; k++) {
+              if (snap[k].uri === state.track.uri) {
+                cur = k;
+                break;
+              }
+            }
+          }
+          qctx.innerHTML = '';
+          qctx.appendChild(
+            qctxItem(
+              'Play now',
+              function () {
+                cmd('playAt', { index: i });
+              },
+              i === cur,
+            ),
+          );
+          qctx.appendChild(
+            qctxItem(
+              'Play next',
+              function () {
+                cmd('move', { index: i, to: cur >= 0 ? cur + 1 : 0 });
+              },
+              cur >= 0 ? i === cur + 1 : i === 0,
+            ),
+          );
+          qctx.appendChild(
+            qctxItem(
+              'Move to top',
+              function () {
+                cmd('move', { index: i, to: 0 });
+              },
+              i === 0,
+            ),
+          );
+          qctx.appendChild(
+            qctxItem(
+              'Move up',
+              function () {
+                cmd('move', { index: i, to: i - 1 });
+              },
+              i === 0,
+            ),
+          );
+          qctx.appendChild(
+            qctxItem(
+              'Move down',
+              function () {
+                cmd('move', { index: i, to: i + 1 });
+              },
+              i === snap.length - 1,
+            ),
+          );
+          qctx.appendChild(
+            qctxItem('Remember song', function () {
+              cmd('remember', { index: i });
+            }),
+          );
+          qctx.appendChild(
+            qctxItem(
+              'Remove',
+              function () {
+                cmd('remove', { index: i });
+              },
+              i === cur,
+            ),
+          );
+          qctx.hidden = false;
+          var r = qctx.getBoundingClientRect();
+          qctx.style.left = Math.max(8, Math.min(x, window.innerWidth - r.width - 8)) + 'px';
+          qctx.style.top = Math.max(8, Math.min(y, window.innerHeight - r.height - 8)) + 'px';
+        }
+        document.addEventListener('click', function (ev) {
+          if (!qctx.hidden && !qctx.contains(ev.target)) closeQctx();
+        });
+        document.addEventListener('scroll', closeQctx, true);
+        window.addEventListener('resize', closeQctx);
+        document.addEventListener('keydown', function (ev) {
+          if (ev.key === 'Escape') closeQctx();
+        });
+
         function renderQueue() {
           var known = queue.filter(function (q) {
             return q.durationMs;
@@ -2696,6 +2847,44 @@
               ),
             );
             li.appendChild(acts);
+            li.addEventListener('contextmenu', function (ev) {
+              ev.preventDefault();
+              openQctx(i, ev.clientX, ev.clientY);
+            });
+            var lpTimer = null;
+            li.addEventListener(
+              'touchstart',
+              function (ev) {
+                if (ev.touches.length !== 1) return;
+                var tp = ev.touches[0];
+                lpTimer = setTimeout(function () {
+                  lpTimer = null;
+                  openQctx(i, tp.clientX, tp.clientY);
+                }, 480);
+              },
+              { passive: true },
+            );
+            ['touchend', 'touchcancel', 'touchmove'].forEach(function (evName) {
+              li.addEventListener(
+                evName,
+                function () {
+                  if (lpTimer) {
+                    clearTimeout(lpTimer);
+                    lpTimer = null;
+                  }
+                },
+                { passive: true },
+              );
+            });
+            var moreBtn = document.createElement('button');
+            moreBtn.textContent = '...';
+            moreBtn.setAttribute('data-tip', 'More actions');
+            moreBtn.onclick = function (ev) {
+              ev.stopPropagation();
+              var mr = moreBtn.getBoundingClientRect();
+              openQctx(i, mr.left, mr.bottom + 4);
+            };
+            acts.appendChild(moreBtn);
             li.draggable = true;
             li.ondragstart = function (ev) {
               dragIndex = i;
@@ -3753,6 +3942,34 @@
           fetch('/api/logout', { method: 'POST' }).then(function () {
             window.location.href = '/';
           });
+        };
+        el['btn-activity'].onclick = function () {
+          var code = (el['activity-code'].value || '').trim().toUpperCase();
+          if (!code) {
+            toast('error', 'Enter the code shown in the Activity');
+            return;
+          }
+          fetch('/api/activity/approve', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code: code }),
+          })
+            .then(function (r) {
+              return r.json().then(function (d) {
+                return { ok: r.ok, d: d };
+              });
+            })
+            .then(function (x) {
+              if (x.ok) {
+                el['activity-code'].value = '';
+                toast('success', 'Activity connected - it will start playing');
+              } else {
+                toast('error', (x.d && x.d.error) || 'Could not connect the Activity');
+              }
+            })
+            .catch(function () {
+              toast('error', 'Could not connect the Activity');
+            });
         };
 
         // PWA: register the (cache-free) service worker so the panel is installable.

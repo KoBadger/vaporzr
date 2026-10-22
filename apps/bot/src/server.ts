@@ -516,6 +516,39 @@ function grantRequestPage(req: http.IncomingMessage, url: URL, res: http.ServerR
   return false;
 }
 
+/**
+ * Discord Activity pairing. The Activity iframe cannot carry our session
+ * cookie, so it shows a 6-character code that an authenticated panel approves;
+ * the approval mints a short-lived, reusable view invite which the Activity's
+ * socket presents once.
+ */
+const activityPairs = new Map<string, { createdAt: number; invite?: string }>();
+const ACTIVITY_PAIR_TTL_MS = 5 * 60 * 1000;
+const ACTIVITY_INVITE_TTL_MS = 20 * 60 * 1000;
+const activityPairTries = new Map<string, { count: number; windowStart: number }>();
+
+function activityPairAllowed(ip: string): boolean {
+  const now = Date.now();
+  const entry = activityPairTries.get(ip);
+  if (!entry || now - entry.windowStart > 60_000) {
+    activityPairTries.set(ip, { count: 1, windowStart: now });
+    return true;
+  }
+  if (entry.count >= 6) return false;
+  entry.count += 1;
+  return true;
+}
+
+function newPairCode(): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  for (let attempt = 0; attempt < 20; attempt++) {
+    let code = '';
+    for (let i = 0; i < 6; i++) code += alphabet[Math.floor(Math.random() * alphabet.length)];
+    if (!activityPairs.has(code)) return code;
+  }
+  return '';
+}
+
 /** Global throttle for the public request endpoint (8 requests / minute). */
 let requestWindowStart = 0;
 let requestCount = 0;
@@ -662,7 +695,8 @@ function activityHtml(origin: string): string | null {
       `}catch(e){}` +
       `}catch(e){window.__VZ_SDK_STATE__='ready-nosdk';}` +
       `}` +
-      `</script>`;
+      `</script>` +
+      '<script src="/activity-connect.js" defer></script>';
     return (
       fs
         .readFileSync(path.join(__dirname, '..', 'public', 'viz.html'), 'utf8')
@@ -943,6 +977,21 @@ async function handleRoute(
       return;
     }
 
+    // Activity pairing poll: /api/activity/pair/<CODE> (no credential - the
+    // code is the credential, and it only ever yields a view invite).
+    if (url.pathname.startsWith('/api/activity/pair/')) {
+      const code = decodeURIComponent(url.pathname.slice('/api/activity/pair/'.length)).toUpperCase();
+      const pair = activityPairs.get(code);
+      if (!pair || Date.now() - pair.createdAt > ACTIVITY_PAIR_TTL_MS) {
+        res.writeHead(404, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ status: 'expired' }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify(pair.invite ? { status: 'approved', invite: pair.invite } : { status: 'pending' }));
+      return;
+    }
+
     switch (url.pathname) {
       case '/':
       case '/index.html': {
@@ -1179,6 +1228,60 @@ async function handleRoute(
         break;
       }
 
+      case '/api/activity/pair': {
+        if (req.method !== 'POST') {
+          res.writeHead(405);
+          res.end();
+          return;
+        }
+        const ip = req.socket.remoteAddress ?? 'unknown';
+        if (!activityPairAllowed(ip)) {
+          res.writeHead(429, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Too many attempts - try again in a minute.' }));
+          return;
+        }
+        const code = newPairCode();
+        if (!code) {
+          res.writeHead(503, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Could not allocate a code.' }));
+          return;
+        }
+        activityPairs.set(code, { createdAt: Date.now() });
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ code, expiresInMs: ACTIVITY_PAIR_TTL_MS }));
+        break;
+      }
+
+      case '/api/activity/approve': {
+        if (req.method !== 'POST') {
+          res.writeHead(405);
+          res.end();
+          return;
+        }
+        if (!config.shareKey || !hasShareAccess(req, url, 'control')) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Sign in to the panel first.' }));
+          return;
+        }
+        const body = (await readJsonBody(req)) as { code?: string } | null;
+        const code = String(body?.code ?? '')
+          .trim()
+          .toUpperCase();
+        const pair = activityPairs.get(code);
+        if (!pair || Date.now() - pair.createdAt > ACTIVITY_PAIR_TTL_MS) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'That code is expired - open the Activity and try again.' }));
+          return;
+        }
+        // Reusable within a short window so the Activity can reconnect after a
+        // network blip; view scope only, so it can never touch playback.
+        const minted = mintInvite('view', 'discord activity', ACTIVITY_INVITE_TTL_MS, Date.now(), 0);
+        pair.invite = minted.token;
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ ok: true, expiresInMs: ACTIVITY_INVITE_TTL_MS }));
+        break;
+      }
+
       case '/api/logout': {
         if (req.method !== 'POST') {
           res.writeHead(405);
@@ -1349,6 +1452,18 @@ async function handleRoute(
         } catch {
           res.writeHead(404);
           res.end('Request page not found.');
+        }
+        break;
+      }
+
+      case '/activity-connect.js': {
+        try {
+          const body = fs.readFileSync(path.join(__dirname, '..', 'public', 'activity-connect.js'), 'utf8');
+          res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store' });
+          res.end(body);
+        } catch {
+          res.writeHead(404);
+          res.end();
         }
         break;
       }
