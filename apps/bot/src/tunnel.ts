@@ -132,6 +132,12 @@ export const vizTunnel = {
     if (b.secure) return { url: `${b.url}/panel`, secure: true };
     return { url: `http://${lanOrPublic()}:${config.port}/panel`, secure: false };
   },
+  /** Full /listen URL (hi-fi listener), mirroring the other web links. */
+  listenLink(): { url: string; secure: boolean } {
+    const b = base();
+    if (b.secure) return { url: `${b.url}/listen`, secure: true };
+    return { url: `http://${lanOrPublic()}:${config.port}/listen`, secure: false };
+  },
 };
 
 function lanOrPublic(): string {

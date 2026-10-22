@@ -1363,8 +1363,14 @@ export class DiscordBot {
         await this.handleSwapButton(interaction);
       } else if (interaction.customId.startsWith('vzhelp:')) {
         const id = interaction.customId.slice('vzhelp:'.length);
-        const embed = this.helpCategoryEmbed(id);
-        if (embed) await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral }).catch(() => {});
+        if (id === 'all') {
+          await interaction.reply({ embeds: this.helpAllEmbeds(), flags: MessageFlags.Ephemeral }).catch(() => {});
+        } else if (id === 'aliases') {
+          await interaction.reply({ embeds: [this.helpAliasesEmbed()], flags: MessageFlags.Ephemeral }).catch(() => {});
+        } else {
+          const embed = this.helpCategoryEmbed(id);
+          if (embed) await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral }).catch(() => {});
+        }
       } else if (interaction.customId.startsWith('qa:')) {
         await this.handleQueueAdjust(interaction);
       } else if (interaction.customId.startsWith('roulette:')) {
@@ -6989,6 +6995,17 @@ export class DiscordBot {
     return this.bridge.getTheme().embedColor;
   }
 
+  /**
+   * Help pages use a darker cut of the active theme's accent: same identity,
+   * quieter sidebar. The bot reads as a dark room with one teal signal, and a
+   * full-saturation stripe under every category clashes with that.
+   */
+  private helpColor(): number {
+    const c = this.themeColor();
+    const cut = (v: number): number => Math.max(22, Math.round(v * 0.52));
+    return (cut((c >> 16) & 0xff) << 16) | (cut((c >> 8) & 0xff) << 8) | cut(c & 0xff);
+  }
+
   private static readonly QUEUE_PAGE = 15;
 
   /** Build the queue embed for one 15-song page plus a jump-to dropdown for
@@ -10512,21 +10529,37 @@ export class DiscordBot {
 
   /** Shared reference for both `/help` and `V@help`. */
   private helpEmbed(): EmbedBuilder {
-    const link = vizTunnel.vizLink();
-    // Public embed: secure link only — the LAN address stays an admin-only detail.
-    const vizLine = link.secure
-      ? `**Web visualizer:** <${link.url}> 🔒`
-      : '**Web visualizer:** run `/viz` for the secure link';
-    const catLines = HELP_CATEGORIES.map((c) => `${c.emoji} **${c.name}** — ${c.blurb}`).join('\n');
-    return new EmbedBuilder()
-      .setTitle('🎧 Vaporzr — Command Center')
-      .setDescription(
-        `Music, autoplay & visuals for your server.\n\n${vizLine}\n\n${catLines}\n\n` +
-          'Tap a category below, `V@help <category>` to jump, **`V@help all`** for every command, ' +
-          'or **`V@help aliases`** for the shortcut index.',
-      )
-      .setColor(this.themeColor())
-      .setFooter({ text: 'Every / command has a V@ prefix shortcut (e.g. /play → V@p).' });
+    const panel = vizTunnel.panelLink();
+    const viz = vizTunnel.vizLink();
+    const listen = vizTunnel.listenLink();
+    const catLines = HELP_CATEGORIES.map((c) => `${c.emoji}  **${c.name}** — ${c.blurb}`).join('\n');
+    const avatar = this.client.user?.displayAvatarURL({ size: 128 });
+    // Public embed: secure links only. A LAN address is an admin-only detail,
+    // so when no secure base is configured we point at the commands instead.
+    const web: string[] = [];
+    if (panel.secure) web.push(`[panel](${panel.url})`);
+    if (viz.secure) web.push(`[visualizer](${viz.url})`);
+    if (listen.secure) web.push(`[hi-fi listener](${listen.url})`);
+    const webLine = web.length
+      ? `**Web** — ${web.join(' · ')}`
+      : '**Web** — `/panel`, `/viz`, `/listen` open the secure links';
+
+    const embed = new EmbedBuilder()
+      .setTitle('Vaporzr')
+      .setDescription(`*music · autoplay · visuals · games*\n\n${catLines}\n\n${webLine}`)
+      .setColor(this.helpColor())
+      .addFields({
+        name: "✨ what's new",
+        value:
+          "`/listen` — the bot's full-quality audio in a browser, with a sound-check panel\n" +
+          '`/diag` — now shows the **live** Opus bitrate, not just the target\n' +
+          '`V@w roast` — The Weasel roasts anyone · `V@w say` — Pauly Shore voice drops',
+      })
+      .setFooter({
+        text: 'V@help all — every command · V@help aliases — every shortcut · V@help <category> — jump',
+      });
+    if (avatar) embed.setThumbnail(avatar);
+    return embed;
   }
 
   /** "See everything": every help line, packed into as few messages as Discord allows. */
@@ -10535,8 +10568,9 @@ export class DiscordBot {
     const pages = chunkFieldsIntoEmbeds(fields);
     return pages.map((page, i) =>
       new EmbedBuilder()
-        .setTitle(`📖 Every command — page ${i + 1}/${pages.length}`)
-        .setColor(this.themeColor())
+        .setTitle(`Every command · ${i + 1}/${pages.length}`)
+        .setDescription('*the complete reference — nothing truncated*')
+        .setColor(this.helpColor())
         .addFields(...page)
         .setFooter({
           text: 'V@help aliases — shortcut index · V@help <category> — just one section',
@@ -10547,9 +10581,9 @@ export class DiscordBot {
   /** The complete V@ shortcut index, generated from the dispatcher's own table. */
   private helpAliasesEmbed(): EmbedBuilder {
     return new EmbedBuilder()
-      .setTitle('⌨️ V@ shortcut index')
+      .setTitle('Shortcuts')
       .setDescription('Type `V@<shortcut>` in any channel the bot can read. `/` slash commands run the same defaults.')
-      .setColor(this.themeColor())
+      .setColor(this.helpColor())
       .addFields(...aliasIndexFields(V_ALIASES))
       .setFooter({ text: 'V@help for the menu · V@help all for full descriptions' });
   }
@@ -10570,18 +10604,35 @@ export class DiscordBot {
       }
       rows.push(row);
     }
+    rows.push(
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId('vzhelp:all')
+          .setLabel('All commands')
+          .setEmoji('📖')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId('vzhelp:aliases')
+          .setLabel('Shortcuts')
+          .setEmoji('⌨️')
+          .setStyle(ButtonStyle.Secondary),
+      ),
+    );
     return rows;
   }
 
   /** Detailed embed for one help category (or null if unknown). */
   private helpCategoryEmbed(id: string): EmbedBuilder | null {
-    const c = HELP_CATEGORIES.find((x) => x.id === id || x.name.toLowerCase() === id.toLowerCase());
-    if (!c) return null;
+    const idx = HELP_CATEGORIES.findIndex((x) => x.id === id || x.name.toLowerCase() === id.toLowerCase());
+    if (idx < 0) return null;
+    const c = HELP_CATEGORIES[idx];
     return new EmbedBuilder()
-      .setTitle(`${c.emoji} ${c.name}`)
-      .setDescription(c.lines.join('\n'))
-      .setColor(this.themeColor())
-      .setFooter({ text: 'Type V@help for the full menu · V@help <category> to jump' });
+      .setTitle(`${c.emoji}  ${c.name}`)
+      .setDescription(`*${c.blurb}*\n\n${c.lines.join('\n')}`)
+      .setColor(this.helpColor())
+      .setFooter({
+        text: `${idx + 1}/${HELP_CATEGORIES.length} · V@help for the menu · V@help all for everything`,
+      });
   }
 
   private statsEmbed(): EmbedBuilder {
@@ -11749,6 +11800,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/panel` · `V@pan` — post the control panel',
       '`/jam` · `V@jam` · `V@share` — post the jam invite card (QR + link) so guests can request songs from their phones',
       '`/viz` · `V@viz` — open the web visualizer (MilkDrop)',
+      "`/listen` — hi-fi listener: the bot's raw 48 kHz audio in a browser (full quality, ahead of Discord) with volume, buffer, mono and test-tone controls",
       '`/theme` · `V@th` — pick a color mood',
       '`/wave` — waveform snapshot · `/burst` — animated clip',
       '`/screensaver` · `V@sc` — idle screensaver',
@@ -11764,7 +11816,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
     name: 'System',
     blurb: 'stats, diagnostics and admin tools',
     lines: [
-      '`/diag` · `V@diag` — diagnostics (gateway, voice, librespot)',
+      '`/diag` · `V@diag` — diagnostics (gateway, voice, librespot, live Opus bitrate)',
       '`/leaderboard` · `V@lb` — server listening stats (top DJs & artists)',
       "`/wrapped [month]` · `V@wrapped` — this server's monthly Wrapped: hours, top tracks, artists, DJs",
       '`/stats` — bot statistics',
