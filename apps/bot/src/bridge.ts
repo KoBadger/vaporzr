@@ -32,6 +32,7 @@ import { secretEquals, keyFromCookieHeader } from './secretCompare.js';
 import {
   authThrottle,
   consumeInvite,
+  mintInvite,
   noteAuthFailure,
   resolveSession,
   tokenFromCookieHeader,
@@ -44,8 +45,21 @@ import { playlistStore } from '@vaporzr/core/playlists';
  *  `joinUrl` stays undefined until JAM_PUBLIC_BASE names a reachable public
  *  host: the bot is loopback-bound behind the reverse proxy, so a client-derived
  *  address only resolves on the machine holding the tunnel. */
+let jamInviteCache: { token: string; expiresAt: number } | null = null;
+
 export function jamJoinLinks(): { joinPath: string; joinUrl: string | undefined } {
-  const joinPath = config.requestKey ? `/jam?key=${encodeURIComponent(config.requestKey)}` : '/jam';
+  // A posted jam card has to keep working for the whole party, so this is a
+  // reusable "request" invite that rotates hourly - expiring and revocable,
+  // unlike the static REQUEST_KEY QR code it replaces.
+  let joinPath = '/jam';
+  if (config.shareKey || config.requestKey) {
+    const now = Date.now();
+    if (!jamInviteCache || jamInviteCache.expiresAt - now < 60 * 60 * 1000) {
+      const minted = mintInvite('request', 'jam card', 6 * 60 * 60 * 1000, now, 0);
+      jamInviteCache = { token: minted.token, expiresAt: minted.invite.expiresAt };
+    }
+    joinPath = `/jam?invite=${encodeURIComponent(jamInviteCache.token)}`;
+  }
   return { joinPath, joinUrl: config.jamPublicBase ? config.jamPublicBase + joinPath : undefined };
 }
 
@@ -429,7 +443,7 @@ export class Bridge {
     if (!config.shareKey) return 'control';
     const ip = req.socket.remoteAddress ?? 'unknown';
     const sess = resolveSession(tokenFromCookieHeader(req.headers.cookie));
-    if (sess) return sess.scope;
+    if (sess) return sess.scope === 'request' ? 'guest' : sess.scope;
     if (secretEquals(keyFromCookieHeader(req.headers.cookie), config.shareKey)) return 'control';
     let qKey: string | null = null;
     let qInvite: string | null = null;
@@ -445,7 +459,7 @@ export class Bridge {
     if (!inviteToken) return 'guest';
     if (!authThrottle(ip).allowed) return 'guest';
     const used = consumeInvite(inviteToken);
-    if (used) return used.session.scope;
+    if (used) return used.session.scope === 'request' ? 'guest' : used.session.scope;
     noteAuthFailure(ip);
     return 'guest';
   }
