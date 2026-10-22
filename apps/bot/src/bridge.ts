@@ -28,7 +28,15 @@ import { DEFAULT_THEME, themeById } from './themes.js';
 import { analyzer } from '@vaporzr/core/analyzer';
 import { searchAndResolveYoutube } from '@vaporzr/core/youtube';
 import type { ResolvedTrack } from '@vaporzr/core/spotify';
-import { secretEquals, socketHasShareKey } from './secretCompare.js';
+import { secretEquals, keyFromCookieHeader } from './secretCompare.js';
+import {
+  authThrottle,
+  consumeInvite,
+  noteAuthFailure,
+  resolveSession,
+  tokenFromCookieHeader,
+  type AccessScope,
+} from './access.js';
 import { playlistStore } from '@vaporzr/core/playlists';
 
 /** The jam page's guest URL: built from the LOW-privilege request key, not the
@@ -93,7 +101,8 @@ export class Bridge {
   /** Routed to the Discord layer when the panel changes autoplay mode. */
   private endlessWaveToggle: ((guildId: string, mode: 'off' | 'basic' | 'smart') => void) | null = null;
   /** Per-socket auth state: true = key holder (full control), false = guest (view-only). */
-  private socketAuthed = new Map<WebSocket, boolean>();
+  /** Per-socket credential level: control (panel), view (watch/listen) or guest (Activity). */
+  private socketScope = new Map<WebSocket, AccessScope | 'guest'>();
   /** Human-readable guild list for the panel/visualizer guild switcher. */
   private guildList: Array<{ id: string; name: string }> = [];
 
@@ -160,33 +169,49 @@ export class Bridge {
     this.sessions.onSessionCreated(() => this.syncQueueSubscriptions());
 
     this.wss.on('connection', (socket, req) => {
-      // Share-key auth: keyed sockets get full control; keyless sockets connect
-      // as guests — they can watch (snapshots, visuals) but commands are ignored.
-      if (config.shareKey) {
-        // Accept the key from the cookie OR the ?key= query param — see
-        // socketHasShareKey for why both are required.
-        const authed = socketHasShareKey(req.url, req.headers.cookie, config.shareKey);
-        this.socketAuthed.set(socket, authed);
-        if (!authed) {
-          // Don't let a guest look like a working panel: say so immediately, on
-          // the socket, so the UI can switch to view-only instead of swallowing
-          // every press in silence.
-          try {
-            socket.send(
-              JSON.stringify({
-                type: 'panel:notice',
-                level: 'error',
-                notice: 'guest',
-                auth: false,
-                text: 'View-only: this panel is not authorised. Open the /key give link to control playback.',
-              }),
-            );
-          } catch {
-            /* socket already gone */
-          }
+      // Cross-site WebSocket hijacking guard: browsers always send Origin on
+      // the upgrade. A mismatch means some other page is opening sockets with
+      // the visitor's cookies, so refuse before any data is sent.
+      const origin = req.headers.origin;
+      if (origin) {
+        let originHost = '';
+        try {
+          originHost = new URL(origin).host;
+        } catch {
+          originHost = '';
         }
-      } else {
-        this.socketAuthed.set(socket, true);
+        const hostname = originHost.split(':')[0] ?? '';
+        // Same origin, or a Discord surface that hosts the Activity iframe.
+        // A Discord origin is still only a guest socket (no cookie), so it can
+        // receive bars but never PCM or commands.
+        const sameSite = originHost === (req.headers.host ?? '');
+        const discordSurface = /^(discord\.com|([a-z0-9-]+\.)*discordsays\.com|([a-z0-9-]+\.)*discordapp\.com)$/i.test(
+          hostname,
+        );
+        if (!sameSite && !discordSurface) {
+          socket.close(1008, 'origin');
+          return;
+        }
+      }
+
+      const scope = this.scopeForUpgrade(req);
+      this.socketScope.set(socket, scope);
+      if (scope === 'guest') {
+        // Guests (e.g. the Discord Activity, which cannot carry a cookie) get
+        // visuals only: no PCM, no commands. Say so so the UI can adapt.
+        try {
+          socket.send(
+            JSON.stringify({
+              type: 'panel:notice',
+              level: 'error',
+              notice: 'guest',
+              auth: false,
+              text: 'View-only: no session on this socket. Open a /key give link to control playback.',
+            }),
+          );
+        } catch {
+          /* socket already gone */
+        }
       }
       socket.on('message', (data) => this.handleMessage(socket, data));
       socket.on('close', () => this.handleClose(socket));
@@ -234,8 +259,9 @@ export class Bridge {
     s.setVisualizerSink((msg) => this.broadcastVisualizers(msg));
     const gid = this.primaryGuildId || '__primary__';
     s.setPcmSink((data: Buffer) => {
-      const hasPcmPanels = [...this.panels].some((p) => p.subscribedPcm);
-      if (this.visualizers.size === 0 && !hasPcmPanels) return; // nobody listening — skip base64 work entirely
+      const hasViewer = [...this.visualizers].some((v) => this.scopeOf(v.socket) !== 'guest');
+      const hasPcmPanels = [...this.panels].some((p) => p.subscribedPcm && this.scopeOf(p.socket) !== 'guest');
+      if (!hasViewer && !hasPcmPanels) return; // nobody authorised — skip base64 work entirely
       const b64 = data.toString('base64');
       this.broadcastPcm(gid, b64);
     });
@@ -289,7 +315,7 @@ export class Bridge {
   }
 
   private handleClose(socket: WebSocket): void {
-    this.socketAuthed.delete(socket);
+    this.socketScope.delete(socket);
     this.cmdBudget.delete(socket);
     for (const panel of this.panels) {
       if (panel.socket === socket) {
@@ -340,7 +366,7 @@ export class Bridge {
         this.ensureBarsTicker();
       } else {
         this.panels.add(client);
-        const guest = config.shareKey && !this.isAuthed(socket);
+        const guest = this.scopeOf(socket) === 'guest';
         console.log(
           `[bridge] panel connected${client.guildId ? ` (guild ${client.guildId})` : ''}${guest ? ' [guest]' : ''}`,
         );
@@ -385,8 +411,43 @@ export class Bridge {
     return null;
   }
 
+  private scopeOf(socket: WebSocket): AccessScope | 'guest' {
+    return this.socketScope.get(socket) ?? 'control';
+  }
+
+  /** True when this socket may control playback (control sessions and local tests). */
   private isAuthed(socket: WebSocket): boolean {
-    return this.socketAuthed.get(socket) ?? true;
+    return this.scopeOf(socket) === 'control';
+  }
+
+  /**
+   * Resolve the credential for a new socket. Priority: session cookie, legacy
+   * raw-key cookie, ?key= master key, ?invite= (or ?key= invite code), guest.
+   * A guest never receives PCM - the raw audio is the whole point of /listen.
+   */
+  private scopeForUpgrade(req: http.IncomingMessage): AccessScope | 'guest' {
+    if (!config.shareKey) return 'control';
+    const ip = req.socket.remoteAddress ?? 'unknown';
+    const sess = resolveSession(tokenFromCookieHeader(req.headers.cookie));
+    if (sess) return sess.scope;
+    if (secretEquals(keyFromCookieHeader(req.headers.cookie), config.shareKey)) return 'control';
+    let qKey: string | null = null;
+    let qInvite: string | null = null;
+    try {
+      const url = new URL(req.url ?? '/ws', 'http://localhost');
+      qKey = url.searchParams.get('key');
+      qInvite = url.searchParams.get('invite');
+    } catch {
+      /* malformed query: treat as keyless */
+    }
+    if (qKey && secretEquals(qKey, config.shareKey)) return 'control';
+    const inviteToken = qInvite ?? (qKey && !secretEquals(qKey, config.shareKey) ? qKey : null);
+    if (!inviteToken) return 'guest';
+    if (!authThrottle(ip).allowed) return 'guest';
+    const used = consumeInvite(inviteToken);
+    if (used) return used.session.scope;
+    noteAuthFailure(ip);
+    return 'guest';
   }
 
   /** Per-socket command token bucket: ~30 burst, refilled at 3/s. Keeps a keyed
@@ -1388,6 +1449,7 @@ export class Bridge {
             .filter((x) => x.guildId !== '__fallback__')
             .map((x) => ({ id: x.guildId, name: x.guildId }));
     const authed = this.isAuthed(socket);
+    const guestSocket = this.scopeOf(socket) === 'guest';
     const selected =
       allGuilds.find((g) => g.id === selectedId) ?? (selectedId ? { id: selectedId, name: selectedId } : undefined);
     const guildsForClient = authed ? allGuilds : selected ? [{ id: selected.id, name: 'Server' }] : [];
@@ -1410,7 +1472,7 @@ export class Bridge {
         this.presetIdx >= 0 && this.presetNames[this.presetIdx]
           ? { name: this.presetNames[this.presetIdx], index: this.presetIdx }
           : undefined,
-      guest: config.shareKey ? !authed : undefined,
+      guest: guestSocket || undefined,
       endlesswave: ew ? ew.active : undefined,
       endlesswaveMode: ew ? (ew.active ? 'smart' : ew.basic ? 'basic' : 'off') : undefined,
       ambient: s.guildId ? this.perms.getAmbient(s.guildId) : undefined,
@@ -1474,11 +1536,13 @@ export class Bridge {
   private broadcastPcm(guildId: string, data: string): void {
     const msg: OutboundMessage = { type: 'audio:pcm', guildId, data, ts: Date.now() };
     for (const vis of this.visualizers) {
+      if (this.scopeOf(vis.socket) === 'guest') continue; // guests: bars only, never audio
       if (!vis.guildId || vis.guildId === guildId) {
         this.sendToSocket(vis.socket, msg);
       }
     }
     for (const panel of this.panels) {
+      if (this.scopeOf(panel.socket) === 'guest') continue;
       if (panel.subscribedPcm && (!guildId || !panel.guildId || panel.guildId === guildId)) {
         this.sendToSocket(panel.socket, msg);
       }
