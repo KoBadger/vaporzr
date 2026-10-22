@@ -489,6 +489,26 @@ export class QueueManager {
     return true;
   }
 
+  /**
+   * Clear everything EXCEPT the track that is playing. "Clear queue" must not
+   * stop the music - that is what /leave and the stop action are for.
+   * Returns how many upcoming tracks were dropped.
+   */
+  clearUpcoming(): number {
+    const before = this.tracks.length;
+    const keep = this.tracks[this.currentIndex] ?? this.tracks.find((t) => t.uri === this.state.track?.uri);
+    if (!keep) {
+      this.clear();
+      return before;
+    }
+    const upcoming = Math.max(0, before - this.currentIndex - 1);
+    this.tracks = [keep];
+    this.currentIndex = 0;
+    this.clearPlayedThrough();
+    this.emitQueue();
+    return upcoming;
+  }
+
   clear(): void {
     this.tracks = [];
     this.currentIndex = -1;

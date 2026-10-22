@@ -16,6 +16,7 @@ A Discord music bot with a branded web control panel and a browser-based MilkDro
 - **👁 Guest mode** — the visualizer and a **view-only panel** are open to anyone with the URL; only *control* requires a key (enforced server-side)
 - **🌈 Web visualizer** (`/viz`) — Butterchurn (MilkDrop 2) in the browser, ~1,700 presets, motion-skip + strobe-guard + 🌙 Calm mode, standalone (no desktop app needed)
 - **Hi-fi listener** (`/listen`) - hear the bot's playback in a browser at the source's full 48 kHz stereo, straight from the PCM tap (ahead of Discord's lossy relay), with live bitrate/buffer readouts and a sound-check panel (volume, +6 dB boost, delay presets, mono, test tone)
+- **Activity audio** - the Discord Activity can now play the same 48 kHz stream: press *Connect audio* inside the Activity, then approve the 6-character code in the panel's key dialog (the Activity iframe cannot carry a login cookie, so it pairs this way instead)
 - **Discord button panel** (`V@pan`) — custom icon emojis, live-updating embed, NOW PLAYING confirmations, secure link buttons; postable by **server admins**
 - **🔴 Mini now-playing** — a compact strip auto-posts wherever commands are used the moment music starts; updates in place, re-anchors to the bottom on every track change
 - **🔑 Share keys** — `SHARE_KEY` gates panel control behind a cookie; `/key give` (admin-level by default) hands pre-authorized links to trusted users, `/key rotate` (owner-only) kills them all

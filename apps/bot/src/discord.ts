@@ -1,6 +1,9 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import {
+  describeAddress,
+  describeLabel,
+  describeScope,
   describeUserAgent,
   listAccess,
   mintInvite,
@@ -200,7 +203,7 @@ const COMMANDS = [
   new SlashCommandBuilder().setName('skip').setDescription('Skip to the next track'),
   new SlashCommandBuilder().setName('pause').setDescription('Pause playback'),
   new SlashCommandBuilder().setName('resume').setDescription('Resume or refresh stalled playback'),
-  new SlashCommandBuilder().setName('clear').setDescription('Clear the queue'),
+  new SlashCommandBuilder().setName('clear').setDescription('Clear upcoming tracks (the current song keeps playing)'),
   new SlashCommandBuilder()
     .setName('remove')
     .setDescription('Remove a track from the queue')
@@ -1918,10 +1921,15 @@ export class DiscordBot {
 
       case 'clear':
         if (!this.requireLevel('clear', interaction)) return this.deny(interaction);
-        s.playback.stopAll();
-        s.queue.clear();
+        // Clear the UPCOMING list only - the current track keeps playing.
+        const removed = s.queue.clearUpcoming();
+        const nowPlaying = s.queue.getState().track?.name;
         {
-          const r4 = await interaction.reply('🗑️ Queue cleared');
+          const r4 = await interaction.reply(
+            nowPlaying
+              ? `Cleared ${removed} upcoming track${removed === 1 ? '' : 's'} - still playing **${nowPlaying}**`
+              : 'Queue cleared',
+          );
           this.autoExpire(r4);
         }
         break;
@@ -3736,10 +3744,15 @@ export class DiscordBot {
                 snapshot.map((t) => ({ ...t })),
               );
           }
-          s.playback.stopAll();
-          s.queue.clear();
+          // Keep the current track playing (V@leave is the hard stop).
+          const removed = s.queue.clearUpcoming();
+          const nowPlaying = s.queue.getState().track?.name;
           {
-            const m4 = await message.reply('🗑️ Queue cleared');
+            const m4 = await message.reply(
+              nowPlaying
+                ? `Cleared ${removed} upcoming track${removed === 1 ? '' : 's'} - still playing **${nowPlaying}**`
+                : 'Queue cleared',
+            );
             this.autoExpire(m4);
           }
           break;
@@ -10684,9 +10697,13 @@ export class DiscordBot {
     try {
       const user = await this.client.users.fetch(config.ownerId);
       await user.send(
-        `New device on the Vaporzr web tier: **${s.label}** · ${s.scope}\n` +
-          `${describeUserAgent(s.lastUserAgent)} · ${s.lastIp ?? 'address unknown'} · id \`${s.id}\`\n` +
-          `Not you? \`/key revoke ${s.id}\` (or \`/key rotate\`).`,
+        `**A new device opened the Vaporzr web panel.**\n\n` +
+          `**Where:** ${describeUserAgent(s.lastUserAgent)} - ${describeAddress(s.lastIp)}\n` +
+          `**Access:** ${describeScope(s.scope)}\n` +
+          `**Came from:** ${describeLabel(s.label)}\n` +
+          `**Device id:** \`${s.id}\`\n\n` +
+          `If that was you, nothing to do.\n` +
+          `If not: \`/key revoke ${s.id}\` removes just that device, or \`/key rotate\` removes every device and issues a new key.`,
       );
     } catch {
       /* DMs closed or owner offline */
@@ -11966,6 +11983,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/panel` · `V@pan` — post the control panel',
       '`/jam` · `V@jam` · `V@share` — post the jam invite card (QR + link) so guests can request songs from their phones',
       '`/viz` · `V@viz` — open the web visualizer (MilkDrop)',
+      'Discord Activity: the visualizer there also offers hi-fi audio - press Connect inside it, then approve the 6-character code in the panel key dialog',
       "`/listen` — hi-fi listener: the bot's raw 48 kHz audio in a browser (full quality, ahead of Discord) with volume, buffer, mono and test-tone controls",
       '`/theme` · `V@th` — pick a color mood',
       '`/wave` — waveform snapshot · `/burst` — animated clip',

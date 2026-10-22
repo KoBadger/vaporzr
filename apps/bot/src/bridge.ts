@@ -705,10 +705,45 @@ export class Bridge {
       case 'repeat':
         if (msg.repeat != null) s.playback.setRepeat(msg.repeat);
         break;
-      case 'clear':
-        s.playback.stopAll();
-        s.queue.clear();
+      case 'clear': {
+        // Keep the current track playing; only the upcoming list is dropped.
+        const removed = s.queue.clearUpcoming();
+        this.notice(
+          'info',
+          removed > 0 ? `Cleared ${removed} upcoming track${removed === 1 ? '' : 's'}` : 'Nothing queued ahead',
+        );
         break;
+      }
+      case 'remember': {
+        if (msg.index == null) break;
+        const t = s.queue.getSnapshot().tracks[msg.index];
+        const gid = s.guildId;
+        if (!t || !gid) break;
+        const name = 'Remembered';
+        const existing = playlistStore.get(gid, name);
+        const tracks = existing ? existing.tracks.slice() : [];
+        if (tracks.some((x) => x.uri === t.uri)) {
+          this.notice('info', `Already in "Remembered": ${t.name}`);
+          break;
+        }
+        tracks.push({
+          uri: t.uri,
+          name: t.name,
+          artists: t.artists ?? [],
+          album: t.album ?? '',
+          durationMs: t.durationMs ?? 0,
+          source: t.source ?? '',
+          image: (t as { image?: string }).image,
+        });
+        const res = playlistStore.save(gid, name, tracks);
+        this.notice(
+          res.ok ? 'success' : 'error',
+          res.ok
+            ? `Remembered: ${t.name} · in the "Remembered" playlist`
+            : (res.error ?? 'Could not remember that track'),
+        );
+        break;
+      }
       case 'remove':
         if (msg.index != null) s.removeFromQueue(msg.index);
         break;
