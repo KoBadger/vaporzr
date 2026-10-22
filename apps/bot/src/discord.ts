@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
+import { listAccess, mintInvite, revokeAll, revokeSession } from './access.js';
 import fs from 'node:fs/promises';
 import { existsSync, statSync } from 'node:fs';
 import os from 'node:os';
@@ -223,12 +224,36 @@ const COMMANDS = [
   new SlashCommandBuilder().setName('panel').setDescription('Post (or refresh) the live control panel with buttons'),
   new SlashCommandBuilder()
     .setName('key')
-    .setDescription('Web panel/visualizer access links and key (trusted users)')
-    .addSubcommand((sc) => sc.setName('give').setDescription('Get your pre-authorized panel + visualizer links'))
+    .setDescription('Web access: mint invite links, list devices, rotate the master key')
     .addSubcommand((sc) =>
-      sc.setName('show').setDescription('Owner: reveal the current key itself (not just the links)'),
+      sc
+        .setName('give')
+        .setDescription('Owner: mint a single-use link (control = full panel, view = watch/listen)')
+        .addStringOption((o) =>
+          o
+            .setName('scope')
+            .setDescription('control (panel + audio + visuals) or view (watch/listen only)')
+            .addChoices({ name: 'control', value: 'control' }, { name: 'view', value: 'view' }),
+        )
+        .addIntegerOption((o) =>
+          o
+            .setName('hours')
+            .setDescription('How long the invite stays usable (1-168, default 12 control / 24 view)')
+            .setMinValue(1)
+            .setMaxValue(168),
+        ),
     )
-    .addSubcommand((sc) => sc.setName('rotate').setDescription('Owner: issue a new key — all old links stop working')),
+    .addSubcommand((sc) => sc.setName('show').setDescription('Owner: reveal the master key itself'))
+    .addSubcommand((sc) => sc.setName('list').setDescription('Owner: list active devices and unused invites'))
+    .addSubcommand((sc) =>
+      sc
+        .setName('revoke')
+        .setDescription('Owner: revoke one device/invite, or everything')
+        .addStringOption((o) =>
+          o.setName('id').setDescription('id from /key list, or "all"').setRequired(true).setMaxLength(40),
+        ),
+    )
+    .addSubcommand((sc) => sc.setName('rotate').setDescription('Owner: new master key; kills every device and invite')),
   new SlashCommandBuilder()
     .setName('endwav')
     .setDescription('Endless Wave — AI-powered autoplay that evolves with your vibe')
@@ -2070,8 +2095,13 @@ export class DiscordBot {
 
       case 'key': {
         const sub = interaction.options.getSubcommand();
+        if (!this.perms.isOwner(interaction.user.id)) return this.deny(interaction);
+        const pl = vizTunnel.panelLink();
+        const vl = vizTunnel.vizLink();
+        const linkFor = (base: { url: string; secure: boolean }, token: string): string =>
+          base.secure ? `${base.url}?invite=${encodeURIComponent(token)}` : '';
+
         if (sub === 'rotate') {
-          if (!this.perms.isOwner(interaction.user.id)) return this.deny(interaction);
           const newKey = randomBytes(12).toString('base64url');
           config.shareKey = newKey; // live immediately
           try {
@@ -2088,78 +2118,119 @@ export class DiscordBot {
           } catch (err) {
             console.warn(`[discord] could not persist SHARE_KEY: ${err instanceof Error ? err.message : err}`);
           }
-          const pl = vizTunnel.panelLink();
-          const linkLine = pl.secure
-            ? `${pl.url}?key=${newKey}`
-            : `(links appear once PUBLIC_BASE_URL or a tunnel is up)`;
+          const killed = revokeAll();
           await interaction.reply({
-            content: `🔑 New key issued — all previous links and remembered devices are dead.\n${linkLine}`,
+            content:
+              `New master key issued. Every device and invite is dead ` +
+              `(${killed.sessions} session${killed.sessions === 1 ? '' : 's'}, ${killed.invites} invite${killed.invites === 1 ? '' : 's'}).\n` +
+              `The new key is in your .env (SHARE_KEY). Use \`/key give\` for links from now on.`,
             flags: MessageFlags.Ephemeral,
           });
           break;
         }
-        // show — owner-only: reveals the key itself, so it can be typed or
-        // transferred by hand instead of only via a link.
+
         if (sub === 'show') {
-          if (!this.perms.isOwner(interaction.user.id)) return this.deny(interaction);
           if (!config.shareKey) {
             await interaction.reply({
-              content: 'No share key is configured — the web panel is open access.',
+              content: 'No share key is configured - the web tier is open.',
               flags: MessageFlags.Ephemeral,
             });
             break;
           }
-          const sPl = vizTunnel.panelLink();
-          const sVl = vizTunnel.vizLink();
           await interaction.reply({
             embeds: [
               new EmbedBuilder()
-                .setTitle('🔑 Current access key')
+                .setTitle('Master key')
                 .setDescription(
                   `**Key:** \`${config.shareKey}\`\n\n` +
-                    `🔗 Panel: <${sPl.url}?key=${config.shareKey}>\n` +
-                    `🔗 Visualizer: <${sVl.url}?key=${config.shareKey}>`,
+                    'Keep this private: it can mint access. For people and devices use `/key give` - those links expire, work once and can be revoked.',
                 )
                 .setColor(this.themeColor())
-                .setFooter({ text: 'Tap the key to copy · /key rotate to revoke all devices' }),
+                .setFooter({ text: '/key rotate invalidates every device · /key list shows them' }),
             ],
             flags: MessageFlags.Ephemeral,
           });
           break;
         }
-        // give — owner-only: these links grant full panel control, so admins
-        // must not be able to mint/hand them out.
-        if (!this.perms.isOwner(interaction.user.id)) return this.deny(interaction);
-        if (!config.shareKey) {
+
+        if (sub === 'list') {
+          const access = listAccess();
+          const when = (t: number) => `<t:${Math.floor(t / 1000)}:R>`;
+          const sessions = access.sessions
+            .map((x) => `\`${x.id}\` · ${x.scope}${x.owner ? ' · owner' : ''} · ${x.label} · ${when(x.expiresAt)}`)
+            .join('\n');
+          const invites = access.invites
+            .map((x) => `\`${x.id}\` · ${x.scope} · ${x.label} · ${when(x.expiresAt)}`)
+            .join('\n');
           await interaction.reply({
-            content: 'No share key is configured — the web panel is open access.',
+            embeds: [
+              new EmbedBuilder()
+                .setTitle('Web access')
+                .setColor(this.themeColor())
+                .addFields(
+                  { name: `Devices (${access.sessions.length})`, value: sessions || '`none`' },
+                  { name: `Unused invites (${access.invites.length})`, value: invites || '`none`' },
+                )
+                .setFooter({ text: '/key revoke <id> cuts one off · /key rotate cuts everything' }),
+            ],
             flags: MessageFlags.Ephemeral,
           });
           break;
         }
-        const pl = vizTunnel.panelLink();
-        const vl = vizTunnel.vizLink();
+
+        if (sub === 'revoke') {
+          const id = interaction.options.getString('id', true).trim();
+          if (id === 'all') {
+            const killed = revokeAll();
+            await interaction.reply({
+              content: `Revoked ${killed.sessions} session(s) and ${killed.invites} invite(s).`,
+              flags: MessageFlags.Ephemeral,
+            });
+          } else {
+            const ok = revokeSession(id);
+            await interaction.reply({
+              content: ok ? `Revoked \`${id}\`.` : `No device or invite with id \`${id}\`.`,
+              flags: MessageFlags.Ephemeral,
+            });
+          }
+          break;
+        }
+
+        // give - owner only: mint a single-use invite instead of handing out the key.
+        if (!config.shareKey) {
+          await interaction.reply({
+            content: 'No share key is configured - the web tier is open.',
+            flags: MessageFlags.Ephemeral,
+          });
+          break;
+        }
+        const scope = interaction.options.getString('scope') === 'view' ? 'view' : 'control';
+        const hours = Math.max(
+          1,
+          Math.min(168, interaction.options.getInteger('hours') ?? (scope === 'control' ? 12 : 24)),
+        );
+        const minted = mintInvite(scope, `discord:${interaction.user.username}`, hours * 60 * 60 * 1000);
+        const link = linkFor(scope === 'control' ? pl : vl, minted.token);
         if (interaction.guildId) await this.markKeyedGuild(interaction.guildId);
         await interaction.reply({
           embeds: [
             new EmbedBuilder()
-              .setTitle('🔑 Web access links')
+              .setTitle(scope === 'control' ? 'Control invite' : 'View invite')
               .setDescription(
-                `Pre-authorized for you — opens once, then that device is remembered.\n\n` +
-                  `🎛️ **Control panel:** <${pl.url}?key=${config.shareKey}>\n` +
-                  `🌈 **Visualizer:** <${vl.url}?key=${config.shareKey}>` +
-                  `\n\n🥚 *Psst… this server can now rename me — try* \`/nickname set\``,
+                (link ? `<${link}>\n\n` : '(links appear once PUBLIC_BASE_URL or a tunnel is up)\n\n') +
+                  `Single use, expires in ${hours}h. ` +
+                  (scope === 'control'
+                    ? 'Unlocks the control panel, and the same link also opens /viz and /listen.'
+                    : 'Watch the visualizer or listen in hi-fi; cannot change playback.') +
+                  "\n\nIf a key screen appears, paste this link's code there.",
               )
               .setColor(this.themeColor())
-              .setFooter({
-                text: 'Keep these links private — anyone holding them gets in · /key rotate to revoke all',
-              }),
+              .setFooter({ text: `id ${minted.invite.id} · /key revoke ${minted.invite.id} to cut it off early` }),
           ],
           flags: MessageFlags.Ephemeral,
         });
         break;
       }
-
       case 'endwav': {
         if (!this.requireLevel('endwav', interaction)) return this.deny(interaction);
         if (!interaction.guildId)
@@ -4379,14 +4450,15 @@ export class DiscordBot {
         }
 
         case 'key': {
-          // Sub-command comes from `args` (everything after the command word).
-          // Indexing into `message.content` was wrong: for `V@key show` the raw
-          // content is "V@key show", so token [2] is undefined — the `show`
-          // branch never ran (and `V@key rotate` never rotated either).
-          const keySub = args.trim().split(/\s+/)[0]?.toLowerCase() ?? '';
-          const wantsRotate = keySub === 'rotate';
-          if (wantsRotate) {
-            if (!this.perms.isOwner(message.author.id)) return void (await deny());
+          if (!this.perms.isOwner(message.author.id)) return void (await deny());
+          const parts = args.trim().split(/\s+/).filter(Boolean);
+          const sub = (parts[0] ?? '').toLowerCase();
+          const pl = vizTunnel.panelLink();
+          const vl = vizTunnel.vizLink();
+          const linkFor = (base: { url: string; secure: boolean }, token: string): string =>
+            base.secure ? `${base.url}?invite=${encodeURIComponent(token)}` : '';
+
+          if (sub === 'rotate') {
             const newKey = randomBytes(12).toString('base64url');
             config.shareKey = newKey; // live immediately
             try {
@@ -4403,57 +4475,81 @@ export class DiscordBot {
             } catch (err) {
               console.warn(`[discord] could not persist SHARE_KEY: ${err instanceof Error ? err.message : err}`);
             }
-            const pl = vizTunnel.panelLink();
-            const linkLine = pl.secure
-              ? `${pl.url}?key=${newKey}`
-              : `(links appear once PUBLIC_BASE_URL or a tunnel is up)`;
-            await message.reply(`🔑 New key issued — all previous links and remembered devices are dead.\n${linkLine}`);
-            break;
-          }
-          const keyArg = keySub;
-          // owner-only (matches the slash command): the links grant full panel control.
-          if (!this.perms.isOwner(message.author.id)) return void (await deny());
-          if (!config.shareKey) {
-            await message.reply('No share key is configured — the web panel is open access.');
-            break;
-          }
-          if (keyArg === 'show' || keyArg === 'key') {
-            const sPl = vizTunnel.panelLink();
-            const sVl = vizTunnel.vizLink();
-            // The key gets its own line and its own code span so it can be copied
-            // on its own — you should not have to fish it out of a URL. The
-            // pre-authorized links follow as a separate block.
+            const killed = revokeAll();
             await message.reply(
-              `🔑 **Current key**\n\`${config.shareKey}\`\n\n` +
-                `**Pre-authorized links** (key included):\n` +
-                `🎛️ Panel: <${sPl.url}?key=${config.shareKey}>\n` +
-                `🌈 Visualizer: <${sVl.url}?key=${config.shareKey}>\n` +
-                `*Tap the key above to copy · V@key rotate to revoke all*`,
+              `New master key issued. Every device and invite is dead ` +
+                `(${killed.sessions} session${killed.sessions === 1 ? '' : 's'}, ${killed.invites} invite${killed.invites === 1 ? '' : 's'}).\n` +
+                `The new key is in your .env (SHARE_KEY). Use \`V@key give\` for links from now on.`,
             );
             break;
           }
-          const kpl = vizTunnel.panelLink();
-          const kvl = vizTunnel.vizLink();
-          await message.reply({
-            embeds: [
-              new EmbedBuilder()
-                .setTitle('🔑 Web access links')
-                .setDescription(
-                  `Pre-authorized — opens once, then that device is remembered.\n\n` +
-                    `🎛️ **Control panel:** <${kpl.url}?key=${config.shareKey}>\n` +
-                    `🌈 **Visualizer:** <${kvl.url}?key=${config.shareKey}>` +
-                    `\n\n🥚 *Psst… this server can now rename me — try* \`V@nick Neon-rzr\``,
-                )
-                .setColor(this.themeColor())
-                .setFooter({
-                  text: 'Keep these links private — anyone holding them gets in · V@key rotate to revoke all',
-                }),
-            ],
-          });
+
+          if (sub === 'show') {
+            if (!config.shareKey) {
+              await message.reply('No share key is configured - the web tier is open.');
+              break;
+            }
+            await message.reply(
+              `**Master key**\n\`${config.shareKey}\`\n\n` +
+                'Keep this private: it can mint access. For people and devices use `V@key give` - those links expire, work once and can be revoked.',
+            );
+            break;
+          }
+
+          if (sub === 'list') {
+            const access = listAccess();
+            const when = (t: number) => `<t:${Math.floor(t / 1000)}:R>`;
+            const sessions = access.sessions
+              .map((x) => `\`${x.id}\` · ${x.scope}${x.owner ? ' · owner' : ''} · ${x.label} · ${when(x.expiresAt)}`)
+              .join('\n');
+            const invites = access.invites
+              .map((x) => `\`${x.id}\` · ${x.scope} · ${x.label} · ${when(x.expiresAt)}`)
+              .join('\n');
+            await message.reply(
+              `**Web access**\n**Devices (${access.sessions.length})**\n${sessions || '`none`'}\n\n` +
+                `**Unused invites (${access.invites.length})**\n${invites || '`none`'}\n\n` +
+                '`V@key revoke <id>` cuts one off · `V@key rotate` cuts everything',
+            );
+            break;
+          }
+
+          if (sub === 'revoke') {
+            const id = (parts[1] ?? '').trim();
+            if (!id) {
+              await message.reply('Usage: `V@key revoke <id|all>` - ids come from `V@key list`.');
+              break;
+            }
+            if (id === 'all') {
+              const killed = revokeAll();
+              await message.reply(`Revoked ${killed.sessions} session(s) and ${killed.invites} invite(s).`);
+            } else {
+              const ok = revokeSession(id);
+              await message.reply(ok ? `Revoked \`${id}\`.` : `No device or invite with id \`${id}\`.`);
+            }
+            break;
+          }
+
+          // give - owner only: mint a single-use invite instead of handing out the key.
+          if (!config.shareKey) {
+            await message.reply('No share key is configured - the web tier is open.');
+            break;
+          }
+          const scope = (parts[1] ?? '').toLowerCase() === 'view' ? 'view' : 'control';
+          const hours = Math.max(1, Math.min(168, Number(parts[2]) || (scope === 'control' ? 12 : 24)));
+          const minted = mintInvite(scope, `discord:${message.author.username}`, hours * 60 * 60 * 1000);
+          const link = linkFor(scope === 'control' ? pl : vl, minted.token);
           if (message.guildId) await this.markKeyedGuild(message.guildId);
+          await message.reply(
+            `**${scope === 'control' ? 'Control' : 'View'} invite**\n` +
+              (link ? `${link}\n\n` : '(links appear once PUBLIC_BASE_URL or a tunnel is up)\n\n') +
+              `Single use, expires in ${hours}h. ` +
+              (scope === 'control'
+                ? 'Unlocks the control panel, and the same link also opens /viz and /listen.'
+                : 'Watch the visualizer or listen in hi-fi; cannot change playback.') +
+              `\n\nid \`${minted.invite.id}\` · \`V@key revoke ${minted.invite.id}\` to cut it off early`,
+          );
           break;
         }
-
         case 'sc':
         case 'screensaver': {
           const svl = vizTunnel.vizLink();
@@ -11823,7 +11919,10 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/sleep <30m|1h>` · `V@sleep` — sleep timer',
       '`/help` · `V@help` — this menu',
       '`/invite` · `V@invite` — add Vaporzr to a server',
-      '`/key show|rotate` · `V@key show` — reveal the access key, or rotate it (admin)',
+      '`/key give [view|control] [hours]` · `V@key give` — mint a single-use access link (owner)',
+      '`/key list` · `V@key list` — active devices + unused invites (owner)',
+      '`/key revoke <id|all>` · `V@key revoke` — cut off one device/invite, or everything (owner)',
+      '`/key show` · `V@key show` — reveal the master key · `/key rotate` — new key, kills all devices (owner)',
       '`/perms` — command levels & roles (admin)',
       '`/cookie-refresh` — re-export YouTube cookies from a browser (admin; only works where a browser exists)',
       '`/cookie-upload` — upload a cookies.txt to refresh YouTube cookies (owner)',

@@ -82,7 +82,13 @@ Music is encoded by the bot itself (48 kHz stereo, 20 ms frames) instead of bein
 
 ## Sharing & permissions
 
-The web tier is two-level: **viewing is open** (landing page, `/viz`, and a view-only panel), **control requires the key**. Discord commands need no keys — anyone in a server with the bot can use them.
+The web tier is **locked end to end**: `/`, `/panel`, `/viz` and `/listen` all require a session. Credentials come in three flavours:
+
+- **Master key** - `SHARE_KEY` in `.env`. Enter it once on any page (or open the page with `?key=...`); that device gets an owner session, the key is removed from the URL and from the cookie jar, and every later load uses an opaque token.
+- **Invites** - `/key give [view|control] [hours]` mints a **single-use** link. `control` unlocks the panel; `view` only watches and listens. Invites expire on their own and can be revoked early.
+- **Sessions** - one per device, 30 days, stored server-side by SHA-256 only. `/key list` shows them with ids; `/key revoke <id|all>` cuts them off; `/key rotate` issues a new master key and kills everything at once.
+
+WebSockets are gated too and checked against the page's `Origin`, so another website cannot open a socket with your cookie. The one public page is **`/activity`** - Discord's iframe cannot carry a cookie, so it connects as a guest and receives spectrum bars, never audio or commands. Song requests keep their separate, lower-privilege `REQUEST_KEY`.
 
 | Rank | Who | Powers |
 |---|---|---|

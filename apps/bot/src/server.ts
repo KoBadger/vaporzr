@@ -18,7 +18,22 @@ import { Bridge } from './bridge.js';
 import { SessionManager } from './session.js';
 import { PermissionsManager } from './permissions.js';
 import { vizTunnel } from './tunnel.js';
-import { secretEquals } from './secretCompare.js';
+import { secretEquals, keyFromCookieHeader } from './secretCompare.js';
+import {
+  SESSION_COOKIE,
+  INVITE_TTL_MS,
+  OWNER_LINK_TTL_MS,
+  consumeInvite,
+  mintInvite,
+  mintSession,
+  noteAuthFailure,
+  authThrottle,
+  clearAuthFailures,
+  resolveSession,
+  scopeSatisfies,
+  tokenFromCookieHeader,
+  type AccessScope,
+} from './access.js';
 import { statsStore } from '@vaporzr/core/stats';
 
 /** Pre-gzipped vendor assets — preset chunks are tens of MB of JS. */
@@ -279,22 +294,122 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
   return bridge;
 }
 
-/** True when the request carries the shared key (cookie or ?key= param). */
-export function hasShareAccess(req: http.IncomingMessage, url: URL): boolean {
+/**
+ * Which credential a page needs. Everything that can hear or change playback is
+ * gated now: `/` (portal), `/panel` (control), `/viz` (visuals + PCM), `/listen`
+ * (raw audio). `/activity` stays open because Discord's iframe cannot carry a
+ * cookie; it connects as a guest and receives bars, never PCM. `/request` keeps
+ * its separate lower-privilege request key.
+ */
+function accessNeedFor(pathname: string): AccessScope | null {
+  if (pathname === '/panel' || pathname === '/panel.html') return 'control';
+  if (pathname === '/' || pathname === '/index.html') return 'view';
+  if (pathname === '/viz' || pathname === '/viz.html') return 'view';
+  if (pathname === '/listen' || pathname === '/listen.html') return 'view';
+  return null;
+}
+
+/** True when the request carries a session (or the master key) for `need`. */
+export function hasShareAccess(req: http.IncomingMessage, url: URL, need: AccessScope = 'control'): boolean {
   const key = config.shareKey;
   if (!key) return true;
   const cookie = req.headers.cookie ?? '';
-  const m = /(?:^|;\s*)vz_key=([^;]+)/.exec(cookie);
-  if (m) {
-    let value = m[1];
-    try {
-      value = decodeURIComponent(value);
-    } catch {
-      /* malformed encoding — compare raw */
-    }
-    if (secretEquals(value, key)) return true;
-  }
+  const session = resolveSession(tokenFromCookieHeader(cookie));
+  if (session && scopeSatisfies(session.scope, need)) return true;
+  // Legacy devices from before sessions hold the raw-key cookie: still valid,
+  // and grantPageAccess upgrades them to a real session on the next page hit.
+  if (secretEquals(keyFromCookieHeader(cookie), key)) return true;
   return secretEquals(url.searchParams.get('key'), key);
+}
+
+function sessionCookie(token: string, expiresAt: number, req: http.IncomingMessage): string {
+  const proto = String(req.headers['x-forwarded-proto'] ?? '')
+    .split(',')[0]
+    .trim();
+  const secure = proto === 'https' ? '; Secure' : '';
+  const maxAge = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
+  return `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; Max-Age=${maxAge}; HttpOnly; SameSite=Lax${secure}`;
+}
+
+function redirectStrippingCredentials(res: http.ServerResponse, pathname: string): void {
+  res.writeHead(303, { Location: pathname, 'Cache-Control': 'no-store' });
+  res.end();
+}
+
+function tooManyAttempts(res: http.ServerResponse, retryAfterMs: number): void {
+  const secs = Math.max(1, Math.ceil(retryAfterMs / 1000));
+  res.writeHead(429, { 'Content-Type': 'text/plain; charset=utf-8', 'Retry-After': String(secs) });
+  res.end(`Too many attempts. Try again in ${secs}s.`);
+}
+
+/**
+ * Page gate. Returns true when the request may be served. Credentials arrive as
+ *   - `vz_sess` cookie (normal case),
+ *   - `vz_key` cookie or `?key=<master>` (owner recovery / legacy devices),
+ *   - `?invite=<token>` (single-use link minted by /key give).
+ * Query credentials are exchanged for a session cookie and redirected away so
+ * the secret never stays in the address bar, history or a shared screenshot.
+ */
+function grantPageAccess(req: http.IncomingMessage, url: URL, res: http.ServerResponse, need: AccessScope): boolean {
+  const key = config.shareKey;
+  if (!key) return true;
+  const cookie = req.headers.cookie ?? '';
+  const ip = req.socket.remoteAddress ?? 'unknown';
+
+  const session = resolveSession(tokenFromCookieHeader(cookie));
+  if (session && scopeSatisfies(session.scope, need)) {
+    clearAuthFailures(ip);
+    return true;
+  }
+
+  const throttle = authThrottle(ip);
+  if (!throttle.allowed) {
+    tooManyAttempts(res, throttle.retryAfterMs);
+    return false;
+  }
+
+  // Legacy raw-key cookie: upgrade silently to a session (control).
+  if (secretEquals(keyFromCookieHeader(cookie), key)) {
+    const { token, session: minted } = mintSession('control', 'remembered device', undefined, Date.now(), true);
+    // Drop the raw key from the device now that it holds an opaque session.
+    res.setHeader('Set-Cookie', [
+      sessionCookie(token, minted.expiresAt, req),
+      'vz_key=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax',
+    ]);
+    clearAuthFailures(ip);
+    return true;
+  }
+
+  const qKey = url.searchParams.get('key');
+  if (qKey && secretEquals(qKey, key)) {
+    const { token, session: minted } = mintSession('control', 'owner link', undefined, Date.now(), true);
+    res.setHeader('Set-Cookie', [
+      sessionCookie(token, minted.expiresAt, req),
+      'vz_key=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax',
+    ]);
+    clearAuthFailures(ip);
+    redirectStrippingCredentials(res, url.pathname);
+    return false;
+  }
+
+  // Invites are single-use; accept them in `invite=` (and `key=` for old links).
+  const inviteToken = url.searchParams.get('invite') ?? (qKey && !secretEquals(qKey, key) ? qKey : null);
+  if (inviteToken) {
+    const used = consumeInvite(inviteToken);
+    if (used) {
+      res.setHeader('Set-Cookie', sessionCookie(used.token, used.session.expiresAt, req));
+      clearAuthFailures(ip);
+      redirectStrippingCredentials(res, url.pathname);
+      return false;
+    }
+    noteAuthFailure(ip);
+    keyPrompt(res, 'That key or invite is not valid, or it has already been used.');
+    return false;
+  }
+
+  if (qKey || url.searchParams.get('invite')) noteAuthFailure(ip);
+  keyPrompt(res);
+  return false;
 }
 
 /** Gate for the public /request page: its own lower-privilege key. */
@@ -370,19 +485,39 @@ function pruneUploads(maxAgeDays = 30): void {
   }
 }
 
-function keyPrompt(res: http.ServerResponse): void {
+function keyPrompt(res: http.ServerResponse, message?: string): void {
   res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8' });
-  res.end(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Vaporzr — Access</title>
+  res.end(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Vaporzr - Access</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/png" href="/favicon.png">
-<style>body{font-family:system-ui,sans-serif;background:#0b1026;color:#c7d2fe;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}
-form{background:rgba(16,22,46,.8);border:1px solid rgba(140,160,255,.25);padding:2rem;border-radius:16px;text-align:center}
-h1{font-size:15px;letter-spacing:3px;background:linear-gradient(90deg,#00f0ff,#6a5cff);-webkit-background-clip:text;background-clip:text;color:transparent}
-input{display:block;margin:1rem auto;padding:.6rem .9rem;border-radius:9px;border:1px solid rgba(140,160,255,.3);background:rgba(10,14,32,.7);color:#e2e8f0;font-size:14px;width:220px}
-button{padding:.6rem 1.4rem;border-radius:9px;border:none;background:linear-gradient(135deg,#6a5cff,#00f0ff);color:#0b1026;font-weight:700;cursor:pointer}</style>
-</head><body><form method="GET"><h1>VAPORZR</h1><p style="color:#94a3b8;font-size:12px">Enter the share key to continue</p>
-<input name="key" placeholder="share key" autofocus><button>Enter</button></form></body></html>`);
+<style>
+  :root{color-scheme:dark}
+  body{font-family:ui-sans-serif,system-ui,"Segoe UI",Roboto,sans-serif;background:radial-gradient(1000px 480px at 50% -10%,#151d2a 0%,#0a0c11 62%);
+       color:#e9edf6;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;padding:20px}
+  form{background:#10131b;border:1px solid #222835;padding:28px 26px;border-radius:16px;text-align:center;width:min(360px,100%);
+       box-shadow:0 24px 80px rgba(0,0,0,.45)}
+  h1{font-size:15px;letter-spacing:.22em;margin:0 0 4px;color:#e9edf6}
+  h1 span{color:#7ee0c2}
+  p{color:#8b97ad;font-size:12.5px;margin:6px 0 0}
+  input{display:block;margin:16px auto 12px;padding:11px 12px;border-radius:9px;border:1px solid #222835;background:#0d1016;color:#e9edf6;
+        font-size:14px;width:100%;box-sizing:border-box;text-align:center;letter-spacing:.04em}
+  input:focus{outline:none;border-color:#2c5a50}
+  button{width:100%;padding:11px 14px;border-radius:9px;border:1px solid #2c5a50;background:linear-gradient(180deg,#1b3733,#132520);
+         color:#d9fff4;font-weight:600;cursor:pointer}
+  .err{color:#f2777a;font-size:12.5px;margin-top:10px}
+  .fine{color:#5f6b80;font-size:11.5px;margin-top:14px;line-height:1.45}
+</style>
+</head><body>
+<form method="GET">
+  <h1>VAPORZR <span>/ access</span></h1>
+  <p>Enter the share key, or an invite link's code</p>
+  <input name="key" placeholder="key or invite" autofocus autocomplete="off" spellcheck="false">
+  <button>Enter</button>
+  ${message ? `<div class="err">${message}</div>` : ''}
+  <div class="fine">Invites from <b>/key give</b> work once and expire on their own.<br>The owner key is in your bot's .env (SHARE_KEY).</div>
+</form>
+</body></html>`);
 }
-
 /**
  * The Discord Activity page: the visualizer with the Embedded App SDK handshake
  * prepended. Discord launches it with ?instance_id=…, and the SDK `ready()` call
@@ -474,26 +609,11 @@ async function handleRoute(
   const host = /^[a-z0-9.-]+(:\d{1,5})?$/i.test(rawHost) ? rawHost : `localhost:${config.port}`;
   const origin = `https://${host}`;
   try {
-    // Share-key gate: only the CONTROL panel requires the key. The visualizer
-    // and its vendor bundles are open — viewing is free, controlling is not.
-    const gated = url.pathname.startsWith('/panel');
-    if (gated && !hasShareAccess(req, url)) {
-      keyPrompt(res);
-      return;
-    }
-    if (gated && config.shareKey && secretEquals(url.searchParams.get('key'), config.shareKey)) {
-      // Persist the key so later loads don't need ?key=. Add Secure when the
-      // request arrived through an HTTPS tunnel so the cookie never travels in
-      // clear over the last hop.
-      const proto = String(req.headers['x-forwarded-proto'] ?? '')
-        .split(',')[0]
-        .trim();
-      const secure = proto === 'https' ? '; Secure' : '';
-      res.setHeader(
-        'Set-Cookie',
-        `vz_key=${encodeURIComponent(config.shareKey)}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax${secure}`,
-      );
-    }
+    // Access gate: the portal, panel, visualizer and listener all need a
+    // session now. Static assets stay open (they hold no audio or state).
+    const need = accessNeedFor(url.pathname);
+    if (need && !grantPageAccess(req, url, res, need)) return;
+
     // Brand assets.
     const BRAND_ASSETS: Record<string, string> = {
       '/favicon.png': 'image/png',
@@ -921,25 +1041,36 @@ async function handleRoute(
       }
 
       case '/api/access': {
-        // Reveals the shared key itself. Gated on the key (cookie OR ?key=), so
-        // only someone who already has access can read it back — but that is
-        // exactly the point: a control device can recover the key to add a new
-        // device, without an owner having to resend a link. Read-only; never
-        // rotates. Use /key rotate to revoke.
-        if (!config.shareKey || !hasShareAccess(req, url)) {
+        // Owner sessions may read the master key back (device recovery).
+        // Everyone else gets single-use invite links - never the secret itself.
+        if (!config.shareKey || !hasShareAccess(req, url, 'control')) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'unauthorized' }));
           return;
         }
+        const cookie = req.headers.cookie ?? '';
+        const sess = resolveSession(tokenFromCookieHeader(cookie));
+        const owner =
+          Boolean(sess?.owner) ||
+          secretEquals(keyFromCookieHeader(cookie), config.shareKey) ||
+          secretEquals(url.searchParams.get('key'), config.shareKey);
         const pl = vizTunnel.panelLink();
         const vl = vizTunnel.vizLink();
+        const ll = vizTunnel.listenLink();
+        const inviteLink = (base: { url: string; secure: boolean }, scope: AccessScope, ttl: number, label: string) => {
+          if (!owner || !base.secure) return ''; // minting invites is owner-only
+          const { token } = mintInvite(scope, label, ttl);
+          return `${base.url}?invite=${encodeURIComponent(token)}`;
+        };
         res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
         res.end(
           JSON.stringify({
-            key: config.shareKey,
-            panelUrl: `${pl.url}?key=${encodeURIComponent(config.shareKey)}`,
-            vizUrl: `${vl.url}?key=${encodeURIComponent(config.shareKey)}`,
-            secure: Boolean(pl.secure && vl.secure),
+            key: owner ? config.shareKey : undefined,
+            owner,
+            panelUrl: inviteLink(pl, 'control', OWNER_LINK_TTL_MS, 'panel link'),
+            vizUrl: inviteLink(vl, 'view', INVITE_TTL_MS, 'visualizer link'),
+            listenUrl: inviteLink(ll, 'view', INVITE_TTL_MS, 'listener link'),
+            secure: Boolean(pl.secure && vl.secure && ll.secure),
           }),
         );
         break;
