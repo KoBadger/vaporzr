@@ -30,7 +30,9 @@ import {
   authThrottle,
   clearAuthFailures,
   resolveSession,
+  revokeSessionByToken,
   scopeSatisfies,
+  webAccessAllowed,
   tokenFromCookieHeader,
   type AccessScope,
 } from './access.js';
@@ -322,11 +324,31 @@ export function hasShareAccess(req: http.IncomingMessage, url: URL, need: Access
   return secretEquals(url.searchParams.get('key'), key);
 }
 
+/**
+ * CSP + framing policy for the hand-written pages. Scripts stay inline (the
+ * pages are single-file by design), but everything else is pinned to this
+ * origin: no third-party script hosts, no external frames, form posts only here.
+ */
+function htmlSecurityHeaders(res: http.ServerResponse, activity = false): void {
+  if (res.hasHeader('Content-Security-Policy')) return;
+  const frame = activity
+    ? 'frame-ancestors https://discord.com https://*.discordsays.com https://*.discordapp.com'
+    : "frame-ancestors 'none'";
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self'; img-src 'self' data: blob: https:; media-src 'self' blob:; " +
+      "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; " +
+      "connect-src 'self' ws: wss:; font-src 'self' data:; base-uri 'none'; form-action 'self'; " +
+      frame,
+  );
+  if (!activity) res.setHeader('X-Frame-Options', 'DENY');
+}
+
 function sessionCookie(token: string, expiresAt: number, req: http.IncomingMessage): string {
   const proto = String(req.headers['x-forwarded-proto'] ?? '')
     .split(',')[0]
     .trim();
-  const secure = proto === 'https' ? '; Secure' : '';
+  const secure = proto === 'https' || /^https:/i.test(config.staticBaseUrl || '') ? '; Secure' : '';
   const maxAge = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
   return `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; Max-Age=${maxAge}; HttpOnly; SameSite=Lax${secure}`;
 }
@@ -356,7 +378,10 @@ function grantPageAccess(req: http.IncomingMessage, url: URL, res: http.ServerRe
   const cookie = req.headers.cookie ?? '';
   const ip = req.socket.remoteAddress ?? 'unknown';
 
-  const session = resolveSession(tokenFromCookieHeader(cookie));
+  const session = resolveSession(tokenFromCookieHeader(cookie), Date.now(), {
+    userAgent: String(req.headers['user-agent'] ?? ''),
+    ip,
+  });
   if (session && scopeSatisfies(session.scope, need)) {
     clearAuthFailures(ip);
     return true;
@@ -413,9 +438,17 @@ function grantPageAccess(req: http.IncomingMessage, url: URL, res: http.ServerRe
 }
 
 /** Gate for the public /request page: its own lower-privilege key. */
+/**
+ * Song requests: the jam card now hands out a reusable, expiring "request"
+ * invite instead of the static REQUEST_KEY. Sessions with request scope or
+ * higher work too, and the legacy request key / vz_req cookie keep working.
+ */
 function hasRequestAccess(req: http.IncomingMessage, url: URL): boolean {
+  if (!config.shareKey && !config.requestKey) return true; // open LAN-only setup
+  const cookie = req.headers.cookie ?? '';
+  const sess = resolveSession(tokenFromCookieHeader(cookie));
+  if (sess && scopeSatisfies(sess.scope, 'request')) return true;
   if (config.requestKey) {
-    const cookie = req.headers.cookie ?? '';
     const m = /(?:^|;\s*)vz_req=([^;]+)/.exec(cookie);
     if (m) {
       let value = m[1];
@@ -426,10 +459,61 @@ function hasRequestAccess(req: http.IncomingMessage, url: URL): boolean {
       }
       if (secretEquals(value, config.requestKey)) return true;
     }
-    return secretEquals(url.searchParams.get('key'), config.requestKey);
+    if (secretEquals(url.searchParams.get('key'), config.requestKey)) return true;
   }
-  // No dedicated request key: only allow on an otherwise-open (LAN-only) setup.
-  return !config.shareKey;
+  const inviteToken = url.searchParams.get('invite');
+  if (inviteToken) {
+    const used = consumeInvite(inviteToken);
+    if (used && scopeSatisfies(used.session.scope, 'request')) return true;
+  }
+  return false;
+}
+
+/** Page version of the request gate: exchanges an invite for a session cookie. */
+function grantRequestPage(req: http.IncomingMessage, url: URL, res: http.ServerResponse): boolean {
+  const cookie = req.headers.cookie ?? '';
+  const sess = resolveSession(tokenFromCookieHeader(cookie), Date.now(), {
+    userAgent: String(req.headers['user-agent'] ?? ''),
+    ip: req.socket.remoteAddress,
+  });
+  if (sess && scopeSatisfies(sess.scope, 'request')) return true;
+
+  // Legacy REQUEST_KEY: cookie, or ?key= which also remembers this device.
+  if (config.requestKey) {
+    const m = /(?:^|;\s*)vz_req=([^;]+)/.exec(cookie);
+    if (m) {
+      let value = m[1];
+      try {
+        value = decodeURIComponent(value);
+      } catch {
+        /* compare raw */
+      }
+      if (secretEquals(value, config.requestKey)) return true;
+    }
+    if (secretEquals(url.searchParams.get('key'), config.requestKey)) {
+      res.setHeader(
+        'Set-Cookie',
+        `vz_req=${encodeURIComponent(config.requestKey)}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax`,
+      );
+      return true;
+    }
+  }
+
+  // Invites: consume once, then keep the session in a cookie (never both burn
+  // and serve without storing the credential - that locked people out).
+  const inviteToken = url.searchParams.get('invite');
+  if (inviteToken) {
+    const used = consumeInvite(inviteToken);
+    if (used && scopeSatisfies(used.session.scope, 'request')) {
+      res.setHeader('Set-Cookie', sessionCookie(used.token, used.session.expiresAt, req));
+      redirectStrippingCredentials(res, url.pathname);
+      return false;
+    }
+  }
+
+  res.writeHead(403, { 'Content-Type': 'text/html; charset=utf-8' });
+  res.end('<h1 style="font-family:system-ui">Requests are disabled or keyed. Ask the operator for a link.</h1>');
+  return false;
 }
 
 /** Global throttle for the public request endpoint (8 requests / minute). */
@@ -609,6 +693,61 @@ async function handleRoute(
   const host = /^[a-z0-9.-]+(:\d{1,5})?$/i.test(rawHost) ? rawHost : `localhost:${config.port}`;
   const origin = `https://${host}`;
   try {
+    // Baseline headers for every response, including gate pages.
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+
+    // Tailnet-only mode: a public host is refused before any credential work.
+    if (!webAccessAllowed(req.headers.host)) {
+      res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Vaporzr is reachable from the tailnet only (WEB_ACCESS=tailnet).');
+      return;
+    }
+
+    const proto = String(req.headers['x-forwarded-proto'] ?? '')
+      .split(',')[0]
+      .trim()
+      .toLowerCase();
+    const forceHttps = /^https:/i.test(config.staticBaseUrl || '');
+    const localHost = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(req.headers.host ?? '');
+    if (forceHttps && !localHost && proto && proto !== 'https') {
+      res.writeHead(308, { Location: `https://${req.headers.host}${req.url ?? '/'}` });
+      res.end();
+      return;
+    }
+    if (proto === 'https' || forceHttps) {
+      res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    }
+
+    // CSRF: state-changing requests must come from this origin.
+    if (req.method && req.method !== 'GET' && req.method !== 'HEAD') {
+      const originHeader = req.headers.origin;
+      if (originHeader) {
+        let oh = '';
+        try {
+          oh = new URL(originHeader).host;
+        } catch {
+          oh = '';
+        }
+        if (oh !== (req.headers.host ?? '')) {
+          res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('Cross-origin request refused.');
+          return;
+        }
+      }
+    }
+
+    // Attach the CSP automatically to every HTML response (pages, key screen).
+    const writeHead = res.writeHead.bind(res);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (res as any).writeHead = (status: number, headers?: any) => {
+      const ct = headers && typeof headers === 'object' ? (headers['Content-Type'] ?? headers['content-type']) : '';
+      if (typeof ct === 'string' && ct.startsWith('text/html')) {
+        htmlSecurityHeaders(res, url.pathname.startsWith('/activity'));
+      }
+      return writeHead(status, headers);
+    };
     // Access gate: the portal, panel, visualizer and listener all need a
     // session now. Static assets stay open (they hold no audio or state).
     const need = accessNeedFor(url.pathname);
@@ -1040,6 +1179,19 @@ async function handleRoute(
         break;
       }
 
+      case '/api/logout': {
+        if (req.method !== 'POST') {
+          res.writeHead(405);
+          res.end();
+          return;
+        }
+        const cleared = revokeSessionByToken(tokenFromCookieHeader(req.headers.cookie));
+        res.setHeader('Set-Cookie', 'vz_sess=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax');
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ ok: true, cleared }));
+        break;
+      }
+
       case '/api/access': {
         // Owner sessions may read the master key back (device recovery).
         // Everyone else gets single-use invite links - never the secret itself.
@@ -1180,13 +1332,7 @@ async function handleRoute(
       case '/request':
       case '/request.html':
       case '/jam': {
-        if (!hasRequestAccess(req, url)) {
-          res.writeHead(403, { 'Content-Type': 'text/html; charset=utf-8' });
-          res.end(
-            '<h1 style="font-family:system-ui">Requests are disabled or keyed. Ask the operator for a link.</h1>',
-          );
-          return;
-        }
+        if (!grantRequestPage(req, url, res)) return;
         if (config.requestKey && secretEquals(url.searchParams.get('key'), config.requestKey)) {
           res.setHeader(
             'Set-Cookie',

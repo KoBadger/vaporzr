@@ -1,6 +1,14 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { listAccess, mintInvite, revokeAll, revokeSession } from './access.js';
+import {
+  describeUserAgent,
+  listAccess,
+  mintInvite,
+  revokeAll,
+  revokeSession,
+  type AccessSession,
+  type AccessScope,
+} from './access.js';
 import fs from 'node:fs/promises';
 import { existsSync, statSync } from 'node:fs';
 import os from 'node:os';
@@ -233,7 +241,11 @@ const COMMANDS = [
           o
             .setName('scope')
             .setDescription('control (panel + audio + visuals) or view (watch/listen only)')
-            .addChoices({ name: 'control', value: 'control' }, { name: 'view', value: 'view' }),
+            .addChoices(
+              { name: 'control', value: 'control' },
+              { name: 'view', value: 'view' },
+              { name: 'request', value: 'request' },
+            ),
         )
         .addIntegerOption((o) =>
           o
@@ -1230,6 +1242,7 @@ export class DiscordBot {
       void this.ensurePanelEmojis();
       void this.syncBotAvatar();
       void this.loadKeyedGuilds();
+      this.startAccessWatch();
     });
     // Never let a stray client error take the process down.
     this.client.on('error', (e) => console.warn('[vaporzr] client error:', e instanceof Error ? e.message : e));
@@ -2157,10 +2170,18 @@ export class DiscordBot {
           const access = listAccess();
           const when = (t: number) => `<t:${Math.floor(t / 1000)}:R>`;
           const sessions = access.sessions
-            .map((x) => `\`${x.id}\` · ${x.scope}${x.owner ? ' · owner' : ''} · ${x.label} · ${when(x.expiresAt)}`)
+            .map(
+              (x) =>
+                `\`${x.id}\` · ${x.scope}${x.owner ? ' · owner' : ''} · ${x.label} · last ${when(x.lastSeenAt)} · ` +
+                `${describeUserAgent(x.lastUserAgent)}${x.lastIp ? ` · ${x.lastIp}` : ''}`,
+            )
             .join('\n');
           const invites = access.invites
-            .map((x) => `\`${x.id}\` · ${x.scope} · ${x.label} · ${when(x.expiresAt)}`)
+            .map(
+              (x) =>
+                `\`${x.id}\` · ${x.scope} · ${x.label} · ${when(x.expiresAt)} · ` +
+                `${x.maxUses === 0 ? 'reusable' : `used ${x.uses}/${x.maxUses}`}`,
+            )
             .join('\n');
           await interaction.reply({
             embeds: [
@@ -2204,7 +2225,8 @@ export class DiscordBot {
           });
           break;
         }
-        const scope = interaction.options.getString('scope') === 'view' ? 'view' : 'control';
+        const scopeArg = interaction.options.getString('scope') ?? 'control';
+        const scope: AccessScope = scopeArg === 'view' ? 'view' : scopeArg === 'request' ? 'request' : 'control';
         const hours = Math.max(
           1,
           Math.min(168, interaction.options.getInteger('hours') ?? (scope === 'control' ? 12 : 24)),
@@ -2215,13 +2237,17 @@ export class DiscordBot {
         await interaction.reply({
           embeds: [
             new EmbedBuilder()
-              .setTitle(scope === 'control' ? 'Control invite' : 'View invite')
+              .setTitle(
+                scope === 'control' ? 'Control invite' : scope === 'view' ? 'View invite' : 'Song-request invite',
+              )
               .setDescription(
                 (link ? `<${link}>\n\n` : '(links appear once PUBLIC_BASE_URL or a tunnel is up)\n\n') +
                   `Single use, expires in ${hours}h. ` +
                   (scope === 'control'
                     ? 'Unlocks the control panel, and the same link also opens /viz and /listen.'
-                    : 'Watch the visualizer or listen in hi-fi; cannot change playback.') +
+                    : scope === 'view'
+                      ? 'Watch the visualizer or listen in hi-fi; cannot change playback.'
+                      : 'Opens the song-request page only - no listening, no controls.') +
                   "\n\nIf a key screen appears, paste this link's code there.",
               )
               .setColor(this.themeColor())
@@ -4500,10 +4526,18 @@ export class DiscordBot {
             const access = listAccess();
             const when = (t: number) => `<t:${Math.floor(t / 1000)}:R>`;
             const sessions = access.sessions
-              .map((x) => `\`${x.id}\` · ${x.scope}${x.owner ? ' · owner' : ''} · ${x.label} · ${when(x.expiresAt)}`)
+              .map(
+                (x) =>
+                  `\`${x.id}\` · ${x.scope}${x.owner ? ' · owner' : ''} · ${x.label} · last ${when(x.lastSeenAt)} · ` +
+                  `${describeUserAgent(x.lastUserAgent)}${x.lastIp ? ` · ${x.lastIp}` : ''}`,
+              )
               .join('\n');
             const invites = access.invites
-              .map((x) => `\`${x.id}\` · ${x.scope} · ${x.label} · ${when(x.expiresAt)}`)
+              .map(
+                (x) =>
+                  `\`${x.id}\` · ${x.scope} · ${x.label} · ${when(x.expiresAt)} · ` +
+                  `${x.maxUses === 0 ? 'reusable' : `used ${x.uses}/${x.maxUses}`}`,
+              )
               .join('\n');
             await message.reply(
               `**Web access**\n**Devices (${access.sessions.length})**\n${sessions || '`none`'}\n\n` +
@@ -4534,18 +4568,21 @@ export class DiscordBot {
             await message.reply('No share key is configured - the web tier is open.');
             break;
           }
-          const scope = (parts[1] ?? '').toLowerCase() === 'view' ? 'view' : 'control';
+          const scopeArg = (parts[1] ?? '').toLowerCase();
+          const scope: AccessScope = scopeArg === 'view' ? 'view' : scopeArg === 'request' ? 'request' : 'control';
           const hours = Math.max(1, Math.min(168, Number(parts[2]) || (scope === 'control' ? 12 : 24)));
           const minted = mintInvite(scope, `discord:${message.author.username}`, hours * 60 * 60 * 1000);
           const link = linkFor(scope === 'control' ? pl : vl, minted.token);
           if (message.guildId) await this.markKeyedGuild(message.guildId);
           await message.reply(
-            `**${scope === 'control' ? 'Control' : 'View'} invite**\n` +
+            `**${scope === 'control' ? 'Control' : scope === 'view' ? 'View' : 'Song-request'} invite**\n` +
               (link ? `${link}\n\n` : '(links appear once PUBLIC_BASE_URL or a tunnel is up)\n\n') +
               `Single use, expires in ${hours}h. ` +
               (scope === 'control'
                 ? 'Unlocks the control panel, and the same link also opens /viz and /listen.'
-                : 'Watch the visualizer or listen in hi-fi; cannot change playback.') +
+                : scope === 'view'
+                  ? 'Watch the visualizer or listen in hi-fi; cannot change playback.'
+                  : 'Opens the song-request page only - no listening, no controls.') +
               `\n\nid \`${minted.invite.id}\` · \`V@key revoke ${minted.invite.id}\` to cut it off early`,
           );
           break;
@@ -10623,6 +10660,39 @@ export class DiscordBot {
       });
   }
 
+  private accessWatch: NodeJS.Timeout | null = null;
+
+  /**
+   * DM the owner when a new web device signs in. Access sessions live in a
+   * file, so this polls; the first tick seeds the known ids and stays silent.
+   */
+  private startAccessWatch(): void {
+    if (this.accessWatch) return;
+    const seen = new Set(listAccess().sessions.map((x) => x.id));
+    this.accessWatch = setInterval(() => {
+      for (const s of listAccess().sessions) {
+        if (seen.has(s.id)) continue;
+        seen.add(s.id);
+        void this.notifyNewDevice(s);
+      }
+    }, 60_000);
+    this.accessWatch.unref?.();
+  }
+
+  private async notifyNewDevice(s: AccessSession): Promise<void> {
+    if (!config.ownerId) return;
+    try {
+      const user = await this.client.users.fetch(config.ownerId);
+      await user.send(
+        `New device on the Vaporzr web tier: **${s.label}** · ${s.scope}\n` +
+          `${describeUserAgent(s.lastUserAgent)} · ${s.lastIp ?? 'address unknown'} · id \`${s.id}\`\n` +
+          `Not you? \`/key revoke ${s.id}\` (or \`/key rotate\`).`,
+      );
+    } catch {
+      /* DMs closed or owner offline */
+    }
+  }
+
   /** Shared reference for both `/help` and `V@help`. */
   private helpEmbed(): EmbedBuilder {
     const panel = vizTunnel.panelLink();
@@ -11919,7 +11989,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/sleep <30m|1h>` · `V@sleep` — sleep timer',
       '`/help` · `V@help` — this menu',
       '`/invite` · `V@invite` — add Vaporzr to a server',
-      '`/key give [view|control] [hours]` · `V@key give` — mint a single-use access link (owner)',
+      '`/key give [view|control|request] [hours]` · `V@key give` — mint an access link: panel, watch/listen, or song requests only (owner)',
       '`/key list` · `V@key list` — active devices + unused invites (owner)',
       '`/key revoke <id|all>` · `V@key revoke` — cut off one device/invite, or everything (owner)',
       '`/key show` · `V@key show` — reveal the master key · `/key rotate` — new key, kills all devices (owner)',

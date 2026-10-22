@@ -26,7 +26,7 @@ let bad = 0;
 
 // Both hand-written pages: a syntax error in either leaves the page chrome
 // rendering while the script is dead - a silent failure otherwise.
-for (const page of ['apps/bot/public/viz.html', 'apps/bot/public/listen.html']) {
+for (const page of ['apps/bot/public/viz.html', 'apps/bot/public/listen.html', 'apps/bot/public/panel.html']) {
   const html = fs.readFileSync(page, 'utf8');
   const blocks = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)];
   console.log(`${page} inline script blocks: ${blocks.length}`);

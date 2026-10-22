@@ -88,7 +88,11 @@ The web tier is **locked end to end**: `/`, `/panel`, `/viz` and `/listen` all r
 - **Invites** - `/key give [view|control] [hours]` mints a **single-use** link. `control` unlocks the panel; `view` only watches and listens. Invites expire on their own and can be revoked early.
 - **Sessions** - one per device, 30 days, stored server-side by SHA-256 only. `/key list` shows them with ids; `/key revoke <id|all>` cuts them off; `/key rotate` issues a new master key and kills everything at once.
 
-WebSockets are gated too and checked against the page's `Origin`, so another website cannot open a socket with your cookie. The one public page is **`/activity`** - Discord's iframe cannot carry a cookie, so it connects as a guest and receives spectrum bars, never audio or commands. Song requests keep their separate, lower-privilege `REQUEST_KEY`.
+WebSockets are gated too and checked against the page's `Origin`, so another website cannot open a socket with your cookie. The one public page is **`/activity`** - Discord's iframe cannot carry a cookie, so it connects as a guest and receives spectrum bars, never audio or commands.
+
+Jam cards now mint a **reusable request invite** (6 h, revocable) instead of embedding a static key, so a photographed QR stops working on its own. `REQUEST_KEY` still works as a legacy fallback.
+
+Other details: cookies are `Secure` whenever `PUBLIC_BASE_URL` is https and HTTP is redirected to HTTPS with HSTS; every HTML page ships a strict CSP (same-origin scripts, `frame-ancestors none`, the Activity allowing only Discord surfaces); state-changing requests must come from the same `Origin`; the panel's key dialog has **Sign out this device**; `/key list` shows each device's last-seen time, browser and masked address, and the owner gets a DM when a new device signs in. `WEB_ACCESS=tailnet` refuses the public host entirely and serves only loopback/Tailscale addresses.
 
 | Rank | Who | Powers |
 |---|---|---|

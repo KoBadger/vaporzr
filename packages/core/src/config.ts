@@ -141,6 +141,12 @@ export const config = {
    * the LAN IP. Set to a custom domain when running behind port forwarding.
    */
   publicHost: process.env.PUBLIC_HOST ?? '',
+  /**
+   * Web exposure policy. `public` (default) serves the tunnel host normally;
+   * `tailnet` refuses anything that did not arrive through loopback or a
+   * Tailscale address/name, so the public URL cannot reach the panel at all.
+   */
+  webAccess: (process.env.WEB_ACCESS === 'tailnet' ? 'tailnet' : 'public') as 'public' | 'tailnet',
   /** cloudflared binary used to expose an HTTPS quick tunnel for /viz + /panel links. */
   cloudflaredPath:
     process.env.CLOUDFLARED_PATH ?? path.join(__dirname, '..', '..', '..', 'vendor', 'cloudflared', 'cloudflared'),

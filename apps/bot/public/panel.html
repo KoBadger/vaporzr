@@ -2057,13 +2057,15 @@
     <div id="key-modal" style="display: none">
       <div id="key-card">
         <div class="key-h">🔑 Access key</div>
-        <p class="key-sub">Anyone with this key controls the panel. Share it only with people you trust.</p>
+        <p class="key-sub">
+          This is the master key. Hand out the invite links below instead: they expire and can be revoked.
+        </p>
         <div class="key-row">
           <input id="key-value" type="text" readonly spellcheck="false" />
           <button id="key-reveal" data-tip="Reveal / hide">👁</button>
           <button id="key-copy" data-tip="Copy key">⧉</button>
         </div>
-        <div class="key-h2">Ready-made links</div>
+        <div class="key-h2">Invite links (single use, expire)</div>
         <div class="key-row">
           <input id="key-panel" type="text" readonly spellcheck="false" />
           <button id="key-copy-panel" data-tip="Copy panel link">⧉ panel</button>
@@ -2072,7 +2074,12 @@
           <input id="key-viz" type="text" readonly spellcheck="false" />
           <button id="key-copy-viz" data-tip="Copy visualizer link">⧉ viz</button>
         </div>
+        <div class="key-row">
+          <input id="key-listen" type="text" readonly spellcheck="false" />
+          <button id="key-copy-listen" data-tip="Copy listener link">listen</button>
+        </div>
         <div class="key-foot">
+          <button id="key-signout">Sign out this device</button>
           <button id="key-close">Close</button>
         </div>
       </div>
@@ -2123,6 +2130,9 @@
           'key-copy-panel',
           'key-viz',
           'key-copy-viz',
+          'key-listen',
+          'key-copy-listen',
+          'key-signout',
           'key-close',
           'btn-play',
           'btn-shuffle',
@@ -3695,6 +3705,7 @@
             el['key-value'].type = keyRevealed ? 'text' : 'password';
             el['key-panel'].value = d.panelUrl || '';
             el['key-viz'].value = d.vizUrl || '';
+            el['key-listen'].value = d.listenUrl || '';
             keyLoaded = true;
             return true;
           } catch (e) {
@@ -3733,6 +3744,15 @@
         };
         el['key-copy-viz'].onclick = function () {
           copyText(el['key-viz'].value, 'Visualizer link');
+        };
+        el['key-copy-listen'].onclick = function () {
+          copyText(el['key-listen'].value, 'Listener link');
+        };
+        el['key-signout'].onclick = function () {
+          if (!window.confirm('Sign this device out? A key or invite is needed to return.')) return;
+          fetch('/api/logout', { method: 'POST' }).then(function () {
+            window.location.href = '/';
+          });
         };
 
         // PWA: register the (cache-free) service worker so the panel is installable.
