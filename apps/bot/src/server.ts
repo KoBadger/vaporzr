@@ -303,6 +303,20 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
  * cookie; it connects as a guest and receives bars, never PCM. `/request` keeps
  * its separate lower-privilege request key.
  */
+/**
+ * True for a request that is not a browser navigation: Discord's Embedded App
+ * Proxy fetches our pages server-side (no Sec-Fetch headers) and proxies them
+ * into the Activity iframe, which cannot carry our session cookie. Those
+ * requests get the Activity page - a guest surface that grants nothing until
+ * the owner approves a pairing code - instead of the key screen. Real browsers
+ * always send Sec-Fetch-Mode, so the gate still applies to them.
+ */
+function isActivityFetch(req: http.IncomingMessage): boolean {
+  const mode = req.headers['sec-fetch-mode'];
+  if (!mode) return true;
+  return req.headers['sec-fetch-dest'] === 'iframe';
+}
+
 function accessNeedFor(pathname: string): AccessScope | null {
   if (pathname === '/panel' || pathname === '/panel.html') return 'control';
   if (pathname === '/' || pathname === '/index.html') return 'view';
@@ -337,8 +351,9 @@ function htmlSecurityHeaders(res: http.ServerResponse, activity = false): void {
   res.setHeader(
     'Content-Security-Policy',
     "default-src 'self'; img-src 'self' data: blob: https:; media-src 'self' blob:; " +
-      "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; " +
-      "connect-src 'self' ws: wss:; font-src 'self' data:; base-uri 'none'; form-action 'self'; " +
+      "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+      "connect-src 'self' ws: wss:; font-src 'self' data: https://fonts.gstatic.com; " +
+      "base-uri 'none'; form-action 'self'; " +
       frame,
   );
   if (!activity) res.setHeader('X-Frame-Options', 'DENY');
@@ -727,6 +742,8 @@ async function handleRoute(
   const host = /^[a-z0-9.-]+(:\d{1,5})?$/i.test(rawHost) ? rawHost : `localhost:${config.port}`;
   const origin = `https://${host}`;
   try {
+    // Set when this response body is the Activity page (framing rules differ).
+    let activityResponse = url.pathname.startsWith('/activity');
     // Baseline headers for every response, including gate pages.
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
@@ -778,14 +795,27 @@ async function handleRoute(
     (res as any).writeHead = (status: number, headers?: any) => {
       const ct = headers && typeof headers === 'object' ? (headers['Content-Type'] ?? headers['content-type']) : '';
       if (typeof ct === 'string' && ct.startsWith('text/html')) {
-        htmlSecurityHeaders(res, url.pathname.startsWith('/activity'));
+        htmlSecurityHeaders(res, activityResponse);
       }
       return writeHead(status, headers);
     };
     // Access gate: the portal, panel, visualizer and listener all need a
     // session now. Static assets stay open (they hold no audio or state).
     const need = accessNeedFor(url.pathname);
-    if (need && !grantPageAccess(req, url, res, need)) return;
+    if (need && config.shareKey) {
+      if (isActivityFetch(req)) {
+        // Discord's proxy asked for this path on behalf of the Activity iframe:
+        // answer with the Activity page (open, frameable, guest socket).
+        const page = activityHtml(origin);
+        if (page) {
+          activityResponse = true;
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+          res.end(page);
+          return;
+        }
+      }
+      if (!grantPageAccess(req, url, res, need)) return;
+    }
 
     // Brand assets.
     const BRAND_ASSETS: Record<string, string> = {
