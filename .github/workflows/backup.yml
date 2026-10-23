@@ -61,7 +61,7 @@ jobs:
           ls -lh "$BACKUP_NAME"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: backup-${{ github.run_id }}
           path: ${{ env.BACKUP_NAME }}
