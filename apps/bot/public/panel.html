@@ -2093,27 +2093,32 @@
     <div id="key-modal" style="display: none">
       <div id="key-card">
         <div class="key-h">🔑 Access key</div>
-        <p class="key-sub">
-          This is the master key. Hand out the invite links below instead: they expire and can be revoked.
+        <div id="key-owner">
+          <p class="key-sub">
+            This is the master key. Hand out the invite links below instead: they expire and can be revoked.
+          </p>
+          <div class="key-row">
+            <input id="key-value" type="text" readonly spellcheck="false" />
+            <button id="key-reveal" data-tip="Reveal / hide">👁</button>
+            <button id="key-copy" data-tip="Copy key">⧉</button>
+          </div>
+          <div class="key-h2">Invite links (single use, expire)</div>
+          <div class="key-row">
+            <input id="key-panel" type="text" readonly spellcheck="false" />
+            <button id="key-copy-panel" data-tip="Copy panel link">⧉ panel</button>
+          </div>
+          <div class="key-row">
+            <input id="key-viz" type="text" readonly spellcheck="false" />
+            <button id="key-copy-viz" data-tip="Copy visualizer link">⧉ viz</button>
+          </div>
+          <div class="key-row">
+            <input id="key-listen" type="text" readonly spellcheck="false" />
+            <button id="key-copy-listen" data-tip="Copy listener link">listen</button>
+          </div>
+        </div>
+        <p class="key-sub" id="key-note" style="display: none">
+          Only the owner's devices can show the key or create invite links. Ask the owner for a link.
         </p>
-        <div class="key-row">
-          <input id="key-value" type="text" readonly spellcheck="false" />
-          <button id="key-reveal" data-tip="Reveal / hide">👁</button>
-          <button id="key-copy" data-tip="Copy key">⧉</button>
-        </div>
-        <div class="key-h2">Invite links (single use, expire)</div>
-        <div class="key-row">
-          <input id="key-panel" type="text" readonly spellcheck="false" />
-          <button id="key-copy-panel" data-tip="Copy panel link">⧉ panel</button>
-        </div>
-        <div class="key-row">
-          <input id="key-viz" type="text" readonly spellcheck="false" />
-          <button id="key-copy-viz" data-tip="Copy visualizer link">⧉ viz</button>
-        </div>
-        <div class="key-row">
-          <input id="key-listen" type="text" readonly spellcheck="false" />
-          <button id="key-copy-listen" data-tip="Copy listener link">listen</button>
-        </div>
         <div class="key-h2">Discord Activity</div>
         <div class="key-row">
           <input
@@ -2179,6 +2184,8 @@
           'key-copy-viz',
           'key-listen',
           'key-copy-listen',
+          'key-owner',
+          'key-note',
           'key-signout',
           'activity-code',
           'btn-activity',
@@ -3893,6 +3900,12 @@
               return false;
             }
             var d = await r.json();
+            // Master key and invite minting are owner-only: a control invite
+            // session gets empty fields from the API, so hide the block instead
+            // of presenting blanks that look broken.
+            var isOwner = d.owner !== false;
+            if (el['key-owner']) el['key-owner'].style.display = isOwner ? '' : 'none';
+            if (el['key-note']) el['key-note'].style.display = isOwner ? 'none' : '';
             el['key-value'].value = d.key || '';
             el['key-value'].type = keyRevealed ? 'text' : 'password';
             el['key-panel'].value = d.panelUrl || '';
