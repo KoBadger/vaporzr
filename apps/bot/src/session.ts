@@ -179,6 +179,9 @@ export class SessionManager {
         voiceChannelId?: string;
       };
       s.queue.restore(data);
+      // Repeat is a listening mode, not a saved setting: a redeploy must not
+      // resurrect a track-loop left on (e.g. by a stray Ctrl+R) days earlier.
+      s.queue.setState({ repeat: false });
       // Re-adopt persisted audio settings so a redeploy keeps the session's
       // speed/bass/EQ/loudnorm instead of silently resetting the sound.
       s.playback.adoptAudioState(data.state ?? {});

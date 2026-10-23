@@ -3715,6 +3715,9 @@
 
         /* ---------- keyboard shortcuts ---------- */
         document.addEventListener('keydown', function (e) {
+          // Browser/OS chords (Ctrl+R, Cmd+R, Alt+Left, …) are not shortcuts:
+          // Ctrl+R used to also match 'r' and silently turn on repeat.
+          if (e.ctrlKey || e.metaKey || e.altKey) return;
           var tag = (e.target && e.target.tagName) || '';
           var typing =
             /INPUT|TEXTAREA|SELECT/.test(tag) &&
