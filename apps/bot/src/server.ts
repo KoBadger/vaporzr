@@ -711,7 +711,7 @@ function activityHtml(origin: string): string | null {
       `}catch(e){window.__VZ_SDK_STATE__='ready-nosdk';}` +
       `}` +
       `</script>` +
-      '<script src="/activity-connect.js" defer></script>';
+      `<script src="/activity-connect.js?v=${build}" defer></script>`;
     return (
       fs
         .readFileSync(path.join(__dirname, '..', 'public', 'viz.html'), 'utf8')

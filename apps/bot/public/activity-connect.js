@@ -59,7 +59,7 @@
     ui.innerHTML =
       '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px">' +
       '<b style="letter-spacing:.08em;font-size:11px;text-transform:uppercase;color:#8b97ad">Hi-fi audio</b>' +
-      '<button type="button" class="vz-x" aria-label="Hide" style="background:none;border:0;color:#8b97ad;font:600 16px/1 system-ui;cursor:pointer;padding:2px 4px">\u00d7</button>' +
+      '<button type="button" class="vz-x" aria-label="Hide" title="Hide" style="flex:0 0 auto;width:26px;height:26px;display:grid;place-items:center;border-radius:7px;border:1px solid #2b3446;background:#1a1f2b;color:#c7d2e5;font:600 15px/1 system-ui;cursor:pointer">\u00d7</button>' +
       '</div>' +
       '<div class="vz-m" style="margin:6px 0 10px">This Activity shows visuals only. Connect it to hear the stream.</div>' +
       '<button type="button" class="vz-go" style="width:100%;padding:9px 12px;border-radius:9px;border:1px solid #2c5a50;background:linear-gradient(180deg,#1b3733,#132520);color:#d9fff4;font-weight:600;cursor:pointer">Connect audio</button>' +
@@ -83,7 +83,13 @@
     pill.onclick = show;
     document.body.appendChild(pill);
 
-    if (sessionStorage.getItem(HIDE_KEY) === '1') hide();
+    var wasHidden = false;
+    try {
+      wasHidden = sessionStorage.getItem(HIDE_KEY) === '1';
+    } catch (e) {
+      /* storage blocked: start expanded */
+    }
+    if (wasHidden) hide();
   }
 
   function hide() {
@@ -164,6 +170,13 @@
           setTimeout(function () {
             if (ui) ui.remove();
             ui = null;
+            if (pill) pill.remove();
+            pill = null;
+            try {
+              sessionStorage.removeItem(HIDE_KEY);
+            } catch (e) {
+              /* ignore */
+            }
           }, 2500);
           return;
         }
