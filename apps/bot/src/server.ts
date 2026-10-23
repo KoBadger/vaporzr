@@ -671,7 +671,7 @@ function activityHtml(origin: string): string | null {
     // with a cache-busting query and the result is reported onto window for the
     // page (and remote debugging) to see, rather than failing silently.
     const handshake =
-      `<script>window.__VZ_ACTIVITY__=1;window.__VZ_SDK_STATE__='pending';</script>` +
+      `<script>window.__VZ_ACTIVITY__=1;window.__VZ_STATE__=window.__VZ_STATE__||{};window.__VZ_STATE__.origin='${origin}';window.__VZ_SDK_STATE__='pending';</script>` +
       `<script type="module">` +
       `window.__VZ_SDK_STATE__='loading';` +
       `let DiscordSDK;` +
@@ -771,8 +771,12 @@ async function handleRoute(
       res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
     }
 
-    // CSRF: state-changing requests must come from this origin.
-    if (req.method && req.method !== 'GET' && req.method !== 'HEAD') {
+    // CSRF: state-changing requests must come from this origin. The Activity
+    // pair call is exempt on purpose: it is unauthenticated, rate-limited and
+    // creates nothing but a 6-character code. Inside Discord its Origin is the
+    // discordsays proxy, which by design differs from our host.
+    const pairEndpoint = url.pathname === '/api/activity/pair';
+    if (!pairEndpoint && req.method && req.method !== 'GET' && req.method !== 'HEAD') {
       const originHeader = req.headers.origin;
       if (originHeader) {
         let oh = '';

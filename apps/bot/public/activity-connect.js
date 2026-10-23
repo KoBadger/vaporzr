@@ -46,6 +46,9 @@
     if (msg) msg.textContent = text;
   }
 
+  var pill = null;
+  var HIDE_KEY = 'vz-act-hidden';
+
   function build() {
     if (ui || !document.body) return;
     ui = document.createElement('div');
@@ -54,23 +57,76 @@
       'border-radius:12px;background:rgba(13,16,22,.94);border:1px solid #222835;color:#e9edf6;' +
       'font:13px/1.45 system-ui,sans-serif;box-shadow:0 14px 40px rgba(0,0,0,.5)';
     ui.innerHTML =
-      '<b style="display:block;letter-spacing:.08em;font-size:11px;text-transform:uppercase;color:#8b97ad">Hi-fi audio</b>' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px">' +
+      '<b style="letter-spacing:.08em;font-size:11px;text-transform:uppercase;color:#8b97ad">Hi-fi audio</b>' +
+      '<button type="button" class="vz-x" aria-label="Hide" style="background:none;border:0;color:#8b97ad;font:600 16px/1 system-ui;cursor:pointer;padding:2px 4px">\u00d7</button>' +
+      '</div>' +
       '<div class="vz-m" style="margin:6px 0 10px">This Activity shows visuals only. Connect it to hear the stream.</div>' +
-      '<button type="button" style="width:100%;padding:9px 12px;border-radius:9px;border:1px solid #2c5a50;background:linear-gradient(180deg,#1b3733,#132520);color:#d9fff4;font-weight:600;cursor:pointer">Connect audio</button>' +
-      '<div style="margin-top:8px;color:#5f6b80;font-size:11px">Visuals keep working whether you connect or not.</div>';
+      '<button type="button" class="vz-go" style="width:100%;padding:9px 12px;border-radius:9px;border:1px solid #2c5a50;background:linear-gradient(180deg,#1b3733,#132520);color:#d9fff4;font-weight:600;cursor:pointer">Connect audio</button>' +
+      '<div style="margin-top:8px;color:#5f6b80;font-size:11px">Visuals keep working either way.</div>';
     document.body.appendChild(ui);
-    btn = ui.querySelector('button');
+    btn = ui.querySelector('.vz-go');
     msg = ui.querySelector('.vz-m');
     btn.onclick = start;
+    ui.querySelector('.vz-x').onclick = hide;
+
+    // Collapsed pill: always available once dismissed, so audio can be enabled
+    // later without reloading the Activity.
+    pill = document.createElement('button');
+    pill.type = 'button';
+    pill.textContent = 'Audio';
+    pill.setAttribute('aria-label', 'Hi-fi audio');
+    pill.style.cssText =
+      'position:fixed;left:14px;bottom:14px;z-index:2147483000;padding:8px 14px;border-radius:999px;' +
+      'border:1px solid #2c5a50;background:rgba(13,16,22,.92);color:#7ee0c2;font:600 11px/1 system-ui;' +
+      'letter-spacing:.1em;text-transform:uppercase;cursor:pointer;display:none';
+    pill.onclick = show;
+    document.body.appendChild(pill);
+
+    if (sessionStorage.getItem(HIDE_KEY) === '1') hide();
+  }
+
+  function hide() {
+    if (ui) ui.style.display = 'none';
+    if (pill) pill.style.display = '';
+    try {
+      sessionStorage.setItem(HIDE_KEY, '1');
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  function show() {
+    if (ui) ui.style.display = '';
+    if (pill) pill.style.display = 'none';
+    try {
+      sessionStorage.removeItem(HIDE_KEY);
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  /** POST the pair request; the Discord proxy may refuse it, so retry the
+   *  absolute public origin (CORS is open for this unauthenticated endpoint). */
+  function requestPair() {
+    var first = fetch('/api/activity/pair', { method: 'POST' }).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    });
+    return first.catch(function () {
+      var origin = (window.__VZ_STATE__ && window.__VZ_STATE__.origin) || '';
+      if (!origin || origin === location.origin) throw new Error('unreachable');
+      return fetch(origin + '/api/activity/pair', { method: 'POST' }).then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      });
+    });
   }
 
   function start() {
     btn.disabled = true;
     setMsg('Creating a code...');
-    fetch('/api/activity/pair', { method: 'POST' })
-      .then(function (r) {
-        return r.json();
-      })
+    requestPair()
       .then(function (d) {
         if (!d || !d.code) throw new Error('no code');
         pendingCode = d.code;
@@ -81,9 +137,11 @@
           '</div>Waiting for approval...';
         poll();
       })
-      .catch(function () {
+      .catch(function (err) {
         btn.disabled = false;
-        setMsg('Could not create a code. Is the panel reachable?');
+        setMsg(
+          'Could not reach the bot' + (err && err.message ? ' (' + err.message + ')' : '') + '. Tap Hide and retry.',
+        );
       });
   }
 
