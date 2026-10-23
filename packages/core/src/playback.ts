@@ -360,7 +360,9 @@ export class PlaybackController {
 
   /** Repeat-current-track mode (natural ends replay instead of advancing). */
   setRepeat(on: boolean): void {
+    const changed = this.queue.getState().repeat !== on;
     this.queue.setState({ repeat: on });
+    if (changed) console.log(`[playback] repeat ${on ? 'on' : 'off'}`);
   }
 
   private clearEndTimer(): void {
@@ -752,11 +754,16 @@ export class PlaybackController {
   /** Advance to the next track once a server-side stream naturally ends. */
   private serverStreamOnEnd(): () => void {
     const uri = this.currentUri;
+    // The stream we are attached to dies with this generation. A skip bumps the
+    // generation, so a late onEnd from the torn-down stream can no longer replay
+    // or advance the track the user just selected.
+    const generation = this.playGeneration;
     // Capture the track that is ending BEFORE we advance the queue, so the
     // Endless Wave onTrackEnd hook can record it (YouTube/SoundCloud/etc. paths
     // don't go through the position-timer and would otherwise never trigger EW).
     const endedTrack = this.queue.getCurrentTrack() ?? null;
     return () => {
+      if (generation !== this.playGeneration) return;
       if (this.currentUri !== uri) return;
       if (this.spotifyFallback) {
         this.spotifyFallback = false;
