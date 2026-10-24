@@ -168,6 +168,10 @@ export class PlaybackController {
   ];
   /** Invalidates in-flight play() calls when skip/previous/stop changes the cursor. */
   private playGeneration = 0;
+  /** Position to resume from after a stall-driven Spotify re-issue, so a
+   *  dried-up feed continues where it stopped instead of restarting at 0. */
+  private stallResumeMs = 0;
+  private stallResumeUri: string | null = null;
   /** Cumulative number of tracks that have started playing. */
   tracksPlayed = 0;
 
@@ -893,6 +897,7 @@ export class PlaybackController {
           return;
         }
         this.spotifyRetryAttempts = 0;
+        this.seekStallResume(current.uri);
       } catch (err) {
         if (err instanceof SpotifyError && err.status === 404 && this.librespot?.ensureDevice) {
           // Device not registered (usually librespot mid-reconnect). Re-register
@@ -911,6 +916,7 @@ export class PlaybackController {
               return;
             }
             this.spotifyRetryAttempts = 0;
+            this.seekStallResume(current.uri);
           } catch (retryErr) {
             this.stopSpotifyFeed();
             this.voice.stopStream();
@@ -1431,6 +1437,21 @@ export class PlaybackController {
     await spotifyPlay(deviceId, [uri]);
   }
 
+  /** After a stall-driven re-issue, seek the resumed track back to where it
+   *  dried up so the listener hears continuity instead of a restart. Only
+   *  fires when the track being played is the one that stalled (a skip in
+   *  between cancels it). */
+  private seekStallResume(currentUri: string): void {
+    if (this.stallResumeMs <= 0 || this.stallResumeUri !== currentUri) return;
+    if (!this.librespot?.seekMs) return;
+    const ms = this.stallResumeMs;
+    this.stallResumeMs = 0;
+    this.stallResumeUri = null;
+    void this.librespot.seekMs(ms).catch((err) => {
+      console.warn(`[playback] stall resume seek failed: ${err instanceof Error ? err.message : err}`);
+    });
+  }
+
   /** Pause Spotify playback on whichever backend is active. */
   private pauseSpotifyAny(): void {
     if (this.librespot?.pausePlayback) {
@@ -1562,7 +1583,11 @@ export class PlaybackController {
         if (!this.lastStallRecoveryAt || now - this.lastStallRecoveryAt > 20_000) {
           this.lastStallRecoveryAt = now;
           this.stallReissueUri = playing.uri;
-          console.warn(`[playback] Spotify feed stalled — re-issuing "${playing.name}"`);
+          // Resume from the last known position so a feed recovery doesn't
+          // restart the track from the top (heard as the song looping).
+          this.stallResumeMs = pos;
+          this.stallResumeUri = playing.uri;
+          console.warn(`[playback] Spotify feed stalled — re-issuing "${playing.name}" @ ${Math.round(pos / 1000)}s`);
           this.sendVisualizer({ type: 'cmd', command: 'stop' });
           void this.play().catch((err) => {
             console.warn(`[playback] stall re-issue failed: ${err instanceof Error ? err.message : err}`);
