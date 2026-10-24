@@ -1,0 +1,18 @@
+{
+  "note": "Generated ambient loops used by the web surfaces. Each entry records the prompt and settings so a clip can be reproduced. Re-encode: ffmpeg -an -c:v libx264 -preset slow -crf 26 -pix_fmt yuv420p -movflags +faststart.",
+  "loops": [
+    {
+      "id": "jam-nebula",
+      "file": "jam-nebula.mp4",
+      "poster": "jam-nebula.jpg",
+      "usedBy": ["/jam"],
+      "prompt": "Seamless looping abstract background: deep indigo and pink nebula clouds slowly churning in darkness, faint twinkling stars, volumetric light, dark edges for blending over other footage, no text, no camera movement, loopable",
+      "model": "ltx-2-3-fast",
+      "resolution": "1280x720",
+      "fps": 24,
+      "seconds": 6,
+      "costUsd": 0.18,
+      "generated": "2026-10-24"
+    }
+  ]
+}

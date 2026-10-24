@@ -844,6 +844,72 @@ async function handleRoute(
         return;
       }
     }
+    // Generated ambient loops under public/media/loops. Same streaming rules
+    // as /ew-bg.mp4 below: Range matters for a looping <video>, and the names
+    // stay stable, so pages bust the cache with ?v=<build> instead.
+    if (url.pathname.startsWith('/media/loops/')) {
+      const rel = url.pathname.slice('/media/loops/'.length);
+      const LOOP_TYPES: Record<string, string> = {
+        mp4: 'video/mp4',
+        webm: 'video/webm',
+        jpg: 'image/jpeg',
+        jpeg: 'image/jpeg',
+        webp: 'image/webp',
+        json: 'application/json; charset=utf-8',
+      };
+      const ext = (path.extname(rel).slice(1) || '').toLowerCase();
+      if (/^[\w-]+\.(mp4|webm|jpe?g|webp|json)$/i.test(rel) && LOOP_TYPES[ext]) {
+        const filePath = path.join(__dirname, '..', 'public', 'media', 'loops', rel);
+        try {
+          const stat = fs.statSync(filePath);
+          const headers: Record<string, string> = {
+            'Content-Type': LOOP_TYPES[ext],
+            'Cache-Control': 'public, max-age=31536000, immutable',
+          };
+          if (ext !== 'mp4' && ext !== 'webm') {
+            res.writeHead(200, { ...headers, 'Content-Length': stat.size });
+            res.end(fs.readFileSync(filePath));
+            return;
+          }
+          headers['Accept-Ranges'] = 'bytes';
+          const m = req.headers.range ? /bytes=(\d*)-(\d*)/.exec(req.headers.range) : null;
+          if (m) {
+            const start = m[1] ? parseInt(m[1], 10) : 0;
+            const end = Math.min(m[2] ? parseInt(m[2], 10) : stat.size - 1, stat.size - 1);
+            res.writeHead(206, {
+              ...headers,
+              'Content-Length': end - start + 1,
+              'Content-Range': `bytes ${start}-${end}/${stat.size}`,
+            });
+            const stream = fs.createReadStream(filePath, { start, end });
+            stream.on('error', () => {
+              try {
+                res.end();
+              } catch {
+                /* client went away */
+              }
+            });
+            stream.pipe(res);
+            return;
+          }
+          res.writeHead(200, { ...headers, 'Content-Length': stat.size });
+          const stream = fs.createReadStream(filePath);
+          stream.on('error', () => {
+            try {
+              res.end();
+            } catch {
+              /* client went away */
+            }
+          });
+          stream.pipe(res);
+          return;
+        } catch {
+          res.writeHead(404);
+          res.end();
+          return;
+        }
+      }
+    }
     // Endless Wave wallpaper loop (real VISUALDON video) + poster. Open like
     // /viz. Range support is required for browsers to stream/loop <video>.
     if (url.pathname === '/ew-bg.mp4') {
