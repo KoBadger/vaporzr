@@ -601,7 +601,11 @@ export class VoiceManager implements AudioTransport {
     }
 
     this.channelBitrate = channel ? current : null;
-    this.opusBitrate = Math.max(16_000, Math.min(wanted, current));
+    // Don't let a channel the bot can't raise (no Manage Channels) drag the
+    // encoder below libopus's 64 kbps default — encoding at 64k and letting
+    // Discord downmix to a lower channel sounds better than encoding at the
+    // channel's floor directly. (Pre-#60 the encoder ran at ~64k regardless.)
+    this.opusBitrate = Math.min(wanted, Math.max(current, 64_000));
     if (config.voiceOpusEncoder !== 'off') {
       console.log(
         `[voice] opus target ${Math.round(this.opusBitrate / 1000)} kbps ` +
