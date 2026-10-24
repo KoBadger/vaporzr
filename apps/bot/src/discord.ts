@@ -5888,7 +5888,10 @@ export class DiscordBot {
     this.miniNpBusy.add(guildId);
     try {
       const uri = st.track.uri;
-      if (this.miniTrackUri.get(guildId) === uri && this.miniNp.has(guildId)) return;
+      // Suppress re-posts for the same track even if the strip message is gone
+      // — a 404 on the old strip used to clear miniTrackUri and let the same
+      // track re-post in a burst. The strip reappears on the next track change.
+      if (this.miniTrackUri.get(guildId) === uri) return;
       const channel = await this.client.channels.fetch(channelId).catch(() => null);
       if (!channel || !('send' in channel)) {
         // Never bail silently: an unpostable target is why the strip once just
@@ -5915,9 +5918,9 @@ export class DiscordBot {
           this.scheduleSavePanels();
           return;
         }
-        // The message is genuinely gone (404) — forget it and repost below.
+        // The message is genuinely gone (404) — forget the message ref but
+        // keep miniTrackUri so the same track can't re-post in a burst.
         this.miniNp.delete(guildId);
-        this.miniTrackUri.delete(guildId);
       }
       // Hard rate limit on POSTING (a new message). Edits above are unlimited.
       const now = Date.now();
