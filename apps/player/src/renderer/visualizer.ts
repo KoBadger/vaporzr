@@ -139,10 +139,10 @@ let currentSensitivity = 1.0;
 let moodPalette: { hue: number; sat: number; light: number } | null = null;
 let bridgePcmActive = false;
 let pcmSilenceTimer: number | null = null;
-let pcmSourceNode: AudioBufferSourceNode | null = null;
-let pcmQueue: AudioBuffer[] = [];
-let pcmPlaying = false;
-const PCM_MAX_QUEUE = 12;
+let pcmNextTime = 0;
+let remoteBars: number[] | null = null;
+let remoteBarsAt = 0;
+const PCM_MAX_LEAD_SEC = 0.6;
 const PCM_SILENCE_MS = 2000;
 
 const client = new WsClient({
@@ -175,6 +175,7 @@ const client = new WsClient({
     } else if (msg.type === 'endlesswave') {
       setWaveMode(msg.mode ?? (msg.active ? 'smart' : 'off'));
     } else if (msg.type === 'snapshot') {
+      if (msg.state) handleState(msg.state);
       setDjEnabled(!!msg.djEnabled);
       if (msg.queue) {
         latestQueue = msg.queue;
@@ -204,6 +205,9 @@ const client = new WsClient({
       setDjEnabled(msg.enabled);
     } else if (msg.type === 'audio:pcm') {
       queueBridgePcm(msg.data);
+    } else if (msg.type === 'visuals:bars') {
+      remoteBars = msg.bars;
+      remoteBarsAt = Date.now();
     } else if (msg.type === 'visuals:sensitivity') {
       applySensitivity(msg.multiplier);
     } else if (msg.type === 'visuals:mood') {
@@ -378,6 +382,24 @@ function sampleLevels(): SynthLevels {
       const lo = Math.min(n - 1, Math.floor(2 * Math.pow(1.32, i)));
       const hi = Math.min(n, Math.max(lo + 1, Math.floor(2 * Math.pow(1.32, i + 1))));
       synthBars[i] += (avg(lo, hi) - synthBars[i]) * 0.35;
+    }
+    // Fallback to the bridge's 8 fps spectrum bars when local/PCM audio is silent.
+    if (synthEnergy < 0.01 && remoteBars && remoteBars.length > 0 && Date.now() - remoteBarsAt < 1500) {
+      const m = Math.min(24, remoteBars.length);
+      for (let i = 0; i < m; i++) {
+        synthBars[i] += ((remoteBars[i] ?? 0) - synthBars[i]) * 0.45;
+      }
+      const bAvg = (a: number, b: number): number => {
+        let s = 0;
+        const end = Math.min(m, b);
+        if (end <= a) return 0;
+        for (let i = a; i < end; i++) s += synthBars[i];
+        return s / (end - a);
+      };
+      synthBass = bAvg(0, 5);
+      synthMid = bAvg(5, 15);
+      synthTreble = bAvg(15, 24);
+      synthEnergy = (synthBass + synthMid + synthTreble) / 3;
     }
     if (synthBass > 0.16 && synthBass - synthPrevBass >= 0.045) {
       const now = Date.now();
@@ -1237,6 +1259,11 @@ async function initAudio(): Promise<boolean> {
   sensitivityGain = audioContext.createGain();
   sensitivityGain.gain.value = 1.0;
   sensitivityGain.connect(analyser);
+  // Keep analyser in the active pull graph even when loopback is silent/muted.
+  const silentPull = audioContext.createGain();
+  silentPull.gain.value = 0;
+  analyser.connect(silentPull);
+  silentPull.connect(audioContext.destination);
 
   const stream = await getLoopbackStream();
   if (!stream) {
@@ -1348,9 +1375,15 @@ function decodeBridgePcm(b64Data: string): AudioBuffer | null {
 
 function queueBridgePcm(b64Data: string): void {
   const buf = decodeBridgePcm(b64Data);
-  if (!buf || !audioContext || !analyser) return;
+  if (!buf || !audioContext || !analyser || !sensitivityGain) return;
+  if (audioContext.state === 'suspended') void audioContext.resume();
 
   bridgePcmActive = true;
+  if (document.body.classList.contains('idle')) {
+    document.body.classList.remove('idle');
+    const v = document.getElementById('idle-video') as HTMLVideoElement | null;
+    if (v && !v.paused) v.pause();
+  }
 
   // Mute loopback so only bridge PCM drives the visualizer.
   if (loopbackGain) loopbackGain.gain.value = 0;
@@ -1359,40 +1392,24 @@ function queueBridgePcm(b64Data: string): void {
   if (pcmSilenceTimer) clearTimeout(pcmSilenceTimer);
   pcmSilenceTimer = window.setTimeout(() => {
     bridgePcmActive = false;
+    pcmNextTime = 0;
     if (loopbackGain) loopbackGain.gain.value = 1;
-    pcmPlaying = false;
-    pcmSourceNode = null;
-    pcmQueue.length = 0;
     log('Bridge PCM idle — visualizer follows loopback');
   }, PCM_SILENCE_MS);
 
-  // Drop oldest chunks if the queue backs up.
-  if (pcmQueue.length > PCM_MAX_QUEUE) pcmQueue.shift();
-  pcmQueue.push(buf);
-  if (!pcmPlaying) playNextBridgePcmChunk();
-}
-
-function playNextBridgePcmChunk(): void {
-  if (pcmQueue.length === 0 || !audioContext || !analyser) {
-    pcmPlaying = false;
-    pcmSourceNode = null;
-    return;
-  }
-  pcmPlaying = true;
-  const buf = pcmQueue.shift()!;
+  // Schedule gaplessly on the Web Audio clock so there are no silent gaps
+  // between chunks and a suspended context can never wedge a queue flag.
+  const now = audioContext.currentTime;
+  if (pcmNextTime < now) pcmNextTime = now;
+  if (pcmNextTime - now > PCM_MAX_LEAD_SEC) return;
   const src = audioContext.createBufferSource();
   src.buffer = buf;
-  src.connect(sensitivityGain!);
-  pcmSourceNode = src;
+  src.connect(sensitivityGain);
+  src.start(pcmNextTime);
+  pcmNextTime += buf.duration;
   src.onended = () => {
     src.disconnect();
-    if (bridgePcmActive) playNextBridgePcmChunk();
-    else {
-      pcmPlaying = false;
-      pcmSourceNode = null;
-    }
   };
-  src.start();
 }
 
 // ---- Preset manager: curation, dead-visual watchdog, history ----

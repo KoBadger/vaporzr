@@ -204,6 +204,22 @@ function createOverlayWindow(screensaver: boolean): void {
 }
 
 async function enableLoopbackCapture(): Promise<void> {
+  // visualizer.html loads via file://, so Chromium sends Origin: file:// on the
+  // WebSocket handshake. Rewrite that to the target server's origin so strict
+  // same-origin WebSocket guards accept the desktop visualizer.
+  session.defaultSession.webRequest.onBeforeSendHeaders({ urls: ['ws://*/*', 'wss://*/*'] }, (details, callback) => {
+    const headers = { ...details.requestHeaders };
+    if (!headers.Origin || /^file:\/\//i.test(headers.Origin)) {
+      try {
+        const u = new URL(details.url);
+        headers.Origin = `${u.protocol === 'wss:' ? 'https:' : 'http:'}//${u.host}`;
+      } catch {
+        /* leave untouched */
+      }
+    }
+    callback({ requestHeaders: headers });
+  });
+
   session.defaultSession.setDisplayMediaRequestHandler(
     (_request, callback) => {
       desktopCapturer
