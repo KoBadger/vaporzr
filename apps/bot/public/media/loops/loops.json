@@ -1,0 +1,21 @@
+{
+  "note": "Generated ambient loops used by the web surfaces. Each entry records the prompt, model and encode so a clip can be reproduced. Source clips are 6 s from LTX; they are mirrored (forward + reversed) into a 12 s ping-pong so the wrap point is seamless - a straight 6 s loop from these models cuts visibly (measured SSIM first-vs-last frame 0.71; ping-pong 0.96).",
+  "encode": "ffmpeg -i <source> -an -filter_complex \"[0:v]fps=24,split=2[fwd][rev];[rev]reverse,trim=start_frame=1,setpts=PTS-STARTPTS[rv];[fwd][rv]concat=n=2:v=1[v]\" -map \"[v]\" -c:v libx264 -preset slow -crf 28 -pix_fmt yuv420p -movflags +faststart <id>.mp4",
+  "loops": [
+    {
+      "id": "jam-nebula",
+      "file": "jam-nebula.mp4",
+      "poster": "jam-nebula.jpg",
+      "usedBy": ["/jam"],
+      "prompt": "Seamless looping abstract background: deep indigo and pink nebula clouds slowly churning in darkness, faint twinkling stars, volumetric light, dark edges for blending over other footage, no text, no camera movement, loopable",
+      "model": "ltx-2-3-fast",
+      "resolution": "1280x720",
+      "fps": 24,
+      "sourceSeconds": 6,
+      "seconds": 12,
+      "bytes": 679936,
+      "costUsd": 0.18,
+      "generated": "2026-10-24"
+    }
+  ]
+}
