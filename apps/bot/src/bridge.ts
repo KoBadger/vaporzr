@@ -189,6 +189,13 @@ export class Bridge {
       // the visitor's cookies, so refuse before any data is sent.
       const origin = req.headers.origin;
       if (origin) {
+        const fileOrigin = /^file:\/\//i.test(origin);
+        if (fileOrigin) {
+          // The desktop Electron visualizer loads from file:// and authenticates
+          // via ?key=. Strip any ambient cookie header so a local file can never
+          // ride a browser session.
+          delete req.headers.cookie;
+        }
         let originHost = '';
         try {
           originHost = new URL(origin).host;
@@ -196,14 +203,14 @@ export class Bridge {
           originHost = '';
         }
         const hostname = originHost.split(':')[0] ?? '';
-        // Same origin, or a Discord surface that hosts the Activity iframe.
-        // A Discord origin is still only a guest socket (no cookie), so it can
-        // receive bars but never PCM or commands.
+        // Same origin, a Discord surface that hosts the Activity iframe, or the
+        // local Electron visualizer (file://). A Discord origin is still only a
+        // guest socket (no cookie), so it can receive bars but never PCM or commands.
         const sameSite = originHost === (req.headers.host ?? '');
         const discordSurface = /^(discord\.com|([a-z0-9-]+\.)*discordsays\.com|([a-z0-9-]+\.)*discordapp\.com)$/i.test(
           hostname,
         );
-        if (!sameSite && !discordSurface) {
+        if (!sameSite && !discordSurface && !fileOrigin) {
           socket.close(1008, 'origin');
           return;
         }
