@@ -38,6 +38,7 @@ import {
   tokenFromCookieHeader,
   type AccessScope,
 } from './access.js';
+import { fetchLyrics } from '@vaporzr/core/lyrics';
 import { playlistStore } from '@vaporzr/core/playlists';
 
 /** The jam page's guest URL: built from the LOW-privilege request key, not the
@@ -310,6 +311,7 @@ export class Bridge {
       };
       const onStateChanged = (state: PlaybackState): void => {
         this.broadcastPanels({ type: 'state:update', state, guildId: gid }, gid);
+        this.pushLyrics(gid, state);
         if (gid === this.sessions.guildId) this.broadcastVisualizers({ type: 'state:update', state });
       };
       q.subscribe({ onQueueChanged, onStateChanged });
@@ -748,16 +750,25 @@ export class Bridge {
         if (msg.index != null) s.removeFromQueue(msg.index);
         break;
       case 'playAt':
-        if (msg.index != null) s.playback.playAt(msg.index);
+        if (msg.index != null) {
+          const at = msg.index;
+          void (async () => {
+            if (!(await this.ensureVoice(guildId))) return;
+            s.playback.playAt(at);
+          })();
+        }
         break;
       case 'queuePlay': {
         // V@qa "play": jump to this track and drop everything queued before it.
         if (msg.index != null) {
-          const track = s.queue.getSnapshot().tracks[msg.index];
-          if (track) {
-            s.queue.removeUpTo(msg.index);
-            s.playback.next();
-          }
+          const at = msg.index;
+          void (async () => {
+            if (!(await this.ensureVoice(guildId))) return;
+            if (s.queue.getSnapshot().tracks[at]) {
+              s.queue.removeUpTo(at);
+              s.playback.next();
+            }
+          })();
         }
         break;
       }
@@ -1474,6 +1485,57 @@ export class Bridge {
     for (const vis of this.visualizers) this.sendToSocket(vis.socket, msg);
   }
 
+  /** Last track per guild whose lyrics were sent, and guilds with a lookup in flight. */
+  private lyricsSent = new Map<string, string>();
+  private lyricsBusy = new Set<string>();
+
+  /**
+   * Push synced/plain lyrics to the panels of one guild whenever the track
+   * changes. LRCLIB is keyless and the lookup caches for 30 minutes, so this is
+   * cheap; failures still send an empty result so the card can say "none found"
+   * instead of silently keeping the previous song's words on screen.
+   */
+  private pushLyrics(gid: string, state: PlaybackState): void {
+    const track = state.track;
+    const stamp = track ? track.uri : '';
+    if ((this.lyricsSent.get(gid) ?? '<init>') === stamp) return;
+    this.lyricsSent.set(gid, stamp);
+    if (!track) {
+      this.broadcastPanels({ type: 'lyrics', guildId: gid, title: '', artist: '', lines: [] }, gid);
+      return;
+    }
+    if (this.lyricsBusy.has(gid)) return;
+    this.lyricsBusy.add(gid);
+    const title = track.name;
+    const artist = (track.artists ?? []).join(', ');
+    void (async () => {
+      try {
+        const r = await fetchLyrics({
+          name: track.name,
+          artists: track.artists ?? [],
+          album: track.album ?? '',
+          durationMs: track.durationMs ?? 0,
+        });
+        const lines = r?.syncedLines ?? [];
+        this.broadcastPanels(
+          {
+            type: 'lyrics',
+            guildId: gid,
+            title,
+            artist,
+            lines,
+            plain: lines.length === 0 ? (r?.lyrics ?? '') : undefined,
+          },
+          gid,
+        );
+      } catch {
+        this.broadcastPanels({ type: 'lyrics', guildId: gid, title, artist, lines: [] }, gid);
+      } finally {
+        this.lyricsBusy.delete(gid);
+      }
+    })();
+  }
+
   private sendSnapshot(socket: WebSocket): void {
     const client = this.clientOf(socket);
     // Which server this client is looking at: its own selection (set by the
@@ -1497,11 +1559,12 @@ export class Bridge {
             .all()
             .filter((x) => x.guildId !== '__fallback__')
             .map((x) => ({ id: x.guildId, name: x.guildId }));
-    const authed = this.isAuthed(socket);
     const guestSocket = this.scopeOf(socket) === 'guest';
     const selected =
       allGuilds.find((g) => g.id === selectedId) ?? (selectedId ? { id: selectedId, name: selectedId } : undefined);
-    const guildsForClient = authed ? allGuilds : selected ? [{ id: selected.id, name: 'Server' }] : [];
+    // Guests see a generic label; anyone signed in (view or control) sees real
+    // server names, so a listener knows which server they are hearing.
+    const guildsForClient = guestSocket ? (selected ? [{ id: selected.id, name: 'Server' }] : []) : allGuilds;
     const ew = s.endlessWave;
     const out: OutboundMessage = {
       type: 'snapshot',
