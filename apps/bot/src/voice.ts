@@ -733,8 +733,36 @@ export class VoiceManager implements AudioTransport {
 
   /** Mix a short sound effect (48 kHz stereo Int16 PCM) over the current audio. */
   queueSfxPcm(data: Buffer): void {
-    if (!this.player) return;
-    this.sfxBuffer = data;
+    if (!this.player || data.length === 0) return;
+    const streamFlowing = Boolean(
+      this.stream &&
+      !this.paused &&
+      this.player.state.status === AudioPlayerStatus.Playing &&
+      (!this.expectingPcm || (this.lastChunkAt > 0 && Date.now() - this.lastChunkAt < 1000)),
+    );
+    if (streamFlowing) {
+      this.sfxBuffer = this.sfxBuffer ? Buffer.concat([this.sfxBuffer, data]) : data;
+      this.applyVolumeToResource();
+      return;
+    }
+    if (
+      this.stream &&
+      !this.paused &&
+      !this.stream.writableEnded &&
+      this.player.state.status === AudioPlayerStatus.Playing
+    ) {
+      this.sfxBuffer = null;
+      this.stream.write(data);
+      return;
+    }
+    // No music stream is actively flowing (idle, paused, or between tracks):
+    // play the clip directly on the AudioPlayer so mic drops and SFX are heard.
+    this.sfxBuffer = null;
+    const standalone = Readable.from(data);
+    const res = this.makeResource(standalone);
+    res.volume?.setVolume(this.volumePercent / 100);
+    this.clearIdleTimer();
+    this.player.play(res);
   }
 
   /** Sum two Int16 PCM chunks sample-by-sample (clamped), consuming the SFX tail. */
@@ -746,13 +774,26 @@ export class VoiceManager implements AudioTransport {
     }
     const out = Buffer.allocUnsafe(chunk.length);
     const mixSamples = Math.floor(Math.min(chunk.length, sfx.length) / 2);
+    // Duck the music under the SFX/voice overlay while keeping the overlay at
+    // full level (ducking resource.volume instead would quiet the voice too).
+    const musicScale = this.isDucking() ? this.duckFactor : 1;
     for (let i = 0; i < mixSamples; i++) {
-      const a = chunk.readInt16LE(i * 2);
+      const a = Math.round(chunk.readInt16LE(i * 2) * musicScale);
       const b = sfx.readInt16LE(i * 2);
       out.writeInt16LE(Math.max(-32768, Math.min(32767, a + b)), i * 2);
     }
-    if (mixSamples * 2 < chunk.length) chunk.copy(out, mixSamples * 2, mixSamples * 2);
+    if (mixSamples * 2 < chunk.length) {
+      if (musicScale < 1) {
+        const totalSamples = Math.floor(chunk.length / 2);
+        for (let i = mixSamples; i < totalSamples; i++) {
+          out.writeInt16LE(Math.round(chunk.readInt16LE(i * 2) * musicScale), i * 2);
+        }
+      } else {
+        chunk.copy(out, mixSamples * 2, mixSamples * 2);
+      }
+    }
     this.sfxBuffer = sfx.length > mixSamples * 2 ? sfx.subarray(mixSamples * 2) : null;
+    if (!this.sfxBuffer) this.applyVolumeToResource();
     return out;
   }
 
@@ -1364,6 +1405,9 @@ export class VoiceManager implements AudioTransport {
   }
 
   private effectiveVolumePercent(): number {
+    // While an SFX/TTS overlay is mixing into the stream, mixSfx() ducks the
+    // music samples directly so the voice overlay stays at full volume.
+    if (this.sfxBuffer && this.sfxBuffer.length > 0) return this.volumePercent;
     return this.isDucking() ? this.volumePercent * this.duckFactor : this.volumePercent;
   }
 

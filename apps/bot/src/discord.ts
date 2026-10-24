@@ -10732,7 +10732,7 @@ export class DiscordBot {
 
     const embed = new EmbedBuilder()
       .setTitle('Vaporzr')
-      .setDescription(`*music · autoplay · visuals · games*\n\n${catLines}\n\n${webLine}`)
+      .setDescription(`*music · autoplay · weasel ai · visuals · games*\n\n${catLines}\n\n${webLine}`)
       .setColor(this.helpColor())
       .addFields({
         name: "✨ what's new",
@@ -10809,7 +10809,9 @@ export class DiscordBot {
 
   /** Detailed embed for one help category (or null if unknown). */
   private helpCategoryEmbed(id: string): EmbedBuilder | null {
-    const idx = HELP_CATEGORIES.findIndex((x) => x.id === id || x.name.toLowerCase() === id.toLowerCase());
+    const q = id.trim().toLowerCase();
+    const aliasId = q === 'ai' || q === 'w' || q === 'amok' || q === 'pauly' ? 'weasel' : q;
+    const idx = HELP_CATEGORIES.findIndex((x) => x.id === aliasId || x.name.toLowerCase() === aliasId);
     if (idx < 0) return null;
     const c = HELP_CATEGORIES[idx];
     return new EmbedBuilder()
@@ -10961,10 +10963,10 @@ export class DiscordBot {
 
   /** Speak a short Weasel line over the active voice stream with music ducking. */
   private async speakWeaselInVoice(s: Session, text: string): Promise<boolean> {
-    if (!s.voice.isJoined()) return false;
+    if (!s.voice.isConnectionReady()) return false;
     try {
       const clip = await synthWeaselVoice(text);
-      if (!clip || !s.voice.isJoined()) return false;
+      if (!clip || !s.voice.isConnectionReady()) return false;
       s.voice.duckFor(clip.durationMs + 400);
       s.voice.queueSfxPcm(clip.pcm);
       return true;
@@ -11304,7 +11306,7 @@ export class DiscordBot {
         voiceMembers,
         forceRoomContext: true,
       });
-      if (!s.voice.isJoined()) {
+      if (!s.voice.isConnectionReady()) {
         try {
           await opts.ensureJoin();
         } catch {
@@ -11902,6 +11904,24 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
     ],
   },
   {
+    id: 'weasel',
+    emoji: '🦦',
+    name: 'Weasel & AI',
+    blurb: '90s MTV VJ, AI auto-DJ, roasts, track lore and voice mic drops',
+    lines: [
+      '`/weasel <message>` · `V@w <msg>` (`V@weasel`, `V@amok`, `V@pauly`) — chat with The Weasel (web-grounded, room-aware) or reply directly to any of his messages',
+      '`V@w play <vibe|request>` — AI Auto-DJ: picks & queues tracks matching any vibe, era, or prompt',
+      '`V@w wave <vibe|arc>` · `V@w arc` · `V@w steer` — AI Deep-DNA Endless Wave & Harmonic Set Architect (`off` clears)',
+      '`V@w breakdown [song]` · `V@w lore` · `V@w sample` — Deep Track Intelligence: samples, producer lore, sonic DNA & cousin tracks',
+      '`V@w roast [@user|target]` · `V@w rate` — savage 90s MTV Spring Break roast of the queue, a tagged user, or any named target',
+      '`V@w say [topic]` · `V@w speak` · `V@w mic` — hop on the voice-channel mic with a Pauly Shore voice drop',
+      '`V@w vj on|off` — Auto-VJ: spoken track intros & sample/producer notes on track changes',
+      '`V@w listen on|off` — Voice Ears: talk out loud in VC (*"Hey Weasel, play…"* ) and he answers on the mic',
+      '`V@w memory` · `V@w remember <fact>` — view or teach persistent listener & room taste memory',
+      '`/vibe [mood]` · `V@vibe` — mood / time-of-day / weather auto-DJ (e.g. `V@vibe chill like Bonobo`, `V@vibe hype workout 5`)',
+    ],
+  },
+  {
     id: 'voice',
     emoji: '🔊',
     name: 'Voice',
@@ -11963,7 +11983,6 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`V@duel board` — duel leaderboard + how often the bot called the room right',
       "`/roulette` · `V@roulette` — a rarely-played track from this server's own history, queued next: ⭐ Hall of Fame or 🚫 Ban",
       '`/quiz` · `V@quiz` — guess-the-song lyric game · `/guess <answer>` · `V@guess`',
-      '`/weasel <message>` · `V@w` (`V@weasel`, `V@amok`, `V@pauly`) — chat with The Weasel, `V@w play <vibe>` to auto-DJ, `V@w roast [@user|target]` for savage 90s MTV roasts of anyone, `V@w say <text>` / `V@w vj on` for voice mic drops, or reply to his messages',
     ],
   },
   {
