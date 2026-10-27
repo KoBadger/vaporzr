@@ -273,17 +273,22 @@ const SENSITIVITY_CURVE: Record<number, number> = {
 };
 
 function applySensitivity(multiplier: number): void {
-  currentSensitivity = multiplier;
-  if (sensitivityGain) sensitivityGain.gain.value = multiplier;
-  const smoothing = SENSITIVITY_CURVE[multiplier] ?? 0.82 - (multiplier - 1) * 0.44;
+  const m = Math.max(0.25, Math.min(4, Number.isFinite(multiplier) ? multiplier : 1));
+  currentSensitivity = m;
+  if (sensitivityGain) sensitivityGain.gain.value = m;
+  // Boosted sensitivity used to pin the analyser at 255 across the spectrum —
+  // the scene looked LESS reactive the higher it went. The compressor between
+  // the gain and the analyser keeps the peaks inside the byte range so a lift
+  // adds detail instead of flattening the bars.
+  const smoothing = Math.min(0.92, Math.max(0.55, SENSITIVITY_CURVE[m] ?? 0.82 - (m - 1) * 0.2));
   if (analyser) analyser.smoothingTimeConstant = smoothing;
   try {
-    localStorage.setItem('vaporzr.sensitivity', String(multiplier));
+    localStorage.setItem('vaporzr.sensitivity', String(m));
   } catch {}
   // Keep the slider honest when the value arrives from the bot (snapshot) or
   // another panel, not just from this window's own drag.
-  if (sensSlider) sensSlider.value = String(multiplier);
-  log(`Sensitivity set to ${multiplier.toFixed(2)}x (smoothing ${smoothing.toFixed(2)})`);
+  if (sensSlider) sensSlider.value = String(m);
+  log(`Sensitivity set to ${m.toFixed(2)}x (smoothing ${smoothing.toFixed(2)})`);
 }
 
 /** Lock the current visual: the carousel stops advancing (this viewer only). */
@@ -1257,8 +1262,17 @@ async function initAudio(): Promise<boolean> {
   analyser.smoothingTimeConstant = 0.82;
 
   sensitivityGain = audioContext.createGain();
-  sensitivityGain.gain.value = 1.0;
-  sensitivityGain.connect(analyser);
+  sensitivityGain.gain.value = currentSensitivity;
+  // Soft limiter: sensitivity boosts stay inside the analyser's byte range so
+  // raising it reveals detail instead of clipping every band to 255.
+  const limiter = audioContext.createDynamicsCompressor();
+  limiter.threshold.value = -12;
+  limiter.knee.value = 12;
+  limiter.ratio.value = 6;
+  limiter.attack.value = 0.003;
+  limiter.release.value = 0.18;
+  sensitivityGain.connect(limiter);
+  limiter.connect(analyser);
   // Keep analyser in the active pull graph even when loopback is silent/muted.
   const silentPull = audioContext.createGain();
   silentPull.gain.value = 0;

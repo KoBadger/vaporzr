@@ -79,6 +79,13 @@ export interface DeckSource {
   bpm?: number | null;
 }
 
+/** An active loop region. `beats` is set when it was created from a beat count. */
+export interface DeckLoop {
+  inMs: number;
+  outMs: number;
+  beats: number | null;
+}
+
 export interface DeckSlotState {
   source: DeckSource | null;
   playing: boolean;
@@ -92,6 +99,31 @@ export interface DeckSlotState {
   tempo: number;
   /** Effective BPM (follows tempo changes). */
   bpm: number | null;
+  /** Eight hot-cue pads, in ms (null = empty). */
+  cues: Array<number | null>;
+  /** Loop region, or null when no loop is stored. */
+  loop: DeckLoop | null;
+  /** True while the playhead is actually cycling the loop. */
+  looping: boolean;
+  /** Fine tempo correction applied for sync-lock (1 = none). */
+  drift: number;
+}
+
+/** Set-recording status surfaced to both control surfaces. */
+export interface DeckRecordState {
+  active: boolean;
+  elapsedMs: number;
+  /** Last finished recording, when it could be uploaded somewhere. */
+  lastUrl: string | null;
+  lastName: string | null;
+}
+
+/** Continuous beat-lock between the two decks, owned by the controller. */
+export interface DeckSyncState {
+  master: DeckId;
+  follower: DeckId;
+  /** Current phase error of the follower, in ms (positive = ahead). */
+  driftMs: number;
 }
 
 export interface DeckMixerState {
@@ -100,11 +132,35 @@ export interface DeckMixerState {
   masterGain: number;
   a: DeckSlotState;
   b: DeckSlotState;
+  /** Filled in by the controller; the mixer itself is sync-agnostic. */
+  sync?: DeckSyncState | null;
+  record?: DeckRecordState;
 }
 
 /** Deck actions a control surface may drive. */
 export type DeckAction =
-  'play' | 'pause' | 'cue' | 'seek' | 'nudge' | 'sync' | 'stop' | 'crossfader' | 'gain' | 'eq' | 'kill' | 'tempo';
+  | 'play'
+  | 'pause'
+  | 'cue'
+  | 'seek'
+  | 'nudge'
+  | 'sync'
+  | 'stop'
+  | 'crossfader'
+  | 'gain'
+  | 'eq'
+  | 'kill'
+  | 'tempo'
+  | 'cue-set'
+  | 'cue-jump'
+  | 'cue-clear'
+  | 'loop-set'
+  | 'loop-clear'
+  | 'loop-toggle'
+  | 'loop-beats'
+  | 'lock'
+  | 'rec-start'
+  | 'rec-stop';
 
 export interface GuildPermissions {
   roles: Record<PermissionLevel, string[]>;
@@ -249,12 +305,12 @@ export type InboundMessage =
   | { type: 'burst:data'; data: string }
   /** Load a track onto a live deck (resolved + downloaded server-side). */
   | { type: 'deck:load'; deck: DeckId; query: string; guildId?: string }
-  /** Drive the deck mixer: transport, crossfader, EQ, sync. */
+  /** Drive the deck mixer: transport, crossfader, EQ, sync, cues, loops, record. */
   | {
       type: 'deck:control';
       action: DeckAction;
       deck?: DeckId;
-      /** Crossfader 0..1 (A..B). */
+      /** Crossfader 0..1 (A..B), or trim for action 'gain'. */
       value?: number;
       band?: keyof DeckEq;
       /** EQ gain in dB. */
@@ -262,6 +318,12 @@ export type InboundMessage =
       positionMs?: number;
       /** Tempo factor for action 'tempo'. */
       tempo?: number;
+      /** Hot-cue pad 1..8 for the cue actions. */
+      slot?: number;
+      /** Loop length in beats for 'loop-beats'. */
+      beats?: number;
+      /** Enable flag for 'lock' / 'loop-toggle'. */
+      enabled?: boolean;
       guildId?: string;
     }
   /** Ask for the current deck state (sent on connect). */

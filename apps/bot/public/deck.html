@@ -182,6 +182,31 @@
         padding: 6px 9px;
         font-size: 11px;
       }
+      .label {
+        font-size: 10px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        opacity: 0.55;
+        margin-top: 4px;
+      }
+      .pads {
+        display: grid;
+        grid-template-columns: repeat(8, 1fr);
+        gap: 4px;
+      }
+      .pads .pad {
+        padding: 6px 0;
+        font-variant-numeric: tabular-nums;
+      }
+      .pads .pad.set {
+        border-color: var(--deck);
+        color: #fff;
+        background: color-mix(in srgb, var(--deck) 22%, transparent);
+      }
+      button.on {
+        border-color: var(--deck);
+        color: #fff;
+      }
       input[type='text'] {
         flex: 1;
         min-width: 120px;
@@ -317,6 +342,8 @@
       <span class="muted" id="status">connecting…</span>
       <span class="spacer"></span>
       <button class="mini" id="btn-sync">SYNC B → A</button>
+      <button class="mini" id="btn-lock">Lock</button>
+      <button class="mini" id="btn-rec">Record</button>
       <button class="mini" id="btn-play">Play both</button>
       <button class="mini" id="btn-pause">Pause</button>
       <button class="mini" id="btn-stop">Stop decks</button>
@@ -378,6 +405,25 @@
           </span>
           <output></output>
         </div>
+        <div class="label">HOT CUES</div>
+        <div class="row pads" data-role="pads">
+          <button class="mini pad" data-pad="1" title="Click: set / jump · Right-click: clear">1</button>
+          <button class="mini pad" data-pad="2">2</button>
+          <button class="mini pad" data-pad="3">3</button>
+          <button class="mini pad" data-pad="4">4</button>
+          <button class="mini pad" data-pad="5">5</button>
+          <button class="mini pad" data-pad="6">6</button>
+          <button class="mini pad" data-pad="7">7</button>
+          <button class="mini pad" data-pad="8">8</button>
+        </div>
+        <div class="row">
+          <button class="mini" data-loop="1">1 beat</button>
+          <button class="mini" data-loop="4">4</button>
+          <button class="mini" data-loop="8">8</button>
+          <button class="mini" data-loop="16">16</button>
+          <button class="mini" data-loop="off">Off</button>
+          <span class="time" data-role="loop">no loop</span>
+        </div>
       </section>
 
       <section class="deck b" data-deck="b">
@@ -434,6 +480,25 @@
             <button class="mini" data-nudge="25">+25ms</button>
           </span>
           <output></output>
+        </div>
+        <div class="label">HOT CUES</div>
+        <div class="row pads" data-role="pads">
+          <button class="mini pad" data-pad="1" title="Click: set / jump · Right-click: clear">1</button>
+          <button class="mini pad" data-pad="2">2</button>
+          <button class="mini pad" data-pad="3">3</button>
+          <button class="mini pad" data-pad="4">4</button>
+          <button class="mini pad" data-pad="5">5</button>
+          <button class="mini pad" data-pad="6">6</button>
+          <button class="mini pad" data-pad="7">7</button>
+          <button class="mini pad" data-pad="8">8</button>
+        </div>
+        <div class="row">
+          <button class="mini" data-loop="1">1 beat</button>
+          <button class="mini" data-loop="4">4</button>
+          <button class="mini" data-loop="8">8</button>
+          <button class="mini" data-loop="16">16</button>
+          <button class="mini" data-loop="off">Off</button>
+          <span class="time" data-role="loop">no loop</span>
         </div>
       </section>
     </div>
@@ -528,7 +593,26 @@
             var tempo = el('[data-role="tempo"]', root);
             if (document.activeElement !== tempo) tempo.value = (slot.tempo * 100).toFixed(1);
             el('[data-out="tempo"]', root).textContent = (slot.tempo * 100).toFixed(1);
+            all('[data-pad]', root).forEach(function (btn) {
+              var cue = slot.cues[Number(btn.getAttribute('data-pad')) - 1];
+              btn.classList.toggle('set', cue != null);
+              btn.textContent = cue != null ? fmt(cue) : btn.getAttribute('data-pad');
+            });
+            el('[data-role="loop"]', root).textContent = slot.loop
+              ? 'loop ' + fmt(slot.loop.outMs - slot.loop.inMs) + (slot.looping ? ' ●' : '')
+              : 'no loop';
           });
+          var lock = el('#btn-lock');
+          lock.classList.toggle('on', !!state.sync);
+          lock.textContent = state.sync
+            ? 'Locked ' + state.sync.follower.toUpperCase() + ' → ' + state.sync.master.toUpperCase()
+            : 'Lock';
+          var rec = el('#btn-rec');
+          rec.classList.toggle('on', !!(state.record && state.record.active));
+          rec.textContent =
+            state.record && state.record.active
+              ? '■ Stop rec ' + Math.round(state.record.elapsedMs / 1000) + 's'
+              : 'Record';
           var xf = el('#xfade');
           if (document.activeElement !== xf) xf.value = Math.round(state.crossfader * 100);
           el('#xfade-val').textContent = Math.round(state.crossfader * 100) + '%';
@@ -597,6 +681,25 @@
             el('[data-role="cue"]', root).onclick = function () {
               control('cue', { deck: id });
             };
+            all('[data-pad]', root).forEach(function (btn) {
+              var pad = Number(btn.getAttribute('data-pad'));
+              btn.onclick = function () {
+                if (!state) return;
+                var set = state[id].cues[pad - 1] != null;
+                control(set ? 'cue-jump' : 'cue-set', { deck: id, slot: pad });
+              };
+              btn.oncontextmenu = function (e) {
+                e.preventDefault();
+                control('cue-clear', { deck: id, slot: pad });
+              };
+            });
+            all('[data-loop]', root).forEach(function (btn) {
+              btn.onclick = function () {
+                var v = btn.getAttribute('data-loop');
+                if (v === 'off') control('loop-clear', { deck: id });
+                else control('loop-beats', { deck: id, beats: Number(v) });
+              };
+            });
             el('[data-role="seek"]', root).onclick = function (e) {
               if (!state || !state[id].durationMs) return;
               var r = e.currentTarget.getBoundingClientRect();
@@ -636,6 +739,14 @@
           });
           el('#btn-sync').onclick = function () {
             control('sync');
+          };
+          el('#btn-lock').onclick = function () {
+            if (!state) return;
+            control('lock', state.sync ? { enabled: false } : { deck: 'a', enabled: true });
+          };
+          el('#btn-rec').onclick = function () {
+            if (!state) return;
+            control(state.record && state.record.active ? 'rec-stop' : 'rec-start');
           };
           el('#btn-play').onclick = function () {
             control('play');

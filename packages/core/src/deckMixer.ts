@@ -1,6 +1,15 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { config } from '@vaporzr/core/config';
-import type { DeckEq, DeckId, DeckMixerState, DeckSlotState, DeckSource } from '@vaporzr/shared';
+import type {
+  DeckEq,
+  DeckId,
+  DeckLoop,
+  DeckMixerState,
+  DeckRecordState,
+  DeckSlotState,
+  DeckSource,
+  DeckSyncState,
+} from '@vaporzr/shared';
 
 /**
  * Live two-deck mixer.
@@ -15,12 +24,30 @@ import type { DeckEq, DeckId, DeckMixerState, DeckSlotState, DeckSource } from '
  * mixed 48 kHz stereo Int16 PCM. Discord voice is the only caller today.
  */
 
-export type { DeckEq, DeckId, DeckMixerState, DeckSlotState, DeckSource };
+export type { DeckEq, DeckId, DeckLoop, DeckMixerState, DeckRecordState, DeckSlotState, DeckSource, DeckSyncState };
+
+/** Beat-quantised loop region: the bar starts at the last beat boundary at or
+ *  before `positionMs`, and is `beats` beats long. Unknown tempo assumes 120. */
+export function beatLoopRegion(
+  positionMs: number,
+  bpm: number | null,
+  beats: number,
+): { inMs: number; outMs: number; beats: number } {
+  const tempo = bpm && bpm > 0 ? bpm : 120;
+  const count = Math.max(0.25, Math.min(32, Number.isFinite(beats) ? beats : 4));
+  const beatMs = 60_000 / tempo;
+  const inMs = Math.floor(Math.max(0, positionMs) / beatMs) * beatMs;
+  return { inMs, outMs: inMs + beatMs * count, beats: count };
+}
 
 /** EQ band gains in dB. -40 is treated as a kill, 0 is flat. */
 export const DECK_EQ_MIN_DB = -40;
 export const DECK_EQ_MAX_DB = 6;
 export const FLAT_EQ: DeckEq = { low: 0, mid: 0, high: 0 };
+/** Hot-cue pads per deck. */
+export const DECK_CUE_SLOTS = 8;
+/** Longest loop the decoded-PCM cache will hold (32 MB of stereo Int16). */
+export const DECK_LOOP_MAX_MS = 30_000;
 
 export interface DeckMixerOptions {
   ffmpegPath?: string;
@@ -38,6 +65,8 @@ const DEFAULT_SAMPLE_RATE = 48_000;
 const DEFAULT_FRAME_MS = 20; // matches Discord's Opus frame size
 /** Leave headroom so two full-level decks summing don't clip. */
 const MASTER_HEADROOM = 0.9;
+/** Stereo Int16 bytes per millisecond at 48 kHz. */
+const BYTES_PER_MS = (DEFAULT_SAMPLE_RATE * 4) / 1000;
 
 /* ------------------------------------------------------------------ DSP ---- */
 
@@ -230,6 +259,18 @@ interface SlotRuntime {
   baseMs: number;
   /** Audio consumed from the current decoder, in frames. */
   consumedFrames: number;
+  /** Fine playback-rate factor applied by resampling (drift correction). */
+  micro: number;
+  /** Fractional source-frame carry between ticks (for `micro`). */
+  frac: number;
+  /** Decoded PCM for the loop region, so a wrap costs no decoder restart. */
+  loopBuf: Buffer | null;
+  /** Byte cursor inside `loopBuf` once the first pass has filled it. */
+  loopPos: number;
+  /** True once the playhead is cycling `loopBuf` instead of the live decoder. */
+  loopWrapped: boolean;
+  /** Last loop, so the toggle can bring it back. */
+  lastLoop: DeckLoop | null;
 }
 
 const emptySlot = (): DeckSlotState => ({
@@ -242,6 +283,10 @@ const emptySlot = (): DeckSlotState => ({
   eq: { ...FLAT_EQ },
   tempo: 1,
   bpm: null,
+  cues: new Array<number | null>(DECK_CUE_SLOTS).fill(null),
+  loop: null,
+  looping: false,
+  drift: 1,
 });
 
 export class DeckMixer {
@@ -288,6 +333,12 @@ export class DeckMixer {
       fadeFrames: 0,
       baseMs: 0,
       consumedFrames: 0,
+      micro: 1,
+      frac: 0,
+      loopBuf: null,
+      loopPos: 0,
+      loopWrapped: false,
+      lastLoop: null,
     };
   }
 
@@ -296,12 +347,18 @@ export class DeckMixer {
   }
 
   state(): DeckMixerState {
+    const snap = (slot: SlotRuntime): DeckSlotState => ({
+      ...slot.state,
+      eq: { ...slot.state.eq },
+      cues: [...slot.state.cues],
+      loop: slot.state.loop ? { ...slot.state.loop } : null,
+    });
     return {
       active: this.a.state.playing || this.b.state.playing || Boolean(this.a.state.source || this.b.state.source),
       crossfader: this.crossfader,
       masterGain: this.masterGain,
-      a: { ...this.a.state, eq: { ...this.a.state.eq } },
-      b: { ...this.b.state, eq: { ...this.b.state.eq } },
+      a: snap(this.a),
+      b: snap(this.b),
     };
   }
 
@@ -323,6 +380,14 @@ export class DeckMixer {
     slot.state.tempo = 1;
     slot.state.gain = 1;
     slot.state.eq = { ...FLAT_EQ };
+    // A new track invalidates every musical anchor from the old one.
+    slot.state.cues = new Array<number | null>(DECK_CUE_SLOTS).fill(null);
+    slot.state.loop = null;
+    slot.lastLoop = null;
+    this.resetLoopCache(slot);
+    slot.micro = 1;
+    slot.state.drift = 1;
+    slot.frac = 0;
     this.rebuildCoefs(slot);
     const seekMs = Math.max(0, Math.round(opts.seekMs ?? 0));
     slot.baseMs = seekMs;
@@ -364,6 +429,14 @@ export class DeckMixer {
     slot.state.positionMs = target;
     slot.state.ended = false;
     slot.ring.clear();
+    // Seeking inside the loop keeps it (and restarts the cache); seeking out of
+    // it drops the loop, which is what a DJ expects from a hard jump.
+    if (slot.state.loop && (target < slot.state.loop.inMs || target >= slot.state.loop.outMs)) {
+      this.clearLoopState(slot);
+    } else if (slot.state.loop) {
+      this.resetLoopCache(slot);
+      slot.state.looping = true;
+    }
     this.killDecoder(slot);
     slot.fadeFrames = Math.round(this.sampleRate * 0.04);
     this.spawnDecoder(slot, target);
@@ -388,10 +461,117 @@ export class DeckMixer {
     slot.consumedFrames = 0;
     slot.state.positionMs = pos;
     slot.ring.clear();
+    // The cached loop PCM was rendered at the old rate.
+    this.resetLoopCache(slot);
     this.killDecoder(slot);
     slot.fadeFrames = Math.round(this.sampleRate * 0.04);
     this.spawnDecoder(slot, pos);
     this.emit();
+  }
+
+  /* ----------------------------------------------------- cues and loops -- */
+
+  /** Store the playhead (or an explicit position) on a hot-cue pad. */
+  setCue(id: DeckId, slot: number, ms?: number): void {
+    const s = this.slot(id);
+    const index = Math.round(slot) - 1;
+    if (index < 0 || index >= DECK_CUE_SLOTS || !s.state.source) return;
+    const raw = ms ?? s.state.positionMs;
+    const dur = s.state.durationMs;
+    s.state.cues[index] = Math.max(0, dur ? Math.min(Math.round(raw), dur - 250) : Math.round(raw));
+    this.emit();
+  }
+
+  clearCue(id: DeckId, slot: number): void {
+    const s = this.slot(id);
+    const index = Math.round(slot) - 1;
+    if (index < 0 || index >= DECK_CUE_SLOTS) return;
+    s.state.cues[index] = null;
+    this.emit();
+  }
+
+  /** Jump to a hot cue. No-op on an empty pad. */
+  jumpCue(id: DeckId, slot: number): boolean {
+    const s = this.slot(id);
+    const index = Math.round(slot) - 1;
+    const target = index >= 0 && index < DECK_CUE_SLOTS ? s.state.cues[index] : null;
+    if (target == null) return false;
+    this.seek(id, target);
+    return true;
+  }
+
+  /**
+   * Arm a loop region. The tick caches the decoded PCM for the region on the
+   * first pass and then cycles straight out of memory, so the wrap is
+   * sample-accurate instead of costing a decoder restart.
+   */
+  setLoop(id: DeckId, region: { inMs: number; outMs: number; beats?: number | null } | null): void {
+    const s = this.slot(id);
+    if (!s.state.source) return;
+    if (!region) {
+      this.clearLoopState(s);
+      this.emit();
+      return;
+    }
+    const dur = s.state.durationMs;
+    let inMs = Math.max(0, Math.round(region.inMs));
+    let outMs = Math.max(inMs + 50, Math.round(region.outMs));
+    if (dur) {
+      inMs = Math.min(inMs, dur - 250);
+      outMs = Math.min(outMs, dur);
+    }
+    if (outMs - inMs > DECK_LOOP_MAX_MS) outMs = inMs + DECK_LOOP_MAX_MS;
+    const loop: DeckLoop = { inMs, outMs, beats: region.beats ?? null };
+    s.state.loop = loop;
+    s.lastLoop = { ...loop };
+    this.resetLoopCache(s);
+    s.state.looping = true;
+    this.seek(id, inMs);
+  }
+
+  /** Turn the loop off and hand playback back to the live decoder. */
+  clearLoop(id: DeckId): void {
+    const s = this.slot(id);
+    if (!s.state.loop) return;
+    const at = s.state.positionMs;
+    this.clearLoopState(s);
+    this.seek(id, at);
+  }
+
+  /** Re-arm the stored loop, or drop it when one is already running. */
+  toggleLoop(id: DeckId): void {
+    const s = this.slot(id);
+    if (s.state.loop) {
+      this.clearLoop(id);
+      return;
+    }
+    if (s.lastLoop) this.setLoop(id, s.lastLoop);
+  }
+
+  /** Build a loop of `beats` beats from the current (beat-quantised) position. */
+  loopBeats(id: DeckId, beats: number): void {
+    const s = this.slot(id);
+    if (!s.state.source) return;
+    const region = beatLoopRegion(s.state.positionMs, s.state.bpm, beats);
+    this.setLoop(id, region);
+  }
+
+  /**
+   * Fine playback-rate correction for beat-lock. ±2% is the useful range and,
+   * unlike `setTempo`, this never restarts the decoder — it resamples the tick,
+   * so a drifting deck is pulled back into phase without a gap.
+   */
+  setMicroTempo(id: DeckId, ratio: number): void {
+    const s = this.slot(id);
+    const r = Math.max(0.98, Math.min(1.02, Number.isFinite(ratio) ? ratio : 1));
+    if (Math.abs(r - s.micro) < 0.00005) return;
+    s.micro = r;
+    s.state.drift = Number(r.toFixed(5));
+    this.emit();
+  }
+
+  getMicroTempo(id: DeckId): number {
+    return this.slot(id).micro;
   }
 
   setBpm(id: DeckId, bpm: number | null): void {
@@ -453,6 +633,10 @@ export class DeckMixer {
       slot.consumedFrames = 0;
       slot.fadeFrames = 0;
       slot.coefs = [IDENTITY_BIQUAD, IDENTITY_BIQUAD, IDENTITY_BIQUAD];
+      slot.micro = 1;
+      slot.frac = 0;
+      slot.lastLoop = null;
+      this.resetLoopCache(slot);
     }
     this.crossfader = 0.5;
     this.stopTick();
@@ -460,6 +644,56 @@ export class DeckMixer {
   }
 
   /* ------------------------------------------------------------ internals -- */
+
+  private resetLoopCache(slot: SlotRuntime): void {
+    slot.loopBuf = null;
+    slot.loopPos = 0;
+    slot.loopWrapped = false;
+  }
+
+  private clearLoopState(slot: SlotRuntime): void {
+    slot.state.loop = null;
+    slot.state.looping = false;
+    this.resetLoopCache(slot);
+  }
+
+  /**
+   * Fill `wantBytes` from whichever source is live: the loop cache once the
+   * region has been captured, or the decoder (clipped to the loop-out point on
+   * the first pass). Returns short only when the decoder is starved.
+   */
+  private readSlot(slot: SlotRuntime, wantBytes: number): Buffer {
+    const loop = slot.state.loop;
+    if (!loop) return slot.ring.readUpTo(wantBytes);
+
+    const cached = slot.loopBuf;
+    if (slot.loopWrapped && cached && cached.length > 0) {
+      const out = Buffer.allocUnsafe(wantBytes);
+      let written = 0;
+      while (written < wantBytes) {
+        const take = Math.min(wantBytes - written, cached.length - slot.loopPos);
+        cached.copy(out, written, slot.loopPos, slot.loopPos + take);
+        written += take;
+        slot.loopPos += take;
+        if (slot.loopPos >= cached.length) slot.loopPos = 0;
+      }
+      return out;
+    }
+
+    // First pass: capture the region on the way through it.
+    const remainingMs = Math.max(0, loop.outMs - slot.state.positionMs);
+    const remainingBytes = Math.max(0, Math.round(remainingMs * BYTES_PER_MS));
+    const take = Math.min(wantBytes, remainingBytes);
+    const buf = take > 0 ? slot.ring.readUpTo(take) : Buffer.alloc(0);
+    if (buf.length > 0) {
+      slot.loopBuf = slot.loopBuf ? Buffer.concat([slot.loopBuf, buf]) : Buffer.from(buf);
+    }
+    if (take === 0 || (slot.loopBuf && slot.loopBuf.length >= remainingBytes)) {
+      slot.loopWrapped = true;
+      slot.loopPos = 0;
+    }
+    return buf;
+  }
 
   private rebuildCoefs(slot: SlotRuntime): void {
     const eq = slot.state.eq;
@@ -569,25 +803,38 @@ export class DeckMixer {
       return;
     }
     this.acc.fill(0);
-    const frameBytes = this.framesPerTick * 4;
+    const outFrames = this.framesPerTick;
 
     for (const slot of slots) {
-      if (slot.state.playing) {
-        // Refill a decoder that was paused by the buffer cap.
-        if (slot.proc?.stdout?.isPaused() && slot.ring.byteLength < this.sampleRate * 2) {
-          slot.proc.stdout.resume();
+      if (!slot.state.playing) continue;
+      // Refill a decoder that was paused by the buffer cap.
+      if (slot.proc?.stdout?.isPaused() && slot.ring.byteLength < this.sampleRate * 2) {
+        slot.proc.stdout.resume();
+      }
+      const wantIn = Math.ceil(outFrames * slot.micro) + 2;
+      const buf = this.readSlot(slot, wantIn * 4);
+      if (buf.length > 0) {
+        const consumed = this.renderSlot(slot, buf, outFrames);
+        const advancedMs = (consumed / this.sampleRate) * 1000 * slot.state.tempo;
+        const loop = slot.state.loop;
+        if (loop && slot.loopWrapped) {
+          // The cache is the clock: position wraps with the region.
+          slot.state.looping = true;
+          slot.state.positionMs = loop.inMs + slot.loopPos / BYTES_PER_MS;
+        } else if (loop) {
+          slot.state.positionMs = Math.min(slot.state.positionMs + advancedMs, loop.outMs);
+        } else {
+          slot.state.positionMs += advancedMs;
         }
-        const buf = slot.ring.readUpTo(frameBytes);
-        if (buf.length > 0) this.renderSlot(slot, buf);
-        const consumedMs = (Math.floor(buf.length / 4) / this.sampleRate) * 1000;
-        if (consumedMs > 0) slot.state.positionMs += consumedMs * slot.state.tempo;
-        if (slot.procEnded && slot.ring.byteLength === 0) {
-          slot.state.playing = false;
-          slot.state.ended = true;
-          if (slot.state.durationMs > 0) slot.state.positionMs = slot.state.durationMs;
-          this.onDeckEnd?.(slot.id);
-          this.emit();
-        }
+      }
+      // A loop never runs out: the decoder is only consumed on the first pass.
+      const starved = slot.ring.byteLength === 0 && !(slot.state.loop && slot.loopWrapped);
+      if (slot.procEnded && starved) {
+        slot.state.playing = false;
+        slot.state.ended = true;
+        if (slot.state.durationMs > 0) slot.state.positionMs = slot.state.durationMs;
+        this.onDeckEnd?.(slot.id);
+        this.emit();
       }
     }
 
@@ -597,23 +844,47 @@ export class DeckMixer {
   }
 
   /** Sum one deck's PCM into the shared float accumulator, with EQ + gain. */
-  private renderSlot(slot: SlotRuntime, buf: Buffer): void {
+  /** Linear-interpolating resample of one deck frame into the mix accumulator.
+   *  Returns the number of source frames consumed. */
+  private renderSlot(slot: SlotRuntime, buf: Buffer, outFrames: number): number {
     const cross = crossfaderGains(this.crossfader);
     const target = (slot.id === 'a' ? cross.a : cross.b) * slot.state.gain;
-    const frames = Math.floor(buf.length / 4);
+    const inFrames = Math.floor(buf.length / 4);
     const acc = this.acc;
     const coefs = slot.coefs;
     const [lowC, midC, highC] = coefs as [BiquadCoefs, BiquadCoefs, BiquadCoefs];
     const anyEq = !isIdentityBiquad(lowC) || !isIdentityBiquad(midC) || !isIdentityBiquad(highC);
     // Ramp gain across the frame so slider moves don't click.
     const start = slot.gainNow;
-    const step = (target - start) / Math.max(1, frames);
+    const step = (target - start) / Math.max(1, outFrames);
     let gain = start;
+    const micro = slot.micro;
+    const direct = Math.abs(micro - 1) < 1e-9 && Math.abs(slot.frac) < 1e-9;
 
-    for (let i = 0; i < frames; i++) {
-      const base = i * 4;
-      let l = buf.readInt16LE(base) / 32768;
-      let r = buf.readInt16LE(base + 2) / 32768;
+    for (let i = 0; i < outFrames; i++) {
+      let l = 0;
+      let r = 0;
+      if (direct) {
+        if (i < inFrames) {
+          l = buf.readInt16LE(i * 4) / 32768;
+          r = buf.readInt16LE(i * 4 + 2) / 32768;
+        }
+      } else {
+        const p = slot.frac + i * micro;
+        const i0 = Math.floor(p);
+        if (i0 + 1 < inFrames) {
+          const f = p - i0;
+          const l0 = buf.readInt16LE(i0 * 4) / 32768;
+          const r0 = buf.readInt16LE(i0 * 4 + 2) / 32768;
+          const l1 = buf.readInt16LE(i0 * 4 + 4) / 32768;
+          const r1 = buf.readInt16LE(i0 * 4 + 6) / 32768;
+          l = l0 + (l1 - l0) * f;
+          r = r0 + (r1 - r0) * f;
+        } else if (i0 < inFrames) {
+          l = buf.readInt16LE(i0 * 4) / 32768;
+          r = buf.readInt16LE(i0 * 4 + 2) / 32768;
+        }
+      }
       if (anyEq) {
         const l0 = slot.eqState[0]!;
         const l1 = slot.eqState[1]!;
@@ -636,9 +907,21 @@ export class DeckMixer {
       acc[i * 2 + 1] = acc[i * 2 + 1]! + r * gain;
     }
     slot.gainNow = gain;
+
+    // How many source frames that consumed, carrying the fraction to next time.
+    let consumed: number;
+    if (direct) {
+      consumed = Math.min(outFrames, inFrames);
+    } else {
+      const total = slot.frac + outFrames * micro;
+      consumed = Math.min(Math.floor(total), inFrames);
+      // Under-run leaves a debt for the next tick, but never let it compound.
+      slot.frac = Math.min(1, total - consumed);
+    }
+
     // Fade-in after a (re)start: multiply the first N frames by a ramp.
     if (slot.fadeFrames > 0) {
-      const n = Math.min(slot.fadeFrames, frames);
+      const n = Math.min(slot.fadeFrames, outFrames);
       for (let i = 0; i < n; i++) {
         const k = i / slot.fadeFrames;
         acc[i * 2] = acc[i * 2]! * k;
@@ -646,5 +929,6 @@ export class DeckMixer {
       }
       slot.fadeFrames -= n;
     }
+    return consumed;
   }
 }

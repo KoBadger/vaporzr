@@ -1012,6 +1012,8 @@ export class DiscordBot {
   }
   /** Beat-reactive presence equalizer state. */
   private presenceTimer: NodeJS.Timeout | null = null;
+  /** Re-arms an autoplay wave that dead-ended while the channel sat silent. */
+  private waveWatchdog: NodeJS.Timeout | null = null;
   private lastPresence = '';
   /** Per-user-per-command rate limiting (key: `${userId}:${command}` -> last use). */
   private cooldowns = new Map<string, number>();
@@ -1199,6 +1201,24 @@ export class DiscordBot {
         // `V@r` picks up exactly where the set interrupted it.
         pauseQueue: () => s.playback.pause(),
         onState: (state) => this.bridge.broadcastDeck(state, guildId),
+        uploadRecording: async (file, name) => {
+          const channel = await this.panelShareChannel(guildId);
+          if (!channel) return null;
+          try {
+            const size = statSync(file).size;
+            // Discord's bot upload cap is 25 MB (10 MB on older guilds); a long
+            // set blows past it, so large files stay on the server.
+            if (size > 24 * 1024 * 1024) return null;
+            const msg = await channel.send({
+              content: `🎚️ **Set recording** — ${name}`,
+              files: [{ attachment: file, name }],
+            });
+            return msg.attachments.first()?.url ?? null;
+          } catch (err) {
+            console.warn(`[deck] recording upload failed: ${err instanceof Error ? err.message : err}`);
+            return null;
+          }
+        },
       });
       this.deckControllers.set(guildId, decks);
     }
@@ -1270,6 +1290,35 @@ export class DiscordBot {
         case 'tempo':
           quiet(decks.tempo(deck, msg.tempo ?? 1));
           break;
+        case 'cue-set':
+          report(decks.setCue(deck, msg.slot ?? 1));
+          break;
+        case 'cue-jump':
+          quiet(decks.jumpCue(deck, msg.slot ?? 1));
+          break;
+        case 'cue-clear':
+          quiet(decks.clearCue(deck, msg.slot ?? 1));
+          break;
+        case 'loop-beats':
+          report(decks.loopBeats(deck, msg.beats ?? 4));
+          break;
+        case 'loop-toggle':
+          quiet(decks.loopToggle(deck));
+          break;
+        case 'loop-clear':
+          quiet(decks.loopClear(deck));
+          break;
+        case 'lock':
+          report(decks.lock(msg.enabled === false ? null : deck));
+          break;
+        case 'rec-start':
+          report(decks.recStart());
+          break;
+        case 'rec-stop': {
+          const saved = await decks.recStop();
+          report(saved);
+          break;
+        }
         default:
           break;
       }
@@ -1413,6 +1462,7 @@ export class DiscordBot {
     analyzer.setBeatHandler(() => this.onBeat());
     await this.loginWithRetry();
     this.startPresenceTicker();
+    this.startWaveWatchdog();
   }
 
   /** Keep the bridge's primary guild (used by desktop/browser panels) in sync. */
@@ -9968,6 +10018,36 @@ export class DiscordBot {
         if (!Number.isFinite(pct) || pct <= 0) return 'Usage: `V@deck tempo b 104` (percent) or `V@deck tempo b 105%`.';
         return decks.tempo(deck, pct / 100).message;
       }
+      case 'pad':
+      case 'hotcue': {
+        const n = Number(value || 1);
+        if (!Number.isFinite(n) || n < 1 || n > 8)
+          return 'Usage: `V@deck pad a 3` (pads 1-8; sets an empty pad, jumps to a set one).';
+        const slotCues = st[deck].cues;
+        if (slotCues[Math.round(n) - 1] == null) return decks.setCue(deck, n).message;
+        return decks.jumpCue(deck, n).message;
+      }
+      case 'loop': {
+        const arg2 = value.toLowerCase();
+        if (arg2 === 'off' || arg2 === 'clear') return decks.loopClear(deck).message;
+        if (arg2 === 'on') return decks.loopToggle(deck).message;
+        const beats = Number(arg2 || 4);
+        if (!Number.isFinite(beats) || beats <= 0) return 'Usage: `V@deck loop a 4` (beats), or `loop a off`.';
+        return decks.loopBeats(deck, beats).message;
+      }
+      case 'lock': {
+        const master: DeckId | null =
+          value.toLowerCase().startsWith('off') || value === '' ? null : isDeck ? deck : 'a';
+        // `V@deck lock` with no args toggles, so the phone flow is one command.
+        if (st.sync && master === null) return decks.lock(null).message;
+        if (!st.sync && master === null) return decks.lock('a').message;
+        return decks.lock(master).message;
+      }
+      case 'rec':
+      case 'record': {
+        if (/^(stop|off|end)$/i.test(value)) return (await decks.recStop()).message;
+        return decks.recStart().message;
+      }
       case 'status':
       case 'now':
       default: {
@@ -9975,14 +10055,20 @@ export class DiscordBot {
           if (!slot.source) return `**${label}** — empty`;
           const pos = `${Math.floor(slot.positionMs / 60000)}:${String(Math.floor((slot.positionMs % 60000) / 1000)).padStart(2, '0')}`;
           const eq = `L${slot.eq.low <= -39.5 ? '✕' : Math.round(slot.eq.low)} M${slot.eq.mid <= -39.5 ? '✕' : Math.round(slot.eq.mid)} H${slot.eq.high <= -39.5 ? '✕' : Math.round(slot.eq.high)}`;
-          return `**${label}** ${slot.playing ? '▶' : '⏸'} ${slot.source.title} — ${pos}/${Math.floor(slot.durationMs / 60000)}:${String(Math.floor((slot.durationMs % 60000) / 1000)).padStart(2, '0')} · ${slot.bpm ? `${slot.bpm} BPM` : 'bpm…'} · ${eq}`;
+          const cues = slot.cues.filter((c) => c != null).length;
+          const loop = slot.loop ? ` · loop ${Math.round(slot.loop.outMs - slot.loop.inMs)}ms` : '';
+          return `**${label}** ${slot.playing ? '▶' : '⏸'} ${slot.source.title} — ${pos}/${Math.floor(slot.durationMs / 60000)}:${String(Math.floor((slot.durationMs % 60000) / 1000)).padStart(2, '0')} · ${slot.bpm ? `${slot.bpm} BPM` : 'bpm…'} · ${eq} · ${cues}/8 cues${loop}`;
         };
+        const syncLine = st.sync
+          ? `🔒 Locked ${st.sync.follower.toUpperCase()} → ${st.sync.master.toUpperCase()} (drift ${st.sync.driftMs > 0 ? '+' : ''}${st.sync.driftMs}ms)`
+          : 'Lock off';
+        const recLine = st.record?.active ? ` · 🔴 recording ${Math.round((st.record.elapsedMs ?? 0) / 1000)}s` : '';
         return [
           '🎛️ **Live decks**',
           line('A', st.a),
           line('B', st.b),
-          `Crossfader ${Math.round(st.crossfader * 100)}% · open \`/deck\` for faders, EQ knobs and cue points.`,
-          '`V@deck a <song>` · `play` · `pause` · `sync` · `cross 60` · `eq a low kill` · `stop`',
+          `Crossfader ${Math.round(st.crossfader * 100)}% · ${syncLine}${recLine} · open \`/deck\` for faders, EQ knobs and cue pads.`,
+          '`V@deck a <song>` · `play` · `pause` · `pad a 3` · `loop a 4` · `lock` · `rec` · `sync` · `cross 60` · `stop`',
         ].join('\n');
       }
     }
@@ -11080,6 +11166,43 @@ export class DiscordBot {
       return embed.addFields({ name: 'Servers', value: lines.join('\n') });
     }
     return embed;
+  }
+
+  /**
+   * Autoplay watchdog. Every refill path is event-driven (track end, queue end),
+   * so once the wave dead-ends there is nothing left to retrigger it: the queue
+   * drains, the last track finishes and the channel just goes quiet. This timer
+   * re-arms a stalled wave on its own — but only when autoplay is on AND nothing
+   * is playing, so it can never fight a live set or a paused queue.
+   */
+  private startWaveWatchdog(): void {
+    if (this.waveWatchdog) return;
+    this.waveWatchdog = setInterval(() => {
+      for (const s of this.sessions.all()) {
+        if (!EW.isAutoActive(s.endlessWave)) continue;
+        if (!s.voice.isJoined()) continue;
+        const st = s.queue.getState();
+        if (st.playing) continue;
+        const snap = s.queue.getSnapshot();
+        if (snap.tracks.length > snap.currentIndex + 1) continue; // something is queued
+        if (this.ewBusy.has(s.guildId)) continue;
+        void (async () => {
+          this.ewRetryAfter.delete(s.guildId);
+          const before = s.queue.getSnapshot().tracks.length;
+          try {
+            await this.topUpWave(s);
+          } catch {
+            return;
+          }
+          const after = s.queue.getSnapshot();
+          if (after.tracks.length > before) {
+            s.playback.playAt(after.currentIndex + 1);
+            this.clearVoiceStatus(s);
+          }
+        })();
+      }
+    }, 15_000);
+    this.waveWatchdog.unref?.();
   }
 
   /** Beat-reactive presence: an equalizer built from the live PCM tap. */

@@ -1466,6 +1466,10 @@ export class Bridge {
    *  unreadable) it falls back to relaying the bare intent — the old,
    *  unsynchronised behaviour, so this can never be worse than before. */
   private showPreset(action: 'next' | 'prev' | 'shuffle' = 'next'): void {
+    // Any manual change restarts the dwell clock: without this, switching a
+    // visual 2 s before the interval fires immediately advances again, which
+    // reads as "the timer setting is ignored".
+    this.startPresetTimer();
     const names = this.ensurePresetNames();
     if (!names.length) {
       this.broadcast({ type: 'preset:nav', action, guildId: this.primaryGuildId ?? undefined });
