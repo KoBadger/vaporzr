@@ -1,0 +1,659 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Vaporzr · Live Decks</title>
+    <style>
+      :root {
+        --bg: #05060f;
+        --panel: rgba(16, 18, 34, 0.86);
+        --line: rgba(255, 255, 255, 0.09);
+        --text: #e8ecf8;
+        --muted: #8d96b4;
+        --accent: #6a5cff;
+        --accent2: #00f0ff;
+        --a: #6a5cff;
+        --b: #ff4d9d;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+      }
+      body {
+        margin: 0;
+        background:
+          radial-gradient(900px 500px at 10% -10%, rgba(106, 92, 255, 0.22), transparent 60%),
+          radial-gradient(800px 500px at 110% 10%, rgba(255, 77, 157, 0.16), transparent 60%), var(--bg);
+        color: var(--text);
+        font:
+          14px/1.45 system-ui,
+          -apple-system,
+          'Segoe UI',
+          sans-serif;
+        display: flex;
+        flex-direction: column;
+        min-height: 100%;
+        padding: 18px;
+        gap: 14px;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      h1 {
+        font-size: 17px;
+        margin: 0;
+        letter-spacing: 0.02em;
+        font-weight: 700;
+      }
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #f43f5e;
+        box-shadow: 0 0 10px currentColor;
+      }
+      .dot.on {
+        background: #22c55e;
+      }
+      .spacer {
+        flex: 1;
+      }
+      .muted {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .decks {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+      }
+      @media (max-width: 780px) {
+        .decks {
+          grid-template-columns: 1fr;
+        }
+      }
+      .deck {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        backdrop-filter: blur(10px);
+        border-top: 2px solid var(--deck);
+      }
+      .deck.a {
+        --deck: var(--a);
+      }
+      .deck.b {
+        --deck: var(--b);
+      }
+      .deck-head {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+      }
+      .badge {
+        font:
+          700 11px/1 system-ui,
+          sans-serif;
+        letter-spacing: 0.12em;
+        padding: 5px 7px;
+        border-radius: 6px;
+        background: color-mix(in srgb, var(--deck) 22%, transparent);
+        color: var(--deck);
+        border: 1px solid color-mix(in srgb, var(--deck) 40%, transparent);
+      }
+      .title {
+        font-weight: 650;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        flex: 1;
+      }
+      .sub {
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .time {
+        font-variant-numeric: tabular-nums;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .seek {
+        position: relative;
+        height: 8px;
+        border-radius: 99px;
+        background: rgba(255, 255, 255, 0.08);
+        cursor: pointer;
+        overflow: hidden;
+      }
+      .seek > i {
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 0%;
+        background: var(--deck);
+        border-radius: 99px;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      button {
+        appearance: none;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--text);
+        padding: 8px 12px;
+        border-radius: 10px;
+        font:
+          600 12px/1 system-ui,
+          sans-serif;
+        cursor: pointer;
+        transition:
+          background 0.15s,
+          border-color 0.15s,
+          transform 0.05s;
+      }
+      button:hover {
+        background: rgba(255, 255, 255, 0.1);
+      }
+      button:active {
+        transform: translateY(1px);
+      }
+      button.primary {
+        background: linear-gradient(135deg, var(--deck), color-mix(in srgb, var(--deck) 55%, #000));
+        border-color: transparent;
+        color: #fff;
+      }
+      button.wide {
+        flex: 1;
+      }
+      button.mini {
+        padding: 6px 9px;
+        font-size: 11px;
+      }
+      input[type='text'] {
+        flex: 1;
+        min-width: 120px;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        color: var(--text);
+        padding: 8px 10px;
+        font: inherit;
+        font-size: 12px;
+      }
+      input[type='text']:focus {
+        outline: 1px solid var(--deck);
+      }
+      .eq {
+        display: grid;
+        grid-template-columns: 26px 1fr 34px;
+        gap: 6px 8px;
+        align-items: center;
+        font-size: 11px;
+      }
+      .eq label {
+        color: var(--muted);
+        letter-spacing: 0.08em;
+      }
+      .eq output {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      input[type='range'] {
+        -webkit-appearance: none;
+        appearance: none;
+        height: 18px;
+        background: transparent;
+        width: 100%;
+      }
+      input[type='range']::-webkit-slider-runnable-track {
+        height: 4px;
+        border-radius: 99px;
+        background: rgba(255, 255, 255, 0.14);
+      }
+      input[type='range']::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        width: 14px;
+        height: 14px;
+        margin-top: -5px;
+        border-radius: 50%;
+        background: var(--deck);
+        box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.35);
+      }
+      input[type='range']::-moz-range-track {
+        height: 4px;
+        border-radius: 99px;
+        background: rgba(255, 255, 255, 0.14);
+      }
+      input[type='range']::-moz-range-thumb {
+        width: 14px;
+        height: 14px;
+        border: 0;
+        border-radius: 50%;
+        background: var(--deck);
+      }
+      .mixer {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .xfade-head {
+        display: flex;
+        justify-content: space-between;
+        font-size: 11px;
+        color: var(--muted);
+      }
+      #xfade {
+        --deck: var(--accent2);
+      }
+      .footer {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .kbd {
+        font:
+          600 11px/1.4 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 2px 6px;
+        color: var(--muted);
+      }
+      #toasts {
+        position: fixed;
+        right: 16px;
+        bottom: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        z-index: 50;
+        max-width: 320px;
+      }
+      .toast {
+        background: rgba(12, 14, 26, 0.95);
+        border: 1px solid var(--line);
+        border-left: 3px solid var(--accent);
+        border-radius: 10px;
+        padding: 9px 12px;
+        font-size: 12px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+      }
+      .toast.error {
+        border-left-color: #f43f5e;
+      }
+      .toast.success {
+        border-left-color: #22c55e;
+      }
+      .bpm {
+        font-variant-numeric: tabular-nums;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <span class="dot" id="conn"></span>
+      <h1>Live Decks</h1>
+      <span class="muted" id="status">connecting…</span>
+      <span class="spacer"></span>
+      <button class="mini" id="btn-sync">SYNC B → A</button>
+      <button class="mini" id="btn-play">Play both</button>
+      <button class="mini" id="btn-pause">Pause</button>
+      <button class="mini" id="btn-stop">Stop decks</button>
+    </header>
+
+    <div class="decks">
+      <section class="deck a" data-deck="a">
+        <div class="deck-head">
+          <span class="badge">A</span>
+          <span class="title" data-role="title">—</span>
+          <span class="bpm" data-role="bpm"></span>
+        </div>
+        <div class="sub" data-role="artist"></div>
+        <div class="seek" data-role="seek"><i></i></div>
+        <div class="row" style="justify-content: space-between">
+          <span class="time" data-role="time">0:00</span>
+          <span class="time" data-role="dur">0:00</span>
+        </div>
+        <div class="row">
+          <input type="text" data-role="query" placeholder="Song name or link…" />
+          <button class="primary mini" data-role="load">Load</button>
+        </div>
+        <div class="row">
+          <button class="wide" data-role="toggle">Play</button>
+          <button class="mini" data-role="cue">Cue 0:00</button>
+        </div>
+        <div class="eq" data-role="eq">
+          <label>LOW</label><input type="range" data-band="low" min="-40" max="6" step="1" value="0" /><output
+            data-out="low"
+            >0</output
+          >
+          <label>MID</label><input type="range" data-band="mid" min="-40" max="6" step="1" value="0" /><output
+            data-out="mid"
+            >0</output
+          >
+          <label>HIGH</label><input type="range" data-band="high" min="-40" max="6" step="1" value="0" /><output
+            data-out="high"
+            >0</output
+          >
+        </div>
+        <div class="row">
+          <button class="mini" data-kill="low">Kill low</button>
+          <button class="mini" data-kill="mid">Kill mid</button>
+          <button class="mini" data-kill="high">Kill high</button>
+        </div>
+        <div class="eq">
+          <label>TRIM</label><input type="range" data-role="gain" min="0" max="100" step="1" value="100" /><output
+            data-out="gain"
+            >100</output
+          >
+          <label>SPEED</label><input type="range" data-role="tempo" min="92" max="108" step="0.1" value="100" /><output
+            data-out="tempo"
+            >100</output
+          >
+          <label>NUDGE</label>
+          <span class="row" style="gap: 6px">
+            <button class="mini" data-nudge="-25">−25ms</button>
+            <button class="mini" data-nudge="25">+25ms</button>
+          </span>
+          <output></output>
+        </div>
+      </section>
+
+      <section class="deck b" data-deck="b">
+        <div class="deck-head">
+          <span class="badge">B</span>
+          <span class="title" data-role="title">—</span>
+          <span class="bpm" data-role="bpm"></span>
+        </div>
+        <div class="sub" data-role="artist"></div>
+        <div class="seek" data-role="seek"><i></i></div>
+        <div class="row" style="justify-content: space-between">
+          <span class="time" data-role="time">0:00</span>
+          <span class="time" data-role="dur">0:00</span>
+        </div>
+        <div class="row">
+          <input type="text" data-role="query" placeholder="Song name or link…" />
+          <button class="primary mini" data-role="load">Load</button>
+        </div>
+        <div class="row">
+          <button class="wide" data-role="toggle">Play</button>
+          <button class="mini" data-role="cue">Cue 0:00</button>
+        </div>
+        <div class="eq" data-role="eq">
+          <label>LOW</label><input type="range" data-band="low" min="-40" max="6" step="1" value="0" /><output
+            data-out="low"
+            >0</output
+          >
+          <label>MID</label><input type="range" data-band="mid" min="-40" max="6" step="1" value="0" /><output
+            data-out="mid"
+            >0</output
+          >
+          <label>HIGH</label><input type="range" data-band="high" min="-40" max="6" step="1" value="0" /><output
+            data-out="high"
+            >0</output
+          >
+        </div>
+        <div class="row">
+          <button class="mini" data-kill="low">Kill low</button>
+          <button class="mini" data-kill="mid">Kill mid</button>
+          <button class="mini" data-kill="high">Kill high</button>
+        </div>
+        <div class="eq">
+          <label>TRIM</label><input type="range" data-role="gain" min="0" max="100" step="1" value="100" /><output
+            data-out="gain"
+            >100</output
+          >
+          <label>SPEED</label><input type="range" data-role="tempo" min="92" max="108" step="0.1" value="100" /><output
+            data-out="tempo"
+            >100</output
+          >
+          <label>NUDGE</label>
+          <span class="row" style="gap: 6px">
+            <button class="mini" data-nudge="-25">−25ms</button>
+            <button class="mini" data-nudge="25">+25ms</button>
+          </span>
+          <output></output>
+        </div>
+      </section>
+    </div>
+
+    <section class="mixer">
+      <div class="xfade-head"><span>A</span><span id="xfade-val">50%</span><span>B</span></div>
+      <input type="range" id="xfade" min="0" max="100" step="1" value="50" />
+      <div class="footer">
+        <span class="muted">Load both decks, hit <span class="kbd">SYNC</span>, then walk the fader.</span>
+        <span class="spacer"></span>
+        <span class="muted" id="engine">engine idle</span>
+      </div>
+    </section>
+
+    <div id="toasts"></div>
+
+    <script>
+      (function () {
+        var ws = null;
+        var state = null;
+        var localClock = { at: 0, pos: { a: 0, b: 0 } };
+        var lastSent = {};
+        var el = function (sel, root) {
+          return (root || document).querySelector(sel);
+        };
+        var all = function (sel, root) {
+          return Array.prototype.slice.call((root || document).querySelectorAll(sel));
+        };
+
+        function fmt(ms) {
+          ms = Math.max(0, ms || 0);
+          var s = Math.floor(ms / 1000);
+          return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+        }
+
+        function toast(level, text) {
+          var t = document.createElement('div');
+          t.className = 'toast ' + (level || 'info');
+          t.textContent = text;
+          el('#toasts').appendChild(t);
+          setTimeout(function () {
+            t.remove();
+          }, 4200);
+        }
+
+        function send(msg) {
+          if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg));
+        }
+        function control(action, extra) {
+          send(Object.assign({ type: 'deck:control', action: action }, extra || {}));
+        }
+        /* Slider drags fire dozens of events — keep the socket sane. */
+        function controlThrottled(key, action, extra) {
+          var now = Date.now();
+          if (lastSent[key] && now - lastSent[key] < 55) {
+            clearTimeout(lastSent[key + ':t']);
+            lastSent[key + ':t'] = setTimeout(function () {
+              lastSent[key] = Date.now();
+              control(action, extra);
+            }, 60);
+            return;
+          }
+          lastSent[key] = now;
+          control(action, extra);
+        }
+
+        function paint() {
+          if (!state) return;
+          ['a', 'b'].forEach(function (id) {
+            var slot = state[id];
+            var root = el('.deck.' + id);
+            // Interpolate from the last server push so the clock reads live
+            // between the 250 ms state broadcasts.
+            var pos = slot.positionMs + (slot.playing && localClock.at ? Date.now() - localClock.at : 0);
+            el('[data-role="title"]', root).textContent = slot.source ? slot.source.title : '—';
+            el('[data-role="artist"]', root).textContent = slot.source ? slot.source.artist || '' : 'empty';
+            el('[data-role="bpm"]', root).textContent = slot.bpm ? Math.round(slot.bpm) + ' BPM' : '';
+            el('[data-role="time"]', root).textContent = fmt(pos);
+            el('[data-role="dur"]', root).textContent = fmt(slot.durationMs);
+            el('[data-role="toggle"]', root).textContent = slot.playing ? 'Pause' : slot.ended ? 'Replay' : 'Play';
+            var pct = slot.durationMs ? Math.min(100, (pos / slot.durationMs) * 100) : 0;
+            el('[data-role="seek"] > i', root).style.width = pct + '%';
+            all('[data-band]', root).forEach(function (input) {
+              var band = input.getAttribute('data-band');
+              var v = Math.round(slot.eq[band]);
+              if (document.activeElement !== input) input.value = v;
+              el('[data-out="' + band + '"]', root).textContent = v <= -39.5 ? 'KILL' : (v > 0 ? '+' : '') + v;
+            });
+            var gain = el('[data-role="gain"]', root);
+            if (document.activeElement !== gain) gain.value = Math.round(slot.gain * 100);
+            el('[data-out="gain"]', root).textContent = Math.round(slot.gain * 100);
+            var tempo = el('[data-role="tempo"]', root);
+            if (document.activeElement !== tempo) tempo.value = (slot.tempo * 100).toFixed(1);
+            el('[data-out="tempo"]', root).textContent = (slot.tempo * 100).toFixed(1);
+          });
+          var xf = el('#xfade');
+          if (document.activeElement !== xf) xf.value = Math.round(state.crossfader * 100);
+          el('#xfade-val').textContent = Math.round(state.crossfader * 100) + '%';
+          var active = state.a.playing || state.b.playing;
+          el('#engine').textContent = active
+            ? 'live — feeding the voice channel'
+            : state.active
+              ? 'cued'
+              : 'engine idle';
+        }
+
+        function connect() {
+          var loc = location;
+          var url = (loc.protocol === 'https:' ? 'wss://' : 'ws://') + loc.host + '/ws';
+          ws = new WebSocket(url);
+          ws.onopen = function () {
+            el('#conn').classList.add('on');
+            el('#status').textContent = 'connected';
+            send({ type: 'hello', role: 'panel', name: 'deck-page' });
+            send({ type: 'panel:subscribe', channels: ['state'] });
+            send({ type: 'deck:request' });
+          };
+          ws.onclose = function () {
+            el('#conn').classList.remove('on');
+            el('#status').textContent = 'reconnecting…';
+            setTimeout(connect, 2500);
+          };
+          ws.onmessage = function (ev) {
+            var msg;
+            try {
+              msg = JSON.parse(ev.data);
+            } catch (e) {
+              return;
+            }
+            if (msg.type === 'deck:state') {
+              state = msg.state;
+              localClock.at = Date.now();
+              paint();
+            } else if (msg.type === 'panel:notice') {
+              toast(msg.level, msg.text);
+            }
+          };
+        }
+
+        document.addEventListener('DOMContentLoaded', function () {
+          all('.deck').forEach(function (root) {
+            var id = root.getAttribute('data-deck');
+            el('[data-role="load"]', root).onclick = function () {
+              var q = el('[data-role="query"]', root).value.trim();
+              if (!q) return;
+              send({ type: 'deck:load', deck: id, query: q });
+              el('[data-role="query"]', root).value = '';
+            };
+            el('[data-role="query"]', root).addEventListener('keydown', function (e) {
+              if (e.key === 'Enter') el('[data-role="load"]', root).click();
+            });
+            el('[data-role="toggle"]', root).onclick = function () {
+              if (!state) return;
+              if (state[id].ended) {
+                control('seek', { deck: id, positionMs: 0 });
+                control('play', { deck: id });
+              } else {
+                control(state[id].playing ? 'pause' : 'play', { deck: id });
+              }
+            };
+            el('[data-role="cue"]', root).onclick = function () {
+              control('cue', { deck: id });
+            };
+            el('[data-role="seek"]', root).onclick = function (e) {
+              if (!state || !state[id].durationMs) return;
+              var r = e.currentTarget.getBoundingClientRect();
+              var pct = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+              control('seek', { deck: id, positionMs: pct * state[id].durationMs });
+            };
+            all('[data-band]', root).forEach(function (input) {
+              input.addEventListener('input', function () {
+                var band = input.getAttribute('data-band');
+                el('[data-out="' + band + '"]', root).textContent = input.value;
+                controlThrottled(id + ':eq:' + band, 'eq', { deck: id, band: band, db: Number(input.value) });
+              });
+            });
+            all('[data-kill]', root).forEach(function (btn) {
+              btn.onclick = function () {
+                control('kill', { deck: id, band: btn.getAttribute('data-kill') });
+              };
+            });
+            el('[data-role="gain"]', root).addEventListener('input', function (e) {
+              el('[data-out="gain"]', root).textContent = e.target.value;
+              controlThrottled(id + ':gain', 'gain', { deck: id, value: Number(e.target.value) / 100 });
+            });
+            el('[data-role="tempo"]', root).addEventListener('input', function (e) {
+              el('[data-out="tempo"]', root).textContent = Number(e.target.value).toFixed(1);
+              controlThrottled(id + ':tempo', 'tempo', { deck: id, tempo: Number(e.target.value) / 100 });
+            });
+            all('[data-nudge]', root).forEach(function (btn) {
+              btn.onclick = function () {
+                control('nudge', { deck: id, positionMs: Number(btn.getAttribute('data-nudge')) });
+              };
+            });
+          });
+
+          el('#xfade').addEventListener('input', function (e) {
+            el('#xfade-val').textContent = e.target.value + '%';
+            controlThrottled('xfade', 'crossfader', { value: Number(e.target.value) / 100 });
+          });
+          el('#btn-sync').onclick = function () {
+            control('sync');
+          };
+          el('#btn-play').onclick = function () {
+            control('play');
+          };
+          el('#btn-pause').onclick = function () {
+            control('pause');
+          };
+          el('#btn-stop').onclick = function () {
+            control('stop');
+          };
+
+          setInterval(function () {
+            if (state) paint();
+          }, 250);
+
+          connect();
+        });
+      })();
+    </script>
+  </body>
+</html>

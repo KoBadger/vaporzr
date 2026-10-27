@@ -319,6 +319,8 @@ function isActivityFetch(req: http.IncomingMessage): boolean {
 
 function accessNeedFor(pathname: string): AccessScope | null {
   if (pathname === '/panel' || pathname === '/panel.html') return 'control';
+  // Decks change what the whole voice channel hears — same gate as the panel.
+  if (pathname === '/deck' || pathname === '/deck.html') return 'control';
   if (pathname === '/' || pathname === '/index.html') return 'view';
   if (pathname === '/viz' || pathname === '/viz.html') return 'view';
   if (pathname === '/listen' || pathname === '/listen.html') return 'view';
@@ -1118,7 +1120,7 @@ async function handleRoute(
           <p>${tokenStore.load() ? 'Spotify account linked.' : 'Spotify not linked.'}</p>
           <p><a href="/login">Link Spotify account</a></p>
           <p>Player status: <span id="s">checking…</span></p>
-          <p><a href="/panel">Open the control panel →</a> <a href="/viz">Visualizer →</a></p>
+          <p><a href="/panel">Open the control panel →</a> <a href="/deck">Live decks →</a> <a href="/viz">Visualizer →</a></p>
           <script>
             try {
               fetch('/api/token').then(r => r.json()).then(d => {
@@ -1227,6 +1229,23 @@ async function handleRoute(
         } catch {
           res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
           res.end('Panel not found.');
+        }
+        break;
+      }
+
+      case '/deck':
+      case '/deck.html': {
+        try {
+          const build = (process.env.VAPORZR_BUILD ?? 'dev').slice(0, 7);
+          const file = fs
+            .readFileSync(path.join(__dirname, '..', 'public', 'deck.html'), 'utf8')
+            .replace(/\{\{ORIGIN\}\}/g, origin)
+            .replace(/\{\{BUILD\}\}/g, build);
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+          res.end(file);
+        } catch {
+          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('Deck page not found.');
         }
         break;
       }

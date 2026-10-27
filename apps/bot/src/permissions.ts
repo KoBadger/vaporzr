@@ -74,6 +74,7 @@ const DEFAULT_COMMAND_LEVELS: Record<string, PermissionLevel> = {
   cover: 'user',
   hype: 'user',
   mix: 'user',
+  deck: 'mod',
   mashup: 'user',
   mashupgame: 'user',
   mashups: 'user',
