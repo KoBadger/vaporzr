@@ -5,6 +5,7 @@ import {
   IDENTITY_BIQUAD,
   PcmRing,
   applyBiquad,
+  beatLoopRegion,
   crossfaderGains,
   floatToInt16,
   highShelfCoefs,
@@ -36,6 +37,31 @@ const sineRms = (freq: number, sampleRate = 48000): number => {
   }
   return Math.sqrt(sum / (n - 2048));
 };
+
+describe('beat-quantised loops', () => {
+  it('snaps the loop-in to the last beat boundary', () => {
+    const r = beatLoopRegion(3_700, 120, 4);
+    expect(r.inMs).toBe(3_500);
+    expect(r.outMs).toBe(5_500);
+    expect(r.beats).toBe(4);
+  });
+
+  it('assumes 120 BPM when the tempo is unknown', () => {
+    expect(beatLoopRegion(1_000, null, 2)).toEqual({ inMs: 1_000, outMs: 2_000, beats: 2 });
+  });
+
+  it('clamps silly beat counts and tolerates fractional loops', () => {
+    expect(beatLoopRegion(0, 120, 999).beats).toBe(32);
+    expect(beatLoopRegion(0, 120, 0).beats).toBe(0.25);
+    expect(beatLoopRegion(0, 120, 0.5).outMs).toBe(250);
+  });
+
+  it('handles a faster grid and a negative position', () => {
+    const r = beatLoopRegion(-50, 174, 1);
+    expect(r.inMs).toBe(0);
+    expect(r.outMs).toBeCloseTo(60_000 / 174, 5);
+  });
+});
 
 describe('deck crossfader', () => {
   it('is full A at 0, full B at 1, and equal-power at centre', () => {
