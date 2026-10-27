@@ -59,6 +59,53 @@ export interface QueueSnapshot {
   currentIndex: number;
 }
 
+/* ------------------------------------------------------------------ decks -- */
+
+export type DeckId = 'a' | 'b';
+
+/** Per-deck 3-band EQ in dB. -40 is a kill; 0 is flat. */
+export interface DeckEq {
+  low: number;
+  mid: number;
+  high: number;
+}
+
+export interface DeckSource {
+  /** Local, seekable file (downloaded before load so cue/seek are instant). */
+  file: string;
+  title: string;
+  artist?: string;
+  durationMs: number;
+  bpm?: number | null;
+}
+
+export interface DeckSlotState {
+  source: DeckSource | null;
+  playing: boolean;
+  ended: boolean;
+  positionMs: number;
+  durationMs: number;
+  /** Per-deck trim, 0..1. */
+  gain: number;
+  eq: DeckEq;
+  /** Playback-rate factor (1 = normal). */
+  tempo: number;
+  /** Effective BPM (follows tempo changes). */
+  bpm: number | null;
+}
+
+export interface DeckMixerState {
+  active: boolean;
+  crossfader: number;
+  masterGain: number;
+  a: DeckSlotState;
+  b: DeckSlotState;
+}
+
+/** Deck actions a control surface may drive. */
+export type DeckAction =
+  'play' | 'pause' | 'cue' | 'seek' | 'nudge' | 'sync' | 'stop' | 'crossfader' | 'gain' | 'eq' | 'kill' | 'tempo';
+
 export interface GuildPermissions {
   roles: Record<PermissionLevel, string[]>;
   commandLevels: Record<string, PermissionLevel>;
@@ -200,6 +247,25 @@ export type InboundMessage =
   | { type: 'jam:roster'; names: string[] }
   /** Base64-encoded WebM clip captured by a visualizer window (/burst). */
   | { type: 'burst:data'; data: string }
+  /** Load a track onto a live deck (resolved + downloaded server-side). */
+  | { type: 'deck:load'; deck: DeckId; query: string; guildId?: string }
+  /** Drive the deck mixer: transport, crossfader, EQ, sync. */
+  | {
+      type: 'deck:control';
+      action: DeckAction;
+      deck?: DeckId;
+      /** Crossfader 0..1 (A..B). */
+      value?: number;
+      band?: keyof DeckEq;
+      /** EQ gain in dB. */
+      db?: number;
+      positionMs?: number;
+      /** Tempo factor for action 'tempo'. */
+      tempo?: number;
+      guildId?: string;
+    }
+  /** Ask for the current deck state (sent on connect). */
+  | { type: 'deck:request'; guildId?: string }
   | CommandMessage;
 
 export type OutboundMessage =
@@ -297,4 +363,6 @@ export type OutboundMessage =
     }
   | { type: 'ready'; ok: boolean }
   | { type: 'error'; message: string }
+  /** Full live-deck state (both playheads, crossfader, EQ). */
+  | { type: 'deck:state'; state: DeckMixerState; guildId?: string }
   | CommandMessage;

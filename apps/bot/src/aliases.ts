@@ -115,6 +115,9 @@ export const V_ALIASES: Record<string, string> = {
   cover: 'cover',
   hype: 'hype',
   mix: 'mix',
+  deck: 'deck',
+  decks: 'deck',
+  dk: 'deck',
   mashup: 'mashup',
   msh: 'mashup',
   mashupgame: 'mashupgame',
@@ -146,6 +149,8 @@ export const V_ALIASES: Record<string, string> = {
  *  `args`, so they are deliberately not listed here. */
 export const V_DISPATCH_ALIASES: Record<string, string> = {
   boost: 'bassboost',
+  decks: 'deck',
+  dk: 'deck',
   msh: 'mashup',
   mg: 'mashupgame',
   mh: 'mashups',

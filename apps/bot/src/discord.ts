@@ -106,7 +106,8 @@ import { analyzer } from '@vaporzr/core/analyzer';
 import { vizTunnel } from './tunnel.js';
 import { renderPanelIconPng, PANEL_ICON_FALLBACKS } from './panelIcons.js';
 import { jamJoinLinks, type Bridge } from './bridge.js';
-import type { PermissionLevel, TrackInfo, PlaybackState } from '@vaporzr/shared';
+import { DeckController } from './decks.js';
+import type { DeckEq, DeckId, InboundMessage, PermissionLevel, TrackInfo, PlaybackState } from '@vaporzr/shared';
 import * as EW from '@vaporzr/core/endlesswave';
 import { playlistStore } from '@vaporzr/core/playlists';
 import { statsStore } from '@vaporzr/core/stats';
@@ -834,6 +835,8 @@ export class DiscordBot {
   /** guildId -> Weasel live voice-channel ear enabled (`v@w listen on`). */
   private weaselListenGuilds = new Set<string>();
   private weaselListenBusy = new Set<string>();
+  /** guildId -> live two-deck mixer (see decks.ts). Created on first use. */
+  private deckControllers = new Map<string, DeckController>();
   /** guildId -> active AI steering / harmonic arc directive for Endless Wave (`v@w wave ...`). */
   private ewSteerPrompt = new Map<string, string>();
   /** guildId -> buffered AI crate-digger picks for Endless Wave. */
@@ -1045,6 +1048,17 @@ export class DiscordBot {
     // interaction to read a member from), so the bridge asks the bot to join
     // wherever the listeners are.
     bridge.onEnsureJoined = () => this.joinWhereListenersAre();
+    // Live decks: the bridge carries the sockets, the bot owns the mixers.
+    bridge.onDeckAction = (guildId, msg) => {
+      void this.handleDeckMessage(guildId, msg).catch((err) => {
+        console.warn(`[deck] ${err instanceof Error ? err.message : err}`);
+        bridge.notice('error', 'Deck command failed — see the bot log.');
+      });
+    };
+    bridge.deckStateProvider = (guildId) => {
+      const gid = guildId ?? bridge.getPrimaryGuildId();
+      return gid ? (this.deckControllers.get(gid)?.state() ?? null) : null;
+    };
     // The web panel's Share button posts the jam card through the same path as
     // /jam. The panel has no channel of its own, so the bot resolves one (the
     // panel's channel, else the last text channel it heard from).
@@ -1169,6 +1183,98 @@ export class DiscordBot {
   /** Resolve the isolated playback session for a guild (DMs share one session). */
   private sessionFor(guildId: string | null | undefined): Session {
     return this.sessions.get(guildId ?? '__dm__');
+  }
+
+  /** Live decks for a guild — one mixer per guild, sharing its voice link. */
+  private deckFor(guildId: string): DeckController {
+    let decks = this.deckControllers.get(guildId);
+    if (!decks) {
+      const s = this.sessionFor(guildId);
+      decks = new DeckController({
+        guildId,
+        voice: s.voice,
+        resolve: (query) => resolvePlayInput(query),
+        resolveStream: async (track) => (await EW.resolveCandidate(track))?.streamUrl,
+        // Decks own the stream while they're up; the queue keeps its cursor so
+        // `V@r` picks up exactly where the set interrupted it.
+        pauseQueue: () => s.playback.pause(),
+        onState: (state) => this.bridge.broadcastDeck(state, guildId),
+      });
+      this.deckControllers.set(guildId, decks);
+    }
+    return decks;
+  }
+
+  /**
+   * Deck commands from the `/deck` page. Continuous controls (fader, trim, EQ,
+   * seek) stay silent — only discrete actions and failures toast, otherwise
+   * dragging the crossfader would fire a hundred notifications.
+   */
+  private async handleDeckMessage(
+    guildId: string | undefined,
+    msg: (InboundMessage & { type: 'deck:load' }) | (InboundMessage & { type: 'deck:control' }),
+  ): Promise<void> {
+    const gid = guildId ?? this.bridge.getPrimaryGuildId() ?? '';
+    if (!gid) return;
+    const decks = this.deckFor(gid);
+    const report = (r: { ok: boolean; message: string }): void => {
+      this.bridge.notice(r.ok ? 'success' : 'error', r.message);
+    };
+    const quiet = (r: { ok: boolean; message: string }): void => {
+      if (!r.ok) this.bridge.notice('error', r.message);
+    };
+
+    if (msg.type === 'deck:load') {
+      if (!this.sessionFor(gid).voice.isConnectionReady() && !(await this.joinWhereListenersAre())) {
+        report({ ok: false, message: 'Join a voice channel first — I need somewhere to spin.' });
+        return;
+      }
+      report(await decks.load(msg.deck, msg.query));
+    } else {
+      const deck: DeckId = msg.deck ?? 'a';
+      switch (msg.action) {
+        case 'play':
+          report(decks.play(msg.deck));
+          break;
+        case 'pause':
+          report(decks.pause(msg.deck));
+          break;
+        case 'cue':
+          quiet(decks.pause(deck));
+          quiet(decks.seek(deck, 0));
+          break;
+        case 'seek':
+          quiet(decks.seek(deck, msg.positionMs ?? 0));
+          break;
+        case 'nudge':
+          quiet(decks.nudge(deck, msg.positionMs ?? 0));
+          break;
+        case 'sync':
+          report(decks.sync());
+          break;
+        case 'stop':
+          report(decks.stop());
+          break;
+        case 'crossfader':
+          quiet(decks.crossfader(msg.value ?? 0.5));
+          break;
+        case 'gain':
+          quiet(decks.gain(deck, msg.value ?? 1));
+          break;
+        case 'eq':
+          quiet(decks.eq(deck, (msg.band ?? 'mid') as keyof DeckEq, msg.db ?? 0));
+          break;
+        case 'kill':
+          quiet(decks.kill(deck, (msg.band ?? 'mid') as keyof DeckEq));
+          break;
+        case 'tempo':
+          quiet(decks.tempo(deck, msg.tempo ?? 1));
+          break;
+        default:
+          break;
+      }
+    }
+    this.bridge.broadcastDeck(decks.state(), gid);
   }
 
   async start(): Promise<void> {
@@ -4193,6 +4299,12 @@ export class DiscordBot {
           });
           const sent = await message.reply(reply);
           if (sent?.id) this.rememberAmokMessage(sent.id);
+          break;
+        }
+
+        case 'deck': {
+          if (!canUse('deck')) return void (await deny());
+          await message.reply(await this.deckCommandText(message.guildId ?? '', args));
           break;
         }
 
@@ -9765,6 +9877,117 @@ export class DiscordBot {
     ];
   }
 
+  /**
+   * `V@deck …` — text-side control for the live decks. The full mixer lives on
+   * the `/deck` page (faders and EQ need a UI); this covers loading and the
+   * transport so a set can be driven from chat or a phone.
+   */
+  private async deckCommandText(gid: string, raw: string): Promise<string> {
+    const decks = this.deckFor(gid);
+    const trimmed = raw.trim();
+    const [sub = 'status', ...rest] = trimmed.split(/\s+/);
+    const arg = rest.join(' ').trim();
+    const st = decks.state();
+    const deckArg = (arg.split(/\s+/)[0] ?? '').toLowerCase();
+    const isDeck = deckArg === 'a' || deckArg === 'b';
+    const deck: DeckId = isDeck ? (deckArg as DeckId) : 'a';
+    const value = isDeck ? arg.replace(/^\S+\s*/, '').trim() : arg;
+
+    const parseTime = (v: string): number => {
+      const clock = /^(\d+):([0-5]?\d)$/.exec(v);
+      if (clock) return (Number(clock[1]) * 60 + Number(clock[2])) * 1000;
+      const n = Number(v);
+      return Number.isFinite(n) ? n * 1000 : 0;
+    };
+
+    switch (sub.toLowerCase()) {
+      case 'load':
+      case 'cue':
+      case 'a':
+      case 'b': {
+        // `V@deck a <song>` and `V@deck load a <song>` mean the same thing.
+        let target: DeckId = 'a';
+        let query = arg;
+        if (sub === 'a' || sub === 'b') {
+          target = sub;
+        } else if (isDeck) {
+          target = deck;
+          query = value;
+        }
+        if (!query) return 'Usage: `V@deck a <song or link>` / `V@deck b <song or link>`.';
+        if (!this.sessionFor(gid).voice.isConnectionReady() && !(await this.joinWhereListenersAre())) {
+          return 'Join a voice channel first (`V@j`), then load a deck.';
+        }
+        return (await decks.load(target, query)).message;
+      }
+      case 'play':
+      case 'go':
+        return decks.play().message;
+      case 'pause':
+        return decks.pause().message;
+      case 'stop':
+      case 'off':
+        return decks.stop().message;
+      case 'sync':
+        return decks.sync().message;
+      case 'nudge': {
+        const ms = Number(value);
+        if (!Number.isFinite(ms) || !ms) return 'Usage: `V@deck nudge a 25` (milliseconds).';
+        return decks.nudge(deck, ms).message;
+      }
+      case 'seek': {
+        const ms = parseTime(value);
+        if (!ms) return 'Usage: `V@deck seek a 1:30`.';
+        return decks.seek(deck, ms).message;
+      }
+      case 'cross':
+      case 'xfade': {
+        const pct = Number(value.replace('%', ''));
+        if (!Number.isFinite(pct)) return 'Usage: `V@deck cross 60` (0 = A, 100 = B).';
+        return decks.crossfader(Math.max(0, Math.min(1, pct / 100))).message;
+      }
+      case 'gain':
+      case 'trim': {
+        const pct = Number(value.replace('%', ''));
+        if (!Number.isFinite(pct)) return 'Usage: `V@deck gain a 85`.';
+        return decks.gain(deck, Math.max(0, Math.min(1, pct / 100))).message;
+      }
+      case 'eq': {
+        const [bandRaw = 'mid', dbRaw = '0'] = value.split(/\s+/);
+        const band = bandRaw.toLowerCase() as keyof DeckEq;
+        if (band !== 'low' && band !== 'mid' && band !== 'high') {
+          return 'Usage: `V@deck eq a low -40` (bands: low / mid / high).';
+        }
+        if (/^kill$/i.test(dbRaw)) return decks.kill(deck, band).message;
+        const db = Number(dbRaw);
+        if (!Number.isFinite(db)) return 'Give me a dB value, e.g. `V@deck eq a low -12`.';
+        return decks.eq(deck, band, db).message;
+      }
+      case 'tempo': {
+        const pct = Number(value.replace('%', ''));
+        if (!Number.isFinite(pct) || pct <= 0) return 'Usage: `V@deck tempo b 104` (percent) or `V@deck tempo b 105%`.';
+        return decks.tempo(deck, pct / 100).message;
+      }
+      case 'status':
+      case 'now':
+      default: {
+        const line = (label: string, slot: typeof st.a): string => {
+          if (!slot.source) return `**${label}** — empty`;
+          const pos = `${Math.floor(slot.positionMs / 60000)}:${String(Math.floor((slot.positionMs % 60000) / 1000)).padStart(2, '0')}`;
+          const eq = `L${slot.eq.low <= -39.5 ? '✕' : Math.round(slot.eq.low)} M${slot.eq.mid <= -39.5 ? '✕' : Math.round(slot.eq.mid)} H${slot.eq.high <= -39.5 ? '✕' : Math.round(slot.eq.high)}`;
+          return `**${label}** ${slot.playing ? '▶' : '⏸'} ${slot.source.title} — ${pos}/${Math.floor(slot.durationMs / 60000)}:${String(Math.floor((slot.durationMs % 60000) / 1000)).padStart(2, '0')} · ${slot.bpm ? `${slot.bpm} BPM` : 'bpm…'} · ${eq}`;
+        };
+        return [
+          '🎛️ **Live decks**',
+          line('A', st.a),
+          line('B', st.b),
+          `Crossfader ${Math.round(st.crossfader * 100)}% · open \`/deck\` for faders, EQ knobs and cue points.`,
+          '`V@deck a <song>` · `play` · `pause` · `sync` · `cross 60` · `eq a low kill` · `stop`',
+        ].join('\n');
+      }
+    }
+  }
+
   private async mixTracks(s: Session, a: string, b: string, sec: number): Promise<string> {
     const d = Math.max(2, Math.min(20, sec || 6));
     const ra = (await resolvePlayInput(a).catch(() => []))[0];
@@ -11964,6 +12187,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/npchannel` · `V@npc` — pin the live now-playing strip to this channel (mod; `off` disables it)',
       '`/hype on|off` · `V@hype` — auto-hype: drop a hit on strong beats',
       '`/mix <a> <b>` · `V@mix <a> | <b>` — crossfade two tracks into one mix',
+      '`V@deck` (`V@dk`) — live two-deck mixer: `V@deck a <song>`, `b <song>`, `play`, `sync`, `cross 60`, `eq a low kill`, `stop`. Full faders + EQ on the web `/deck` page (mod)',
       '`/mashup <a> <b>` · `V@mashup <a> | <b>` — render a tempo/key-matched blend (downloadable) + 5 similar tracks',
       '`V@mashup list` · `V@mashup remove <n>` · `V@mashup edit <n> <a> | <b>` · `V@mashup move <n> <m>` · `V@mashup clear` — manage the mashup queue (up to 5 lined up while one renders)',
       '`/mashupgame` · `V@mashupgame` (`V@mg`) — auto-pick two queued songs, render stem blends, vote for the best',

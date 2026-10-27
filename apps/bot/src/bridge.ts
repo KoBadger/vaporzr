@@ -7,6 +7,7 @@ import vm from 'node:vm';
 import { WebSocket, WebSocketServer } from 'ws';
 import {
   emptyState,
+  type DeckMixerState,
   type InboundMessage,
   type OutboundMessage,
   type PlaybackState,
@@ -115,6 +116,19 @@ export class Bridge {
   librespot: SpotifyBackend;
   /** Routed to the Discord layer when the panel changes autoplay mode. */
   private endlessWaveToggle: ((guildId: string, mode: 'off' | 'basic' | 'smart') => void) | null = null;
+  /**
+   * Live-deck control. The bridge owns the socket and the guild context; the
+   * Discord layer owns the mixer (per guild, next to the queue), so deck
+   * messages are forwarded rather than handled here.
+   */
+  onDeckAction:
+    | ((
+        guildId: string | undefined,
+        msg: (InboundMessage & { type: 'deck:load' }) | (InboundMessage & { type: 'deck:control' }),
+      ) => void)
+    | null = null;
+  /** Current deck state for a guild, or null when that guild has no decks. */
+  deckStateProvider: ((guildId?: string) => DeckMixerState | null) | null = null;
   /** Per-socket auth state: true = key holder (full control), false = guest (view-only). */
   /** Per-socket credential level: control (panel), view (watch/listen) or guest (Activity). */
   private socketScope = new Map<WebSocket, AccessScope | 'guest'>();
@@ -585,6 +599,22 @@ export class Bridge {
       case 'state:request':
         this.sendSnapshot(socket);
         break;
+      case 'deck:load':
+      case 'deck:control':
+        // Decks change what the whole channel hears — control scope only, and
+        // never a guest/Activity socket.
+        if (!this.isAuthed(socket)) {
+          this.notice('error', 'Live decks need the control key.');
+          return;
+        }
+        if (!this.allowCommand(socket)) return;
+        this.onDeckAction?.(this.clientGuildId(socket), msg);
+        break;
+      case 'deck:request': {
+        const state = this.deckStateProvider?.(this.clientGuildId(socket));
+        if (state) this.sendToSocket(socket, { type: 'deck:state', state });
+        break;
+      }
       default:
         break;
     }
@@ -1305,6 +1335,11 @@ export class Bridge {
   /** Toast-style feedback to every connected panel. */
   notice(level: 'info' | 'success' | 'error', text: string): void {
     this.broadcastPanels({ type: 'panel:notice', level, text });
+  }
+
+  /** Push live-deck state to every control surface (panels filter by guild). */
+  broadcastDeck(state: DeckMixerState, guildId?: string): void {
+    this.broadcastPanels({ type: 'deck:state', state, guildId });
   }
 
   /** Toast panels, plus a direct copy to the socket that asked: the desktop
