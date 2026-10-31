@@ -23,6 +23,12 @@ import { youtubeProxyHops } from '@vaporzr/core/youtube';
 import { safeFetch } from '@vaporzr/core/net';
 import { createMusicResource } from './opusStream.js';
 
+/** The slice of an opusscript decoder the Weasel ear pipeline uses. */
+interface OpusScriptLike {
+  decode(packet: Buffer): Buffer;
+}
+type OpusScriptCtor = new (rate: number, channels: number, app?: number) => OpusScriptLike;
+
 /**
  * The slice of a discord.js voice channel the bitrate negotiation needs, kept
  * structural so VoiceManager stays free of discord.js state (it is unit-tested
@@ -139,6 +145,8 @@ export class VoiceManager implements AudioTransport {
   /** Optional voice-channel utterance listener (`v@w listen on`). */
   private voiceListenHandler: ((userId: string, pcmMono48k: Buffer) => void) | null = null;
   private activeVoiceCaptures = new Set<string>();
+  /** Cached `opusscript` decoder loader (resolved when the ears are armed). */
+  private opusScriptLoad: Promise<OpusScriptCtor | null> | null = null;
 
   /** True when the voice connection is alive but a SERVER-SIDE stream has died
    *  (ffmpeg crashed, pipe broken, etc.) — resume should re-stream instead of unpause.
@@ -1452,54 +1460,101 @@ export class VoiceManager implements AudioTransport {
   /** Enable or disable live voice-channel speech capture (`v@w listen on`). */
   setVoiceListenHandler(fn: ((userId: string, pcmMono48k: Buffer) => void) | null): void {
     this.voiceListenHandler = fn;
-    if (!fn) this.activeVoiceCaptures.clear();
+    // Warm the decoder as soon as the ears are switched on: doing the dynamic
+    // import inside the speaking handler cost the first syllables of the first
+    // utterance, which is exactly where "Hey Weasel, ..." lives.
+    if (fn) void this.loadOpusScript();
+    else this.activeVoiceCaptures.clear();
+  }
+
+  /** Resolve `opusscript` once and cache it (null when unavailable). */
+  private loadOpusScript(): Promise<OpusScriptCtor | null> {
+    if (!this.opusScriptLoad) {
+      this.opusScriptLoad = import('opusscript')
+        .then((mod) => {
+          const ctor = (mod as { default?: OpusScriptCtor }).default ?? null;
+          if (!ctor) console.warn('[weasel] ears: opusscript has no decoder export');
+          return ctor;
+        })
+        .catch((err) => {
+          console.warn('[weasel] ears: opusscript unavailable —', err instanceof Error ? err.message : err);
+          return null;
+        });
+    }
+    return this.opusScriptLoad;
   }
 
   private captureUserUtterance(connection: VoiceConnection, userId: string): void {
     if (!this.voiceListenHandler || this.activeVoiceCaptures.has(userId)) return;
     this.activeVoiceCaptures.add(userId);
     void (async () => {
+      const OpusScriptCtor = await this.loadOpusScript();
+      if (!OpusScriptCtor) {
+        this.activeVoiceCaptures.delete(userId);
+        return;
+      }
+      let opusStream: Readable;
+      let decoder: OpusScriptLike;
       try {
-        const mod = (await import('opusscript')) as unknown as {
-          default?: new (rate: number, channels: number, app?: number) => { decode(buf: Buffer): Buffer };
-        };
-        const OpusScriptCtor = mod.default;
-        if (!OpusScriptCtor) {
-          this.activeVoiceCaptures.delete(userId);
+        decoder = new OpusScriptCtor(48_000, 1, 2049);
+        opusStream = connection.receiver.subscribe(userId, {
+          end: { behavior: EndBehaviorType.AfterSilence, duration: 900 },
+        }) as unknown as Readable;
+      } catch (err) {
+        console.warn(`[weasel] ears: could not subscribe to ${userId} —`, err instanceof Error ? err.message : err);
+        this.activeVoiceCaptures.delete(userId);
+        return;
+      }
+      const chunks: Buffer[] = [];
+      let totalBytes = 0;
+      let decodeErrors = 0;
+      let finished = false;
+      let guard: NodeJS.Timeout | null = null;
+      const maxBytes = 48_000 * 2 * 8; // cap at 8s of 48kHz mono Int16 PCM
+      const finish = (why: string): void => {
+        if (finished) return;
+        finished = true;
+        if (guard) clearTimeout(guard);
+        this.activeVoiceCaptures.delete(userId);
+        try {
+          opusStream.destroy();
+        } catch {
+          /* already closed */
+        }
+        const seconds = totalBytes / (48_000 * 2);
+        if (decodeErrors > 0) {
+          console.warn(`[weasel] ears: ${decodeErrors} packet(s) from ${userId} failed to decode`);
+        }
+        if (totalBytes < 48_000) {
+          console.log(`[weasel] ears: ${seconds.toFixed(1)}s from ${userId} dropped (${why}, under 0.5s)`);
           return;
         }
-        const decoder = new OpusScriptCtor(48_000, 1, 2049);
-        const opusStream = connection.receiver.subscribe(userId, {
-          end: { behavior: EndBehaviorType.AfterSilence, duration: 900 },
-        });
-        const chunks: Buffer[] = [];
-        let totalBytes = 0;
-        const maxBytes = 48_000 * 2 * 8; // cap at 8s of 48kHz mono Int16 PCM
-        opusStream.on('data', (packet: Buffer) => {
-          if (totalBytes >= maxBytes) return;
-          try {
-            const pcm = decoder.decode(packet);
-            if (pcm && pcm.length > 0) {
-              chunks.push(pcm);
-              totalBytes += pcm.length;
-            }
-          } catch {
-            /* ignore corrupt packet */
+        console.log(`[weasel] ears: captured ${seconds.toFixed(1)}s from ${userId} (${why})`);
+        const cb = this.voiceListenHandler;
+        if (cb) cb(userId, Buffer.concat(chunks, totalBytes));
+      };
+      // A capture that never sees its 'end' event (silent mic, a dropped
+      // subscription) would otherwise pin this user in activeVoiceCaptures and
+      // silently swallow every later utterance they make.
+      guard = setTimeout(() => finish('timeout'), 20_000);
+      guard.unref?.();
+      opusStream.on('data', (packet: Buffer) => {
+        if (totalBytes >= maxBytes) return;
+        try {
+          const pcm = decoder.decode(packet);
+          if (pcm && pcm.length > 0) {
+            chunks.push(pcm);
+            totalBytes += pcm.length;
           }
-        });
-        const done = (): void => {
-          this.activeVoiceCaptures.delete(userId);
-          if (totalBytes < 48_000) return; // < 0.5s speech
-          const cb = this.voiceListenHandler;
-          if (cb) cb(userId, Buffer.concat(chunks, totalBytes));
-        };
-        opusStream.once('end', done);
-        opusStream.once('error', () => {
-          this.activeVoiceCaptures.delete(userId);
-        });
-      } catch {
-        this.activeVoiceCaptures.delete(userId);
-      }
+        } catch {
+          decodeErrors++;
+        }
+      });
+      opusStream.once('end', () => finish('silence'));
+      opusStream.once('error', (err: Error) => {
+        console.warn(`[weasel] ears: stream error for ${userId} —`, err.message);
+        finish('error');
+      });
     })();
   }
 
