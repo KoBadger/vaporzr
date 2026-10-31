@@ -749,6 +749,24 @@ function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
+/**
+ * Strip Discord markdown, mentions and links before handing text to the TTS
+ * engine, so the Weasel doesn't read out asterisks, backticks or URLs.
+ */
+export function stripForSpeech(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/<[@#][!&]?\d+>/g, '')
+    .replace(/https?:\/\/\S+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 /** Parse a sleep-timer spec ("30m", "1h", "45s", "1h30m") into milliseconds. */
 export function parseSleepSpec(spec: string): number | null {
   const m = /^(\d+(?:\.\d+)?)([smh])$/.exec(spec.trim().toLowerCase());
@@ -973,12 +991,16 @@ export class DiscordBot {
         miniNp?: Record<string, { channelId: string; messageId: string }>;
         miniTrackUri?: Record<string, string>;
         lastTextChannel?: Record<string, string>;
+        weaselVj?: string[];
+        weaselListen?: string[];
       };
       for (const [k, v] of Object.entries(d.panels ?? {})) this.panels.set(k, v);
       for (const [k, v] of Object.entries(d.npMessages ?? {})) this.npMessages.set(k, v);
       for (const [k, v] of Object.entries(d.miniNp ?? {})) this.miniNp.set(k, v);
       for (const [k, v] of Object.entries(d.miniTrackUri ?? {})) this.miniTrackUri.set(k, v);
       for (const [k, v] of Object.entries(d.lastTextChannel ?? {})) this.lastTextChannel.set(k, v);
+      for (const g of d.weaselVj ?? []) this.weaselVjGuilds.add(g);
+      for (const g of d.weaselListen ?? []) this.weaselListenGuilds.add(g);
       const n = this.panels.size + this.npMessages.size + this.miniNp.size;
       if (n) console.log(`[vaporzr] restored ${n} panel/now-playing registration(s) from disk`);
     } catch (err) {
@@ -1003,6 +1025,8 @@ export class DiscordBot {
         miniNp: Object.fromEntries(this.miniNp),
         miniTrackUri: Object.fromEntries(this.miniTrackUri),
         lastTextChannel: Object.fromEntries(this.lastTextChannel),
+        weaselVj: [...this.weaselVjGuilds],
+        weaselListen: [...this.weaselListenGuilds],
       };
       await fs.mkdir(config.dataDir, { recursive: true });
       await fs.writeFile(this.panelsFile(), JSON.stringify(obj), 'utf8');
@@ -1077,6 +1101,8 @@ export class DiscordBot {
     sessions.onRestoredPlaying((s, info) => this.scheduleRestartResume(s, info));
     // Every per-guild session refreshes that server's control panel on changes.
     sessions.onSessionCreated((s) => {
+      // Sessions created after boot (lazy join) must get the ears too.
+      this.armWeaselEars(s);
       s.queue.subscribe({
         onQueueChanged: () => this.schedulePanelRefresh(),
         onStateChanged: (st) => {
@@ -1336,6 +1362,9 @@ export class DiscordBot {
       // seamless restart resume) run at boot instead of waiting for the first
       // event in that guild.
       for (const g of this.client.guilds.cache.values()) this.sessions.get(g.id);
+      // Re-arm the Weasel's voice ears for guilds that had `V@w listen on`
+      // before the last restart — otherwise the feature silently stays off.
+      this.restoreWeaselVoiceState();
       // Alert the owner if the YouTube canary flips to a broken state.
       setYoutubeHealthListener((status, context) => void this.alertYoutubeHealth(status, context));
       if (!config.ownerId) {
@@ -11307,6 +11336,28 @@ export class DiscordBot {
     }
   }
 
+  /** Point a session's voice manager at the live-ear handler (or detach it). */
+  private armWeaselEars(s: Session): void {
+    const on = this.weaselListenGuilds.has(s.guildId);
+    s.voice.setVoiceListenHandler(on ? (uid, pcm) => void this.onWeaselVoiceUtterance(s, uid, pcm) : null);
+  }
+
+  /**
+   * Re-arm the ears after a restart. The listen/VJ toggles are persisted in
+   * panels.json, but a fresh process has no speak handler wired into its voice
+   * managers yet — so `V@w listen on` used to go permanently quiet after every
+   * deploy, with nothing in the log to say why.
+   */
+  private restoreWeaselVoiceState(): void {
+    for (const s of this.sessions.all()) this.armWeaselEars(s);
+    if (this.weaselListenGuilds.size > 0) {
+      console.log(`[weasel] voice ears restored for ${this.weaselListenGuilds.size} guild(s)`);
+    }
+    if (this.weaselVjGuilds.size > 0) {
+      console.log(`[weasel] auto-VJ restored for ${this.weaselVjGuilds.size} guild(s)`);
+    }
+  }
+
   /** Speak a short Weasel line over the active voice stream with music ducking. */
   private async speakWeaselInVoice(s: Session, text: string): Promise<boolean> {
     if (!s.voice.isConnectionReady()) return false;
@@ -11371,19 +11422,26 @@ export class DiscordBot {
     try {
       const wav = pcmMono48kToWav(pcmMono48k);
       const transcript = await transcribeVoiceUtterance(wav);
-      if (!transcript) return;
+      if (!transcript) {
+        console.log('[weasel] ears: heard speech but got no transcript (noise or transcription failed)');
+        return;
+      }
+      console.log(`[weasel] ears: heard "${truncate(transcript, 160)}"`);
       // Respond when the speaker addresses The Weasel or gives a clear DJ voice request
       const addressed =
         /\b(weasel|pauly|amok|bu+ddy|broham|hey dj|yo dj)\b/i.test(transcript) ||
         /^(?:hey|yo|okay|ok)?\s*(?:play|queue|put on|throw on|skip|what song|who sings|roast)\b/i.test(
           transcript.trim(),
         );
-      if (!addressed) return;
+      if (!addressed) {
+        console.log('[weasel] ears: ignored — not addressed to him (say "Hey Weasel, ...")');
+        return;
+      }
 
       const guild = this.client.guilds.cache.get(gid);
       const member = guild?.members.cache.get(userId);
       const username = member?.user.username ?? 'broham';
-      const channelId = this.lastTextChannel.get(gid) ?? null;
+      const channelId = this.lastTextChannel.get(gid) ?? guild?.systemChannelId ?? null;
 
       const reply = await this.handleWeaselRequest(s, transcript, {
         scopeId: gid,
@@ -11394,8 +11452,14 @@ export class DiscordBot {
         ensureJoin: async () => true,
       });
 
+      // Speak only the lead answer, with markdown/links stripped so the TTS
+      // doesn't read out asterisks, backticks and URLs.
       const firstParagraph = reply.split(/\n\n/)[0] ?? reply;
-      await this.speakWeaselInVoice(s, firstParagraph);
+      const spoken = stripForSpeech(firstParagraph);
+      const spoke = spoken ? await this.speakWeaselInVoice(s, truncate(spoken, 600)) : false;
+      if (!spoke) {
+        console.warn('[weasel] ears: reply could not be spoken (voice link not ready?)');
+      }
 
       if (channelId) {
         const ch = this.client.channels.cache.get(channelId);
@@ -11404,8 +11468,8 @@ export class DiscordBot {
           if (sent?.id) this.rememberAmokMessage(sent.id);
         }
       }
-    } catch {
-      /* ignore transient voice transcription errors */
+    } catch (err) {
+      console.warn('[weasel] ears: utterance failed —', err instanceof Error ? err.message : err);
     } finally {
       this.weaselListenBusy.delete(gid);
     }
@@ -11450,6 +11514,7 @@ export class DiscordBot {
         else this.weaselVjGuilds.add(gid);
       }
       const active = this.weaselVjGuilds.has(gid);
+      this.scheduleSavePanels();
       return active
         ? "🎙️ **Weasel Auto-VJ is ON, buuuddy!** I'll hop on the mic with SSML surfer cadence and drop 90s MTV Spring Break intros (+ sample/producer notes) when tracks kick off. (`V@w vj off` to chill)"
         : '🔇 **Weasel Auto-VJ is OFF** — keeping the mic quiet during track changes, broham.';
@@ -11467,7 +11532,8 @@ export class DiscordBot {
         else this.weaselListenGuilds.add(gid);
       }
       const active = this.weaselListenGuilds.has(gid);
-      s.voice.setVoiceListenHandler(active ? (uid, pcm) => void this.onWeaselVoiceUtterance(s, uid, pcm) : null);
+      this.armWeaselEars(s);
+      this.scheduleSavePanels();
       if (active && !s.voice.isJoined()) {
         try {
           await opts.ensureJoin();
