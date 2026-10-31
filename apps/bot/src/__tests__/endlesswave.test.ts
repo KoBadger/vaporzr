@@ -71,6 +71,7 @@ import {
   extractSeeds,
   normalizeTrackName,
   pickContext,
+  rotationSeeds,
   pickBasicTrack,
   pickNextTrack,
   resolveCandidate,
@@ -132,6 +133,34 @@ function stateWithHistory(n: number): EndlessWaveState {
 }
 
 /* ---------- tests ---------- */
+
+describe('seed rotation (dead-end widening)', () => {
+  const mk = (name: string, artists: string[]): TrackInfo => ({
+    uri: `youtube:video:${name}`,
+    name,
+    artists,
+    album: '',
+    durationMs: 200_000,
+    source: 'youtube',
+    addedBy: 'test',
+    addedAt: 0,
+  });
+
+  it('walks the context newest-first and de-dupes case-insensitively', () => {
+    const seeds = rotationSeeds([mk('x', ['Sublime']), mk('y', ['Pennywise']), mk('z', ['sublime', 'No Doubt'])]);
+    expect(seeds).toEqual(['sublime', 'No Doubt', 'Pennywise']);
+  });
+
+  it('appends session artists after the context ones, skipping junk short names', () => {
+    const seeds = rotationSeeds([mk('x', ['AB'])], ['M83', 'Sublime']);
+    // 'AB' is too short to search on; session artists follow, newest first.
+    expect(seeds).toEqual(['Sublime', 'M83']);
+  });
+
+  it('is empty when there is nothing to rotate to', () => {
+    expect(rotationSeeds([], [])).toEqual([]);
+  });
+});
 
 describe('state management', () => {
   it('creates initial state as inactive', () => {
