@@ -878,6 +878,22 @@ export function extractSeeds(recentTracks: TrackInfo[]): string[] {
   return seeds;
 }
 
+/** Seed artists for the dead-end rotation strategy: the context tracks' artists
+ *  (most recent first) followed by every artist this session, de-duplicated
+ *  case-insensitively and skipping junk short names. */
+export function rotationSeeds(recentTracks: TrackInfo[], recentArtists: string[] = []): string[] {
+  const out: string[] = [];
+  const push = (raw: string): void => {
+    const name = raw.trim();
+    if (name.length < 3) return;
+    if (out.some((s) => s.toLowerCase() === name.toLowerCase())) return;
+    out.push(name);
+  };
+  for (const t of [...recentTracks].reverse()) for (const a of t.artists) push(a);
+  for (const a of [...recentArtists].reverse()) push(a);
+  return out;
+}
+
 /** Pick the next track. Returns null if nothing suitable was found.
  *  `excludeUris` lets callers reject candidates that already failed to resolve.
  *  `upcoming` is the full list of tracks still waiting in the queue — used to
@@ -1030,15 +1046,26 @@ export async function pickNextTrack(
   // picks (each with a confidence score) from a ~2M-track electronic/underground
   // catalog, merged alongside the Spotify candidates so scoring picks the best of
   // both. No-op without an API key, or when the seed isn't in cosine's catalog.
+  //
+  // Seeded from the last THREE context tracks, not just the newest one: a single
+  // seed has a small neighbourhood, and once every id in it has been queued the
+  // picker dead-ends while two other seeds are still unexplored.
   if (cosineEnabled() && recentTracks.length > 0) {
-    const last = recentTracks[recentTracks.length - 1];
-    try {
-      const cos = await cosineSimilarCandidates({ name: last.name, artists: last.artists, uri: last.uri }, 30);
-      allCandidates.push(...cos);
-      const cosViable = viable(cos);
-      if (cosViable.length > 0) survivors = survivors.concat(cosViable);
-    } catch {
-      // best-effort — cosine must never break a pick
+    const seenCosine = new Set<string>();
+    const seeds = [...recentTracks].reverse().slice(0, 3);
+    for (const seed of seeds) {
+      try {
+        const cos = await cosineSimilarCandidates({ name: seed.name, artists: seed.artists, uri: seed.uri }, 30);
+        const fresh = cos.filter(
+          (c) => c.cosineId && !seenCosine.has(c.cosineId) && !state.queuedCosineIds.has(c.cosineId),
+        );
+        for (const c of fresh) if (c.cosineId) seenCosine.add(c.cosineId);
+        allCandidates.push(...fresh);
+        const cosViable = viable(fresh);
+        if (cosViable.length > 0) survivors = survivors.concat(cosViable);
+      } catch {
+        // best-effort — cosine must never break a pick
+      }
     }
   }
 
@@ -1175,6 +1202,45 @@ export async function pickNextTrack(
         survivors = viable(dz);
       } catch {
         // fall through — Deezer is best-effort only
+      }
+    }
+  }
+
+  // Strategy 6 (seed rotation): every strategy above seeds from the LAST context
+  // track and the "similar artist" it just chose. When that one neighbourhood is
+  // exhausted — every cosine id already queued, every artist cooled, every
+  // recommendation a dupe — they all come back empty and the wave dead-ends.
+  // Rotate the seed through the other context tracks (and then the artists seen
+  // this session) and ask Deezer for THEIR related artists' tracks, which is a
+  // genuinely different pool rather than the same candidates with looser
+  // filters. Deezer is keyless, so this costs no Spotify quota.
+  if (survivors.length === 0) {
+    stage = 6;
+    const seedArtists = rotationSeeds(recentTracks, state.recentArtists);
+
+    const rotatedViable = (c: ResolvedTrack): boolean => {
+      if (isLongFormMix(c)) return false;
+      if (isDuplicate(state, c.uri)) return false;
+      if (upcomingUris.has(c.uri)) return false;
+      if (c.cosineId && state.queuedCosineIds.has(c.cosineId)) return false;
+      if (excludeUris?.has(c.uri)) return false;
+      if (isRemixOrCover(state, c.name, c.artists)) return false;
+      const variants = nameVariants(normalizeTrackName(c.name), c.artists, state.recentArtists);
+      return !variants.some((v) => upcomingNames.has(v));
+    };
+
+    for (const artist of seedArtists.slice(0, 4)) {
+      try {
+        const pool = await deezerRelatedTracks(artist);
+        allCandidates.push(...pool);
+        const found = pool.filter(rotatedViable);
+        if (found.length > 0) {
+          console.log(`[endlesswave] seed rotation → "${artist}" opened ${found.length} fresh candidate(s)`);
+          survivors = found;
+          break;
+        }
+      } catch {
+        // try the next seed
       }
     }
   }
@@ -1324,6 +1390,23 @@ export async function pickBasicTrack(
       /* best-effort */
     }
   }
+  // Seed rotation: the seed above is the newest track (or the similar-artist it
+  // just chose). If that neighbourhood is spent, walk back through the context
+  // and try each earlier artist's related-artist pool instead of giving up.
+  if (survivors.length === 0) {
+    for (const artist of rotationSeeds(recentTracks).slice(0, 4)) {
+      try {
+        const pool = (await deezerRelatedTracks(artist)).filter(ok);
+        if (pool.length > 0) {
+          console.log(`[autoplay] seed rotation → "${artist}" opened ${pool.length} candidate(s)`);
+          survivors = pool;
+          break;
+        }
+      } catch {
+        /* next seed */
+      }
+    }
+  }
   if (survivors.length === 0) {
     try {
       const video = await searchAndResolveYoutube(seed);
@@ -1367,25 +1450,33 @@ export async function resolveCandidate(track: ResolvedTrack): Promise<TrackInfo 
 
   try {
     if (track.uri.startsWith('spotify:')) {
+      // Retry once with the artist-first form: a failed resolve is usually the
+      // search scoring nothing well (or a transient block), and the reversed
+      // query surfaces a different candidate set without touching the queue.
       const query = `${track.name} ${track.artists.join(' ')}`.trim();
-      const video = await searchAndResolveYoutube(query, {
-        name: track.name,
-        artists: track.artists,
-        durationMs: track.durationMs,
-      });
-      if (video && !isBadResult(video.name, video.artists)) {
-        return {
-          uri: track.uri,
+      const attempts = [query, `${track.artists.join(' ')} ${track.name}`.trim()].filter(
+        (q, i, all) => q.length > 0 && all.indexOf(q) === i,
+      );
+      for (const q of attempts) {
+        const video = await searchAndResolveYoutube(q, {
           name: track.name,
           artists: track.artists,
-          album: track.album,
           durationMs: track.durationMs,
-          image: track.image,
-          source: 'spotify',
-          streamUrl: video.streamUrl,
-          addedBy: 'endless-wave',
-          addedAt: Date.now(),
-        };
+        });
+        if (video && !isBadResult(video.name, video.artists)) {
+          return {
+            uri: track.uri,
+            name: track.name,
+            artists: track.artists,
+            album: track.album,
+            durationMs: track.durationMs,
+            image: track.image,
+            source: 'spotify',
+            streamUrl: video.streamUrl,
+            addedBy: 'endless-wave',
+            addedAt: Date.now(),
+          };
+        }
       }
     }
     if (track.streamUrl && !isBadResult(track.name, track.artists)) {
