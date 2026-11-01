@@ -1114,11 +1114,15 @@ export class DiscordBot {
       });
       if (action === 'list') return { ok: true, ...payload() };
       const result =
-        action === 'save'
-          ? controller.saveSampleSetup(name ?? '')
-          : action === 'apply'
-            ? controller.applySampleSetup(name ?? '')
-            : controller.deleteSampleSetup(name ?? '');
+        action === 'reset'
+          ? controller.resetSamplePads()
+          : action === 'fill'
+            ? controller.fillSamplePads()
+            : action === 'save'
+              ? controller.saveSampleSetup(name ?? '')
+              : action === 'apply'
+                ? controller.applySampleSetup(name ?? '')
+                : controller.deleteSampleSetup(name ?? '');
       if (result.ok) {
         for (const c of this.deckControllers.values()) bridge.broadcastDeck(c.state());
       }
@@ -1382,7 +1386,7 @@ export class DiscordBot {
           quiet(decks.tempo(deck, msg.tempo ?? 1));
           break;
         case 'cue-set':
-          report(decks.setCue(deck, msg.slot ?? 1));
+          report(decks.setCue(deck, msg.slot ?? 1, msg.positionMs));
           break;
         case 'cue-jump':
           quiet(decks.jumpCue(deck, msg.slot ?? 1));

@@ -105,6 +105,27 @@ few seconds).
 
 Keys: `q w e r t y u i` fire the FX pads in order.
 
+**Library, search and setups.** `LIBRARY` opens the whole `data/samples/`
+folder, grouped by subfolder. The search box suggests as you type (first
+letters are enough — `htcl` finds `hat-closed`), arrows move the highlight,
+`Enter` drops the sample on the first empty pad, and every entry still drags
+onto any pad. Saved setups load/save/delete below the list.
+
+`FILL` tops up empty pads from the library, spreading across categories so you
+don't end up with eight kicks. `RESET` puts the starter eight back.
+
+**Keys and headroom.** The mixer header shows each deck's Camelot key
+(`8A`, `9A`, …), tinted green when the pair is harmonic, amber for an energy
+lift and red for a clash. Under the crossfader, `MIX HEADROOM` shows what each
+side contributes after the fader — when the two add past full scale the `CLIP`
+lamp lights, which is the cue to pull a trim back. `SYNC / MATCH` also draws a
+**drift ring**: the arc grows with the phase error the lock is correcting, and
+the number inside is milliseconds.
+
+**Capture.** `CAPTURE CUE → A` / `→ B` under the hot cues copies this deck's
+playhead onto the other deck's first free cue pad — the fast way to line up a
+drop you just found.
+
 ## 4a. DJ filter
 
 Each deck has a single filter knob: **left of centre closes a low-pass**

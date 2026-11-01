@@ -18,6 +18,7 @@ import { downloadToTempFile } from '@vaporzr/core/mediaDownload';
 import { writeJsonAtomicSync } from '@vaporzr/core/jsonFile';
 import type { ResolvedTrack } from '@vaporzr/core/spotify';
 import { probeDuration } from '@vaporzr/core/suno';
+import { estimateKey } from '@vaporzr/core/audioFeatures';
 import { estimateTempo } from '@vaporzr/core/tempo';
 import type { VoiceManager } from './voice.js';
 
@@ -219,6 +220,12 @@ export class DeckController {
     void estimateTempo(file)
       .then((bpm) => {
         if (bpm && this.mixer.state()[deck].source?.file === file) this.mixer.setBpm(deck, bpm);
+      })
+      .catch(() => {});
+    // Key badge in the mixer: one short decode, same off-path rule as above.
+    void computeKey(file)
+      .then((key) => {
+        if (key && this.mixer.state()[deck].source?.file === file) this.mixer.setKey(deck, key);
       })
       .catch(() => {});
     // Waveform for the deck page — also off the critical path.
@@ -538,6 +545,55 @@ export class DeckController {
     layout.pads[b - 1] = tmp;
     this.saveLayout();
     return { ok: true, message: `Swapped pads ${a} and ${b}.` };
+  }
+
+  /** The eight pads the bank starts with (first files in the library). */
+  sampleDefaults(): Array<string | null> {
+    return Array.from({ length: SAMPLE_PADS }, (_, i) => this.sampleLibrary()[i]?.file ?? null);
+  }
+
+  /** Put the starter kit back on the pads, discarding the current layout. */
+  resetSamplePads(): DeckActionResult {
+    const layout = this.loadLayout();
+    layout.pads = this.sampleDefaults();
+    this.saveLayout();
+    const filled = layout.pads.filter(Boolean).length;
+    return { ok: true, message: `Pads reset to the starter kit (${filled}/8).` };
+  }
+
+  /**
+   * Fill empty pads from the library, spreading across categories so the bank
+   * ends up varied instead of eight kicks. Existing pads are kept.
+   */
+  fillSamplePads(): DeckActionResult {
+    const pads = this.samplePads();
+    const used = new Set(pads.filter((p): p is string => !!p));
+    const byCat = new Map<string, Array<string>>();
+    for (const item of this.sampleLibrary()) {
+      if (used.has(item.file)) continue;
+      const list = byCat.get(item.category) ?? [];
+      list.push(item.file);
+      byCat.set(item.category, list);
+    }
+    const queues = [...byCat.entries()].sort((a, b) => b[1].length - a[1].length).map(([, files]) => files);
+    let added = 0;
+    for (let i = 0; i < SAMPLE_PADS; i++) {
+      if (pads[i]) continue;
+      // One from each category per pass keeps the bank from being all drums.
+      for (const queue of queues) {
+        const next = queue.shift();
+        if (next) {
+          pads[i] = next;
+          added++;
+          break;
+        }
+      }
+    }
+    if (!added) return { ok: true, message: 'Every pad is already filled.' };
+    const layout = this.loadLayout();
+    layout.pads = pads;
+    this.saveLayout();
+    return { ok: true, message: `Filled ${added} pad${added === 1 ? '' : 's'} from the library.` };
   }
 
   /** Named pad layouts, newest last. */
@@ -920,6 +976,61 @@ export class DeckController {
 function formatMs(ms: number): string {
   const total = Math.max(0, Math.round(ms / 1000));
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+}
+
+/** Camelot wheel: index by chroma key (0 = C) and mode (1 = major, 0 = minor). */
+const CAMELOT_MAJOR = ['8B', '3B', '10B', '5B', '12B', '7B', '2B', '9B', '4B', '11B', '6B', '1B'];
+const CAMELOT_MINOR = ['5A', '12A', '7A', '2A', '9A', '4A', '11A', '6A', '1A', '8A', '3A', '10A'];
+
+/**
+ * Musical key for the deck badge: decode one minute of 8 kHz mono and let the
+ * same estimator the visualizer uses vote. Returns null when the clip is too
+ * quiet or the run fails, so the badge simply stays blank.
+ */
+function computeKey(file: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (v: string | null): void => {
+      if (settled) return;
+      settled = true;
+      resolve(v);
+    };
+    try {
+      const proc = spawn(
+        config.ffmpegPath,
+        [
+          '-hide_banner',
+          '-loglevel',
+          'error',
+          '-t',
+          '60',
+          '-i',
+          file,
+          '-ac',
+          '1',
+          '-ar',
+          '8000',
+          '-f',
+          's16le',
+          'pipe:1',
+        ],
+        { windowsHide: true },
+      );
+      const chunks: Buffer[] = [];
+      proc.stdout?.on('data', (d: Buffer) => {
+        if (chunks.length < 64) chunks.push(d);
+      });
+      proc.on('error', () => done(null));
+      proc.on('close', (code) => {
+        if (code !== 0) return done(null);
+        const { key, mode } = estimateKey(Buffer.concat(chunks));
+        if (key < 0 || key > 11) return done(null);
+        done((mode === 1 ? CAMELOT_MAJOR : CAMELOT_MINOR)[key] ?? null);
+      });
+    } catch {
+      done(null);
+    }
+  });
 }
 
 /**

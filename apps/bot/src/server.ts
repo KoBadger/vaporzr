@@ -1638,7 +1638,18 @@ async function handleRoute(
           res.end(JSON.stringify({ error: 'forbidden' }));
           return;
         }
-        const action = method === 'GET' ? 'list' : method === 'POST' ? 'save' : method === 'PUT' ? 'apply' : 'delete';
+        const action =
+          method === 'GET'
+            ? 'list'
+            : (url.searchParams.get('op') ?? '') === 'reset'
+              ? 'reset'
+              : (url.searchParams.get('op') ?? '') === 'fill'
+                ? 'fill'
+                : method === 'POST'
+                  ? 'save'
+                  : method === 'PUT'
+                    ? 'apply'
+                    : 'delete';
         const name = url.searchParams.get('name') ?? '';
         const out = bot.onSampleBank(action, name);
         res.writeHead(out.ok ? 200 : 400, {
