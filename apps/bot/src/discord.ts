@@ -1320,6 +1320,12 @@ export class DiscordBot {
         case 'nudge':
           quiet(decks.nudge(deck, msg.positionMs ?? 0));
           break;
+        case 'jogMode':
+          quiet(decks.setJogMode(deck, msg.mode === 'cdj' ? 'cdj' : 'vinyl'));
+          break;
+        case 'quantize':
+          quiet(decks.setQuantize(deck, Boolean(msg.on)));
+          break;
         case 'sync':
           report(decks.sync());
           break;

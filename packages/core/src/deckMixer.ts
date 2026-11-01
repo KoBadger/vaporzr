@@ -40,6 +40,14 @@ export function beatLoopRegion(
   return { inMs, outMs: inMs + beatMs * count, beats: count };
 }
 
+/** Round a seek target to the nearest beat when quantize is armed. */
+export function snapToBeat(ms: number, bpm: number | null | undefined, quantize: boolean): number {
+  if (!Number.isFinite(ms)) return 0;
+  if (!quantize || !bpm || bpm <= 0) return Math.max(0, Math.round(ms));
+  const beatMs = 60_000 / bpm;
+  return Math.max(0, Math.round(Math.round(ms / beatMs) * beatMs));
+}
+
 /** EQ band gains in dB. -40 is treated as a kill, 0 is flat. */
 export const DECK_EQ_MIN_DB = -40;
 export const DECK_EQ_MAX_DB = 6;
@@ -326,6 +334,8 @@ const emptySlot = (): DeckSlotState => ({
   loop: null,
   looping: false,
   drift: 1,
+  jogMode: 'vinyl',
+  quantize: true,
   filter: { type: 'off', cutoff: 20_000 },
 });
 
@@ -470,7 +480,8 @@ export class DeckMixer {
     const slot = this.slot(id);
     if (!slot.state.source) return;
     const dur = slot.state.durationMs;
-    const target = Math.max(0, dur ? Math.min(ms, dur - 250) : Math.round(ms));
+    const snapped = snapToBeat(ms, slot.state.bpm, slot.state.quantize);
+    const target = Math.max(0, dur ? Math.min(snapped, dur - 250) : Math.round(snapped));
     slot.baseMs = target;
     slot.consumedFrames = 0;
     slot.state.positionMs = target;
@@ -625,6 +636,23 @@ export class DeckMixer {
     const slot = this.slot(id);
     slot.state.bpm = bpm && bpm > 0 ? Number(bpm.toFixed(2)) : null;
     if (slot.state.source) slot.state.source.bpm = slot.state.bpm;
+    this.emit();
+  }
+
+  /** Vinyl scratches on drag; CDJ only bends while the platter is held. */
+  setJogMode(id: DeckId, mode: 'vinyl' | 'cdj'): void {
+    const slot = this.slot(id);
+    const next = mode === 'cdj' ? 'cdj' : 'vinyl';
+    if (slot.state.jogMode === next) return;
+    slot.state.jogMode = next;
+    this.emit();
+  }
+
+  /** When on, seeks/cue jumps/loops land on the nearest beat. */
+  setQuantize(id: DeckId, on: boolean): void {
+    const slot = this.slot(id);
+    if (slot.state.quantize === Boolean(on)) return;
+    slot.state.quantize = Boolean(on);
     this.emit();
   }
 

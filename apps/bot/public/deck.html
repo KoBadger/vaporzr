@@ -623,9 +623,67 @@
       /* ---------- jog + pitch ---------- */
       .jog-row {
         display: grid;
-        grid-template-columns: 1fr 62px;
+        grid-template-columns: 86px 1fr 62px;
         gap: 10px;
         align-items: center;
+      }
+      .jog-side {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .jog-side .side-label,
+      .left-read {
+        font-size: 8px;
+        font-weight: 700;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--dim);
+        text-align: center;
+      }
+      .jog-mode {
+        padding: 7px 4px;
+        font-size: 8.5px;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        color: var(--dim);
+      }
+      .jog-mode.on {
+        color: #04121a;
+        border-color: #17c48c;
+        background: linear-gradient(var(--green), #17c48c);
+      }
+      .q-btn {
+        padding: 7px 4px;
+        font-family: var(--mono);
+        font-size: 10px;
+        font-weight: 800;
+      }
+      .q-btn.on {
+        color: #1b1206;
+        border-color: var(--amber);
+        background: linear-gradient(var(--amber), #ffb066);
+      }
+      .bar-read {
+        font-family: var(--mono);
+        font-size: 9px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        color: #9fb0e8;
+        text-align: center;
+      }
+      .left-read {
+        margin-top: 2px;
+        color: #9fb0e8;
+        letter-spacing: 0.04em;
+      }
+      @media (max-width: 1120px) {
+        .jog-row {
+          grid-template-columns: 1fr 62px;
+        }
+        .jog-side {
+          display: none;
+        }
       }
       .jog {
         --prog: 0;
@@ -1681,6 +1739,13 @@
         </div>
 
         <div class="jog-row">
+          <div class="jog-side pro-only">
+            <span class="side-label">PLATTER</span>
+            <button class="jog-mode" data-jogmode="vinyl" title="Vinyl: drag the platter to scratch">VINYL</button>
+            <button class="jog-mode" data-jogmode="cdj" title="CDJ: drag the platter to bend the beat">CDJ</button>
+            <button class="q-btn" data-quantize title="Snap cues, seeks and loops to the beat grid">Q</button>
+            <span class="bar-read" data-out="bar">BAR —</span>
+          </div>
           <div class="jog" data-role="jog">
             <div class="jog-face">
               <div class="jog-time" data-role="jog-time">0:00</div>
@@ -1702,6 +1767,7 @@
               />
             </div>
             <output data-out="tempo">100</output>
+            <span class="left-read" data-out="left">— left</span>
           </div>
         </div>
 
@@ -1871,6 +1937,13 @@
         </div>
 
         <div class="jog-row">
+          <div class="jog-side pro-only">
+            <span class="side-label">PLATTER</span>
+            <button class="jog-mode" data-jogmode="vinyl" title="Vinyl: drag the platter to scratch">VINYL</button>
+            <button class="jog-mode" data-jogmode="cdj" title="CDJ: drag the platter to bend the beat">CDJ</button>
+            <button class="q-btn" data-quantize title="Snap cues, seeks and loops to the beat grid">Q</button>
+            <span class="bar-read" data-out="bar">BAR —</span>
+          </div>
           <div class="jog" data-role="jog">
             <div class="jog-face">
               <div class="jog-time" data-role="jog-time">0:00</div>
@@ -1892,6 +1965,7 @@
               />
             </div>
             <output data-out="tempo">100</output>
+            <span class="left-read" data-out="left">— left</span>
           </div>
         </div>
 
@@ -2255,6 +2329,26 @@
             if (jog) jog.style.setProperty('--prog', String(Math.round(pct)));
             var jogTime = el('[data-role="jog-time"]', root);
             if (jogTime) jogTime.textContent = fmt(pos);
+            // Platter mode + quantize live beside the wheel; the bar counter
+            // turns them into something you can see working.
+            all('[data-jogmode]', root).forEach(function (btn) {
+              btn.classList.toggle('on', (slot.jogMode || 'vinyl') === btn.getAttribute('data-jogmode'));
+            });
+            var qBtn = el('[data-quantize]', root);
+            if (qBtn) qBtn.classList.toggle('on', slot.quantize !== false);
+            var beatMs = slot.bpm ? 60_000 / slot.bpm : 0;
+            var barOut = el('[data-out="bar"]', root);
+            if (barOut) {
+              barOut.textContent = beatMs
+                ? 'BAR ' + (Math.floor(pos / beatMs / 4) + 1) + '.' + ((Math.floor(pos / beatMs) % 4) + 1)
+                : 'BAR —';
+            }
+            var leftOut = el('[data-out="left"]', root);
+            if (leftOut) {
+              leftOut.textContent = slot.durationMs
+                ? '-' + fmt(Math.max(0, slot.durationMs - pos)) + ' left'
+                : '— left';
+            }
             all('[data-band]', root).forEach(function (input) {
               var band = input.getAttribute('data-band');
               var v = Math.round(slot.eq[band]);
@@ -2596,6 +2690,18 @@
             wireDrop(card, function (file) {
               uploadTrack(id, file);
             });
+            all('[data-jogmode]', card).forEach(function (btn) {
+              btn.addEventListener('click', function () {
+                control('jogMode', { deck: id, mode: btn.getAttribute('data-jogmode') });
+              });
+            });
+            var qBtn = el('[data-quantize]', card);
+            if (qBtn) {
+              qBtn.addEventListener('click', function () {
+                var on = !(state && state[id] && state[id].quantize !== false);
+                control('quantize', { deck: id, on: on });
+              });
+            }
           });
 
           /** One transport rule for the deck card and the mobile thumb dock. */
@@ -2693,13 +2799,25 @@
                   jogEl.setPointerCapture(e.pointerId);
                 } catch (err) {}
                 var pct = Math.max(0, Math.min(1, state[id].positionMs / state[id].durationMs));
-                jogDrag = { startX: e.clientX, pct: pct, lastSend: 0 };
+                jogDrag = { startX: e.clientX, pct: pct, lastSend: 0, bend: 0 };
                 jogEl.classList.add('scrubbing');
-                scrub = { deck: id, pct: pct };
+                if ((state[id].jogMode || 'vinyl') === 'vinyl') scrub = { deck: id, pct: pct };
                 paint();
               });
               jogEl.addEventListener('pointermove', function (e) {
                 if (!jogDrag || !state) return;
+                // CDJ platter: the wheel bends the beat in place (a fine nudge)
+                // instead of grabbing the file like a turntable does.
+                if ((state[id].jogMode || 'vinyl') === 'cdj') {
+                  var moved = e.movementX || 0;
+                  jogEl.style.setProperty('--spin', (jogDrag.bend = jogDrag.bend + moved * 1.6) + 'deg');
+                  var stamp = Date.now();
+                  if (Math.abs(moved) > 0 && stamp - jogDrag.lastSend > 40) {
+                    jogDrag.lastSend = stamp;
+                    control('nudge', { deck: id, positionMs: Math.round(moved * 4) });
+                  }
+                  return;
+                }
                 var width = Math.max(160, jogEl.clientWidth);
                 var dx = e.clientX - jogDrag.startX;
                 var pct = Math.max(0, Math.min(1, jogDrag.pct + dx / width));
@@ -2716,10 +2834,11 @@
               var endJog = function () {
                 if (!jogDrag) return;
                 var pct = jogDrag.cur != null ? jogDrag.cur : jogDrag.pct;
+                var bending = (state && (state[id].jogMode || 'vinyl')) === 'cdj';
                 jogDrag = null;
                 jogEl.classList.remove('scrubbing');
                 scrub = null;
-                if (state && state[id].durationMs) {
+                if (!bending && state && state[id].durationMs) {
                   control('seek', { deck: id, positionMs: pct * state[id].durationMs });
                 }
                 paint();
