@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { config } from '@vaporzr/core/config';
 import {
   DECK_CUE_SLOTS,
@@ -61,6 +62,27 @@ const REC_BYTES_PER_MS = 192;
 /** Longest one-shot the sample bank will hold in memory. */
 const SAMPLE_MAX_SEC = 12;
 
+/**
+ * Copy the bundled starter one-shots into `<dataDir>/samples` once. Existing
+ * files are never touched, so an upload always wins over the default.
+ */
+function seedStarterSamples(): void {
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const src = path.join(here, '..', 'assets', 'samples');
+    if (!fs.existsSync(src)) return;
+    const dest = path.join(config.dataDir, 'samples');
+    fs.mkdirSync(dest, { recursive: true });
+    for (const name of fs.readdirSync(src)) {
+      if (!/\.(wav|mp3|ogg|flac|m4a|opus)$/i.test(name)) continue;
+      const target = path.join(dest, name);
+      if (!fs.existsSync(target)) fs.copyFileSync(path.join(src, name), target);
+    }
+  } catch {
+    /* the starter bank is a nicety — never block a deck on it */
+  }
+}
+
 interface Recording {
   stream: fs.WriteStream;
   file: string;
@@ -90,6 +112,7 @@ export class DeckController {
 
   constructor(opts: DeckControllerOptions) {
     this.opts = opts;
+    seedStarterSamples();
     this.mixer = new DeckMixer({
       sink: (pcm) => {
         // A set recording taps the master mix, engaged or not.
@@ -141,18 +164,32 @@ export class DeckController {
     let durationMs = track.durationMs || 0;
     if (!durationMs) durationMs = (await probeDuration(file).catch(() => null)) ?? 0;
 
+    return this.cue(deck, file, track.name, (track.artists ?? []).join(', '), durationMs, track.uri);
+  }
+
+  /**
+   * Cue a local file (a WAV/MP3 dropped straight on the page, or a starter
+   * sample). Skips the resolver entirely — the bytes are already here.
+   */
+  async loadLocal(deck: DeckId, file: string, name: string): Promise<DeckActionResult> {
+    if (!fs.existsSync(file)) return { ok: false, message: `That file vanished: ${name}` };
+    const durationMs = (await probeDuration(file).catch(() => null)) ?? 0;
+    if (!durationMs)
+      return { ok: false, message: `Couldn't read audio from "${name}" — WAV, MP3, M4A, FLAC and OGG all work.` };
+    return this.cue(deck, file, name, '', durationMs);
+  }
+
+  /** Shared tail of load/loadLocal: engage the decks and hand the file to the mixer. */
+  private cue(
+    deck: DeckId,
+    file: string,
+    name: string,
+    artist: string,
+    durationMs: number,
+    uri?: string,
+  ): DeckActionResult {
     this.engage();
-    this.mixer.load(
-      deck,
-      {
-        file,
-        title: track.name,
-        artist: (track.artists ?? []).join(', '),
-        durationMs,
-        bpm: null,
-      },
-      { play: false },
-    );
+    this.mixer.load(deck, { file, title: name, artist, durationMs, bpm: null }, { play: false });
     // Tempo is needed for SYNC, but detection costs a few hundred ms of ffmpeg —
     // never block the load on it.
     void estimateTempo(file)
@@ -168,11 +205,12 @@ export class DeckController {
         }
       })
       .catch(() => {});
-    this.history.push({ title: track.name, artist: (track.artists ?? []).join(', '), at: Date.now() });
+    this.history.push({ title: name, artist, at: Date.now() });
     if (this.history.length > 300) this.history.splice(0, this.history.length - 300);
+    if (uri) this.fileCache.set(uri, file);
     return {
       ok: true,
-      message: `Deck ${deck.toUpperCase()} cued: **${track.name}**${durationMs ? ` (${Math.round(durationMs / 1000)}s)` : ''}.`,
+      message: `Deck ${deck.toUpperCase()} cued: **${name}**${durationMs ? ` (${Math.round(durationMs / 1000)}s)` : ''}.`,
     };
   }
 
@@ -353,6 +391,13 @@ export class DeckController {
     }
     this.sampleListCache = { files, at: Date.now() };
     return files;
+  }
+
+  /** Drop cached listing/PCM after an upload, and hand back the new pad list. */
+  refreshSamples(): string[] {
+    this.sampleListCache = null;
+    this.sampleCache.clear();
+    return this.sampleFiles().map((f) => path.basename(f).replace(/\.[^.]+$/, ''));
   }
 
   /** Fire pad `slot` (1-based) from the sample bank over the live mix. */

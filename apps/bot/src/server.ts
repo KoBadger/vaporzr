@@ -634,6 +634,42 @@ async function readJsonBody(req: http.IncomingMessage, limit = 64 * 1024): Promi
   });
 }
 
+/** Binary request body with a hard cap, for small audio uploads. */
+function readBinaryBody(req: http.IncomingMessage, limit: number): Promise<Buffer | null> {
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let done = false;
+    const finish = (v: Buffer | null): void => {
+      if (done) return;
+      done = true;
+      resolve(v);
+    };
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > limit) {
+        req.destroy();
+        finish(null);
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => finish(Buffer.concat(chunks)));
+    req.on('error', () => finish(null));
+  });
+}
+
+/** Accept only a plain audio filename: no paths, no tricks, known extension. */
+function safeAudioName(raw: string): string | null {
+  const base = raw
+    .replace(/^.*[\\/]/, '')
+    .trim()
+    .replace(/[^A-Za-z0-9._ ()-]/g, '-');
+  if (!base || base.length > 80) return null;
+  if (!/\.(wav|mp3|ogg|flac|m4a|opus)$/i.test(base)) return null;
+  return base;
+}
+
 /** Delete uploaded files older than `maxAgeDays` so data/uploads can't grow forever. */
 function pruneUploads(maxAgeDays = 30): void {
   try {
@@ -1545,6 +1581,87 @@ async function handleRoute(
         if (body?.endpoint) removePushSubscription(body.endpoint);
         res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
         res.end(JSON.stringify({ ok: true }));
+        break;
+      }
+
+      /* ---- deck uploads (drag & drop on /deck) ---- */
+      case '/api/deck/sample': {
+        if (req.method !== 'POST') {
+          res.writeHead(405);
+          res.end();
+          return;
+        }
+        if (!hasShareAccess(req, url, 'control')) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'forbidden' }));
+          return;
+        }
+        const bot = bridgeRef();
+        if (!bot?.onSampleUpload) {
+          res.writeHead(503, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'bot offline' }));
+          return;
+        }
+        const name = safeAudioName(url.searchParams.get('name') ?? '');
+        if (!name) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'name must end in .wav .mp3 .ogg .flac .m4a or .opus' }));
+          return;
+        }
+        const data = await readBinaryBody(req, 12 * 1024 * 1024);
+        if (!data || data.length < 64) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'empty upload (max 12 MB)' }));
+          return;
+        }
+        const out = await bot.onSampleUpload(name, data);
+        res.writeHead(out.ok ? 200 : 500, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify(out));
+        break;
+      }
+
+      case '/api/deck/track': {
+        if (req.method !== 'POST') {
+          res.writeHead(405);
+          res.end();
+          return;
+        }
+        if (!hasShareAccess(req, url, 'control')) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'forbidden' }));
+          return;
+        }
+        const bot = bridgeRef();
+        if (!bot?.onDeckFileUpload) {
+          res.writeHead(503, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'bot offline' }));
+          return;
+        }
+        const deck = url.searchParams.get('deck') === 'b' ? 'b' : 'a';
+        const name = safeAudioName(url.searchParams.get('name') ?? '');
+        if (!name) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'name must end in .wav .mp3 .ogg .flac .m4a or .opus' }));
+          return;
+        }
+        const data = await readBinaryBody(req, 64 * 1024 * 1024);
+        if (!data || data.length < 512) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'empty upload (max 64 MB)' }));
+          return;
+        }
+        const dir = path.join(config.dataDir, 'uploads');
+        fs.mkdirSync(dir, { recursive: true });
+        const file = path.join(dir, `${Date.now()}-${Math.round(Math.random() * 1e6)}-${name}`);
+        fs.writeFileSync(file, data);
+        const out = await bot.onDeckFileUpload(
+          url.searchParams.get('guildId') ?? undefined,
+          deck,
+          file,
+          name.replace(/\.[^.]+$/, ''),
+        );
+        res.writeHead(out.ok ? 200 : 400, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify(out));
         break;
       }
 
