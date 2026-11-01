@@ -262,6 +262,9 @@ crossfader and an **ON AIR** pill, blended over the visuals.
 - Toggle it with the deck button in the toolbar or the D key. It opens by
   itself when a deck loads, and remembers being dismissed.
 - **SUBTLE / MEDIUM / SOLID** set the glass opacity so the visuals stay readable.
+- **COACH** swaps the cue ticks and loop shading for a plain-language line about
+  what is happening ("Deck A is out front. Deck B is cued, waiting for its
+  moment."). Handy on a stream where the audience is new to mixing.
 - **Spectating vs driving:** an Activity viewer is a guest and gets the read-only
   strip. Opened with the control key (for example the panel's *Live decks* link,
   which carries a rotating control invite), the strip also gets A play, CUE,

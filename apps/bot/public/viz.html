@@ -321,6 +321,11 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
 #deck-strip.can-control #ds-xfade{display:block}
 #deck-strip.can-control .ds-mid{min-width:190px}
 #deck-strip.can-control .ds-xf{display:none}
+/* Coach mode: a plain-language note, cleaner bars (no cue ticks / loop). */
+.ds-note{display:none;margin-top:8px;font-size:10.5px;line-height:1.5;color:#b3c0ec}
+#deck-strip.coach .ds-note{display:block}
+#deck-strip.coach .ds-cue,#deck-strip.coach .ds-loop,#deck-strip.coach .ds-head-mark,#deck-strip.coach .ds-sync{display:none}
+.ds-coach.on{color:#b6f7df;border-color:#17c48c;background:rgba(34,230,164,.14)}
 @media (max-width:760px){
   /* An iframe on a phone: blur is the expensive part, and the visualizer is
      already the heavy layer. Solid glass, two rows. */
@@ -419,7 +424,8 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
     <span class="ds-title">LIVE DECKS</span>
     <span class="ds-air"><i></i>ON AIR</span>
     <span class="ds-spacer"></span>
-    <button class="ds-op" data-ds-alpha="0.35">SUBTLE</button>
+        <button class="ds-op ds-coach" id="ds-coach" aria-pressed="false" title="Plain-language note about what the decks are doing">COACH</button>
+<button class="ds-op" data-ds-alpha="0.35">SUBTLE</button>
     <button class="ds-op on" data-ds-alpha="0.55">MEDIUM</button>
     <button class="ds-op" data-ds-alpha="0.85">SOLID</button>
     <button class="ds-x" id="ds-close" title="Hide the deck overlay" aria-label="Hide the deck overlay">×</button>
@@ -447,6 +453,7 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
       <div class="ds-times"><span class="ds-pos">0:00</span><span class="ds-dur">0:00</span></div>
     </div>
   </div>
+  <div class="ds-note" id="ds-note"></div>
   <div class="ds-ctrl" id="ds-ctrl">
     <button class="ds-btn" data-ds-act="play" data-deck="a">▶ A</button>
     <button class="ds-btn" data-ds-act="cue" data-deck="a">CUE A</button>
@@ -1406,7 +1413,7 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
      visualizers), so the overlay is pure rendering: two mini decks, the
      crossfader and a lock light over whatever visual is playing. A guest - the
      Activity always is one - only ever watches the set. */
-  var dsEl=$('deck-strip'),dsState=null,dsAt=0,dsControl=false,dsXfAt=0;
+  var dsEl=$('deck-strip'),dsState=null,dsAt=0,dsControl=false,dsXfAt=0,dsCoachOn=dsPref('vz.viz.decks.coach')==='on';
   function dsPref(k){try{return localStorage.getItem(k)}catch(e){return null}}
   function dsSetPref(k,v){try{localStorage.setItem(k,v)}catch(e){}}
   function dsFmt(ms){ms=Math.max(0,ms||0);var s=Math.floor(ms/1000);return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')}
@@ -1421,6 +1428,26 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
       bar.appendChild(s);root.__cues.push(s);
     }
     return root.__cues;
+  }
+  /** Spectator narration: what a first-timer would want the overlay to say. */
+  function dsNoteText(){
+    if(!dsState)return 'Waiting for the decks.';
+    var a=dsState.a||{},b=dsState.b||{},line;
+    if(!a.source&&!b.source)line='Nothing loaded yet - as soon as a track is cued it appears here.';
+    else if(a.source&&!b.source)line=a.playing?'Deck A is rolling. Deck B is still empty.':'Deck A is cued and ready.';
+    else if(!a.source&&b.source)line=b.playing?'Deck B is rolling. Deck A is still empty.':'Deck B is cued and ready.';
+    else if(a.playing&&b.playing)line=dsState.sync?'Both tracks are locked in step - a clean blend.':'Both decks are running; the fader decides who is heard.';
+    else if(a.playing)line='Deck A is out front. Deck B is cued, waiting for its moment.';
+    else if(b.playing)line='Deck B is out front. Deck A is cued, waiting for its moment.';
+    else line='Both decks are loaded and paused.';
+    if(dsState.record&&dsState.record.active)line+=' Recording this set.';
+    return line;
+  }
+  function dsApplyCoach(){
+    if(!dsEl)return;
+    dsEl.classList.toggle('coach',dsCoachOn);
+    var b=$('ds-coach');
+    if(b){b.classList.toggle('on',dsCoachOn);b.setAttribute('aria-pressed',dsCoachOn?'true':'false')}
   }
   function dsPaint(){
     if(!dsState||!dsEl)return;
@@ -1470,6 +1497,7 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
         xfIn.value=Math.round(Math.max(0,Math.min(1,dsState.crossfader||0))*100);
     }
     dsEl.classList.toggle('live',live);
+    var note=$('ds-note');if(note)note.textContent=dsNoteText();
     var xf=dsEl.querySelector('.ds-xf i');
     if(xf)xf.style.left=Math.max(0,Math.min(1,dsState.crossfader||0))*100+'%';
     dsEl.classList.toggle('locked',!!dsState.sync);
@@ -1502,6 +1530,8 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
     })(dsOps[di]);}
     if($('ds-close'))$('ds-close').onclick=function(){dsShow(false)};
     if($('btn-decks'))$('btn-decks').onclick=dsToggle;
+    dsApplyCoach();
+    if($('ds-coach'))$('ds-coach').onclick=function(){dsCoachOn=!dsCoachOn;dsSetPref('vz.viz.decks.coach',dsCoachOn?'on':'off');dsApplyCoach();if(dsState)dsPaint()};
     // Transport, only reachable with a control key (never the Activity).
     var dsBtns=dsEl.querySelectorAll('[data-ds-act]');
     for(var bi=0;bi<dsBtns.length;bi++){(function(btn){
