@@ -1619,8 +1619,12 @@ async function handleRoute(
         res.end(JSON.stringify({ error: 'not_found' }));
     }
   } catch (err) {
+    // Keep the detail server-side: this handler is reachable from the public
+    // request page, and an exception message can carry paths, SQL or upstream
+    // URLs that only help an attacker (CodeQL js/stack-trace-exposure).
+    console.error('[vaporzr] request failed:', err);
     res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end(err instanceof Error ? err.message : String(err));
+    res.end('Internal server error.');
   }
 }
 

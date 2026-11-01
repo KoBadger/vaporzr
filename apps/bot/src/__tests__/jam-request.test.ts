@@ -85,6 +85,24 @@ describe('Bridge.requestTrack (jam page) duplicate handling', () => {
     expect(names(q)).toEqual(['A', 'B']);
     expect(q.totalEnqueued).toBe(2);
   });
+
+  it('does not leak the resolver exception to the public jam page', async () => {
+    // The error string is rendered on /jam, so a raw exception message would
+    // hand stack-trace detail (upstream URLs, paths) to any key-holding guest
+    // — CodeQL js/stack-trace-exposure. The detail stays in the server log.
+    const q = new QueueManager();
+    const b = Object.create(Bridge.prototype) as Bridge;
+    Object.assign(b, {
+      sessions: { primary: { queue: q } },
+      onResolveRequest: async (): Promise<FakeTrack[]> => {
+        throw new Error('ENOENT: open /srv/vaporzr/cookies.txt');
+      },
+    });
+    const res = await b.requestTrack('mikado', 'Guest');
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('Could not resolve that request — try a different link or search.');
+    expect(res.error).not.toContain('ENOENT');
+  });
 });
 
 describe('Bridge.jamQueue (jam page payload)', () => {

@@ -250,6 +250,80 @@ body.mini #next{font-size:10px;margin-top:4px}
 body.mini #dock{bottom:calc(8px + var(--saib));gap:6px;padding:6px 10px;border-radius:12px}
 body.mini .dock-btn{width:32px;height:32px;font-size:14px;border-radius:9px}
 body.mini #preset-lib,body.mini .sens-wrap{display:none}
+/* ---------- live decks overlay (spectator) ----------
+   Sits over whatever is playing, glass rather than a panel, so the visuals keep
+   reading through it. Deck state already arrives on this socket: the bridge
+   broadcasts deck:state to visualizers. */
+#deck-strip{position:absolute;left:50%;bottom:calc(var(--vz-bottom) + 62px);
+  transform:translateX(-50%) translateY(14px);z-index:13;
+  width:min(960px,calc(100vw - var(--sail) - var(--sair) - 24px));
+  padding:9px 12px 10px;border-radius:15px;border:1px solid #24305a;
+  background:rgba(8,10,24,var(--ds-alpha,.55));backdrop-filter:blur(12px) saturate(1.15);
+  box-shadow:0 18px 44px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.05);
+  opacity:0;pointer-events:none;transition:opacity .3s,transform .3s}
+#deck-strip.show{opacity:1;pointer-events:auto;transform:translateX(-50%) translateY(0)}
+#deck-strip::before{content:'';position:absolute;left:14px;right:14px;top:0;height:2px;border-radius:2px;
+  background:var(--sunset);opacity:.75}
+.ds-head{display:flex;align-items:center;gap:7px;margin-bottom:7px}
+.ds-title{font:800 9px/1 var(--font-display);letter-spacing:.22em;color:#b9c6ff}
+.ds-air{display:none;align-items:center;gap:5px;font:700 8px/1 inherit;letter-spacing:.14em;color:#ffd7e6}
+.ds-air i{width:6px;height:6px;border-radius:50%;background:#ff3c5f;box-shadow:0 0 8px rgba(255,60,95,.9);
+  animation:dsAir 1.4s ease-in-out infinite}
+#deck-strip.live .ds-air{display:inline-flex}
+@keyframes dsAir{50%{opacity:.3}}
+.ds-spacer{flex:1}
+.ds-op{padding:3px 7px;border-radius:6px;border:1px solid #2a3350;background:transparent;color:#8e9bc7;
+  font:700 8px/1 inherit;letter-spacing:.1em;cursor:pointer;font-family:inherit}
+.ds-op.on{color:#dbe4ff;border-color:#4a5b9a;background:rgba(106,92,255,.16)}
+.ds-x{width:19px;height:19px;border-radius:50%;border:1px solid #2a3350;background:transparent;color:#8e9bc7;
+  cursor:pointer;font-size:11px;line-height:1;font-family:inherit}
+.ds-x:hover{border-color:#ff3cac;color:#ffd7e6}
+.ds-body{display:grid;grid-template-columns:1fr auto 1fr;gap:10px;align-items:center}
+.ds-deck{--dc:#22d3ee;min-width:0}
+.ds-deck.b{--dc:#ff3cac}
+.ds-deck .d-top{display:flex;align-items:baseline;gap:6px;min-width:0}
+.ds-letter{font:800 13px/1 var(--font-display);color:var(--dc);letter-spacing:.04em}
+.ds-name{flex:1;min-width:0;font:700 11.5px/1.2 inherit;color:#dbe4ff;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+.ds-bpm{font:700 10px/1 ui-monospace,'SF Mono',monospace;color:#9fb0e8;white-space:nowrap}
+.ds-art{font:600 9px/1.2 inherit;letter-spacing:.1em;text-transform:uppercase;color:#6d7cae;margin:2px 0 5px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ds-bar{position:relative;height:6px;border-radius:99px;background:#0b0e1d;border:1px solid #1b2340;overflow:hidden}
+.ds-bar>i{position:absolute;inset:0 auto 0 0;width:0%;border-radius:99px;
+  background:linear-gradient(90deg,color-mix(in srgb,var(--dc) 42%,#000008),var(--dc))}
+.ds-deck.b .ds-bar>i{left:auto;right:0;
+  background:linear-gradient(270deg,color-mix(in srgb,var(--dc) 42%,#000008),var(--dc))}
+.ds-bar>.ds-head-mark{position:absolute;top:-1px;bottom:-1px;width:2px;background:#e6ecff;opacity:.85}
+.ds-loop{position:absolute;top:0;bottom:0;display:none;background:rgba(255,138,61,.32);
+  border-left:1px solid rgba(255,138,61,.9);border-right:1px solid rgba(255,138,61,.9)}
+.ds-cue{position:absolute;top:0;bottom:0;width:1.5px;background:#e6ecff;opacity:.5}
+.ds-times{display:flex;justify-content:space-between;margin-top:3px;
+  font:600 8.5px/1 ui-monospace,'SF Mono',monospace;color:#7d8ab8}
+.ds-mid{display:grid;gap:5px;justify-items:center;min-width:80px}
+.ds-xf{position:relative;width:80px;height:4px;border-radius:99px;
+  background:linear-gradient(90deg,#22d3ee,#1a2340 50%,#ff3cac)}
+.ds-xf i{position:absolute;top:50%;left:50%;width:9px;height:13px;border-radius:2px;background:#cfd9ff;
+  transform:translate(-50%,-50%);box-shadow:0 1px 2px rgba(0,0,0,.7)}
+.ds-sync{font:700 7.5px/1 inherit;letter-spacing:.16em;color:#5f6c99;min-height:8px}
+#deck-strip.locked .ds-sync{color:#22e6a4}
+.ds-deck.b .d-top{flex-direction:row-reverse}
+.ds-deck.b{text-align:right}
+@media (max-width:760px){
+  /* An iframe on a phone: blur is the expensive part, and the visualizer is
+     already the heavy layer. Solid glass, two rows. */
+  #deck-strip{backdrop-filter:none;background:rgba(8,10,24,.74);bottom:calc(var(--vz-bottom) + 104px);
+    padding:8px 10px 9px}
+  .ds-body{grid-template-columns:1fr;gap:6px}
+  .ds-mid{order:3;display:flex;justify-content:center;align-items:center;gap:10px}
+  .ds-deck.b{text-align:left}
+  .ds-deck.b .d-top{flex-direction:row}
+  .ds-deck.b .ds-bar>i{left:0;right:auto;background:linear-gradient(90deg,color-mix(in srgb,var(--dc) 42%,#000008),var(--dc))}
+  .ds-op{display:none}
+  .ds-deck.b{border-top:1px solid rgba(255,255,255,.08);padding-top:7px}
+  .ds-x{width:28px;height:28px;font-size:13px}
+  .ds-title{font-size:8px}
+  .ds-air{font-size:7px}
+}
 </style>
 </head>
 <body>
@@ -314,6 +388,7 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
   <button class="dock-btn" id="btn-lock" data-tip="Lock current preset">🔓</button>
   <button class="dock-btn" id="btn-synth" data-tip="Synthwave road (Endless Wave)">🛣</button>
   <button class="dock-btn" id="btn-milk" data-tip="MilkDrop mode (butterchurn)">🌀</button>
+  <button class="dock-btn" id="btn-decks" data-tip="Live decks overlay (D)">🎚</button>
   <div class="dock-sep"></div>
   <div id="swatches" title="Theme"></div>
   <div class="dock-sep"></div>
@@ -324,6 +399,40 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
   </div>
   <div class="dock-sep"></div>
   <button class="dock-btn" id="btn-fs" title="Fullscreen">⛶</button>
+</div>
+
+<div id="deck-strip" aria-label="Live decks overlay">
+  <div class="ds-head">
+    <span class="ds-title">LIVE DECKS</span>
+    <span class="ds-air"><i></i>ON AIR</span>
+    <span class="ds-spacer"></span>
+    <button class="ds-op" data-ds-alpha="0.35">SUBTLE</button>
+    <button class="ds-op on" data-ds-alpha="0.55">MEDIUM</button>
+    <button class="ds-op" data-ds-alpha="0.85">SOLID</button>
+    <button class="ds-x" id="ds-close" title="Hide the deck overlay" aria-label="Hide the deck overlay">×</button>
+  </div>
+  <div class="ds-body">
+    <div class="ds-deck a" id="ds-a">
+      <div class="d-top">
+        <span class="ds-letter">A</span><span class="ds-name">—</span><span class="ds-bpm"></span>
+      </div>
+      <div class="ds-art">empty</div>
+      <div class="ds-bar"><div class="ds-loop"></div><i></i><b class="ds-head-mark"></b></div>
+      <div class="ds-times"><span class="ds-pos">0:00</span><span class="ds-dur">0:00</span></div>
+    </div>
+    <div class="ds-mid">
+      <div class="ds-xf"><i></i></div>
+      <span class="ds-sync"></span>
+    </div>
+    <div class="ds-deck b" id="ds-b">
+      <div class="d-top">
+        <span class="ds-letter">B</span><span class="ds-name">—</span><span class="ds-bpm"></span>
+      </div>
+      <div class="ds-art">empty</div>
+      <div class="ds-bar"><div class="ds-loop"></div><i></i><b class="ds-head-mark"></b></div>
+      <div class="ds-times"><span class="ds-pos">0:00</span><span class="ds-dur">0:00</span></div>
+    </div>
+  </div>
 </div>
 
 <div id="overlay" class="hidden">
@@ -550,9 +659,25 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
       s.onerror=function(){jamQrLoading=false};
       document.head.appendChild(s);
     }
+    /* Resolve the join target to a safe absolute URL. `path` arrives over the
+       socket, so a `javascript:` value here would run on click and any other
+       scheme could bounce a viewer off-site (CodeQL js/xss,
+       js/client-side-unvalidated-url-redirection). https is fine anywhere —
+       the public jam tunnel lives on its own origin — http only for loopback
+       dev. */
+    function jamJoinUrl(path){
+      var u;
+      try{u=new URL(String(path||''),location.origin)}catch(e){return null}
+      var host=u.hostname;
+      var loopback=host==='127.0.0.1'||host==='localhost'||host==='::1'||host==='[::1]';
+      if(u.protocol==='https:')return u.href;
+      if(u.protocol==='http:'&&loopback)return u.href;
+      return null;
+    }
     function drawJamQr(path){
       if(!window.qrcode||typeof window.qrcode!=='function')return;
-      var url=/^https?:/i.test(path)?path:(location.origin+path);
+      var url=jamJoinUrl(path);
+      if(!url)return;
       if(!jamQrCanvas){
         /* The wrapper carries the position (see #jam-qr-wrap) and holds the
            clickable URL under the code: a desktop viewer cannot scan the screen
@@ -596,6 +721,9 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
           if(msg.guilds){guilds=msg.guilds;primaryGuildId=msg.primaryGuildId||null;renderGuilds()}
           if(msg.state)showState(msg.state);
           if(msg.queue)showNext(msg.queue);
+          // Ask for the decks: deck state is broadcast on change, so a viewer
+          // that joins mid-set would otherwise stay blank until the next move.
+          dsRequest();
           if(themeOverride){var _ot=themeById(themeOverride);if(_ot)applyTheme(_ot)}
           else if(msg.theme){var _st=themeById(msg.theme.id);if(_st)applyTheme(_st)}
           /* A late joiner picks up whatever the bridge is showing right now. */
@@ -630,6 +758,15 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
           break;
         case 'state:update':
           showState(msg.state);
+          break;
+        case 'deck:state':
+          if(!dsEl)break;
+          // Only the server this visualizer is watching; a busy guild elsewhere
+          // must not paint over this one.
+          if(msg.guildId&&primaryGuildId&&msg.guildId!==primaryGuildId)break;
+          dsState=msg.state;dsAt=Date.now();
+          if(!dsEl.classList.contains('show')&&dsPref('vz.viz.decks')!=='off'&&dsState&&dsState.active)dsShow(true);
+          dsPaint();
           break;
         case 'queue:update':
           showNext(msg.queue);
@@ -686,7 +823,10 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
         case 'visuals:frame':
           markVisual();
           lastFrameAt=Date.now();
-          viz.src=msg.data;
+          /* Only ever an image data URL — the frame arrives over the socket, so
+             an unvalidated value here is a `src` injection sink (CodeQL
+             js/xss, js/client-side-unvalidated-url-redirection). */
+          if(typeof msg.data==='string'&&msg.data.indexOf('data:image/')===0)viz.src=msg.data;
           frameCount++;
           break;
         case 'guilds:list':
@@ -1236,6 +1376,109 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
       if(fsBtn)fsBtn.style.display='none';
     }
   }catch(e){}
+
+  /* ---------- live decks overlay (spectator) ----------
+     `deck:state` already reaches this socket (the bridge broadcasts it to
+     visualizers), so the overlay is pure rendering: two mini decks, the
+     crossfader and a lock light over whatever visual is playing. A guest - the
+     Activity always is one - only ever watches the set. */
+  var dsEl=$('deck-strip'),dsState=null,dsAt=0;
+  function dsPref(k){try{return localStorage.getItem(k)}catch(e){return null}}
+  function dsSetPref(k,v){try{localStorage.setItem(k,v)}catch(e){}}
+  function dsFmt(ms){ms=Math.max(0,ms||0);var s=Math.floor(ms/1000);return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')}
+  function dsSend(msg){try{if(ws&&ws.readyState===1)ws.send(JSON.stringify(msg))}catch(e){}}
+  function dsRequest(){dsSend({type:'deck:request',guildId:primaryGuildId||undefined})}
+  function dsCueMarks(root,count){
+    if(root.__cues&&root.__cues.length===count)return root.__cues;
+    root.__cues=[];
+    var bar=root.querySelector('.ds-bar');
+    for(var i=0;i<count;i++){
+      var s=document.createElement('span');s.className='ds-cue';s.style.display='none';
+      bar.appendChild(s);root.__cues.push(s);
+    }
+    return root.__cues;
+  }
+  function dsPaint(){
+    if(!dsState||!dsEl)return;
+    var live=false;
+    ['a','b'].forEach(function(id){
+      var d=dsState[id]||{},root=$('ds-'+id);
+      if(!root)return;
+      if(d.playing)live=true;
+      var pos=(d.positionMs||0)+(d.playing&&dsAt?Date.now()-dsAt:0);
+      var dur=d.durationMs||0;
+      root.querySelector('.ds-name').textContent=d.source?d.source.title:'—';
+      root.querySelector('.ds-art').textContent=d.source?(d.source.artist||'unknown artist'):'empty';
+      root.querySelector('.ds-bpm').textContent=d.bpm?Math.round(d.bpm)+' BPM':'';
+      root.querySelector('.ds-pos').textContent=dsFmt(pos);
+      root.querySelector('.ds-dur').textContent=dsFmt(dur);
+      var pct=dur?Math.max(0,Math.min(100,(pos/dur)*100)):0;
+      root.querySelector('.ds-bar>i').style.width=pct+'%';
+      root.querySelector('.ds-head-mark').style.left='calc('+pct+'% - 1px)';
+      var loop=root.querySelector('.ds-loop');
+      if(d.loop&&dur){
+        loop.style.display='block';
+        loop.style.left=(d.loop.inMs/dur)*100+'%';
+        loop.style.width=Math.max(0.4,((d.loop.outMs-d.loop.inMs)/dur)*100)+'%';
+      }else loop.style.display='none';
+      var cues=dsCueMarks(root,(d.cues&&d.cues.length)||8);
+      for(var i=0;i<cues.length;i++){
+        var at=d.cues?d.cues[i]:null;
+        if(at==null||!dur){cues[i].style.display='none';continue}
+        cues[i].style.display='block';
+        cues[i].style.left=(at/dur)*100+'%';
+      }
+    });
+    dsEl.classList.toggle('live',live);
+    var xf=dsEl.querySelector('.ds-xf i');
+    if(xf)xf.style.left=Math.max(0,Math.min(1,dsState.crossfader||0))*100+'%';
+    dsEl.classList.toggle('locked',!!dsState.sync);
+    var sy=dsEl.querySelector('.ds-sync');
+    if(sy)
+      sy.textContent=dsState.sync
+        ?'LOCK '+String(dsState.sync.follower).toUpperCase()+'→'+String(dsState.sync.master).toUpperCase()
+        :'';
+  }
+  function dsShow(on){
+    if(!dsEl)return;
+    dsEl.classList.toggle('show',on);
+    var b=$('btn-decks');if(b)b.classList.toggle('active',on);
+    dsSetPref('vz.viz.decks',on?'on':'off');
+    if(on){dsRequest();dsPaint()}
+  }
+  function dsToggle(){dsShow(!dsEl.classList.contains('show'))}
+  if(dsEl){
+    var dsAlpha=dsPref('vz.viz.decks.alpha');
+    var dsOps=dsEl.querySelectorAll('.ds-op');
+    if(dsAlpha)dsEl.style.setProperty('--ds-alpha',dsAlpha);
+    for(var di=0;di<dsOps.length;di++){(function(btn){
+      btn.classList.toggle('on',btn.getAttribute('data-ds-alpha')===(dsAlpha||'0.55'));
+      btn.onclick=function(){
+        var a=btn.getAttribute('data-ds-alpha');
+        dsEl.style.setProperty('--ds-alpha',a);
+        dsSetPref('vz.viz.decks.alpha',a);
+        for(var j=0;j<dsOps.length;j++)dsOps[j].classList.toggle('on',dsOps[j]===btn);
+      };
+    })(dsOps[di]);}
+    if($('ds-close'))$('ds-close').onclick=function(){dsShow(false)};
+    if($('btn-decks'))$('btn-decks').onclick=dsToggle;
+    // Deck pushes are change-driven, so resync from the server while the strip
+    // is open (a steady set would otherwise drift a whole second a minute) and
+    // repaint locally 4x a second for a smooth playhead.
+    var dsTicks=0;
+    setInterval(function(){
+      if(!dsEl.classList.contains('show'))return;
+      dsPaint();
+      if(++dsTicks%12===0)dsRequest();
+    },250);
+    document.addEventListener('keydown',function(e){
+      if(e.metaKey||e.ctrlKey||e.altKey)return;
+      var t=e.target;if(t&&/input|textarea|select/i.test(t.tagName))return;
+      if((e.key||'').toLowerCase()==='d')dsToggle();
+    });
+    // An unconfigured viewer stays closed until a deck actually loads; if the
+    // viewer left it open, the first live deck:state reopens it.
+  }
 
   /* ---------- rendering loop ---------- */
   var dpr=window.devicePixelRatio||1,bcBroken=false;
@@ -2181,6 +2424,10 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
   var burstBusy=false;
   function recordBurst(durationMs){
     if(burstBusy||typeof MediaRecorder==='undefined')return;
+    /* The clip length arrives off the socket, so clamp it here as well as at
+       the call site: an unbounded timeout leaves a MediaRecorder running
+       (CodeQL js/resource-exhaustion). */
+    durationMs=Math.max(250,Math.min(6000,Number(durationMs)||3000));
     var synthComposite=(!frameModeActive()&&synthActive)&&ewVideoReady();
     var src=(!frameModeActive()&&synthActive)?synthCanvas:((!frameModeActive()&&bcViz)?bcCanvas:barsCanvas);
     if(!src.width||!src.height)return;

@@ -1252,7 +1252,11 @@ export class Bridge {
             (skipped > 0 ? ` · ${skipped} already queued` : '');
       return { ok: true, name };
     } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      // This message is returned to the public jam page, so it must not carry
+      // the exception text — resolver failures quote upstream URLs and paths
+      // (CodeQL js/stack-trace-exposure). Log it, answer generically.
+      console.error('[bridge] request resolve failed:', err);
+      return { ok: false, error: 'Could not resolve that request — try a different link or search.' };
     }
   }
 
