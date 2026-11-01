@@ -1373,6 +1373,203 @@
           animation: none !important;
         }
       }
+      /* ---------- Simple / Pro interface modes ---------- */
+      .mode-switch {
+        display: inline-flex;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        overflow: hidden;
+        background: #0a0b19;
+      }
+      .mode-switch button {
+        padding: 6px 10px;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        color: var(--dim);
+        font: 700 9px/1 inherit;
+        letter-spacing: 0.14em;
+        box-shadow: none;
+      }
+      .mode-switch button + button {
+        border-left: 1px solid var(--line);
+      }
+      .mode-switch button.on {
+        color: #dbe4ff;
+        background: linear-gradient(#1c2340, #121628);
+      }
+      .help-btn {
+        width: 26px;
+        height: 26px;
+        padding: 0;
+        border-radius: 50%;
+        font: 800 11px/1 inherit;
+        color: var(--dim);
+      }
+      .help-btn:hover {
+        color: #fff;
+        border-color: var(--brand);
+      }
+      /* The coach line: one plain sentence telling you the next useful move.
+         Simple mode only — a pro does not need to be told to press play. */
+      .coach {
+        display: none;
+        align-items: center;
+        gap: 9px;
+        padding: 9px 12px;
+        border-radius: 10px;
+        border: 1px solid color-mix(in srgb, var(--brand) 40%, var(--line));
+        background: linear-gradient(#171c38, #0c0f1f);
+        font-size: 11.5px;
+        letter-spacing: 0.01em;
+        color: #cbd6ff;
+      }
+      .coach .coach-led {
+        flex: none;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--amber);
+        box-shadow: 0 0 10px rgba(255, 138, 61, 0.8);
+      }
+      body.simple .coach {
+        display: flex;
+      }
+      /* Hide everything a first-timer does not need, keep every feature one
+         click away in Pro. */
+      body.simple .pro-only {
+        display: none !important;
+      }
+      body.simple .deck {
+        gap: 12px;
+      }
+      body.simple .jog {
+        width: min(204px, 64vw);
+      }
+      body.simple .jog-row {
+        grid-template-columns: 1fr;
+      }
+      body.simple .transport .play,
+      body.simple .transport .cue {
+        padding: 17px 12px;
+        font-size: 12px;
+      }
+      body.simple .xfader-block {
+        padding: 14px 12px 10px;
+      }
+      body.simple #xfade {
+        height: 40px;
+      }
+      body.simple #xfade::-webkit-slider-thumb {
+        width: 34px;
+        height: 34px;
+        margin-top: -15px;
+      }
+      body.simple .pads .pad {
+        padding: 16px 0;
+        font-size: 13px;
+      }
+      body.simple .block-label {
+        font-size: 10px;
+        letter-spacing: 0.14em;
+      }
+      body.simple .filter-unit .filter-top {
+        font-size: 9px;
+      }
+      body.simple .mixer {
+        justify-content: flex-start;
+        gap: 14px;
+      }
+      body.simple .kill-row {
+        display: none;
+      }
+      /* Short guided start, opened on a first visit and re-openable with ?. */
+      .tut {
+        position: fixed;
+        inset: 0;
+        z-index: 60;
+        display: none;
+        place-items: center;
+        padding: 18px;
+        background: rgba(4, 5, 14, 0.74);
+        backdrop-filter: blur(4px);
+      }
+      .tut.show {
+        display: grid;
+      }
+      .tut-card {
+        width: min(470px, 100%);
+        max-height: 88vh;
+        overflow: auto;
+        padding: 16px 16px 14px;
+        border-radius: 16px;
+        border: 1px solid var(--line);
+        background: linear-gradient(#121428, #080a14);
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.72);
+      }
+      .tut-card h2 {
+        margin: 0 0 4px;
+        font: 800 15px/1.2 var(--display);
+        letter-spacing: 0.12em;
+        color: #e6ecff;
+      }
+      .tut-card .lead {
+        margin: 0 0 10px;
+        font-size: 11px;
+        color: var(--dim);
+      }
+      .tut-step {
+        display: flex;
+        gap: 10px;
+        padding: 9px 0;
+        border-top: 1px solid var(--line-soft);
+        font-size: 11.5px;
+        line-height: 1.5;
+        color: #b9c4f5;
+      }
+      .tut-step .n {
+        flex: none;
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        font: 800 10px/1 var(--mono);
+        color: #04121a;
+        background: var(--green);
+      }
+      .tut-step b {
+        color: #eef2ff;
+      }
+      .tut-actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .tut-actions button {
+        flex: 1;
+        padding: 11px 12px;
+      }
+      .tut-actions .primary {
+        background: linear-gradient(var(--green), #17c48c);
+        border-color: #17c48c;
+        color: #04121a;
+        font-weight: 800;
+      }
+      @media (max-width: 520px) {
+        .mode-switch {
+          order: 2;
+        }
+        .help-btn {
+          order: 2;
+        }
+        .conn {
+          order: 2;
+        }
+        .tut-card {
+          max-height: 92vh;
+        }
+      }
     </style>
   </head>
   <body>
@@ -1390,14 +1587,26 @@
         </span>
       </label>
       <span class="conn"><span class="dot" id="conn"></span><span id="status">connecting…</span></span>
+      <div class="mode-switch" role="group" aria-label="Interface mode">
+        <button id="mode-simple" aria-pressed="false" title="Fewer controls, plain labels and a step-by-step coach">
+          SIMPLE
+        </button>
+        <button id="mode-pro" aria-pressed="true" title="Full CDJ layout">PRO</button>
+      </div>
+      <button class="fn help-btn" id="btn-help" title="How to mix (short guide)" aria-label="How to mix">?</button>
       <span class="spacer"></span>
       <button class="fn" id="btn-sync"><span class="led"></span>SYNC</button>
-      <button class="fn" id="btn-lock"><span class="led"></span><span class="lbl">LOCK</span></button>
-      <button class="fn rec" id="btn-rec"><span class="led"></span><span class="lbl">REC</span></button>
-      <button class="fn" id="btn-play"><span class="led"></span>PLAY BOTH</button>
-      <button class="fn" id="btn-pause">PAUSE</button>
+      <button class="fn pro-only" id="btn-lock"><span class="led"></span><span class="lbl">LOCK</span></button>
+      <button class="fn rec pro-only" id="btn-rec"><span class="led"></span><span class="lbl">REC</span></button>
+      <button class="fn pro-only" id="btn-play"><span class="led"></span>PLAY BOTH</button>
+      <button class="fn pro-only" id="btn-pause">PAUSE</button>
       <button class="fn" id="btn-stop">STOP</button>
     </header>
+
+    <div class="coach" id="coach" aria-live="polite">
+      <span class="coach-led" aria-hidden="true"></span>
+      <span id="coach-text">Paste a song name into Deck A and press LOAD to begin.</span>
+    </div>
 
     <main class="rig">
       <section class="deck a" data-deck="a">
@@ -1442,7 +1651,7 @@
               <div class="jog-sub">SCRUB</div>
             </div>
           </div>
-          <div class="fader-col">
+          <div class="fader-col pro-only">
             <div class="fader-label">TEMPO</div>
             <div class="pitch-wrap">
               <input
@@ -1463,14 +1672,14 @@
         <div class="transport">
           <button class="play" data-role="toggle">PLAY</button>
           <button class="cue" data-role="cue">CUE</button>
-          <div class="nudge">
+          <div class="nudge pro-only">
             <button data-nudge="-25" title="Nudge 25 ms back">−</button>
             <span>NUDGE</span>
             <button data-nudge="25" title="Nudge 25 ms forward">+</button>
           </div>
         </div>
 
-        <div class="channel">
+        <div class="channel pro-only">
           <div class="eq" data-role="eq">
             <label>LOW</label>
             <input type="range" data-band="low" min="-40" max="6" step="1" value="0" aria-label="Deck A low" />
@@ -1499,10 +1708,10 @@
             <button class="pad" data-pad="2" title="Set or jump to hot cue 2">2</button>
             <button class="pad" data-pad="3" title="Set or jump to hot cue 3">3</button>
             <button class="pad" data-pad="4" title="Set or jump to hot cue 4">4</button>
-            <button class="pad" data-pad="5" title="Set or jump to hot cue 5">5</button>
-            <button class="pad" data-pad="6" title="Set or jump to hot cue 6">6</button>
-            <button class="pad" data-pad="7" title="Set or jump to hot cue 7">7</button>
-            <button class="pad" data-pad="8" title="Set or jump to hot cue 8">8</button>
+            <button class="pad pro-only" data-pad="5" title="Set or jump to hot cue 5">5</button>
+            <button class="pad pro-only" data-pad="6" title="Set or jump to hot cue 6">6</button>
+            <button class="pad pro-only" data-pad="7" title="Set or jump to hot cue 7">7</button>
+            <button class="pad pro-only" data-pad="8" title="Set or jump to hot cue 8">8</button>
           </div>
         </div>
 
@@ -1553,7 +1762,7 @@
           <div class="pads" id="sample-pads"></div>
         </div>
 
-        <div class="match-block">
+        <div class="match-block pro-only">
           <div class="block-label">SYNC / MATCH</div>
           <div class="match-row"><span class="tag">A · BPM / TEMPO</span><span id="match-a">—</span></div>
           <div class="match-row"><span class="tag">B · BPM / TEMPO</span><span id="match-b">—</span></div>
@@ -1571,15 +1780,15 @@
 
         <div class="mixer-foot">
           <span id="engine">engine idle</span>
-          <div class="midi-row">
+          <div class="midi-row pro-only">
             <span>MIDI OUT</span>
             <select id="midi-out" aria-label="MIDI output port">
               <option value="">none</option>
             </select>
             <button id="midi-clock" title="Send start/stop and 24 PPQN clock to the selected port">CLOCK</button>
           </div>
-          <span id="midi-status" class="muted">MIDI IN: waiting for a device…</span>
-          <span class="hints">
+          <span id="midi-status" class="muted pro-only">MIDI IN: waiting for a device…</span>
+          <span class="hints pro-only">
             <span class="kbd">space</span> both · <span class="kbd">A</span>/<span class="kbd">B</span> play ·
             <span class="kbd">S</span> sync · <span class="kbd">L</span> lock · <span class="kbd">←→</span> fader<br />
             <span class="kbd">1-8</span> cues A · <span class="kbd">shift+1-8</span> cues B ·
@@ -1630,7 +1839,7 @@
               <div class="jog-sub">SCRUB</div>
             </div>
           </div>
-          <div class="fader-col">
+          <div class="fader-col pro-only">
             <div class="fader-label">TEMPO</div>
             <div class="pitch-wrap">
               <input
@@ -1651,14 +1860,14 @@
         <div class="transport">
           <button class="play" data-role="toggle">PLAY</button>
           <button class="cue" data-role="cue">CUE</button>
-          <div class="nudge">
+          <div class="nudge pro-only">
             <button data-nudge="-25" title="Nudge 25 ms back">−</button>
             <span>NUDGE</span>
             <button data-nudge="25" title="Nudge 25 ms forward">+</button>
           </div>
         </div>
 
-        <div class="channel">
+        <div class="channel pro-only">
           <div class="eq" data-role="eq">
             <label>LOW</label>
             <input type="range" data-band="low" min="-40" max="6" step="1" value="0" aria-label="Deck B low" />
@@ -1687,10 +1896,10 @@
             <button class="pad" data-pad="2" title="Set or jump to hot cue 2">2</button>
             <button class="pad" data-pad="3" title="Set or jump to hot cue 3">3</button>
             <button class="pad" data-pad="4" title="Set or jump to hot cue 4">4</button>
-            <button class="pad" data-pad="5" title="Set or jump to hot cue 5">5</button>
-            <button class="pad" data-pad="6" title="Set or jump to hot cue 6">6</button>
-            <button class="pad" data-pad="7" title="Set or jump to hot cue 7">7</button>
-            <button class="pad" data-pad="8" title="Set or jump to hot cue 8">8</button>
+            <button class="pad pro-only" data-pad="5" title="Set or jump to hot cue 5">5</button>
+            <button class="pad pro-only" data-pad="6" title="Set or jump to hot cue 6">6</button>
+            <button class="pad pro-only" data-pad="7" title="Set or jump to hot cue 7">7</button>
+            <button class="pad pro-only" data-pad="8" title="Set or jump to hot cue 8">8</button>
           </div>
         </div>
 
@@ -1716,6 +1925,40 @@
       <input id="thumb-xfade" class="tb-x" type="range" min="0" max="100" step="1" value="50" aria-label="Crossfader" />
       <button id="thumb-b-cue" class="tb-b" title="Cue deck B back to the start">CUE</button>
       <button id="thumb-b" class="tb-b" title="Play or pause deck B">B PLAY</button>
+    </div>
+
+    <div class="tut" id="tut" role="dialog" aria-modal="true" aria-labelledby="tut-title">
+      <div class="tut-card">
+        <h2 id="tut-title">MIX IN FIVE MOVES</h2>
+        <p class="lead">Everything here is one deck job at a time. No experience needed.</p>
+        <div class="tut-step">
+          <span class="n">1</span>
+          <span><b>Load a song.</b> Paste a name or link into Deck A and press LOAD.</span>
+        </div>
+        <div class="tut-step">
+          <span class="n">2</span>
+          <span><b>Start it.</b> Press PLAY. The green light means that deck is live.</span>
+        </div>
+        <div class="tut-step">
+          <span class="n">3</span>
+          <span><b>Bring in the next.</b> Load Deck B, press PLAY on it, then slide the fader toward B.</span>
+        </div>
+        <div class="tut-step">
+          <span class="n">4</span>
+          <span><b>Keep them tight.</b> Press SYNC and the two speeds match up.</span>
+        </div>
+        <div class="tut-step">
+          <span class="n">5</span>
+          <span
+            ><b>Play around.</b> Tap a pad to mark a moment, drag the platter to scrub, turn a filter left for deeper /
+            right for brighter.</span
+          >
+        </div>
+        <div class="tut-actions">
+          <button class="primary" id="tut-start">Start mixing</button>
+          <button id="tut-pro">Open Pro view</button>
+        </div>
+      </div>
     </div>
 
     <div id="toasts"></div>
@@ -1761,6 +2004,24 @@
           if (v === 50) return 'OFF';
           var hz = v < 50 ? 180 * Math.pow(50, v / 50) : 9000 * Math.pow(1 / 50, (v - 50) / 50);
           return (v < 50 ? 'LPF ' : 'HPF ') + (hz >= 1000 ? (hz / 1000).toFixed(1) + 'k' : String(Math.round(hz)));
+        }
+
+        /** One plain sentence: the next useful move, given what the decks are doing. */
+        function coachLine() {
+          if (!state) return 'Waking the decks up…';
+          var a = state.a;
+          var b = state.b;
+          if (!a.source && !b.source) return 'Paste a song name or link into Deck A, then press LOAD.';
+          if (!a.source) return 'Deck B is loaded. Load Deck A too if you want to mix two tracks.';
+          if (!b.source) {
+            return a.playing
+              ? 'Deck A is playing. Load Deck B next, then press PLAY on it.'
+              : 'Deck A is ready. Press PLAY to start it.';
+          }
+          if (!a.playing && !b.playing) return 'Both decks are loaded. Press PLAY on Deck A.';
+          if (a.playing && !b.playing) return 'Now press PLAY on Deck B, then slide the fader toward B.';
+          if (!state.sync) return 'Both are playing. Press SYNC so the beats line up, then fade across.';
+          return 'Locked in. Tap a pad to mark a drop, drag the platter to scrub, or swing a filter.';
         }
 
         function toast(level, text) {
@@ -2078,6 +2339,9 @@
             if (midi.restart) midi.restart(clockBpm);
             else midi.bpm = clockBpm;
           }
+          if (document.body.classList.contains('simple')) {
+            el('#coach-text').textContent = coachLine();
+          }
         }
 
         function connect() {
@@ -2127,6 +2391,66 @@
         }
 
         document.addEventListener('DOMContentLoaded', function () {
+          /* ----- interface mode: Simple (default for a first visit) or Pro ----- */
+          var MODE_KEY = 'vz.deck.mode';
+          var TUT_KEY = 'vz.deck.tutorial';
+          function readStore(key) {
+            try {
+              return localStorage.getItem(key);
+            } catch (e) {
+              return null;
+            }
+          }
+          function writeStore(key, value) {
+            try {
+              localStorage.setItem(key, value);
+            } catch (e) {}
+          }
+          function applyMode(mode) {
+            var simple = mode !== 'pro';
+            document.body.classList.toggle('simple', simple);
+            el('#mode-simple').classList.toggle('on', simple);
+            el('#mode-pro').classList.toggle('on', !simple);
+            el('#mode-simple').setAttribute('aria-pressed', String(simple));
+            el('#mode-pro').setAttribute('aria-pressed', String(!simple));
+            writeStore(MODE_KEY, simple ? 'simple' : 'pro');
+            if (state) paint();
+          }
+          function openTutorial() {
+            el('#tut').classList.add('show');
+            el('#tut-start').focus();
+          }
+          function closeTutorial() {
+            el('#tut').classList.remove('show');
+            writeStore(TUT_KEY, 'seen');
+          }
+          var params = new URLSearchParams(location.search);
+          var firstVisit = !readStore(TUT_KEY);
+          var startMode = params.get('mode') || readStore(MODE_KEY) || 'simple';
+          applyMode(startMode);
+          el('#mode-simple').onclick = function () {
+            applyMode('simple');
+          };
+          el('#mode-pro').onclick = function () {
+            applyMode('pro');
+            closeTutorial();
+          };
+          el('#btn-help').onclick = openTutorial;
+          el('#tut-start').onclick = closeTutorial;
+          el('#tut-pro').onclick = function () {
+            applyMode('pro');
+            closeTutorial();
+          };
+          el('#tut').addEventListener('click', function (e) {
+            if (e.target === el('#tut')) closeTutorial();
+          });
+          document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape' && el('#tut').classList.contains('show')) closeTutorial();
+          });
+          if (params.get('tutorial') === '1' || (params.get('tutorial') !== '0' && firstVisit && startMode !== 'pro')) {
+            openTutorial();
+          }
+
           /** One transport rule for the deck card and the mobile thumb dock. */
           function deckToggle(id) {
             if (!state) return;

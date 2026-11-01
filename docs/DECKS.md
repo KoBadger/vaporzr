@@ -25,7 +25,22 @@ resumes where it left off with `V@r` when you stop the decks.
 
 ---
 
-## 2. The deck page
+## 2. Views: Simple and Pro
+
+The page opens in **Simple** on a first visit and remembers the choice;
+`?mode=simple` / `?mode=pro` forces either, and the switch sits next to the
+server picker.
+
+**Simple** keeps the same rig but hides what a first-timer does not need — tempo
+fader, trim, EQ and kill buttons, nudge, beat-lock, recording, the match readout
+and the MIDI footer. A one-line **coach** above the decks names the next useful
+move ("Load Deck B", "press PLAY on B", "press SYNC"), and **?** reopens a
+five-step guide. Nothing is deleted in Simple, only tucked away.
+
+**Pro** shows every control plus the keyboard hints, MIDI clock out and the
+sync/drift readout.
+
+## 2a. The controls
 
 Each deck card has, top to bottom:
 
@@ -40,8 +55,8 @@ Each deck card has, top to bottom:
 | Tempo (vertical fader) | atempo, pitch preserved (92–108 %) |
 | Nudge ±25 ms | Manual phase correction |
 | **Filter** | One knob per deck: low-pass ← **off** → high-pass (centre detent) |
-| 8 cue pads | Click empty = set at playhead, click set = jump, right-click = clear |
-| Loop 1 / 4 / 8 / 16 · Off | Beat-quantised loop, cached as PCM so the wrap is seamless |
+| 8 cue pads | Tap empty = set at the playhead, tap set = jump, hold = clear (right-click works too) |
+| Loop 1/4 · 1/2 · 1 · 2 · 4 · 8 · On/Off · Exit | Beat-quantised loop, cached as PCM so the wrap is seamless |
 
 Header: **SYNC**, **Lock**, **Record**, **Play both**, **Pause**, **Stop decks**.
 Bottom: crossfader, FX bank, a **SYNC / MATCH** readout (each deck's effective BPM,
