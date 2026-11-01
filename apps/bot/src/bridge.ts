@@ -1665,6 +1665,7 @@ export class Bridge {
           ? { name: this.presetNames[this.presetIdx], index: this.presetIdx }
           : undefined,
       guest: guestSocket || undefined,
+      scope: guestSocket ? 'guest' : this.scopeOf(socket) === 'control' ? 'control' : 'view',
       endlesswave: ew ? ew.active : undefined,
       endlesswaveMode: ew ? (ew.active ? 'smart' : ew.basic ? 'basic' : 'off') : undefined,
       ambient: s.guildId ? this.perms.getAmbient(s.guildId) : undefined,

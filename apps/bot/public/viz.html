@@ -308,6 +308,19 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
 #deck-strip.locked .ds-sync{color:#22e6a4}
 .ds-deck.b .d-top{flex-direction:row-reverse}
 .ds-deck.b{text-align:right}
+/* Host controls: only shown when the page was opened with a control key. An
+   Activity viewer is always a guest, so it stays a spectator strip. */
+.ds-ctrl{display:none;align-items:center;justify-content:center;gap:6px;margin-top:8px;
+  padding-top:7px;border-top:1px solid rgba(255,255,255,.07)}
+#deck-strip.can-control .ds-ctrl{display:flex}
+.ds-btn{padding:6px 9px;border-radius:7px;border:1px solid #2a3350;background:rgba(20,24,44,.7);
+  color:#c3cdf5;font:700 8.5px/1 inherit;letter-spacing:.1em;cursor:pointer;font-family:inherit}
+.ds-btn:hover{border-color:#4a5b9a;color:#fff}
+.ds-btn.on{border-color:#17c48c;background:rgba(34,230,164,.18);color:#b6f7df}
+#ds-xfade{display:none;width:100%;max-width:260px;height:18px;accent-color:var(--acc2)}
+#deck-strip.can-control #ds-xfade{display:block}
+#deck-strip.can-control .ds-mid{min-width:190px}
+#deck-strip.can-control .ds-xf{display:none}
 @media (max-width:760px){
   /* An iframe on a phone: blur is the expensive part, and the visualizer is
      already the heavy layer. Solid glass, two rows. */
@@ -422,6 +435,7 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
     </div>
     <div class="ds-mid">
       <div class="ds-xf"><i></i></div>
+      <input id="ds-xfade" type="range" min="0" max="100" step="1" value="50" aria-label="Crossfader" />
       <span class="ds-sync"></span>
     </div>
     <div class="ds-deck b" id="ds-b">
@@ -432,6 +446,13 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
       <div class="ds-bar"><div class="ds-loop"></div><i></i><b class="ds-head-mark"></b></div>
       <div class="ds-times"><span class="ds-pos">0:00</span><span class="ds-dur">0:00</span></div>
     </div>
+  </div>
+  <div class="ds-ctrl" id="ds-ctrl">
+    <button class="ds-btn" data-ds-act="play" data-deck="a">▶ A</button>
+    <button class="ds-btn" data-ds-act="cue" data-deck="a">CUE A</button>
+    <button class="ds-btn" data-ds-act="sync">SYNC</button>
+    <button class="ds-btn" data-ds-act="cue" data-deck="b">CUE B</button>
+    <button class="ds-btn" data-ds-act="play" data-deck="b">▶ B</button>
   </div>
 </div>
 
@@ -721,6 +742,9 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
           if(msg.guilds){guilds=msg.guilds;primaryGuildId=msg.primaryGuildId||null;renderGuilds()}
           if(msg.state)showState(msg.state);
           if(msg.queue)showNext(msg.queue);
+          // Control key present? Then this viewer may drive the decks too.
+          dsControl=msg.scope==='control';
+          if(dsEl)dsEl.classList.toggle('can-control',dsControl);
           // Ask for the decks: deck state is broadcast on change, so a viewer
           // that joins mid-set would otherwise stay blank until the next move.
           dsRequest();
@@ -1382,7 +1406,7 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
      visualizers), so the overlay is pure rendering: two mini decks, the
      crossfader and a lock light over whatever visual is playing. A guest - the
      Activity always is one - only ever watches the set. */
-  var dsEl=$('deck-strip'),dsState=null,dsAt=0;
+  var dsEl=$('deck-strip'),dsState=null,dsAt=0,dsControl=false,dsXfAt=0;
   function dsPref(k){try{return localStorage.getItem(k)}catch(e){return null}}
   function dsSetPref(k,v){try{localStorage.setItem(k,v)}catch(e){}}
   function dsFmt(ms){ms=Math.max(0,ms||0);var s=Math.floor(ms/1000);return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')}
@@ -1429,6 +1453,22 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
         cues[i].style.left=(at/dur)*100+'%';
       }
     });
+    if(dsControl){
+      var ctrls=dsEl.querySelectorAll('[data-ds-act]');
+      for(var ci=0;ci<ctrls.length;ci++){
+        var cb=ctrls[ci],act=cb.getAttribute('data-ds-act'),dk=cb.getAttribute('data-deck');
+        if(act==='play'&&dk){
+          var playing=!!(dsState[dk]&&dsState[dk].playing);
+          cb.textContent=(playing?'❚❚ ':'▶ ')+dk.toUpperCase();
+          cb.classList.toggle('on',playing);
+        }else if(act==='sync'){
+          cb.classList.toggle('on',!!dsState.sync);
+        }
+      }
+      var xfIn=$('ds-xfade');
+      if(xfIn&&document.activeElement!==xfIn)
+        xfIn.value=Math.round(Math.max(0,Math.min(1,dsState.crossfader||0))*100);
+    }
     dsEl.classList.toggle('live',live);
     var xf=dsEl.querySelector('.ds-xf i');
     if(xf)xf.style.left=Math.max(0,Math.min(1,dsState.crossfader||0))*100+'%';
@@ -1462,6 +1502,30 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
     })(dsOps[di]);}
     if($('ds-close'))$('ds-close').onclick=function(){dsShow(false)};
     if($('btn-decks'))$('btn-decks').onclick=dsToggle;
+    // Transport, only reachable with a control key (never the Activity).
+    var dsBtns=dsEl.querySelectorAll('[data-ds-act]');
+    for(var bi=0;bi<dsBtns.length;bi++){(function(btn){
+      btn.onclick=function(){
+        var act=btn.getAttribute('data-ds-act'),dk=btn.getAttribute('data-deck')||undefined;
+        if(act==='play'&&dk&&dsState)act=dsState[dk].playing?'pause':'play';
+        dsSend({type:'deck:control',action:act,deck:dk});
+      };
+    })(dsBtns[bi]);}
+    var dsXf=$('ds-xfade');
+    if(dsXf){
+      var sendXf=function(el){
+        dsXfAt=Date.now();
+        dsSend({type:'deck:control',action:'crossfader',value:Number(el.value)/100});
+      };
+      dsXf.addEventListener('input',function(e){
+        if(Date.now()-dsXfAt>=40)sendXf(e.target);
+        else{
+          clearTimeout(dsXf.__t);
+          dsXf.__t=setTimeout(function(){sendXf(e.target)},45);
+        }
+      });
+      dsXf.addEventListener('change',function(e){sendXf(e.target)});
+    }
     // Deck pushes are change-driven, so resync from the server while the strip
     // is open (a steady set would otherwise drift a whole second a minute) and
     // repaint locally 4x a second for a smooth playhead.

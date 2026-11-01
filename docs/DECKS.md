@@ -250,3 +250,20 @@ What each host does with that:
 
 Browser note: Web MIDI needs a secure origin — `/deck` is served over the panel's
 HTTPS tunnel, so this works on the deployed host but not over plain LAN `http://`.
+
+---
+
+## 11. Visualizer overlay
+
+The visualizer (/viz, and the same page inside the Discord Activity) can show a
+**live decks strip**: two mini decks with position, cue ticks, loop region, a
+crossfader and an **ON AIR** pill, blended over the visuals.
+
+- Toggle it with the deck button in the toolbar or the D key. It opens by
+  itself when a deck loads, and remembers being dismissed.
+- **SUBTLE / MEDIUM / SOLID** set the glass opacity so the visuals stay readable.
+- **Spectating vs driving:** an Activity viewer is a guest and gets the read-only
+  strip. Opened with the control key (for example the panel's *Live decks* link,
+  which carries a rotating control invite), the strip also gets A play, CUE,
+  SYNC, CUE B, B play and a draggable crossfader.
+- On phones the strip stacks and drops the blur for performance.
