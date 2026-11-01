@@ -23,6 +23,7 @@ import type { AudioTransport } from '@vaporzr/core/transport';
 import { youtubeProxyHops } from '@vaporzr/core/youtube';
 import { safeFetch } from '@vaporzr/core/net';
 import { createMusicResource } from './opusStream.js';
+import { normalizeCapturePcm } from './capture.js';
 
 /** The slice of an opusscript decoder the Weasel ear pipeline uses. */
 interface OpusScriptLike {
@@ -1528,8 +1529,12 @@ export class VoiceManager implements AudioTransport {
         try {
           const mod = (await import('@discordjs/opus')) as unknown as {
             OpusEncoder?: new (rate: number, channels: number) => { decode(buf: Buffer, frameSize?: number): Buffer };
+            default?: {
+              OpusEncoder?: new (rate: number, channels: number) => { decode(buf: Buffer, frameSize?: number): Buffer };
+            };
           };
-          const NativeCtor = mod.OpusEncoder;
+          // tsx / CJS interop can expose the class under `default` instead.
+          const NativeCtor = mod.OpusEncoder ?? mod.default?.OpusEncoder;
           if (NativeCtor) {
             return () => {
               const decoder = new NativeCtor(48_000, 2);
@@ -1615,9 +1620,13 @@ export class VoiceManager implements AudioTransport {
           console.log(`[weasel] ears: ${seconds.toFixed(1)}s from ${userId} dropped (${why}, under 0.5s)`);
           return;
         }
-        console.log(`[weasel] ears: captured ${seconds.toFixed(1)}s from ${userId} (${why})`);
+        const clip = normalizeCapturePcm(Buffer.concat(chunks, totalBytes));
+        console.log(
+          `[weasel] ears: captured ${seconds.toFixed(1)}s from ${userId} (${why}) peak=${clip.peak}` +
+            (clip.gain > 1 ? ` x${clip.gain.toFixed(1)}` : ''),
+        );
         const cb = this.voiceListenHandler;
-        if (cb) cb(userId, Buffer.concat(chunks, totalBytes));
+        if (cb) cb(userId, clip.pcm);
       };
       // A capture that never sees its 'end' event (silent mic, a dropped
       // subscription) would otherwise pin this user in activeVoiceCaptures and
