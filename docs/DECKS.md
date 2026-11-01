@@ -37,14 +37,15 @@ Each deck card has, top to bottom:
 | Play / Cue | Transport, or reset to 0:00 |
 | Low / Mid / High + Kill | 3-band EQ, −40 dB … +6 dB; kill buttons slam a band out |
 | Trim | Per-deck gain |
-| Speed | atempo, pitch preserved (92–108 %) |
+| Tempo (vertical fader) | atempo, pitch preserved (92–108 %) |
 | Nudge ±25 ms | Manual phase correction |
 | **Filter** | One knob per deck: low-pass ← **off** → high-pass (centre detent) |
 | 8 cue pads | Click empty = set at playhead, click set = jump, right-click = clear |
 | Loop 1 / 4 / 8 / 16 · Off | Beat-quantised loop, cached as PCM so the wrap is seamless |
 
 Header: **SYNC**, **Lock**, **Record**, **Play both**, **Pause**, **Stop decks**.
-Bottom: crossfader, FX bank, MIDI status.
+Bottom: crossfader, FX bank, a **SYNC / MATCH** readout (each deck's effective BPM,
+tempo % and the drift between them — `LOCKED` when the bot is holding phase), MIDI status.
 
 ---
 
