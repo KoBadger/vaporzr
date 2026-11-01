@@ -107,7 +107,6 @@ import { vizTunnel } from './tunnel.js';
 import { renderPanelIconPng, PANEL_ICON_FALLBACKS } from './panelIcons.js';
 import { jamJoinLinks, type Bridge } from './bridge.js';
 import { DeckController } from './decks.js';
-import { taste } from './taste.js';
 import type { DeckEq, DeckId, InboundMessage, PermissionLevel, TrackInfo, PlaybackState } from '@vaporzr/shared';
 import * as EW from '@vaporzr/core/endlesswave';
 import { playlistStore } from '@vaporzr/core/playlists';
@@ -1145,8 +1144,6 @@ export class DiscordBot {
         // and counts as "played through" for any duel it was part of.
         this.resolveStump(s, ended, false);
         this.noteDuelOutcome(s, ended, false);
-        // Long-lived taste: a track that played through is a mild positive.
-        if (ended?.artists?.[0]) taste.note(s.guildId, ended.artists[0], 1);
         if (!EW.isAutoActive(s.endlessWave)) return;
         void this.waveTrackEnded(s, ended).catch((err) => {
           console.warn(`[endlesswave] on-end failed: ${err instanceof Error ? err.message : err}`);
@@ -1156,21 +1153,6 @@ export class DiscordBot {
       s.playback.onTrackSkipped = (skipped) => {
         this.resolveStump(s, skipped, true);
         this.noteDuelOutcome(s, skipped, true);
-        // Skip feedback: bailing out of a wave track in its first seconds is the
-        // clearest taste signal a listener ever gives. Mute its artists for a
-        // while so the wave stops serving that lane.
-        if (EW.isAutoActive(s.endlessWave) && skipped.addedBy === 'endless-wave') {
-          const playedMs = s.queue.getState().positionMs ?? 0;
-          if (playedMs < 20_000) {
-            for (const artist of skipped.artists ?? []) {
-              EW.penaliseArtist(s.endlessWave, artist);
-              taste.note(s.guildId, artist, -1);
-            }
-            console.log(
-              `[endlesswave] skip feedback: muted "${truncate(skipped.artists.join(', ') || skipped.name, 60)}" for 45 min (skipped at ${Math.round(playedMs / 1000)}s)`,
-            );
-          }
-        }
       };
       // When the queue runs dry, post a friendly notice so listeners aren't left
       // wondering why the music stopped. An active wave ignores the backoff here
@@ -1245,7 +1227,6 @@ export class DiscordBot {
         // `V@r` picks up exactly where the set interrupted it.
         pauseQueue: () => s.playback.pause(),
         onState: (state) => this.bridge.broadcastDeck(state, guildId),
-        onWaveform: (deck, peaks, durationMs) => this.bridge.broadcastDeckWaveform(guildId, deck, peaks, durationMs),
         uploadRecording: async (file, name) => {
           const channel = await this.panelShareChannel(guildId);
           if (!channel) return null;
@@ -1334,12 +1315,6 @@ export class DiscordBot {
           break;
         case 'tempo':
           quiet(decks.tempo(deck, msg.tempo ?? 1));
-          break;
-        case 'filter':
-          quiet(decks.filter(deck, msg.value ?? 0.5));
-          break;
-        case 'sample':
-          report(await decks.playSample(msg.slot ?? 1));
           break;
         case 'cue-set':
           report(decks.setCue(deck, msg.slot ?? 1));
@@ -7756,20 +7731,6 @@ export class DiscordBot {
         lines.push(`• steering: ${EW.describeCalibration(s.endlessWave)}`);
         if (snap.deadEnds) lines.push(`• dead-ends: ${snap.deadEnds}`);
       }
-      // Health readout: how often a refill actually found something. A number
-      // below ~50% means the pool is starving (or YouTube is blocking), which
-      // is otherwise only visible in the logs.
-      const attempts = s.endlessWave.refillAttempts;
-      const queued = s.endlessWave.refillQueued;
-      if (attempts > 0) {
-        const pct = Math.round((queued / attempts) * 100);
-        const skipped = s.endlessWave.penalisedArtists.size;
-        const t = taste.summary(s.guildId);
-        lines.push(
-          `• refills: ${queued}/${attempts} found a track (${pct}%)${skipped ? ` · ${skipped} artist${skipped === 1 ? '' : 's'} muted by skips` : ''}`,
-        );
-        if (t.muted || t.liked) lines.push(`• taste memory: ${t.liked} liked · ${t.muted} muted (all-time)`);
-      }
     }
     lines.push('Change with `V@autoplay off|basic|smart` · `V@autoplay count 5` · `/autoplay`.');
     return lines.join('\n');
@@ -10116,27 +10077,6 @@ export class DiscordBot {
         if (/^(stop|off|end)$/i.test(value)) return (await decks.recStop()).message;
         return decks.recStart().message;
       }
-      case 'filter': {
-        const v = value === 'off' ? 50 : Number(value.replace('%', ''));
-        if (!Number.isFinite(v)) return 'Usage: `V@deck filter a 30` (0 = closed LPF, 50 = off, 100 = open HPF).';
-        return decks.filter(deck, Math.max(0, Math.min(100, v)) / 100).message;
-      }
-      case 'sample':
-      case 'smp': {
-        const samples = decks.sampleFiles().map((f) => path.basename(f).replace(/\.[^.]+$/, ''));
-        if (!value) {
-          if (!samples.length) {
-            return `No samples yet — drop one-shots into \`/app/data/samples/\` on the server, then \`V@deck samples\`.`;
-          }
-          return `🎹 **Sample bank** (${samples.length})\n${samples
-            .slice(0, 16)
-            .map((s, i) => `${i + 1}. ${s}`)
-            .join('\n')}\n\`V@deck sample <n>\``;
-        }
-        const n = Number(value);
-        if (!Number.isFinite(n) || n < 1) return 'Usage: `V@deck sample 3` (see `V@deck sample` for the list).';
-        return (await decks.playSample(n)).message;
-      }
       case 'status':
       case 'now':
       default: {
@@ -10157,7 +10097,6 @@ export class DiscordBot {
           line('A', st.a),
           line('B', st.b),
           `Crossfader ${Math.round(st.crossfader * 100)}% · ${syncLine}${recLine} · open \`/deck\` for faders, EQ knobs and cue pads.`,
-          `🔗 ${this.bridge.deckLink()}`,
           '`V@deck a <song>` · `play` · `pause` · `pad a 3` · `loop a 4` · `lock` · `rec` · `sync` · `cross 60` · `stop`',
         ].join('\n');
       }
@@ -11484,7 +11423,8 @@ export class DiscordBot {
       const wav = pcmMono48kToWav(pcmMono48k);
       const transcript = await transcribeVoiceUtterance(wav);
       if (!transcript) {
-        console.log('[weasel] ears: heard speech but got no transcript (noise or transcription failed)');
+        const secs = (pcmMono48k.length / (48_000 * 2)).toFixed(1);
+        console.log(`[weasel] ears: ${secs}s clip produced no transcript (noise, or the mic is too quiet)`);
         return;
       }
       console.log(`[weasel] ears: heard "${truncate(transcript, 160)}"`);
@@ -12070,7 +12010,6 @@ export class DiscordBot {
     if ((this.ewRetryAfter.get(s.guildId) ?? 0) > Date.now()) return;
     if (this.ewBusy.has(s.guildId)) return;
     this.ewBusy.add(s.guildId);
-    EW.noteRefill(s.endlessWave, false);
     const smart = s.endlessWave.active;
     // Smart keeps a 3-track lookahead; basic just needs the next track ready.
     // A per-guild override (V@autoplay count N) wins when set.
@@ -12125,14 +12064,7 @@ export class DiscordBot {
           failed.add(chosen.uri);
           const r = await EW.resolveCandidate(chosen);
           if (!r) {
-            console.log(`[endlesswave] could not resolve "${chosen.name}" - trying another`);
-            continue;
-          }
-          // Long-lived taste: this room has skipped this artist enough times
-          // that a fresh pick from them is a waste of a queue slot.
-          if (taste.muted(s.guildId, r.artists[0] ?? '')) {
-            console.log(`[autoplay] "${r.name}" — artist muted by this room's taste memory, trying another`);
-            failed.add(chosen.uri);
+            console.log(`[endlesswave] could not resolve "${chosen.name}" — trying another`);
             continue;
           }
           // Dedupe again AFTER resolution: different picks (e.g. "Blue Monday
@@ -12161,7 +12093,6 @@ export class DiscordBot {
         s.queue.enqueue(resolved, 'endless-wave', { keepCursor: true, background: true });
         enqueuedThisRun++;
         s.endlessWave.generated++;
-        s.endlessWave.refillQueued++;
         EW.noteWaveQueued(s.endlessWave, resolved.artists);
         this.bridge.broadcast({
           type: 'endlesswave',
@@ -12446,33 +12377,11 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/npchannel` · `V@npc` — pin the live now-playing strip to this channel (mod; `off` disables it)',
       '`/hype on|off` · `V@hype` — auto-hype: drop a hit on strong beats',
       '`/mix <a> <b>` · `V@mix <a> | <b>` — crossfade two tracks into one mix',
-      '`V@deck` (`V@dk`) — **live two-deck mixer** (full controls in the 🎛️ Live Decks section below) (mod)',
+      '`V@deck` (`V@dk`) — live two-deck mixer: `V@deck a <song>`, `b <song>`, `play`, `sync`, `cross 60`, `eq a low kill`, `stop`. Full faders + EQ on the web `/deck` page (mod)',
       '`/mashup <a> <b>` · `V@mashup <a> | <b>` — render a tempo/key-matched blend (downloadable) + 5 similar tracks',
       '`V@mashup list` · `V@mashup remove <n>` · `V@mashup edit <n> <a> | <b>` · `V@mashup move <n> <m>` · `V@mashup clear` — manage the mashup queue (up to 5 lined up while one renders)',
       '`/mashupgame` · `V@mashupgame` (`V@mg`) — auto-pick two queued songs, render stem blends, vote for the best',
       '`/mashups` · `V@mashups` (`V@mh`) — past mashups + winners',
-    ],
-  },
-  {
-    id: 'decks',
-    emoji: '🎛️',
-    name: 'Live Decks',
-    blurb: 'two decks, real beat-matching — mixes live in your voice channel',
-    lines: [
-      '**Open `/deck` on the panel host** — faders, EQ knobs, waveforms, cue pads and sample bank (mod)',
-      '`V@deck` · `V@deck status` — both decks: position, BPM, EQ, cues, loop, lock drift, recording',
-      '`V@deck a <song or link>` · `V@deck b <song or link>` — load + cue a deck (Spotify name, YouTube link or direct URL)',
-      '`V@deck play` · `pause` · `stop` — stop hands the stream back and unpauses the queue (`V@r`)',
-      "`V@deck sync` — stretch B to A's tempo (±10%) and align its downbeat · `V@deck lock` keeps them in phase (±0.8% resample, no gaps)",
-      '`V@deck seek a 1:30` · `nudge a 25` — jump / phase-nudge in ms',
-      '`V@deck pad a 3` — hot cue: sets an empty pad at the playhead, jumps to a set one (8 per deck). Jumps start 140ms early so they land on the beat',
-      '`V@deck loop a 4` · `loop a off` — beat-quantised loop (1/4/8/16 beats), seamless (cached PCM, no decoder restart)',
-      '`V@deck filter a 30` — one-knob DJ filter: 0 = closed low-pass · 50 = off · 100 = open high-pass',
-      '`V@deck eq a low kill` · `eq a low -12` · `gain a 85` · `tempo a 104` — EQ kills, trim, speed (pitch preserved)',
-      '`V@deck cross 60` — crossfader (0 = A, 100 = B, equal-power)',
-      '`V@deck sample` — list the sample bank · `V@deck sample 3` fires pad 3 (drop one-shots in `data/samples/`)',
-      '`V@deck rec` · `V@deck rec stop` — record the master mix to mp3, posted with set stats (duration, tracks, top artists)',
-      'FX pads (`riser`, `drop`, `horn`…) and MIDI controllers work on the page: keys `space`, `←/→`, `1-8`, `qwertyui`; MIDI CC 1 fader · CC 2/3 trims · CC 4-9 EQ · CC 10/11 filters',
     ],
   },
   {
