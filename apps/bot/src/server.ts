@@ -1432,6 +1432,14 @@ async function handleRoute(
         const pl = vizTunnel.panelLink();
         const vl = vizTunnel.vizLink();
         const ll = vizTunnel.listenLink();
+        // The deck link is a long-lived control invite minted by the bridge.
+        // Make it absolute so the panel shows and copies one URL like the rest.
+        const deckRaw = bridgeRef()?.deckLink() ?? '';
+        const deckUrl = deckRaw
+          ? /^https?:/i.test(deckRaw)
+            ? deckRaw
+            : `${origin}${deckRaw.startsWith('/') ? '' : '/'}${deckRaw}`
+          : '';
         const inviteLink = (base: { url: string; secure: boolean }, scope: AccessScope, ttl: number, label: string) => {
           if (!owner || !base.secure) return ''; // minting invites is owner-only
           const { token } = mintInvite(scope, label, ttl);
@@ -1445,6 +1453,7 @@ async function handleRoute(
             panelUrl: inviteLink(pl, 'control', OWNER_LINK_TTL_MS, 'panel link'),
             vizUrl: inviteLink(vl, 'view', INVITE_TTL_MS, 'visualizer link'),
             listenUrl: inviteLink(ll, 'view', INVITE_TTL_MS, 'listener link'),
+            deckUrl: owner ? deckUrl : '',
             secure: Boolean(pl.secure && vl.secure && ll.secure),
           }),
         );
