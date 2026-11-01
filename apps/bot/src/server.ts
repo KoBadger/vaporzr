@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, domainToASCII } from 'node:url';
 import { config } from '@vaporzr/core/config';
 import {
   buildAuthorizeUrl,
@@ -63,7 +63,7 @@ const ART_HOSTS = new Set([
   'img.youtube.com',
   'yt3.ggpht.com',
   'lh3.googleusercontent.com',
-]);
+].map((h) => h.toLowerCase()));
 const artCache = new Map<string, { body: Buffer; type: string; at: number }>();
 const ART_TTL_MS = 6 * 60 * 60 * 1000;
 const ART_MAX_BYTES = 6 * 1024 * 1024;
@@ -80,12 +80,15 @@ async function serveArtwork(url: URL, res: http.ServerResponse): Promise<void> {
     res.end('Bad artwork URL.');
     return;
   }
-  if (target.protocol !== 'https:' || !ART_HOSTS.has(target.hostname)) {
+  const normalizedHost = domainToASCII(target.hostname).toLowerCase();
+  if (target.protocol !== 'https:' || !normalizedHost || !ART_HOSTS.has(normalizedHost)) {
     res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('Artwork host not allowed.');
     return;
   }
-  const key = target.toString();
+  // Rebuild from validated components so the fetched origin is server-controlled.
+  const safeTarget = new URL(`${target.pathname}${target.search}`, `https://${normalizedHost}`);
+  const key = safeTarget.toString();
   const hit = artCache.get(key);
   if (hit && Date.now() - hit.at < ART_TTL_MS) {
     res.writeHead(200, {
@@ -99,7 +102,7 @@ async function serveArtwork(url: URL, res: http.ServerResponse): Promise<void> {
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 8000);
-    let fetchUrl = key;
+    let fetchUrl = safeTarget.toString();
     let upstream = await fetch(fetchUrl, { signal: ctrl.signal, redirect: 'manual' });
     if (upstream.status >= 300 && upstream.status < 400) {
       const location = upstream.headers.get('location');
