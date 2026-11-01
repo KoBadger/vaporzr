@@ -427,4 +427,6 @@ export type OutboundMessage =
   | { type: 'error'; message: string }
   /** Full live-deck state (both playheads, crossfader, EQ). */
   | { type: 'deck:state'; state: DeckMixerState; guildId?: string }
+  /** Waveform peaks for a freshly loaded deck (0..1, left-to-right). */
+  | { type: 'deck:waveform'; deck: DeckId; peaks: number[]; durationMs: number; guildId?: string }
   | CommandMessage;

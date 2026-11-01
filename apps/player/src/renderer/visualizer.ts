@@ -172,6 +172,8 @@ const client = new WsClient({
     } else if (msg.type === 'queue:update') {
       latestQueue = msg.queue;
       updateNextLine();
+    } else if (msg.type === 'deck:state') {
+      renderDeckStrip(msg.state);
     } else if (msg.type === 'endlesswave') {
       setWaveMode(msg.mode ?? (msg.active ? 'smart' : 'off'));
     } else if (msg.type === 'snapshot') {
@@ -454,6 +456,50 @@ function handleEndlessWave(active: boolean): void {
 }
 
 /** Update the autoplay cycler button + the Endless Wave scene. */
+/**
+ * "On air" strip for the live decks. The player is often the only screen the DJ
+ * can see while mixing, so it mirrors which deck is live, the tempo match and
+ * any loop/lock instead of showing the idle queue.
+ */
+let deckStrip: HTMLElement | null = null;
+let deckStripHiddenAt = 0;
+function renderDeckStrip(state: {
+  active?: boolean;
+  crossfader?: number;
+  sync?: { master: string; follower: string; driftMs: number } | null;
+  a?: { source?: { title?: string } | null; bpm?: number | null; playing?: boolean; loop?: unknown };
+  b?: { source?: { title?: string } | null; bpm?: number | null; playing?: boolean; loop?: unknown };
+}): void {
+  const live = Boolean(state.active) && Boolean((state.a && state.a.source) || (state.b && state.b.source));
+  if (!live) {
+    if (deckStrip) {
+      deckStrip.style.opacity = '0';
+      deckStripHiddenAt = Date.now();
+    }
+    return;
+  }
+  if (!deckStrip) {
+    deckStrip = document.createElement('div');
+    deckStrip.id = 'deck-strip';
+    deckStrip.style.cssText =
+      'position:fixed;left:14px;bottom:14px;z-index:20;display:flex;gap:10px;align-items:center;' +
+      'padding:7px 11px;border-radius:11px;font:600 12px/1.2 system-ui,sans-serif;color:#e8ecf8;' +
+      'background:rgba(10,12,24,.82);border:1px solid rgba(255,255,255,.12);' +
+      'backdrop-filter:blur(8px);transition:opacity .3s;pointer-events:none';
+    document.body.appendChild(deckStrip);
+  }
+  const xf = Math.round((state.crossfader ?? 0.5) * 100);
+  const deck = (id: 'A' | 'B', slot: NonNullable<typeof state.a>): string => {
+    if (!slot?.source) return `${id} —`;
+    const bpm = slot.bpm ? `${Math.round(slot.bpm)}` : '…';
+    return `${id} ${slot.playing ? '▶' : '⏸'} ${slot.source.title ?? ''} · ${bpm}`;
+  };
+  const lock = state.sync ? ` · 🔒 ${state.sync.driftMs > 0 ? '+' : ''}${state.sync.driftMs}ms` : '';
+  deckStrip.textContent = `${deck('A', state.a ?? {})}   |   ${deck('B', state.b ?? {})}   |   fader ${xf}%${lock}`;
+  deckStrip.style.opacity = '1';
+  deckStripHiddenAt = Date.now();
+}
+
 function setWaveMode(mode: 'off' | 'basic' | 'smart'): void {
   waveMode = mode;
   if (btnWave) {

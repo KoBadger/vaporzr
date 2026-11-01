@@ -194,6 +194,15 @@
         grid-template-columns: repeat(8, 1fr);
         gap: 4px;
       }
+      .wave {
+        width: 100%;
+        height: 52px;
+        display: block;
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid var(--line);
+        cursor: crosshair;
+      }
       .pads .pad {
         padding: 6px 0;
         font-variant-numeric: tabular-nums;
@@ -357,6 +366,7 @@
           <span class="bpm" data-role="bpm"></span>
         </div>
         <div class="sub" data-role="artist"></div>
+        <canvas class="wave" data-role="wave" height="52"></canvas>
         <div class="seek" data-role="seek"><i></i></div>
         <div class="row" style="justify-content: space-between">
           <span class="time" data-role="time">0:00</span>
@@ -433,6 +443,7 @@
           <span class="bpm" data-role="bpm"></span>
         </div>
         <div class="sub" data-role="artist"></div>
+        <canvas class="wave" data-role="wave" height="52"></canvas>
         <div class="seek" data-role="seek"><i></i></div>
         <div class="row" style="justify-content: space-between">
           <span class="time" data-role="time">0:00</span>
@@ -513,6 +524,21 @@
       </div>
     </section>
 
+    <section class="mixer">
+      <div class="xfade-head">
+        <span>FX / SAMPLE PADS</span>
+        <span id="midi-status" class="muted">MIDI: waiting for a device…</span>
+      </div>
+      <div class="row pads" id="fx-pads"></div>
+      <div class="footer">
+        <span class="muted">
+          Keys: <span class="kbd">space</span> play/pause · <span class="kbd">←</span><span class="kbd">→</span> fader ·
+          <span class="kbd">1-8</span> cues (A) · <span class="kbd">shift+1-8</span> cues (B) ·
+          <span class="kbd">q w e r t y u i</span> FX
+        </span>
+      </div>
+    </section>
+
     <div id="toasts"></div>
 
     <script>
@@ -521,6 +547,17 @@
         var state = null;
         var localClock = { at: 0, pos: { a: 0, b: 0 } };
         var lastSent = {};
+        var waves = { a: null, b: null };
+        var FX = [
+          { id: 'riser', label: 'RISER' },
+          { id: 'reverse', label: 'REVERSE' },
+          { id: 'drop', label: 'DROP' },
+          { id: 'boom', label: 'BOOM' },
+          { id: 'zap', label: 'ZAP' },
+          { id: 'airhorn', label: 'HORN' },
+          { id: 'applause', label: 'CLAP' },
+          { id: 'countdown', label: '3-2-1' },
+        ];
         var el = function (sel, root) {
           return (root || document).querySelector(sel);
         };
@@ -565,6 +602,62 @@
           control(action, extra);
         }
 
+        /** Draw the decoded waveform with cue markers, the loop region and the
+         *  playhead. Redrawn on the 250 ms repaint, which is cheap enough at
+         *  ~600 buckets per deck. */
+        function drawWave(id) {
+          var slot = state[id];
+          var cv = el('[data-role="wave"]', el('.deck.' + id));
+          if (!cv) return;
+          var dpr = window.devicePixelRatio || 1;
+          var w = cv.clientWidth || 320;
+          var h = 52;
+          if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+            cv.width = Math.round(w * dpr);
+            cv.height = Math.round(h * dpr);
+          }
+          var inked = getComputedStyle(document.documentElement).getPropertyValue('--deck').trim() || '#6a5cff';
+          var g = cv.getContext('2d');
+          g.setTransform(dpr, 0, 0, dpr, 0, 0);
+          g.clearRect(0, 0, w, h);
+          var peaks = waves[id];
+          var dur = slot.durationMs || 1;
+          if (peaks && peaks.length) {
+            var bw = w / peaks.length;
+            g.fillStyle = inked;
+            g.globalAlpha = 0.75;
+            for (var i = 0; i < peaks.length; i++) {
+              var ph = Math.max(2, peaks[i] * (h - 8));
+              g.fillRect(i * bw, (h - ph) / 2, Math.max(1, bw * 0.8), ph);
+            }
+            g.globalAlpha = 1;
+          }
+          // Loop region.
+          if (slot.loop) {
+            var lx = (slot.loop.inMs / dur) * w;
+            var lw = ((slot.loop.outMs - slot.loop.inMs) / dur) * w;
+            g.fillStyle = 'rgba(0, 240, 255, 0.18)';
+            g.fillRect(lx, 0, lw, h);
+            g.strokeStyle = 'rgba(0, 240, 255, 0.85)';
+            g.lineWidth = 1;
+            g.strokeRect(lx + 0.5, 0.5, Math.max(1, lw - 1), h - 1);
+          }
+          // Cue markers.
+          slot.cues.forEach(function (cue, i) {
+            if (cue == null) return;
+            var x = (cue / dur) * w;
+            g.fillStyle = '#fbbf24';
+            g.fillRect(x, 0, 1.5, h);
+            g.font = '9px system-ui, sans-serif';
+            g.fillText(String(i + 1), x + 2, 10);
+          });
+          // Playhead.
+          var pos = slot.positionMs + (slot.playing && localClock.at ? Date.now() - localClock.at : 0);
+          var px = Math.min(w - 1, (pos / dur) * w);
+          g.fillStyle = '#fff';
+          g.fillRect(px, 0, 2, h);
+        }
+
         function paint() {
           if (!state) return;
           ['a', 'b'].forEach(function (id) {
@@ -601,6 +694,7 @@
             el('[data-role="loop"]', root).textContent = slot.loop
               ? 'loop ' + fmt(slot.loop.outMs - slot.loop.inMs) + (slot.looping ? ' ●' : '')
               : 'no loop';
+            drawWave(id);
           });
           var lock = el('#btn-lock');
           lock.classList.toggle('on', !!state.sync);
@@ -651,6 +745,9 @@
               state = msg.state;
               localClock.at = Date.now();
               paint();
+            } else if (msg.type === 'deck:waveform') {
+              waves[msg.deck] = msg.peaks;
+              if (state) paint();
             } else if (msg.type === 'panel:notice') {
               toast(msg.level, msg.text);
             }
@@ -757,6 +854,104 @@
           el('#btn-stop').onclick = function () {
             control('stop');
           };
+
+          all('[data-role="wave"]').forEach(function (cv) {
+            cv.onclick = function (e) {
+              var id = cv.closest('.deck').getAttribute('data-deck');
+              if (!state || !state[id].durationMs) return;
+              var r = cv.getBoundingClientRect();
+              var pct = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+              control('seek', { deck: id, positionMs: pct * state[id].durationMs });
+            };
+          });
+
+          // FX / sample bank — these ride the same soundboard the panel uses, and
+          // the voice layer mixes them over the deck output.
+          var fxRoot = el('#fx-pads');
+          FX.forEach(function (fx, i) {
+            var b = document.createElement('button');
+            b.className = 'mini pad';
+            b.textContent = i + 1 + ' ' + fx.label;
+            b.title = 'Drop ' + fx.label + ' over the mix';
+            b.onclick = function () {
+              send({ type: 'cmd', command: 'sfx', sfxId: fx.id });
+            };
+            fxRoot.appendChild(b);
+          });
+
+          document.addEventListener('keydown', function (e) {
+            if (e.target && /input|textarea/i.test(e.target.tagName)) return;
+            var k = e.key.toLowerCase();
+            if (k === ' ') {
+              e.preventDefault();
+              if (state) control(state.a.playing || state.b.playing ? 'pause' : 'play');
+              return;
+            }
+            if (k === 'arrowleft' || k === 'arrowright') {
+              if (!state) return;
+              e.preventDefault();
+              control('crossfader', {
+                value: Math.max(0, Math.min(1, state.crossfader + (k === 'arrowright' ? 0.04 : -0.04))),
+              });
+              return;
+            }
+            if (k >= '1' && k <= '8') {
+              if (!state) return;
+              var pad = Number(k);
+              var dk = e.shiftKey ? 'b' : 'a';
+              control(state[dk].cues[pad - 1] != null ? 'cue-jump' : 'cue-set', { deck: dk, slot: pad });
+              return;
+            }
+            var fxIdx = 'qwertyui'.indexOf(k);
+            if (fxIdx >= 0 && FX[fxIdx]) send({ type: 'cmd', command: 'sfx', sfxId: FX[fxIdx].id });
+          });
+
+          // MIDI: any class-compliant controller (knobs 1-9, pads from note 36).
+          if (navigator.requestMIDIAccess) {
+            navigator
+              .requestMIDIAccess()
+              .then(function (access) {
+                function bind(input) {
+                  el('#midi-status').textContent = 'MIDI: ' + (input.name || 'device');
+                  input.onmidimessage = function (m) {
+                    var d = m.data;
+                    if (!d || d.length < 3) return;
+                    var status = d[0] & 0xf0;
+                    var cc = d[1];
+                    var val = d[2];
+                    var v = val / 127;
+                    if (status === 0xb0) {
+                      if (cc === 1) controlThrottled('midi:xfade', 'crossfader', { value: v });
+                      else if (cc === 2) controlThrottled('midi:a:gain', 'gain', { deck: 'a', value: v });
+                      else if (cc === 3) controlThrottled('midi:b:gain', 'gain', { deck: 'b', value: v });
+                      else if (cc >= 4 && cc <= 9) {
+                        var bands = ['low', 'mid', 'high'];
+                        var mdeck = cc < 7 ? 'a' : 'b';
+                        var band = bands[(cc - 4) % 3];
+                        controlThrottled('midi:' + mdeck + band, 'eq', { deck: mdeck, band: band, db: -40 + v * 46 });
+                      }
+                    } else if (status === 0x90 && val > 0) {
+                      var idx = cc - 36;
+                      if (idx >= 0 && idx < FX.length) {
+                        send({ type: 'cmd', command: 'sfx', sfxId: FX[idx].id });
+                      } else if (cc >= 48 && cc < 56 && state) {
+                        var slot = cc - 47;
+                        control(state.a.cues[slot - 1] != null ? 'cue-jump' : 'cue-set', { deck: 'a', slot: slot });
+                      }
+                    }
+                  };
+                }
+                Array.prototype.forEach.call(access.inputs.values(), bind);
+                access.onstatechange = function () {
+                  Array.prototype.forEach.call(access.inputs.values(), bind);
+                };
+              })
+              .catch(function () {
+                el('#midi-status').textContent = 'MIDI: not available';
+              });
+          } else {
+            el('#midi-status').textContent = 'MIDI: browser unsupported';
+          }
 
           setInterval(function () {
             if (state) paint();
