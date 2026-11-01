@@ -4,32 +4,42 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Vaporzr · Live Decks</title>
+    <meta name="theme-color" content="#6a5cff" />
     <style>
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Orbitron:wght@600;800;900&display=swap');
       /*
-       * Industrial two-deck + mixer rig.
+       * Industrial two-deck + mixer rig, in the Vaporzr palette: indigo #6a5cff,
+       * cyan #22d3ee (deck A), magenta #ff3cac (deck B), orange #ff8a3d, on a
+       * near-black navy chassis. Deck A·B and the crossfader run the brand
+       * sunset (orange → magenta → indigo → cyan) so the page reads as the same
+       * product as the panel and the visualizer.
+       *
        * Layout and control language deliberately mirror the modern club-standard
-       * media player + mixer pair: dark matte chassis, a display/waveform shelf,
-       * a jog wheel with a pitch fader beside it, two rows of performance pads,
-       * and a centre mixer strip with filter, crossfader and FX pads. Every hook
-       * the deck controller uses (data-role / data-pad / data-band / ids) is kept
-       * exactly as before so behaviour is unchanged.
+       * media player + mixer pair: a display/waveform shelf, a jog wheel with a
+       * pitch fader beside it, two rows of performance pads, and a centre mixer
+       * strip with filter, crossfader and FX pads. Every hook the deck
+       * controller uses (data-role / data-pad / data-band / ids) is kept exactly
+       * as before so behaviour is unchanged.
        */
       :root {
-        --chassis: #0a0a0c;
-        --chassis-2: #101013;
-        --panel: #131317;
-        --panel-2: #18181d;
-        --sunk: #08080a;
-        --line: #2a2a31;
-        --line-soft: #202027;
-        --ink: #f1f2f5;
-        --dim: #8b8c96;
-        --dim-2: #5d5e68;
-        --green: #00e07a;
-        --amber: #ffa62e;
-        --red: #ff3b30;
-        --a: #58c8ff;
-        --b: #ffb15c;
+        --brand: #6a5cff;
+        --sunset: linear-gradient(100deg, #ff8a3d, #ff3cac 42%, #6a5cff 72%, #22d3ee);
+        --display: 'Orbitron', 'Inter', system-ui, sans-serif;
+        --chassis: #080914;
+        --chassis-2: #0d0e1c;
+        --panel: #101121;
+        --panel-2: #141528;
+        --sunk: #070712;
+        --line: #23253f;
+        --line-soft: #1b1c33;
+        --ink: #cad5ff;
+        --dim: #757bb4;
+        --dim-2: #4e537f;
+        --green: #22e6a4;
+        --amber: #ff8a3d;
+        --red: #ff3c5f;
+        --a: #22d3ee;
+        --b: #ff3cac;
         --radius: 14px;
         --mono: ui-monospace, 'SF Mono', 'Roboto Mono', Menlo, Consolas, monospace;
       }
@@ -44,15 +54,27 @@
         margin: 0;
         color: var(--ink);
         font:
-          13px/1.45 'Inter Tight',
-          'Roboto Condensed',
+          13px/1.45 'Inter',
+          'Inter Tight',
           'Segoe UI',
           system-ui,
           sans-serif;
-        background:
-          radial-gradient(1100px 620px at 50% -22%, rgba(255, 255, 255, 0.055), transparent 62%),
-          radial-gradient(700px 420px at 8% 105%, rgba(88, 200, 255, 0.05), transparent 60%),
-          radial-gradient(700px 420px at 96% 100%, rgba(255, 177, 92, 0.05), transparent 60%), var(--chassis);
+        /* Brand ink: indigo haze up top, cyan under deck A, magenta under deck B,
+           over the faint 44px indigo grid the visualizer uses. */
+        background-color: var(--chassis);
+        background-image:
+          linear-gradient(rgba(106, 92, 255, 0.045) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(106, 92, 255, 0.045) 1px, transparent 1px),
+          radial-gradient(1100px 640px at 50% -20%, rgba(106, 92, 255, 0.26), transparent 62%),
+          radial-gradient(740px 460px at 2% 104%, rgba(34, 211, 238, 0.13), transparent 62%),
+          radial-gradient(740px 460px at 98% 102%, rgba(255, 60, 172, 0.15), transparent 62%);
+        background-size:
+          44px 44px,
+          44px 44px,
+          auto,
+          auto,
+          auto;
+        background-attachment: fixed;
         display: flex;
         flex-direction: column;
         gap: 12px;
@@ -67,10 +89,23 @@
         padding: 10px 14px;
         border-radius: 12px;
         border: 1px solid var(--line);
-        background: linear-gradient(#151519, #0d0d10);
+        background: linear-gradient(#141735, #0b0b1c);
         box-shadow:
           inset 0 1px 0 rgba(255, 255, 255, 0.05),
           0 10px 26px rgba(0, 0, 0, 0.45);
+        position: relative;
+        overflow: hidden;
+      }
+      /* brand sunset hairline along the top bar */
+      .topbar::after {
+        content: '';
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 2px;
+        background: var(--sunset);
+        opacity: 0.85;
       }
       .brand {
         display: flex;
@@ -79,9 +114,16 @@
       }
       .brand h1 {
         margin: 0;
+        font-family: var(--display);
         font-size: 15px;
-        letter-spacing: 0.22em;
-        font-weight: 800;
+        letter-spacing: 0.2em;
+        font-weight: 900;
+        /* the brand wordmark runs the sunset gradient, like the visualizer */
+        background: var(--sunset);
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+        -webkit-text-fill-color: transparent;
       }
       .brand .model {
         font-size: 9px;
@@ -93,7 +135,7 @@
         height: 7px;
         border-radius: 50%;
         background: var(--green);
-        box-shadow: 0 0 10px rgba(0, 224, 122, 0.85);
+        box-shadow: 0 0 10px rgba(34, 230, 164, 0.85);
         align-self: center;
       }
       .conn {
@@ -108,11 +150,11 @@
         height: 8px;
         border-radius: 50%;
         background: var(--red);
-        box-shadow: 0 0 9px rgba(255, 59, 48, 0.75);
+        box-shadow: 0 0 9px rgba(255, 60, 95, 0.75);
       }
       .dot.on {
         background: var(--green);
-        box-shadow: 0 0 9px rgba(0, 224, 122, 0.8);
+        box-shadow: 0 0 9px rgba(34, 230, 164, 0.8);
       }
       .spacer {
         flex: 1;
@@ -122,18 +164,64 @@
         color: var(--dim);
         font-size: 11px;
       }
-      #guild-select {
-        max-width: 190px;
-        background: #0b0b0e;
+      /* ---------- server (guild) picker ---------- */
+      .guild-pick {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+        padding: 4px 9px 4px 10px;
+        border-radius: 8px;
         border: 1px solid var(--line);
-        border-radius: 7px;
+        background: linear-gradient(#141733, #0b0d1e);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+      }
+      .guild-pick:focus-within {
+        border-color: color-mix(in srgb, var(--brand) 60%, var(--line));
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.06),
+          0 0 0 2px rgba(106, 92, 255, 0.22);
+      }
+      .guild-pick .gp-label {
+        font: 700 8px/1 inherit;
+        letter-spacing: 0.2em;
+        color: var(--dim-2);
+      }
+      .guild-pick .gp-wrap {
+        display: inline-flex;
+        align-items: center;
+        position: relative;
+        min-width: 0;
+      }
+      #guild-select {
+        appearance: none;
+        -webkit-appearance: none;
+        max-width: 190px;
+        min-width: 0;
+        background: none;
+        border: 0;
+        border-radius: 6px;
         color: var(--ink);
-        padding: 5px 8px;
-        font: 600 11px/1.2 inherit;
-        letter-spacing: 0.06em;
+        padding: 2px 16px 2px 0;
+        font: 700 11px/1.2 inherit;
+        letter-spacing: 0.04em;
+        cursor: pointer;
+        text-overflow: ellipsis;
+      }
+      #guild-select option {
+        background: #0d0f22;
+        color: var(--ink);
+      }
+      .guild-pick .gp-caret {
+        position: absolute;
+        right: 0;
+        font-size: 9px;
+        color: var(--dim);
+        pointer-events: none;
       }
       #guild-select:focus-visible {
         outline: 1px solid var(--a);
+        outline-offset: 2px;
       }
       /* hardware function keys with LED dots */
       .fn {
@@ -144,8 +232,8 @@
         padding: 7px 11px;
         border-radius: 7px;
         border: 1px solid var(--line);
-        background: linear-gradient(#1b1b21, #121216);
-        color: #cfd0d8;
+        background: linear-gradient(#17182c, #0f1020);
+        color: #aeb7ff;
         font: 700 10px/1 inherit;
         letter-spacing: 0.14em;
         cursor: pointer;
@@ -159,35 +247,35 @@
         width: 7px;
         height: 7px;
         border-radius: 50%;
-        background: #33333b;
-        box-shadow: inset 0 0 0 1px #000;
+        background: #2b2d4a;
+        box-shadow: inset 0 0 0 1px #000006;
       }
       .fn .lbl {
         white-space: nowrap;
       }
       .fn:hover {
-        color: #fff;
-        border-color: #3a3a44;
+        color: #d6e0ff;
+        border-color: #313355;
       }
       .fn:active {
         transform: translateY(1px);
       }
       .fn.on {
-        color: #fff;
-        border-color: #3d6b52;
-        background: linear-gradient(#1d2b24, #101713);
+        color: #d6e0ff;
+        border-color: #2f7a63;
+        background: linear-gradient(#182630, #0d141c);
       }
       .fn.on .led {
         background: var(--green);
-        box-shadow: 0 0 9px rgba(0, 224, 122, 0.9);
+        box-shadow: 0 0 9px rgba(34, 230, 164, 0.9);
       }
       .fn.rec.on {
-        border-color: #6b2622;
-        background: linear-gradient(#2c1513, #150b0a);
+        border-color: #6b1f42;
+        background: linear-gradient(#25121c, #120a12);
       }
       .fn.rec.on .led {
         background: var(--red);
-        box-shadow: 0 0 9px rgba(255, 59, 48, 0.95);
+        box-shadow: 0 0 9px rgba(255, 60, 95, 0.95);
         animation: recPulse 1.2s ease-in-out infinite;
       }
       @keyframes recPulse {
@@ -241,6 +329,26 @@
         .brand .model {
           display: none;
         }
+        .brand {
+          order: 1;
+        }
+        .conn {
+          order: 2;
+        }
+        .guild-pick {
+          order: 3;
+          flex-basis: 100%;
+          max-width: 100%;
+        }
+        .spacer {
+          display: none;
+        }
+        .fn {
+          order: 4;
+        }
+        #guild-select {
+          max-width: 46vw;
+        }
         .transport {
           grid-template-columns: 1fr 1fr;
         }
@@ -266,7 +374,8 @@
         border-radius: var(--radius);
         border: 1px solid var(--line);
         background:
-          linear-gradient(180deg, rgba(255, 255, 255, 0.045), transparent 140px), linear-gradient(#16161a, #0d0d10);
+          radial-gradient(560px 240px at 50% -6%, color-mix(in srgb, var(--deck) 15%, transparent), transparent 72%),
+          linear-gradient(180deg, rgba(255, 255, 255, 0.045), transparent 140px), linear-gradient(#121324, #0b0b19);
         box-shadow:
           inset 0 1px 0 rgba(255, 255, 255, 0.07),
           inset 0 -1px 0 rgba(0, 0, 0, 0.7),
@@ -320,7 +429,7 @@
       input[type='text'] {
         flex: 1;
         min-width: 110px;
-        background: #0a0a0d;
+        background: #080915;
         border: 1px solid var(--line);
         border-radius: 7px;
         color: var(--ink);
@@ -339,9 +448,9 @@
       }
       .load-btn {
         appearance: none;
-        border: 1px solid color-mix(in srgb, var(--deck) 45%, #1a1a20);
-        background: linear-gradient(#20232b, #14161b);
-        color: #eaf6ff;
+        border: 1px solid color-mix(in srgb, var(--deck) 45%, #16172b);
+        background: linear-gradient(#1b1f38, #111325);
+        color: #c5d8ff;
         border-radius: 7px;
         padding: 7px 12px;
         font: 800 10px/1 inherit;
@@ -349,7 +458,7 @@
         cursor: pointer;
       }
       .load-btn:hover {
-        background: linear-gradient(#262a34, #171a20);
+        background: linear-gradient(#202542, #13172b);
       }
       /* ---------- display shelf ---------- */
       .display {
@@ -359,8 +468,8 @@
         gap: 8px;
         padding: 9px 10px 8px;
         border-radius: 10px;
-        border: 1px solid #050507;
-        background: linear-gradient(#050507, #090a0f 55%, #050507);
+        border: 1px solid #04040e;
+        background: linear-gradient(#04040e, #080917 55%, #04040e);
         box-shadow:
           inset 0 0 0 1px rgba(255, 255, 255, 0.03),
           inset 0 12px 26px rgba(0, 0, 0, 0.75),
@@ -379,7 +488,7 @@
         min-width: 0;
         font: 700 13px/1.25 inherit;
         letter-spacing: 0.01em;
-        color: #f6f9ff;
+        color: #cfdbff;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -414,10 +523,10 @@
         height: 74px;
         margin-top: 7px;
         border-radius: 6px;
-        border: 1px solid #101018;
+        border: 1px solid #0d0e22;
         background:
           repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.028) 0 1px, transparent 1px 32px),
-          repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.022) 0 1px, transparent 1px 14px), #06070b;
+          repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.022) 0 1px, transparent 1px 14px), #050613;
         cursor: crosshair;
       }
       .seek {
@@ -425,8 +534,8 @@
         height: 6px;
         margin-top: 7px;
         border-radius: 99px;
-        background: #0b0c12;
-        border: 1px solid #16171f;
+        background: #090b1b;
+        border: 1px solid #12142a;
         cursor: pointer;
         overflow: hidden;
       }
@@ -435,7 +544,7 @@
         inset: 0 auto 0 0;
         width: 0%;
         border-radius: 99px;
-        background: linear-gradient(90deg, color-mix(in srgb, var(--deck) 55%, #000), var(--deck));
+        background: linear-gradient(90deg, color-mix(in srgb, var(--deck) 55%, #000006), var(--deck));
         box-shadow: 0 0 10px color-mix(in srgb, var(--deck) 50%, transparent);
       }
       .times {
@@ -444,7 +553,7 @@
         gap: 6px;
         margin-top: 5px;
         font: 700 12px/1 var(--mono);
-        color: #dfe7f5;
+        color: #bbcbff;
       }
       .times .dim {
         font-size: 10px;
@@ -458,7 +567,7 @@
       }
       .deck.looping .times [data-role='loop'] {
         color: var(--amber);
-        text-shadow: 0 0 10px rgba(255, 166, 46, 0.6);
+        text-shadow: 0 0 10px rgba(255, 138, 61, 0.6);
       }
       /* level meter column */
       .meter {
@@ -475,15 +584,20 @@
       .meter i {
         flex: 1;
         border-radius: 2px;
-        background: linear-gradient(90deg, #123b2b, #1d6b45);
+        /* the low end of each meter carries that deck's brand colour */
+        background: linear-gradient(
+          90deg,
+          color-mix(in srgb, var(--deck, var(--a)) 34%, #05060f),
+          var(--deck, var(--a))
+        );
       }
       .meter i:nth-child(9),
       .meter i:nth-child(10) {
-        background: linear-gradient(90deg, #4a3a12, #b98a1e);
+        background: linear-gradient(90deg, #4a2e0f, #d9711f);
       }
       .meter i:nth-child(11),
       .meter i:nth-child(12) {
-        background: linear-gradient(90deg, #4a1512, #c02b22);
+        background: linear-gradient(90deg, #3a1026, #e0335c);
       }
       .deck.playing .meter i {
         animation: meterPulse 0.95s ease-in-out infinite;
@@ -508,7 +622,7 @@
         width: min(172px, 100%);
         aspect-ratio: 1;
         border-radius: 50%;
-        background: radial-gradient(circle at 50% 42%, #1c1c22, #0d0d10 62%, #050506 100%);
+        background: radial-gradient(circle at 50% 42%, #18192d, #0b0b19 62%, #04040d 100%);
         box-shadow:
           inset 0 2px 3px rgba(255, 255, 255, 0.07),
           inset 0 -6px 14px rgba(0, 0, 0, 0.9),
@@ -522,9 +636,9 @@
         position: absolute;
         inset: 3px;
         border-radius: 50%;
-        background: repeating-conic-gradient(from 0deg, #1b1b20 0 1.6deg, #2a2a32 1.6deg 3.2deg);
-        -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 9px), #000 calc(100% - 8px));
-        mask: radial-gradient(farthest-side, transparent calc(100% - 9px), #000 calc(100% - 8px));
+        background: repeating-conic-gradient(from 0deg, #17182b 0 1.6deg, #232540 1.6deg 3.2deg);
+        -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 9px), #000006 calc(100% - 8px));
+        mask: radial-gradient(farthest-side, transparent calc(100% - 9px), #000006 calc(100% - 8px));
         opacity: 0.9;
       }
       .jog::after {
@@ -534,8 +648,8 @@
         inset: 12px;
         border-radius: 50%;
         background: conic-gradient(from -90deg, var(--deck) calc(var(--prog) * 1%), rgba(255, 255, 255, 0.05) 0);
-        -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
-        mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+        -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000006 calc(100% - 2px));
+        mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000006 calc(100% - 2px));
       }
       .jog-face {
         position: relative;
@@ -547,7 +661,7 @@
         place-content: center;
         justify-items: center;
         gap: 3px;
-        background: radial-gradient(circle at 50% 35%, #15161c, #07070a 78%);
+        background: radial-gradient(circle at 50% 35%, #121326, #060612 78%);
         box-shadow:
           inset 0 0 0 1px rgba(255, 255, 255, 0.06),
           inset 0 8px 18px rgba(0, 0, 0, 0.8);
@@ -555,7 +669,7 @@
       .jog-time {
         font: 800 19px/1 var(--mono);
         letter-spacing: 0.02em;
-        color: #eaf3ff;
+        color: #c5d6ff;
         text-shadow: 0 0 14px color-mix(in srgb, var(--deck) 35%, transparent);
       }
       .jog-sub {
@@ -607,9 +721,9 @@
         width: 7px;
         transform: translateX(-50%);
         border-radius: 4px;
-        background: linear-gradient(180deg, #050507, #14151b 40%, #050507);
+        background: linear-gradient(180deg, #04040e, #111225 40%, #04040e);
         box-shadow:
-          inset 0 0 0 1px #23252d,
+          inset 0 0 0 1px #1d213a,
           inset 0 2px 8px rgba(0, 0, 0, 0.95);
       }
       .pitch-wrap::after {
@@ -629,7 +743,7 @@
         height: 26px;
         margin-top: -12px;
         border-radius: 3px;
-        background: linear-gradient(180deg, #f6f8fb, #a9adb8 46%, #767b88 54%, #dfe3ea), #9aa0ad;
+        background: linear-gradient(180deg, #cfdaff, #8e98db 46%, #636ca4 54%, #bbc8ff), #818dcf;
       }
       /* ---------- shared range styling ---------- */
       input[type='range'] {
@@ -643,8 +757,8 @@
       input[type='range']::-webkit-slider-runnable-track {
         height: 5px;
         border-radius: 99px;
-        background: linear-gradient(180deg, #23262f, #454b59 48%, #2a2e38);
-        border: 1px solid #050507;
+        background: linear-gradient(180deg, #1d213d, #3a426d 48%, #232847);
+        border: 1px solid #04040e;
         box-shadow:
           inset 0 1px 0 rgba(255, 255, 255, 0.14),
           inset 0 -1px 2px rgba(0, 0, 0, 0.9);
@@ -655,8 +769,8 @@
         height: 19px;
         margin-top: -8px;
         border-radius: 3px;
-        background: linear-gradient(#f2f4f8, #9fa3ae 55%, #6f7480);
-        border: 1px solid #050506;
+        background: linear-gradient(#cbd7ff, #868fd0 55%, #5d669a);
+        border: 1px solid #04040d;
         box-shadow:
           0 1px 2px rgba(0, 0, 0, 0.8),
           inset 0 1px 0 rgba(255, 255, 255, 0.7);
@@ -664,14 +778,14 @@
       input[type='range']::-moz-range-track {
         height: 4px;
         border-radius: 99px;
-        background: #22242d;
+        background: #1d203a;
       }
       input[type='range']::-moz-range-thumb {
         width: 13px;
         height: 19px;
         border-radius: 3px;
-        border: 1px solid #050506;
-        background: linear-gradient(#f2f4f8, #9fa3ae 55%, #6f7480);
+        border: 1px solid #04040d;
+        background: linear-gradient(#cbd7ff, #868fd0 55%, #5d669a);
       }
       .pitch::-webkit-slider-runnable-track {
         height: 4px;
@@ -686,8 +800,8 @@
       button {
         appearance: none;
         border: 1px solid var(--line);
-        background: linear-gradient(#1a1a20, #121216);
-        color: #d5d7df;
+        background: linear-gradient(#16172b, #0f1020);
+        color: #b3bdff;
         padding: 9px 12px;
         border-radius: 8px;
         font: 700 10px/1 inherit;
@@ -701,21 +815,21 @@
         box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
       }
       button:hover {
-        color: #fff;
-        border-color: #3a3a45;
+        color: #d6e0ff;
+        border-color: #313356;
       }
       button:active {
         transform: translateY(1px);
       }
       button:focus-visible {
-        outline: 1px solid var(--deck, #58c8ff);
+        outline: 1px solid var(--deck, #22d3ee);
         outline-offset: 1px;
       }
       .transport .play {
         font-size: 11px;
         letter-spacing: 0.22em;
-        color: #bdf6d8;
-        border-color: #1f3a2e;
+        color: #b6f7df;
+        border-color: #113a33;
       }
       .transport .play::before {
         content: '';
@@ -730,22 +844,22 @@
         opacity: 0.5;
       }
       .deck.playing .transport .play {
-        color: #04120c;
-        background: linear-gradient(var(--green), #00b863);
-        border-color: #00b863;
+        color: #04121a;
+        background: linear-gradient(var(--green), #17c48c);
+        border-color: #17c48c;
         box-shadow:
-          0 0 18px rgba(0, 224, 122, 0.4),
+          0 0 18px rgba(34, 230, 164, 0.4),
           inset 0 1px 0 rgba(255, 255, 255, 0.4);
       }
       .deck.playing .transport .play::before {
         opacity: 1;
       }
       .transport .cue {
-        color: #ffd9a3;
-        border-color: #3d2e18;
+        color: #ffb3dd;
+        border-color: #43202a;
       }
       .transport .cue:hover {
-        background: linear-gradient(#2b2114, #17110a);
+        background: linear-gradient(#301626, #180b14);
       }
       .nudge {
         display: flex;
@@ -754,7 +868,7 @@
         padding: 0 6px;
         border: 1px solid var(--line-soft);
         border-radius: 8px;
-        background: #0d0d11;
+        background: #0b0b1a;
       }
       .nudge span {
         font: 700 8px/1 inherit;
@@ -775,7 +889,7 @@
         padding: 9px 10px;
         border-radius: 10px;
         border: 1px solid var(--line-soft);
-        background: linear-gradient(#101014, #0b0b0e);
+        background: linear-gradient(#0d0e1d, #090a16);
       }
       .eq {
         display: grid;
@@ -792,7 +906,7 @@
       .eq output {
         text-align: right;
         font: 700 10px/1 var(--mono);
-        color: #cfd3dd;
+        color: #aebaff;
       }
       .kill-row {
         display: grid;
@@ -805,11 +919,11 @@
         letter-spacing: 0.18em;
         color: var(--dim);
         border-radius: 5px;
-        background: #0c0c10;
+        background: #0a0b19;
       }
       .kill-row button:hover {
-        color: #ffd2d2;
-        border-color: #4a2422;
+        color: #ffc2d6;
+        border-color: #3d1234;
       }
       /* ---------- pads ---------- */
       .block-label {
@@ -838,9 +952,9 @@
         appearance: none;
         padding: 10px 0;
         border-radius: 7px;
-        border: 1px solid #23233a;
-        background: linear-gradient(#14141c, #0c0c11);
-        color: #8f93a8;
+        border: 1px solid #232a52;
+        background: linear-gradient(#111226, #0a0b1a);
+        color: #7881c9;
         font: 700 11px/1 var(--mono);
         letter-spacing: 0.04em;
         cursor: pointer;
@@ -849,15 +963,15 @@
           0 1px 2px rgba(0, 0, 0, 0.6);
       }
       .pads .pad:hover {
-        color: #fff;
-        border-color: #333350;
+        color: #d6e0ff;
+        border-color: #2f3568;
       }
       .pads .pad.set {
-        color: #f4fbff;
-        border-color: color-mix(in srgb, var(--deck) 70%, #000);
+        color: #cdddff;
+        border-color: color-mix(in srgb, var(--deck) 70%, #000006);
         background: linear-gradient(
-          color-mix(in srgb, var(--deck) 40%, #0b0b12),
-          color-mix(in srgb, var(--deck) 18%, #08080d)
+          color-mix(in srgb, var(--deck) 40%, #090a1b),
+          color-mix(in srgb, var(--deck) 18%, #070715)
         );
         box-shadow:
           inset 0 1px 0 rgba(255, 255, 255, 0.16),
@@ -872,13 +986,13 @@
         padding: 8px 0;
         font-size: 9px;
         letter-spacing: 0.08em;
-        border-color: #3a2f18;
-        color: #e7c896;
-        background: linear-gradient(#1a1610, #0d0b08);
+        border-color: #3d1c26;
+        color: #ffb98a;
+        background: linear-gradient(#161319, #0b0a0f);
       }
       .loop-pads button:hover {
-        border-color: #6b5525;
-        color: #ffe4b5;
+        border-color: #8a4a1f;
+        color: #ffd0a8;
       }
       /* ---------- mixer ---------- */
       .mixer {
@@ -890,11 +1004,25 @@
         min-height: 100%;
         border-radius: var(--radius);
         border: 1px solid var(--line);
+        position: relative;
         background:
-          linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 120px), linear-gradient(#141419, #0c0c10);
+          radial-gradient(560px 240px at 50% -6%, rgba(106, 92, 255, 0.2), transparent 72%),
+          linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 120px), linear-gradient(#121324, #0a0b19);
         box-shadow:
           inset 0 1px 0 rgba(255, 255, 255, 0.06),
           0 14px 34px rgba(0, 0, 0, 0.5);
+      }
+      /* the mixer carries the full brand sunset across its top edge */
+      .mixer::before {
+        content: '';
+        position: absolute;
+        left: 12px;
+        right: 12px;
+        top: 0;
+        height: 2px;
+        border-radius: 2px;
+        background: var(--sunset);
+        opacity: 0.7;
       }
       .mixer-head {
         display: flex;
@@ -902,7 +1030,7 @@
         justify-content: space-between;
         font: 800 11px/1 inherit;
         letter-spacing: 0.26em;
-        color: #c9ccd6;
+        color: #a9b4fe;
       }
       .mixer-head .dim {
         letter-spacing: 0.18em;
@@ -914,7 +1042,7 @@
         padding: 8px 10px;
         border-radius: 9px;
         border: 1px solid var(--line-soft);
-        background: linear-gradient(#0e0e13, #08080b);
+        background: linear-gradient(#0c0c1c, #070713);
       }
       .filter-unit .filter-top {
         display: flex;
@@ -927,7 +1055,7 @@
         color: var(--dim);
       }
       .filter-unit .filter-top .f-name {
-        color: #d8dae2;
+        color: #b5c0ff;
       }
       .filter-unit .detent {
         position: relative;
@@ -960,7 +1088,7 @@
         padding: 9px 10px 6px;
         border-radius: 9px;
         border: 1px solid var(--line-soft);
-        background: linear-gradient(#0e0e13, #08080b);
+        background: linear-gradient(#0c0c1c, #070713);
       }
       .xfade-head {
         display: flex;
@@ -976,14 +1104,14 @@
         letter-spacing: 0;
       }
       #xfade {
-        --deck: #cfd3dd;
+        --deck: #aebaff;
         height: 26px;
       }
       #xfade::-webkit-slider-runnable-track {
         height: 6px;
-        background: linear-gradient(90deg, var(--a), #1a1b22 50%, var(--b));
+        background: linear-gradient(90deg, var(--a), #16182d 50%, var(--b));
         border-radius: 99px;
-        border: 1px solid #050507;
+        border: 1px solid #04040e;
       }
       #xfade::-webkit-slider-thumb {
         width: 26px;
@@ -991,7 +1119,7 @@
         margin-top: -11px;
         border-radius: 4px;
         background:
-          linear-gradient(90deg, #2a2b33 0 2px, #c7cbd4 2px calc(100% - 2px), #2a2b33 calc(100% - 2px)), #9aa0ad;
+          linear-gradient(90deg, #232641 0 2px, #a7b3fc 2px calc(100% - 2px), #232641 calc(100% - 2px)), #818dcf;
         box-shadow:
           0 2px 4px rgba(0, 0, 0, 0.8),
           inset 0 1px 0 rgba(255, 255, 255, 0.6);
@@ -1010,7 +1138,7 @@
         padding: 9px 10px 10px;
         border-radius: 9px;
         border: 1px solid var(--line-soft);
-        background: linear-gradient(#0e0e13, #08080b);
+        background: linear-gradient(#0c0c1c, #070713);
       }
       .match-block .match-row {
         display: flex;
@@ -1018,7 +1146,7 @@
         align-items: baseline;
         font: 700 11px/1 var(--mono);
         letter-spacing: 0.04em;
-        color: #d6d9e2;
+        color: #b4bfff;
       }
       .match-block .tag {
         font: 700 8px/1 inherit;
@@ -1046,12 +1174,12 @@
       .kbd {
         display: inline-block;
         font: 600 9px/1.3 var(--mono);
-        background: #17171d;
-        border: 1px solid #2c2c35;
+        background: #131428;
+        border: 1px solid #252743;
         border-bottom-width: 2px;
         border-radius: 4px;
         padding: 1px 4px;
-        color: #aeb1bd;
+        color: #929ce1;
       }
       /* ---------- toasts ---------- */
       #toasts {
@@ -1089,7 +1217,13 @@
         <h1>VAPORZR</h1>
         <span class="model">LIVE DECKS</span>
       </div>
-      <select id="guild-select" title="Which server's decks you're controlling"></select>
+      <label class="guild-pick" id="guild-pick" title="Which server's decks you're controlling">
+        <span class="gp-label">SERVER</span>
+        <span class="gp-wrap">
+          <select id="guild-select"></select>
+          <span class="gp-caret" aria-hidden="true">▾</span>
+        </span>
+      </label>
       <span class="conn"><span class="dot" id="conn"></span><span id="status">connecting…</span></span>
       <span class="spacer"></span>
       <button class="fn" id="btn-sync"><span class="led"></span>SYNC</button>
@@ -1477,7 +1611,7 @@
           }
           // Use this deck's own accent rather than the document fallback, so A
           // and B keep their identity on the waveform.
-          var inked = getComputedStyle(rootEl).getPropertyValue('--deck').trim() || '#58c8ff';
+          var inked = getComputedStyle(rootEl).getPropertyValue('--deck').trim() || '#22d3ee';
           var g = cv.getContext('2d');
           g.setTransform(dpr, 0, 0, dpr, 0, 0);
           g.clearRect(0, 0, w, h);
@@ -1497,9 +1631,9 @@
           if (slot.loop) {
             var lx = (slot.loop.inMs / dur) * w;
             var lw = ((slot.loop.outMs - slot.loop.inMs) / dur) * w;
-            g.fillStyle = 'rgba(255, 166, 46, 0.16)';
+            g.fillStyle = 'rgba(255, 138, 61, 0.16)';
             g.fillRect(lx, 0, lw, h);
-            g.strokeStyle = 'rgba(255, 182, 80, 0.9)';
+            g.strokeStyle = 'rgba(255, 138, 61, 0.9)';
             g.lineWidth = 1;
             g.strokeRect(lx + 0.5, 0.5, Math.max(1, lw - 1), h - 1);
           }
@@ -1507,7 +1641,7 @@
           slot.cues.forEach(function (cue, i) {
             if (cue == null) return;
             var x = (cue / dur) * w;
-            g.fillStyle = '#f2f4f8';
+            g.fillStyle = '#cbd7ff';
             g.fillRect(x, 0, 1.5, h);
             g.font = '9px ui-monospace, monospace';
             g.fillText(String(i + 1), x + 2, 10);
@@ -1515,7 +1649,7 @@
           // Playhead (or the drag marker while scrubbing).
           var pos = slot.positionMs + (slot.playing && localClock.at ? Date.now() - localClock.at : 0);
           if (scrub && scrub.deck === id) {
-            g.strokeStyle = '#fff';
+            g.strokeStyle = '#d6e0ff';
             g.setLineDash([3, 3]);
             g.beginPath();
             g.moveTo(scrub.pct * w, 0);
@@ -1525,7 +1659,7 @@
             return;
           }
           var px = Math.min(w - 1, (pos / dur) * w);
-          g.fillStyle = '#fff';
+          g.fillStyle = '#d6e0ff';
           g.fillRect(px, 0, 2, h);
         }
 
@@ -1551,10 +1685,16 @@
             viewGuildId = guilds[0].id;
           }
           if (viewGuildId) sel.value = viewGuildId;
-          sel.style.display = guilds.length > 1 ? '' : 'none';
-          el('#status').textContent = viewGuildId
-            ? 'connected — ' + (sel.options[sel.selectedIndex] || {}).textContent
-            : 'connected';
+          // The picker doubles as "which server am I controlling", so it stays
+          // visible even with a single server — only an empty list hides it.
+          var pick = el('#guild-pick') || sel;
+          pick.style.display = guilds.length ? '' : 'none';
+          el('#status').textContent =
+            viewGuildId && guilds.length > 1
+              ? 'connected'
+              : viewGuildId
+                ? 'connected — ' + (sel.options[sel.selectedIndex] || {}).textContent
+                : 'connected';
         }
 
         function paint() {
