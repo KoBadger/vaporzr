@@ -1085,6 +1085,31 @@ export class DiscordBot {
       const gid = guildId ?? bridge.getPrimaryGuildId();
       return gid ? (this.deckControllers.get(gid)?.state() ?? null) : null;
     };
+    // Uploads from the deck page: pads land in data/samples, dropped tracks are
+    // written to the normal uploads dir and cued on the deck they were dropped on.
+    bridge.onSampleUpload = async (name, data) => {
+      try {
+        const dir = path.join(config.dataDir, 'samples');
+        await fs.mkdir(dir, { recursive: true });
+        await fs.writeFile(path.join(dir, name), data);
+        let samples: string[] = [];
+        for (const controller of this.deckControllers.values()) {
+          samples = controller.refreshSamples();
+          bridge.broadcastDeck(controller.state());
+        }
+        return { ok: true, samples };
+      } catch (err) {
+        return { ok: false, message: err instanceof Error ? err.message : 'could not save the sample' };
+      }
+    };
+    bridge.onDeckFileUpload = async (guildId, deck, file, name) => {
+      const gid = guildId ?? bridge.getPrimaryGuildId() ?? '';
+      const controller = gid ? this.deckControllers.get(gid) : undefined;
+      if (!controller) return { ok: false, message: 'Open the decks in that server first.' };
+      const res = await controller.loadLocal(deck, file, name);
+      if (res.ok) bridge.broadcastDeck(controller.state(), gid);
+      return res;
+    };
     // The web panel's Share button posts the jam card through the same path as
     // /jam. The panel has no channel of its own, so the bot resolves one (the
     // panel's channel, else the last text channel it heard from).

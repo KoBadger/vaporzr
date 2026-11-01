@@ -1385,6 +1385,30 @@
           animation: none !important;
         }
       }
+      /* ---------- drop targets: samples and dropped tracks ---------- */
+      .drop-hint {
+        margin-top: 6px;
+        font-size: 8.5px;
+        font-weight: 600;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--dim);
+      }
+      .pads .pad.add {
+        border-style: dashed;
+        color: var(--dim);
+        font-size: 15px;
+        line-height: 1;
+      }
+      .pads .pad.add:hover {
+        color: #fff;
+        border-color: var(--brand);
+      }
+      .dropping {
+        outline: 2px dashed var(--brand);
+        outline-offset: 3px;
+        background: color-mix(in srgb, var(--brand) 8%, transparent);
+      }
       /* ---------- Simple / Pro interface modes ---------- */
       .mode-switch {
         display: inline-flex;
@@ -1771,7 +1795,9 @@
 
         <div>
           <div class="block-label">SAMPLE BANK <span id="samples-count" class="muted"></span></div>
-          <div class="pads" id="sample-pads"></div>
+          <div class="pads" id="sample-pads" data-drop="sample" title="Drop a WAV or MP3 here"></div>
+          <div class="drop-hint" id="sample-hint">Drop audio on the bank, or press +</div>
+          <input id="sample-file" type="file" accept=".wav,.mp3,.ogg,.flac,.m4a,.opus,audio/*" hidden />
         </div>
 
         <div class="match-block pro-only">
@@ -2281,7 +2307,7 @@
             el('#samples-count').textContent = samples.length
               ? samples.length + ' loaded'
               : 'empty — drop files in data/samples';
-            samples.slice(0, 8).forEach(function (name, i) {
+            samples.slice(0, 7).forEach(function (name, i) {
               var b = document.createElement('button');
               b.className = 'pad';
               b.textContent = i + 1 + ' ' + name.slice(0, 10);
@@ -2291,6 +2317,15 @@
               };
               bank.appendChild(b);
             });
+            var add = document.createElement('button');
+            add.className = 'pad add';
+            add.id = 'sample-add';
+            add.textContent = '+';
+            add.title = 'Add a one-shot (WAV, MP3, OGG, FLAC, M4A)';
+            add.onclick = function () {
+              el('#sample-file').click();
+            };
+            bank.appendChild(add);
           }
           // Thumb dock (phones): keep its transport LEDs and fader in step with
           // the deck cards it duplicates.
@@ -2462,6 +2497,106 @@
           if (params.get('tutorial') === '1' || (params.get('tutorial') !== '0' && firstVisit && startMode !== 'pro')) {
             openTutorial();
           }
+
+          /* ----- adding samples and dropping tracks (HTTP uploads) ----- */
+          function safeAudioName(name) {
+            return (name || 'audio.wav').replace(/^.*[\\/]/, '').replace(/[^A-Za-z0-9._ ()-]/g, '-');
+          }
+          function requestDeckState() {
+            send({ type: 'deck:request' });
+          }
+          function uploadSample(file) {
+            var name = safeAudioName(file.name);
+            if (!/\.(wav|mp3|ogg|flac|m4a|opus)$/i.test(name)) {
+              toast('error', 'WAV, MP3, OGG, FLAC, M4A or OPUS only.');
+              return;
+            }
+            toast('info', 'Adding ' + name + '…');
+            fetch('/api/deck/sample?name=' + encodeURIComponent(name), {
+              method: 'POST',
+              body: file,
+              credentials: 'same-origin',
+            })
+              .then(function (r) {
+                return r.json().catch(function () {
+                  return { ok: r.ok };
+                });
+              })
+              .then(function (res) {
+                if (!res || !res.ok) {
+                  toast('error', (res && (res.error || res.message)) || 'Upload failed.');
+                  return;
+                }
+                toast('ok', 'Pad added: ' + name.replace(/\.[^.]+$/, ''));
+                requestDeckState();
+              })
+              .catch(function () {
+                toast('error', 'Upload failed — network.');
+              });
+          }
+          function uploadTrack(deck, file) {
+            var name = safeAudioName(file.name);
+            if (!/\.(wav|mp3|ogg|flac|m4a|opus)$/i.test(name)) {
+              toast('error', 'Drop an audio file (WAV, MP3, OGG, FLAC, M4A).');
+              return;
+            }
+            toast('info', 'Loading ' + name + ' on deck ' + deck.toUpperCase() + '…');
+            var q =
+              '/api/deck/track?deck=' +
+              deck +
+              '&guildId=' +
+              encodeURIComponent(viewGuildId || '') +
+              '&name=' +
+              encodeURIComponent(name);
+            fetch(q, { method: 'POST', body: file, credentials: 'same-origin' })
+              .then(function (r) {
+                return r.json().catch(function () {
+                  return { ok: r.ok };
+                });
+              })
+              .then(function (res) {
+                if (!res || !res.ok) {
+                  toast('error', (res && (res.error || res.message)) || 'Could not load that file.');
+                  return;
+                }
+                toast('ok', res.message || 'Loaded.');
+                requestDeckState();
+              })
+              .catch(function () {
+                toast('error', 'Upload failed — network.');
+              });
+          }
+          function wireDrop(node, onFile) {
+            if (!node) return;
+            ['dragenter', 'dragover'].forEach(function (ev) {
+              node.addEventListener(ev, function (e) {
+                e.preventDefault();
+                node.classList.add('dropping');
+              });
+            });
+            ['dragleave', 'dragend', 'drop'].forEach(function (ev) {
+              node.addEventListener(ev, function (e) {
+                e.preventDefault();
+                node.classList.remove('dropping');
+              });
+            });
+            node.addEventListener('drop', function (e) {
+              var files = e.dataTransfer && e.dataTransfer.files;
+              if (files && files.length) onFile(files[0]);
+            });
+          }
+          wireDrop(el('#sample-pads').parentNode, uploadSample);
+          el('#sample-file').addEventListener('change', function (e) {
+            var f = e.target.files && e.target.files[0];
+            if (f) uploadSample(f);
+            e.target.value = '';
+          });
+          all('.deck').forEach(function (card) {
+            var id = card.getAttribute('data-deck');
+            wireDrop(card, function (file) {
+              uploadTrack(id, file);
+            });
+          });
 
           /** One transport rule for the deck card and the mobile thumb dock. */
           function deckToggle(id) {

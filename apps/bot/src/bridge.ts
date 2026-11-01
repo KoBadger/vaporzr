@@ -132,6 +132,21 @@ export class Bridge {
     | null = null;
   /** Current deck state for a guild, or null when that guild has no decks. */
   deckStateProvider: ((guildId?: string) => DeckMixerState | null) | null = null;
+  /**
+   * HTTP uploads from the deck page: a one-shot for the sample bank, and an
+   * audio file dropped straight onto a deck. Both live here because the bot
+   * owns the mixers while the HTTP server only sees the bridge.
+   */
+  onSampleUpload:
+    ((name: string, data: Buffer) => Promise<{ ok: boolean; message?: string; samples?: string[] }>) | null = null;
+  onDeckFileUpload:
+    | ((
+        guildId: string | undefined,
+        deck: DeckId,
+        file: string,
+        name: string,
+      ) => Promise<{ ok: boolean; message?: string }>)
+    | null = null;
   /** Per-socket auth state: true = key holder (full control), false = guest (view-only). */
   /** Per-socket credential level: control (panel), view (watch/listen) or guest (Activity). */
   private socketScope = new Map<WebSocket, AccessScope | 'guest'>();
