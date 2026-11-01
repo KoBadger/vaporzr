@@ -1636,6 +1636,7 @@ export class Bridge {
       guilds: guildsForClient.length > 0 ? guildsForClient : undefined,
       sensitivity: this.sensitivity,
       presetCycle: this.presetCycleSec,
+      deckUrl: config.staticBaseUrl ? `${config.staticBaseUrl.replace(/\/+$/, '')}/deck` : '/deck',
       preset:
         this.presetIdx >= 0 && this.presetNames[this.presetIdx]
           ? { name: this.presetNames[this.presetIdx], index: this.presetIdx }

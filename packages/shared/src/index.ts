@@ -356,6 +356,8 @@ export type OutboundMessage =
       guilds?: Array<{ id: string; name: string }>;
       sensitivity?: number;
       presetCycle?: number;
+      /** Absolute URL of the live-deck page (relative `/deck` when no public base is set). */
+      deckUrl?: string;
       preset?: { name: string; index: number };
       guest?: boolean;
       endlesswave?: boolean;

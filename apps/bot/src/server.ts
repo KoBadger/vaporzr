@@ -320,7 +320,7 @@ function isActivityFetch(req: http.IncomingMessage): boolean {
 function accessNeedFor(pathname: string): AccessScope | null {
   if (pathname === '/panel' || pathname === '/panel.html') return 'control';
   // Decks change what the whole voice channel hears — same gate as the panel.
-  if (pathname === '/deck' || pathname === '/deck.html') return 'control';
+  if (pathname === '/deck' || pathname === '/deck.html' || pathname === '/decks') return 'control';
   if (pathname === '/' || pathname === '/index.html') return 'view';
   if (pathname === '/viz' || pathname === '/viz.html') return 'view';
   if (pathname === '/listen' || pathname === '/listen.html') return 'view';
@@ -1234,7 +1234,8 @@ async function handleRoute(
       }
 
       case '/deck':
-      case '/deck.html': {
+      case '/deck.html':
+      case '/decks': {
         try {
           const build = (process.env.VAPORZR_BUILD ?? 'dev').slice(0, 7);
           const file = fs

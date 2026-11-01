@@ -193,6 +193,9 @@ const client = new WsClient({
       if (msg.endlesswaveMode) setWaveMode(msg.endlesswaveMode);
       else if (msg.endlesswave === true) handleEndlessWave(true);
       if (typeof msg.presetCycle === 'number') setPresetCycle(msg.presetCycle, false);
+      if (typeof (msg as { deckUrl?: string }).deckUrl === 'string') {
+        deckUrl = (msg as { deckUrl?: string }).deckUrl ?? '';
+      }
       // A late joiner picks up whatever the bridge is showing right now.
       if (msg.preset) showNamedPreset(msg.preset.name, 0.6);
       if (msg.guilds) setGuilds(msg.guilds, msg.primaryGuildId);
@@ -463,6 +466,8 @@ function handleEndlessWave(active: boolean): void {
  */
 let deckStrip: HTMLElement | null = null;
 let deckStripHiddenAt = 0;
+/** Absolute deck page URL reported by the bot (falls back to the bridge origin). */
+let deckUrl = '';
 function renderDeckStrip(state: {
   active?: boolean;
   crossfader?: number;
@@ -486,7 +491,29 @@ function renderDeckStrip(state: {
       'padding:7px 11px;border-radius:11px;font:600 12px/1.2 system-ui,sans-serif;color:#e8ecf8;' +
       'background:rgba(10,12,24,.82);border:1px solid rgba(255,255,255,.12);' +
       'backdrop-filter:blur(8px);transition:opacity .3s;pointer-events:none';
+    const text = document.createElement('span');
+    text.id = 'deck-strip-text';
+    const link = document.createElement('a');
+    link.id = 'deck-strip-link';
+    link.textContent = 'Decks →';
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.style.cssText = 'color:#00f0ff;text-decoration:none;pointer-events:auto;white-space:nowrap';
+    link.style.display = 'none';
+    deckStrip.appendChild(text);
+    deckStrip.appendChild(link);
     document.body.appendChild(deckStrip);
+  }
+  // Only offer the link when the bot gave us an absolute URL (the Electron shell
+  // hands http(s) links to the system browser; a file:// href goes nowhere).
+  const link = deckStrip.querySelector<HTMLAnchorElement>('#deck-strip-link');
+  if (link) {
+    if (/^https?:\/\//i.test(deckUrl)) {
+      link.href = deckUrl;
+      link.style.display = '';
+    } else {
+      link.style.display = 'none';
+    }
   }
   const xf = Math.round((state.crossfader ?? 0.5) * 100);
   const deck = (id: 'A' | 'B', slot: NonNullable<typeof state.a>): string => {
@@ -495,7 +522,10 @@ function renderDeckStrip(state: {
     return `${id} ${slot.playing ? '▶' : '⏸'} ${slot.source.title ?? ''} · ${bpm}`;
   };
   const lock = state.sync ? ` · 🔒 ${state.sync.driftMs > 0 ? '+' : ''}${state.sync.driftMs}ms` : '';
-  deckStrip.textContent = `${deck('A', state.a ?? {})}   |   ${deck('B', state.b ?? {})}   |   fader ${xf}%${lock}`;
+  const text = deckStrip.querySelector<HTMLElement>('#deck-strip-text');
+  if (text) {
+    text.textContent = `${deck('A', state.a ?? {})}   |   ${deck('B', state.b ?? {})}   |   fader ${xf}%${lock}`;
+  }
   deckStrip.style.opacity = '1';
   deckStripHiddenAt = Date.now();
 }
