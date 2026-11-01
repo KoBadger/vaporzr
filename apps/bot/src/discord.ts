@@ -1102,6 +1102,28 @@ export class DiscordBot {
         return { ok: false, message: err instanceof Error ? err.message : 'could not save the sample' };
       }
     };
+    // The deck page's library panel: categories, the eight pads and saved setups.
+    // Layout lives once per data dir, so any guild's controller can answer.
+    bridge.onSampleBank = (action, name) => {
+      const controller = this.deckControllers.values().next().value;
+      if (!controller) return { ok: false, message: 'Load a deck first — the bank follows the decks.' };
+      const payload = () => ({
+        library: controller.sampleLibrary(),
+        pads: controller.samplePads(),
+        setups: controller.sampleSetups(),
+      });
+      if (action === 'list') return { ok: true, ...payload() };
+      const result =
+        action === 'save'
+          ? controller.saveSampleSetup(name ?? '')
+          : action === 'apply'
+            ? controller.applySampleSetup(name ?? '')
+            : controller.deleteSampleSetup(name ?? '');
+      if (result.ok) {
+        for (const c of this.deckControllers.values()) bridge.broadcastDeck(c.state());
+      }
+      return { ...payload(), ok: result.ok, message: result.message };
+    };
     bridge.onDeckFileUpload = async (guildId, deck, file, name) => {
       const gid = guildId ?? bridge.getPrimaryGuildId() ?? '';
       const controller = gid ? this.deckControllers.get(gid) : undefined;
@@ -1349,6 +1371,12 @@ export class DiscordBot {
           break;
         case 'sample':
           quiet(await decks.playSample(msg.slot ?? 1));
+          break;
+        case 'sampleAssign':
+          quiet(decks.assignSample(msg.slot ?? 1, msg.file ?? ''));
+          break;
+        case 'sampleSwap':
+          quiet(decks.swapSamples(msg.from ?? 1, msg.to ?? 1));
           break;
         case 'tempo':
           quiet(decks.tempo(deck, msg.tempo ?? 1));

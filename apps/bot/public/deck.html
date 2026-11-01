@@ -1203,9 +1203,9 @@
       .mixer-foot {
         display: flex;
         flex-direction: column;
-        gap: 6px;
+        gap: 10px;
         border-top: 1px solid var(--line-soft);
-        padding-top: 8px;
+        padding-top: 12px;
       }
       /* live match readout — real BPM/tempo data from both decks */
       .match-block {
@@ -1243,9 +1243,10 @@
         color: var(--dim);
       }
       .hints {
-        font-size: 10px;
-        line-height: 1.7;
-        color: var(--dim-2);
+        font-size: 11px;
+        line-height: 2.05;
+        letter-spacing: 0.015em;
+        color: #9aa6d0;
       }
       .kbd {
         display: inline-block;
@@ -1664,6 +1665,108 @@
           max-height: 92vh;
         }
       }
+
+      /* ---------- sample library panel ---------- */
+      .bank-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .bank-head .block-label {
+        flex: 1;
+      }
+      .mini-btn {
+        padding: 4px 8px;
+        font: 700 9px/1 inherit;
+        letter-spacing: 0.12em;
+        border-radius: 6px;
+        color: var(--dim);
+        background: #10142a;
+        border: 1px solid var(--line);
+        box-shadow: none;
+      }
+      .mini-btn:hover,
+      .mini-btn.on {
+        color: #dbe4ff;
+        border-color: var(--brand);
+      }
+      .sample-lib {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #0b0e1d;
+        padding: 8px;
+        display: grid;
+        gap: 8px;
+      }
+      .sample-lib[hidden] {
+        display: none;
+      }
+      .sample-lib-list {
+        max-height: 148px;
+        overflow: auto;
+        display: grid;
+        gap: 6px;
+      }
+      .sample-lib-cat {
+        font: 700 9px/1 inherit;
+        letter-spacing: 0.16em;
+        color: var(--dim);
+        text-transform: uppercase;
+        margin-top: 2px;
+      }
+      .sample-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+      }
+      .sample-chip {
+        padding: 5px 8px;
+        border-radius: 6px;
+        border: 1px solid var(--line);
+        background: #12172c;
+        color: #c9d4ff;
+        font: 500 10.5px/1 inherit;
+        cursor: grab;
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .sample-chip:hover {
+        border-color: var(--brand);
+        color: #fff;
+      }
+      #sample-search {
+        width: 100%;
+        padding: 6px 8px;
+        font-size: 11px;
+      }
+      .sample-sets {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+      }
+      .sample-sets select {
+        flex: 1;
+        min-width: 0;
+        padding: 5px 6px;
+        font-size: 10.5px;
+      }
+      .sample-sets .mini-btn {
+        flex: none;
+      }
+      .sdrag {
+        outline: 2px dashed var(--brand);
+        outline-offset: -3px;
+      }
+      .pad[data-slot] {
+        cursor: grab;
+      }
+      .pad.empty {
+        color: var(--dim);
+        border-style: dashed;
+        background: #0a0d1b;
+      }
     </style>
   </head>
   <body>
@@ -1860,9 +1963,25 @@
         </div>
 
         <div>
-          <div class="block-label">SAMPLE BANK <span id="samples-count" class="muted"></span></div>
+          <div class="bank-head">
+            <div class="block-label">SAMPLE BANK <span id="samples-count" class="muted"></span></div>
+            <button class="mini-btn" id="sample-lib-toggle" title="Browse every sample on the server">LIBRARY</button>
+            <button class="mini-btn" id="sample-add" title="Add a one-shot (WAV, MP3, OGG, FLAC, M4A)">+</button>
+          </div>
           <div class="pads" id="sample-pads" data-drop="sample" title="Drop a WAV or MP3 here"></div>
           <div class="drop-hint" id="sample-hint">Drop audio on the bank, or press +</div>
+          <div class="sample-lib" id="sample-lib" hidden>
+            <input id="sample-search" type="search" placeholder="Search samples…" autocomplete="off" />
+            <div class="sample-lib-list" id="sample-lib-list"></div>
+            <div class="sample-sets">
+              <select id="sample-setup" aria-label="Saved sample setups">
+                <option value="">Saved setups…</option>
+              </select>
+              <button class="mini-btn" id="sample-setup-save" title="Save the eight pads as a setup">SAVE</button>
+              <button class="mini-btn" id="sample-setup-apply" title="Load the selected setup">LOAD</button>
+              <button class="mini-btn" id="sample-setup-del" title="Delete the selected setup">DEL</button>
+            </div>
+          </div>
           <input id="sample-file" type="file" accept=".wav,.mp3,.ogg,.flac,.m4a,.opus,audio/*" hidden />
         </div>
 
@@ -2391,35 +2510,12 @@
           rec.classList.toggle('on', !!(state.record && state.record.active));
           el('.lbl', rec).textContent =
             state.record && state.record.active ? 'STOP ' + Math.round(state.record.elapsedMs / 1000) + 'S' : 'REC';
-          // Sample bank pads come from the server's data/samples folder.
+          // Sample bank pads come from the server's samples.json layout (8 slots).
           var samples = (state.a && state.a.samples) || [];
           var key = samples.join('|');
           if (key !== lastSamplesKey) {
             lastSamplesKey = key;
-            var bank = el('#sample-pads');
-            bank.innerHTML = '';
-            el('#samples-count').textContent = samples.length
-              ? samples.length + ' loaded'
-              : 'empty — drop files in data/samples';
-            samples.slice(0, 7).forEach(function (name, i) {
-              var b = document.createElement('button');
-              b.className = 'pad';
-              b.textContent = i + 1 + ' ' + name.slice(0, 10);
-              b.title = name;
-              b.onclick = function () {
-                control('sample', { slot: i + 1 });
-              };
-              bank.appendChild(b);
-            });
-            var add = document.createElement('button');
-            add.className = 'pad add';
-            add.id = 'sample-add';
-            add.textContent = '+';
-            add.title = 'Add a one-shot (WAV, MP3, OGG, FLAC, M4A)';
-            add.onclick = function () {
-              el('#sample-file').click();
-            };
-            bank.appendChild(add);
+            renderSamplePads(samples);
           }
           // Thumb dock (phones): keep its transport LEDs and fader in step with
           // the deck cards it duplicates.
@@ -2599,6 +2695,168 @@
           function requestDeckState() {
             send({ type: 'deck:request' });
           }
+          /* ----- sample library: pads, categories, assignments and setups ----- */
+          var sampleBank = { library: [], pads: [], setups: [] };
+          function renderSamplePads(samples) {
+            var bank = el('#sample-pads');
+            bank.innerHTML = '';
+            var filled = 0;
+            for (var s = 1; s <= 8; s++) {
+              (function (slot) {
+                var name = samples[slot - 1] || '';
+                if (name) filled++;
+                var b = document.createElement('button');
+                b.className = 'pad' + (name ? '' : ' empty');
+                b.textContent = name ? slot + ' ' + name.slice(0, 9) : String(slot);
+                b.title = name ? name + ' — drag onto another pad to swap' : 'Empty pad — drag a sample here';
+                b.setAttribute('data-slot', String(slot));
+                b.draggable = true;
+                b.onclick = function () {
+                  if (name) control('sample', { slot: slot });
+                };
+                b.addEventListener('dragstart', function (e) {
+                  e.dataTransfer.setData('text/x-vz-pad', String(slot));
+                  e.dataTransfer.effectAllowed = 'move';
+                });
+                b.addEventListener('dragover', function (e) {
+                  var types = e.dataTransfer.types || [];
+                  if (types.indexOf('text/x-vz-sample') < 0 && types.indexOf('text/x-vz-pad') < 0) return;
+                  e.preventDefault();
+                  b.classList.add('sdrag');
+                });
+                b.addEventListener('dragleave', function () {
+                  b.classList.remove('sdrag');
+                });
+                b.addEventListener('drop', function (e) {
+                  b.classList.remove('sdrag');
+                  var file = e.dataTransfer.getData('text/x-vz-sample');
+                  if (file) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    assignSample(file, slot);
+                    return;
+                  }
+                  var from = Number(e.dataTransfer.getData('text/x-vz-pad'));
+                  if (!from || from === slot) return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  control('sampleSwap', { from: from, to: slot });
+                });
+                bank.appendChild(b);
+              })(s);
+            }
+            el('#samples-count').textContent = filled + ' / 8 loaded';
+          }
+          function loadSampleBank() {
+            fetch('/api/deck/samples', { credentials: 'same-origin' })
+              .then(function (r) {
+                return r.ok ? r.json() : null;
+              })
+              .then(function (d) {
+                if (!d || !d.library) return;
+                sampleBank = d;
+                renderSampleLib();
+                renderSampleSetups();
+              })
+              .catch(function () {});
+          }
+          function renderSampleLib() {
+            var host = el('#sample-lib-list');
+            if (!host) return;
+            var q = (el('#sample-search').value || '').toLowerCase();
+            host.innerHTML = '';
+            var cats = {};
+            sampleBank.library.forEach(function (it) {
+              if (q && it.file.toLowerCase().indexOf(q) < 0) return;
+              (cats[it.category] = cats[it.category] || []).push(it);
+            });
+            var names = Object.keys(cats).sort();
+            if (!names.length) {
+              var none = document.createElement('div');
+              none.className = 'muted';
+              none.textContent = 'No samples yet — drop a WAV or MP3 on the bank.';
+              host.appendChild(none);
+              return;
+            }
+            names.forEach(function (cat) {
+              var head = document.createElement('div');
+              head.className = 'sample-lib-cat';
+              head.textContent = cat;
+              host.appendChild(head);
+              var wrap = document.createElement('div');
+              wrap.className = 'sample-chips';
+              cats[cat].forEach(function (it) {
+                var chip = document.createElement('button');
+                chip.className = 'sample-chip';
+                chip.textContent = it.name;
+                chip.title = 'Drag onto a pad, or click to fill the first empty pad';
+                chip.draggable = true;
+                chip.addEventListener('dragstart', function (e) {
+                  e.dataTransfer.setData('text/x-vz-sample', it.file);
+                  e.dataTransfer.effectAllowed = 'copy';
+                });
+                chip.onclick = function () {
+                  assignSample(it.file, 0);
+                };
+                wrap.appendChild(chip);
+              });
+              host.appendChild(wrap);
+            });
+          }
+          function assignSample(file, slot) {
+            if (!slot) {
+              var pads = (state && state.a && state.a.samples) || [];
+              slot = 1;
+              for (var i = 0; i < 8; i++) {
+                if (!pads[i]) {
+                  slot = i + 1;
+                  break;
+                }
+              }
+            }
+            control('sampleAssign', { slot: slot, file: file });
+            toast(
+              'ok',
+              'Pad ' +
+                slot +
+                ' ← ' +
+                file
+                  .split('/')
+                  .pop()
+                  .replace(/\.[^.]+$/, ''),
+            );
+          }
+          function renderSampleSetups() {
+            var sel = el('#sample-setup');
+            if (!sel) return;
+            var keep = sel.value;
+            sel.innerHTML = '<option value="">Saved setups…</option>';
+            (sampleBank.setups || []).forEach(function (name) {
+              var o = document.createElement('option');
+              o.value = name;
+              o.textContent = name;
+              sel.appendChild(o);
+            });
+            if (keep) sel.value = keep;
+          }
+          function sampleBankAction(method, name) {
+            var q = name ? '?name=' + encodeURIComponent(name) : '';
+            fetch('/api/deck/samples' + q, { method: method, credentials: 'same-origin' })
+              .then(function (r) {
+                return r.json();
+              })
+              .then(function (d) {
+                if (d && d.library) {
+                  sampleBank = d;
+                  renderSampleLib();
+                  renderSampleSetups();
+                }
+                if (d && d.message) toast(d.ok ? 'ok' : 'warn', d.message);
+              })
+              .catch(function () {
+                toast('warn', 'Could not reach the sample bank.');
+              });
+          }
           function uploadSample(file) {
             var name = safeAudioName(file.name);
             if (!/\.(wav|mp3|ogg|flac|m4a|opus)$/i.test(name)) {
@@ -2623,6 +2881,7 @@
                 }
                 toast('ok', 'Pad added: ' + name.replace(/\.[^.]+$/, ''));
                 requestDeckState();
+                loadSampleBank();
               })
               .catch(function () {
                 toast('error', 'Upload failed — network.');
@@ -2685,6 +2944,31 @@
             if (f) uploadSample(f);
             e.target.value = '';
           });
+          el('#sample-add').onclick = function () {
+            el('#sample-file').click();
+          };
+          el('#sample-lib-toggle').onclick = function () {
+            var panel = el('#sample-lib');
+            panel.hidden = !panel.hidden;
+            el('#sample-lib-toggle').classList.toggle('on', !panel.hidden);
+            if (!panel.hidden) loadSampleBank();
+          };
+          el('#sample-search').addEventListener('input', renderSampleLib);
+          el('#sample-setup-save').onclick = function () {
+            var name = window.prompt('Name this sample setup');
+            if (name) sampleBankAction('POST', name);
+          };
+          el('#sample-setup-apply').onclick = function () {
+            var name = el('#sample-setup').value;
+            if (name) sampleBankAction('PUT', name);
+            else toast('info', 'Pick a saved setup first.');
+          };
+          el('#sample-setup-del').onclick = function () {
+            var name = el('#sample-setup').value;
+            if (name) sampleBankAction('DELETE', name);
+            else toast('info', 'Pick a saved setup first.');
+          };
+          loadSampleBank();
           all('.deck').forEach(function (card) {
             var id = card.getAttribute('data-deck');
             wireDrop(card, function (file) {

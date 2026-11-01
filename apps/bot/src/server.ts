@@ -1620,6 +1620,35 @@ async function handleRoute(
         break;
       }
 
+      case '/api/deck/samples': {
+        const bot = bridgeRef();
+        if (!bot?.onSampleBank) {
+          res.writeHead(503, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'bot offline' }));
+          return;
+        }
+        const method = req.method ?? 'GET';
+        if (!['GET', 'POST', 'PUT', 'DELETE'].includes(method)) {
+          res.writeHead(405);
+          res.end();
+          return;
+        }
+        if (method !== 'GET' && !hasShareAccess(req, url, 'control')) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'forbidden' }));
+          return;
+        }
+        const action = method === 'GET' ? 'list' : method === 'POST' ? 'save' : method === 'PUT' ? 'apply' : 'delete';
+        const name = url.searchParams.get('name') ?? '';
+        const out = bot.onSampleBank(action, name);
+        res.writeHead(out.ok ? 200 : 400, {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-store',
+        });
+        res.end(JSON.stringify(out));
+        break;
+      }
+
       case '/api/deck/track': {
         if (req.method !== 'POST') {
           res.writeHead(405);
