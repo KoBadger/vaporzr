@@ -5,104 +5,272 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Vaporzr · Live Decks</title>
     <style>
+      /*
+       * Industrial two-deck + mixer rig.
+       * Layout and control language deliberately mirror the modern club-standard
+       * media player + mixer pair: dark matte chassis, a display/waveform shelf,
+       * a jog wheel with a pitch fader beside it, two rows of performance pads,
+       * and a centre mixer strip with filter, crossfader and FX pads. Every hook
+       * the deck controller uses (data-role / data-pad / data-band / ids) is kept
+       * exactly as before so behaviour is unchanged.
+       */
       :root {
-        --bg: #05060f;
-        --panel: rgba(16, 18, 34, 0.86);
-        --line: rgba(255, 255, 255, 0.09);
-        --text: #e8ecf8;
-        --muted: #8d96b4;
-        --accent: #6a5cff;
-        --accent2: #00f0ff;
-        --a: #6a5cff;
-        --b: #ff4d9d;
+        --chassis: #0a0a0c;
+        --chassis-2: #101013;
+        --panel: #131317;
+        --panel-2: #18181d;
+        --sunk: #08080a;
+        --line: #2a2a31;
+        --line-soft: #202027;
+        --ink: #f1f2f5;
+        --dim: #8b8c96;
+        --dim-2: #5d5e68;
+        --green: #00e07a;
+        --amber: #ffa62e;
+        --red: #ff3b30;
+        --a: #58c8ff;
+        --b: #ffb15c;
+        --radius: 14px;
+        --mono: ui-monospace, 'SF Mono', 'Roboto Mono', Menlo, Consolas, monospace;
       }
       * {
         box-sizing: border-box;
       }
       html,
       body {
-        height: 100%;
+        min-height: 100%;
       }
       body {
         margin: 0;
-        background:
-          radial-gradient(900px 500px at 10% -10%, rgba(106, 92, 255, 0.22), transparent 60%),
-          radial-gradient(800px 500px at 110% 10%, rgba(255, 77, 157, 0.16), transparent 60%), var(--bg);
-        color: var(--text);
+        color: var(--ink);
         font:
-          14px/1.45 system-ui,
-          -apple-system,
+          13px/1.45 'Inter Tight',
+          'Roboto Condensed',
           'Segoe UI',
+          system-ui,
           sans-serif;
+        background:
+          radial-gradient(1100px 620px at 50% -22%, rgba(255, 255, 255, 0.055), transparent 62%),
+          radial-gradient(700px 420px at 8% 105%, rgba(88, 200, 255, 0.05), transparent 60%),
+          radial-gradient(700px 420px at 96% 100%, rgba(255, 177, 92, 0.05), transparent 60%), var(--chassis);
         display: flex;
         flex-direction: column;
-        min-height: 100%;
-        padding: 18px;
-        gap: 14px;
+        gap: 12px;
+        padding: 14px;
       }
-      header {
+      /* ---------- top utility bar ---------- */
+      .topbar {
         display: flex;
         align-items: center;
         gap: 12px;
         flex-wrap: wrap;
-      }
-      h1 {
-        font-size: 17px;
-        margin: 0;
-        letter-spacing: 0.02em;
-        font-weight: 700;
-      }
-      #guild-select {
-        max-width: 190px;
-        background: rgba(255, 255, 255, 0.06);
+        padding: 10px 14px;
+        border-radius: 12px;
         border: 1px solid var(--line);
-        border-radius: 9px;
-        color: var(--text);
-        padding: 5px 8px;
-        font:
-          600 12px/1.2 system-ui,
-          sans-serif;
+        background: linear-gradient(#151519, #0d0d10);
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.05),
+          0 10px 26px rgba(0, 0, 0, 0.45);
       }
-      #guild-select:focus {
-        outline: 1px solid var(--accent);
+      .brand {
+        display: flex;
+        align-items: baseline;
+        gap: 9px;
+      }
+      .brand h1 {
+        margin: 0;
+        font-size: 15px;
+        letter-spacing: 0.22em;
+        font-weight: 800;
+      }
+      .brand .model {
+        font-size: 9px;
+        letter-spacing: 0.24em;
+        color: var(--dim-2);
+      }
+      .brand .logo-led {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--green);
+        box-shadow: 0 0 10px rgba(0, 224, 122, 0.85);
+        align-self: center;
+      }
+      .conn {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        font-size: 11px;
+        color: var(--dim);
       }
       .dot {
         width: 8px;
         height: 8px;
         border-radius: 50%;
-        background: #f43f5e;
-        box-shadow: 0 0 10px currentColor;
+        background: var(--red);
+        box-shadow: 0 0 9px rgba(255, 59, 48, 0.75);
       }
       .dot.on {
-        background: #22c55e;
+        background: var(--green);
+        box-shadow: 0 0 9px rgba(0, 224, 122, 0.8);
       }
       .spacer {
         flex: 1;
       }
-      .muted {
-        color: var(--muted);
-        font-size: 12px;
+      .muted,
+      .dim {
+        color: var(--dim);
+        font-size: 11px;
       }
-      .decks {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 14px;
+      #guild-select {
+        max-width: 190px;
+        background: #0b0b0e;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        color: var(--ink);
+        padding: 5px 8px;
+        font: 600 11px/1.2 inherit;
+        letter-spacing: 0.06em;
       }
-      @media (max-width: 780px) {
-        .decks {
-          grid-template-columns: 1fr;
+      #guild-select:focus-visible {
+        outline: 1px solid var(--a);
+      }
+      /* hardware function keys with LED dots */
+      .fn {
+        appearance: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 7px 11px;
+        border-radius: 7px;
+        border: 1px solid var(--line);
+        background: linear-gradient(#1b1b21, #121216);
+        color: #cfd0d8;
+        font: 700 10px/1 inherit;
+        letter-spacing: 0.14em;
+        cursor: pointer;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        transition:
+          color 0.15s,
+          border-color 0.15s,
+          background 0.15s;
+      }
+      .fn .led {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #33333b;
+        box-shadow: inset 0 0 0 1px #000;
+      }
+      .fn .lbl {
+        white-space: nowrap;
+      }
+      .fn:hover {
+        color: #fff;
+        border-color: #3a3a44;
+      }
+      .fn:active {
+        transform: translateY(1px);
+      }
+      .fn.on {
+        color: #fff;
+        border-color: #3d6b52;
+        background: linear-gradient(#1d2b24, #101713);
+      }
+      .fn.on .led {
+        background: var(--green);
+        box-shadow: 0 0 9px rgba(0, 224, 122, 0.9);
+      }
+      .fn.rec.on {
+        border-color: #6b2622;
+        background: linear-gradient(#2c1513, #150b0a);
+      }
+      .fn.rec.on .led {
+        background: var(--red);
+        box-shadow: 0 0 9px rgba(255, 59, 48, 0.95);
+        animation: recPulse 1.2s ease-in-out infinite;
+      }
+      @keyframes recPulse {
+        50% {
+          opacity: 0.35;
         }
       }
+      /* ---------- rig ---------- */
+      .rig {
+        display: grid;
+        grid-template-columns: minmax(300px, 1fr) minmax(320px, 400px) minmax(300px, 1fr);
+        gap: 12px;
+        align-items: stretch;
+      }
+      @media (max-width: 1180px) {
+        .rig {
+          grid-template-columns: 1fr 1fr;
+        }
+        .rig .mixer {
+          grid-column: 1 / -1;
+          order: 3;
+        }
+      }
+      @media (max-width: 760px) {
+        .rig {
+          grid-template-columns: 1fr;
+        }
+        .rig .mixer {
+          order: 0;
+        }
+      }
+      /* Grid/flex items default to min-content width, which made the deck cards
+         overflow phones. Let them shrink instead. */
+      .rig > * {
+        min-width: 0;
+      }
       .deck {
-        background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 16px;
-        padding: 14px;
+        min-width: 0;
+      }
+      input[type='text'] {
+        min-width: 0;
+      }
+      @media (max-width: 520px) {
+        body {
+          padding: 10px;
+        }
+        .topbar {
+          gap: 8px;
+          padding: 9px 11px;
+        }
+        .brand .model {
+          display: none;
+        }
+        .transport {
+          grid-template-columns: 1fr 1fr;
+        }
+        .transport .nudge {
+          grid-column: 1 / -1;
+          justify-content: center;
+        }
+        .filters {
+          grid-template-columns: 1fr;
+        }
+        .filter-unit {
+          min-width: 0;
+        }
+      }
+      /* ---------- deck chassis ---------- */
+      .deck {
+        --deck: var(--a);
+        position: relative;
         display: flex;
         flex-direction: column;
         gap: 10px;
-        backdrop-filter: blur(10px);
-        border-top: 2px solid var(--deck);
+        padding: 12px;
+        border-radius: var(--radius);
+        border: 1px solid var(--line);
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.045), transparent 140px), linear-gradient(#16161a, #0d0d10);
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.07),
+          inset 0 -1px 0 rgba(0, 0, 0, 0.7),
+          0 14px 34px rgba(0, 0, 0, 0.5);
       }
       .deck.a {
         --deck: var(--a);
@@ -110,43 +278,155 @@
       .deck.b {
         --deck: var(--b);
       }
+      .deck::before {
+        /* front-panel LED strip */
+        content: '';
+        position: absolute;
+        left: 12px;
+        right: 12px;
+        top: 0;
+        height: 2px;
+        border-radius: 2px;
+        background: linear-gradient(90deg, transparent, var(--deck), transparent);
+        opacity: 0.55;
+      }
       .deck-head {
         display: flex;
-        align-items: baseline;
-        gap: 8px;
+        align-items: center;
+        gap: 10px;
       }
-      .badge {
-        font:
-          700 11px/1 system-ui,
-          sans-serif;
-        letter-spacing: 0.12em;
-        padding: 5px 7px;
-        border-radius: 6px;
-        background: color-mix(in srgb, var(--deck) 22%, transparent);
+      .deck-id {
+        display: flex;
+        align-items: baseline;
+        gap: 7px;
+      }
+      .deck-letter {
+        font: 800 20px/1 inherit;
+        letter-spacing: 0.06em;
         color: var(--deck);
-        border: 1px solid color-mix(in srgb, var(--deck) 40%, transparent);
+        text-shadow: 0 0 16px color-mix(in srgb, var(--deck) 55%, transparent);
+      }
+      .deck-meta {
+        font: 700 9px/1 inherit;
+        letter-spacing: 0.22em;
+        color: var(--dim-2);
+      }
+      .load-row {
+        display: flex;
+        gap: 6px;
+        flex: 1;
+        justify-content: flex-end;
+      }
+      input[type='text'] {
+        flex: 1;
+        min-width: 110px;
+        background: #0a0a0d;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        color: var(--ink);
+        padding: 7px 9px;
+        font: 500 11px/1.3 inherit;
+        letter-spacing: 0.02em;
+      }
+      input[type='text']::placeholder {
+        color: var(--dim-2);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        font-size: 10px;
+      }
+      input[type='text']:focus-visible {
+        outline: 1px solid var(--deck);
+      }
+      .load-btn {
+        appearance: none;
+        border: 1px solid color-mix(in srgb, var(--deck) 45%, #1a1a20);
+        background: linear-gradient(#20232b, #14161b);
+        color: #eaf6ff;
+        border-radius: 7px;
+        padding: 7px 12px;
+        font: 800 10px/1 inherit;
+        letter-spacing: 0.18em;
+        cursor: pointer;
+      }
+      .load-btn:hover {
+        background: linear-gradient(#262a34, #171a20);
+      }
+      /* ---------- display shelf ---------- */
+      .display {
+        position: relative;
+        display: grid;
+        grid-template-columns: 1fr 18px;
+        gap: 8px;
+        padding: 9px 10px 8px;
+        border-radius: 10px;
+        border: 1px solid #050507;
+        background: linear-gradient(#050507, #090a0f 55%, #050507);
+        box-shadow:
+          inset 0 0 0 1px rgba(255, 255, 255, 0.03),
+          inset 0 12px 26px rgba(0, 0, 0, 0.75),
+          0 0 0 1px rgba(255, 255, 255, 0.02);
+      }
+      .display-main {
+        min-width: 0;
+      }
+      .track-line {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
       }
       .title {
-        font-weight: 650;
+        flex: 1;
+        min-width: 0;
+        font: 700 13px/1.25 inherit;
+        letter-spacing: 0.01em;
+        color: #f6f9ff;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-        flex: 1;
+      }
+      .bpm {
+        font: 800 14px/1 var(--mono);
+        color: var(--deck);
+        letter-spacing: 0.02em;
+        text-shadow: 0 0 12px color-mix(in srgb, var(--deck) 45%, transparent);
+        white-space: nowrap;
+      }
+      .deck.master .bpm::after {
+        content: ' MASTER';
+        font: 700 7px/1 inherit;
+        letter-spacing: 0.18em;
+        color: var(--amber);
+        vertical-align: middle;
       }
       .sub {
-        font-size: 11px;
-        color: var(--muted);
+        font: 600 10px/1.3 inherit;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--dim);
+        margin-top: 2px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
-      .time {
-        font-variant-numeric: tabular-nums;
-        font-size: 12px;
-        color: var(--muted);
+      .wave {
+        display: block;
+        width: 100%;
+        height: 74px;
+        margin-top: 7px;
+        border-radius: 6px;
+        border: 1px solid #101018;
+        background:
+          repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.028) 0 1px, transparent 1px 32px),
+          repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.022) 0 1px, transparent 1px 14px), #06070b;
+        cursor: crosshair;
       }
       .seek {
         position: relative;
-        height: 8px;
+        height: 6px;
+        margin-top: 7px;
         border-radius: 99px;
-        background: rgba(255, 255, 255, 0.08);
+        background: #0b0c12;
+        border: 1px solid #16171f;
         cursor: pointer;
         overflow: hidden;
       }
@@ -154,180 +434,626 @@
         position: absolute;
         inset: 0 auto 0 0;
         width: 0%;
-        background: var(--deck);
         border-radius: 99px;
+        background: linear-gradient(90deg, color-mix(in srgb, var(--deck) 55%, #000), var(--deck));
+        box-shadow: 0 0 10px color-mix(in srgb, var(--deck) 50%, transparent);
       }
-      .row {
+      .times {
         display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 6px;
+        margin-top: 5px;
+        font: 700 12px/1 var(--mono);
+        color: #dfe7f5;
       }
-      button {
-        appearance: none;
-        border: 1px solid var(--line);
-        background: rgba(255, 255, 255, 0.05);
-        color: var(--text);
-        padding: 8px 12px;
-        border-radius: 10px;
-        font:
-          600 12px/1 system-ui,
-          sans-serif;
-        cursor: pointer;
-        transition:
-          background 0.15s,
-          border-color 0.15s,
-          transform 0.05s;
-      }
-      button:hover {
-        background: rgba(255, 255, 255, 0.1);
-      }
-      button:active {
-        transform: translateY(1px);
-      }
-      button.primary {
-        background: linear-gradient(135deg, var(--deck), color-mix(in srgb, var(--deck) 55%, #000));
-        border-color: transparent;
-        color: #fff;
-      }
-      button.wide {
-        flex: 1;
-      }
-      button.mini {
-        padding: 6px 9px;
-        font-size: 11px;
-      }
-      .label {
+      .times .dim {
         font-size: 10px;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        opacity: 0.55;
-        margin-top: 4px;
       }
-      .pads {
+      .times [data-role='loop'] {
+        margin-left: auto;
+        font: 700 9px/1 inherit;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--dim);
+      }
+      .deck.looping .times [data-role='loop'] {
+        color: var(--amber);
+        text-shadow: 0 0 10px rgba(255, 166, 46, 0.6);
+      }
+      /* level meter column */
+      .meter {
+        display: flex;
+        flex-direction: column-reverse;
+        gap: 3px;
+        padding: 2px 0;
+        opacity: 0.45;
+        transition: opacity 0.25s;
+      }
+      .deck.playing .meter {
+        opacity: 1;
+      }
+      .meter i {
+        flex: 1;
+        border-radius: 2px;
+        background: linear-gradient(90deg, #123b2b, #1d6b45);
+      }
+      .meter i:nth-child(9),
+      .meter i:nth-child(10) {
+        background: linear-gradient(90deg, #4a3a12, #b98a1e);
+      }
+      .meter i:nth-child(11),
+      .meter i:nth-child(12) {
+        background: linear-gradient(90deg, #4a1512, #c02b22);
+      }
+      .deck.playing .meter i {
+        animation: meterPulse 0.95s ease-in-out infinite;
+        animation-delay: calc(var(--d, 0) * 55ms);
+      }
+      @keyframes meterPulse {
+        50% {
+          filter: brightness(1.65);
+        }
+      }
+      /* ---------- jog + pitch ---------- */
+      .jog-row {
         display: grid;
-        grid-template-columns: repeat(8, 1fr);
+        grid-template-columns: 1fr 62px;
+        gap: 10px;
+        align-items: center;
+      }
+      .jog {
+        --prog: 0;
+        position: relative;
+        justify-self: center;
+        width: min(172px, 100%);
+        aspect-ratio: 1;
+        border-radius: 50%;
+        background: radial-gradient(circle at 50% 42%, #1c1c22, #0d0d10 62%, #050506 100%);
+        box-shadow:
+          inset 0 2px 3px rgba(255, 255, 255, 0.07),
+          inset 0 -6px 14px rgba(0, 0, 0, 0.9),
+          0 10px 22px rgba(0, 0, 0, 0.55);
+        display: grid;
+        place-items: center;
+      }
+      .jog::before {
+        /* knurled outer grip */
+        content: '';
+        position: absolute;
+        inset: 3px;
+        border-radius: 50%;
+        background: repeating-conic-gradient(from 0deg, #1b1b20 0 1.6deg, #2a2a32 1.6deg 3.2deg);
+        -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 9px), #000 calc(100% - 8px));
+        mask: radial-gradient(farthest-side, transparent calc(100% - 9px), #000 calc(100% - 8px));
+        opacity: 0.9;
+      }
+      .jog::after {
+        /* progress ring */
+        content: '';
+        position: absolute;
+        inset: 12px;
+        border-radius: 50%;
+        background: conic-gradient(from -90deg, var(--deck) calc(var(--prog) * 1%), rgba(255, 255, 255, 0.05) 0);
+        -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+        mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+      }
+      .jog-face {
+        position: relative;
+        z-index: 1;
+        width: 68%;
+        aspect-ratio: 1;
+        border-radius: 50%;
+        display: grid;
+        place-content: center;
+        justify-items: center;
+        gap: 3px;
+        background: radial-gradient(circle at 50% 35%, #15161c, #07070a 78%);
+        box-shadow:
+          inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+          inset 0 8px 18px rgba(0, 0, 0, 0.8);
+      }
+      .jog-time {
+        font: 800 19px/1 var(--mono);
+        letter-spacing: 0.02em;
+        color: #eaf3ff;
+        text-shadow: 0 0 14px color-mix(in srgb, var(--deck) 35%, transparent);
+      }
+      .jog-sub {
+        font: 700 7px/1 inherit;
+        letter-spacing: 0.2em;
+        color: var(--dim-2);
+      }
+      .deck.playing .jog-face {
+        box-shadow:
+          inset 0 0 0 1px color-mix(in srgb, var(--deck) 35%, transparent),
+          inset 0 8px 18px rgba(0, 0, 0, 0.8),
+          0 0 22px color-mix(in srgb, var(--deck) 22%, transparent);
+      }
+      .fader-col {
+        display: grid;
+        justify-items: center;
         gap: 4px;
       }
-      .wave {
-        width: 100%;
-        height: 52px;
-        display: block;
-        border-radius: 10px;
-        background: rgba(255, 255, 255, 0.04);
-        border: 1px solid var(--line);
-        cursor: crosshair;
+      .fader-label {
+        font: 700 8px/1 inherit;
+        letter-spacing: 0.18em;
+        color: var(--dim-2);
       }
-      .pads .pad {
-        padding: 6px 0;
-        font-variant-numeric: tabular-nums;
+      .fader-col output {
+        font: 700 10px/1 var(--mono);
+        color: var(--deck);
       }
-      .pads .pad.set {
-        border-color: var(--deck);
-        color: #fff;
-        background: color-mix(in srgb, var(--deck) 22%, transparent);
+      /* vertical pitch fader: rotate a normal slider so it works in every engine */
+      .pitch-wrap {
+        position: relative;
+        width: 34px;
+        height: 132px;
       }
-      button.on {
-        border-color: var(--deck);
-        color: #fff;
+      .pitch {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 132px;
+        height: 20px;
+        transform: translate(-50%, -50%) rotate(-90deg);
       }
-      input[type='text'] {
-        flex: 1;
-        min-width: 120px;
-        background: rgba(255, 255, 255, 0.05);
-        border: 1px solid var(--line);
-        border-radius: 10px;
-        color: var(--text);
-        padding: 8px 10px;
-        font: inherit;
-        font-size: 12px;
+      .pitch-wrap::before {
+        /* recessed fader slot */
+        content: '';
+        position: absolute;
+        left: 50%;
+        top: 4px;
+        bottom: 4px;
+        width: 7px;
+        transform: translateX(-50%);
+        border-radius: 4px;
+        background: linear-gradient(180deg, #050507, #14151b 40%, #050507);
+        box-shadow:
+          inset 0 0 0 1px #23252d,
+          inset 0 2px 8px rgba(0, 0, 0, 0.95);
       }
-      input[type='text']:focus {
-        outline: 1px solid var(--deck);
+      .pitch-wrap::after {
+        /* 0% detent marker */
+        content: '';
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 20px;
+        height: 1px;
+        transform: translate(-50%, -50%);
+        background: rgba(255, 255, 255, 0.28);
+        pointer-events: none;
       }
-      .eq {
-        display: grid;
-        grid-template-columns: 26px 1fr 34px;
-        gap: 6px 8px;
-        align-items: center;
-        font-size: 11px;
+      .pitch::-webkit-slider-thumb {
+        width: 15px;
+        height: 26px;
+        margin-top: -12px;
+        border-radius: 3px;
+        background: linear-gradient(180deg, #f6f8fb, #a9adb8 46%, #767b88 54%, #dfe3ea), #9aa0ad;
       }
-      .eq label {
-        color: var(--muted);
-        letter-spacing: 0.08em;
-      }
-      .eq output {
-        text-align: right;
-        font-variant-numeric: tabular-nums;
-      }
+      /* ---------- shared range styling ---------- */
       input[type='range'] {
         -webkit-appearance: none;
         appearance: none;
-        height: 18px;
-        background: transparent;
+        height: 20px;
         width: 100%;
+        background: transparent;
+        accent-color: var(--deck);
       }
       input[type='range']::-webkit-slider-runnable-track {
-        height: 4px;
+        height: 5px;
         border-radius: 99px;
-        background: rgba(255, 255, 255, 0.14);
+        background: linear-gradient(180deg, #23262f, #454b59 48%, #2a2e38);
+        border: 1px solid #050507;
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.14),
+          inset 0 -1px 2px rgba(0, 0, 0, 0.9);
       }
       input[type='range']::-webkit-slider-thumb {
         -webkit-appearance: none;
-        width: 14px;
-        height: 14px;
-        margin-top: -5px;
-        border-radius: 50%;
-        background: var(--deck);
-        box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.35);
+        width: 13px;
+        height: 19px;
+        margin-top: -8px;
+        border-radius: 3px;
+        background: linear-gradient(#f2f4f8, #9fa3ae 55%, #6f7480);
+        border: 1px solid #050506;
+        box-shadow:
+          0 1px 2px rgba(0, 0, 0, 0.8),
+          inset 0 1px 0 rgba(255, 255, 255, 0.7);
       }
       input[type='range']::-moz-range-track {
         height: 4px;
         border-radius: 99px;
-        background: rgba(255, 255, 255, 0.14);
+        background: #22242d;
       }
       input[type='range']::-moz-range-thumb {
-        width: 14px;
-        height: 14px;
-        border: 0;
-        border-radius: 50%;
-        background: var(--deck);
+        width: 13px;
+        height: 19px;
+        border-radius: 3px;
+        border: 1px solid #050506;
+        background: linear-gradient(#f2f4f8, #9fa3ae 55%, #6f7480);
       }
-      .mixer {
-        background: var(--panel);
+      .pitch::-webkit-slider-runnable-track {
+        height: 4px;
+      }
+      /* ---------- transport ---------- */
+      .transport {
+        display: grid;
+        grid-template-columns: 1.4fr 1fr auto;
+        gap: 7px;
+        align-items: stretch;
+      }
+      button {
+        appearance: none;
         border: 1px solid var(--line);
-        border-radius: 16px;
-        padding: 14px;
+        background: linear-gradient(#1a1a20, #121216);
+        color: #d5d7df;
+        padding: 9px 12px;
+        border-radius: 8px;
+        font: 700 10px/1 inherit;
+        letter-spacing: 0.16em;
+        cursor: pointer;
+        transition:
+          background 0.14s,
+          border-color 0.14s,
+          color 0.14s,
+          transform 0.05s;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+      }
+      button:hover {
+        color: #fff;
+        border-color: #3a3a45;
+      }
+      button:active {
+        transform: translateY(1px);
+      }
+      button:focus-visible {
+        outline: 1px solid var(--deck, #58c8ff);
+        outline-offset: 1px;
+      }
+      .transport .play {
+        font-size: 11px;
+        letter-spacing: 0.22em;
+        color: #bdf6d8;
+        border-color: #1f3a2e;
+      }
+      .transport .play::before {
+        content: '';
+        display: inline-block;
+        width: 0;
+        height: 0;
+        margin-right: 8px;
+        border-left: 9px solid currentColor;
+        border-top: 6px solid transparent;
+        border-bottom: 6px solid transparent;
+        vertical-align: -1px;
+        opacity: 0.5;
+      }
+      .deck.playing .transport .play {
+        color: #04120c;
+        background: linear-gradient(var(--green), #00b863);
+        border-color: #00b863;
+        box-shadow:
+          0 0 18px rgba(0, 224, 122, 0.4),
+          inset 0 1px 0 rgba(255, 255, 255, 0.4);
+      }
+      .deck.playing .transport .play::before {
+        opacity: 1;
+      }
+      .transport .cue {
+        color: #ffd9a3;
+        border-color: #3d2e18;
+      }
+      .transport .cue:hover {
+        background: linear-gradient(#2b2114, #17110a);
+      }
+      .nudge {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 0 6px;
+        border: 1px solid var(--line-soft);
+        border-radius: 8px;
+        background: #0d0d11;
+      }
+      .nudge span {
+        font: 700 8px/1 inherit;
+        letter-spacing: 0.16em;
+        color: var(--dim-2);
+      }
+      .nudge button {
+        padding: 5px 7px;
+        font-size: 11px;
+        letter-spacing: 0;
+        background: transparent;
+        border-color: transparent;
+      }
+      /* ---------- channel strip (EQ) ---------- */
+      .channel {
+        display: grid;
+        gap: 8px;
+        padding: 9px 10px;
+        border-radius: 10px;
+        border: 1px solid var(--line-soft);
+        background: linear-gradient(#101014, #0b0b0e);
+      }
+      .eq {
+        display: grid;
+        grid-template-columns: 34px 1fr 34px;
+        gap: 4px 8px;
+        align-items: center;
+        font-size: 10px;
+      }
+      .eq label {
+        color: var(--dim);
+        font: 700 9px/1 inherit;
+        letter-spacing: 0.18em;
+      }
+      .eq output {
+        text-align: right;
+        font: 700 10px/1 var(--mono);
+        color: #cfd3dd;
+      }
+      .kill-row {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 6px;
+      }
+      .kill-row button {
+        padding: 6px 0;
+        font-size: 8px;
+        letter-spacing: 0.18em;
+        color: var(--dim);
+        border-radius: 5px;
+        background: #0c0c10;
+      }
+      .kill-row button:hover {
+        color: #ffd2d2;
+        border-color: #4a2422;
+      }
+      /* ---------- pads ---------- */
+      .block-label {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        font: 700 9px/1 inherit;
+        letter-spacing: 0.2em;
+        color: var(--dim);
+        margin-bottom: 5px;
+      }
+      .block-label .hint {
+        margin-left: auto;
+        font: 600 8px/1 inherit;
+        letter-spacing: 0.08em;
+        text-transform: none;
+        color: var(--dim-2);
+      }
+      .pads {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 6px;
+      }
+      .pads .pad,
+      .pads button {
+        appearance: none;
+        padding: 10px 0;
+        border-radius: 7px;
+        border: 1px solid #23233a;
+        background: linear-gradient(#14141c, #0c0c11);
+        color: #8f93a8;
+        font: 700 11px/1 var(--mono);
+        letter-spacing: 0.04em;
+        cursor: pointer;
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.04),
+          0 1px 2px rgba(0, 0, 0, 0.6);
+      }
+      .pads .pad:hover {
+        color: #fff;
+        border-color: #333350;
+      }
+      .pads .pad.set {
+        color: #f4fbff;
+        border-color: color-mix(in srgb, var(--deck) 70%, #000);
+        background: linear-gradient(
+          color-mix(in srgb, var(--deck) 40%, #0b0b12),
+          color-mix(in srgb, var(--deck) 18%, #08080d)
+        );
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.16),
+          0 0 14px color-mix(in srgb, var(--deck) 32%, transparent);
+      }
+      .loop-pads {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 6px;
+      }
+      .loop-pads button {
+        padding: 8px 0;
+        font-size: 9px;
+        letter-spacing: 0.08em;
+        border-color: #3a2f18;
+        color: #e7c896;
+        background: linear-gradient(#1a1610, #0d0b08);
+      }
+      .loop-pads button:hover {
+        border-color: #6b5525;
+        color: #ffe4b5;
+      }
+      /* ---------- mixer ---------- */
+      .mixer {
         display: flex;
         flex-direction: column;
-        gap: 12px;
+        justify-content: space-between;
+        gap: 11px;
+        padding: 12px;
+        min-height: 100%;
+        border-radius: var(--radius);
+        border: 1px solid var(--line);
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 120px), linear-gradient(#141419, #0c0c10);
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.06),
+          0 14px 34px rgba(0, 0, 0, 0.5);
+      }
+      .mixer-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        font: 800 11px/1 inherit;
+        letter-spacing: 0.26em;
+        color: #c9ccd6;
+      }
+      .mixer-head .dim {
+        letter-spacing: 0.18em;
+        font-size: 9px;
+      }
+      .filter-unit {
+        display: grid;
+        gap: 5px;
+        padding: 8px 10px;
+        border-radius: 9px;
+        border: 1px solid var(--line-soft);
+        background: linear-gradient(#0e0e13, #08080b);
+      }
+      .filter-unit .filter-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 8px;
+        font: 700 8px/1 inherit;
+        letter-spacing: 0.12em;
+        white-space: nowrap;
+        color: var(--dim);
+      }
+      .filter-unit .filter-top .f-name {
+        color: #d8dae2;
+      }
+      .filter-unit .detent {
+        position: relative;
+        height: 20px;
+        display: flex;
+        align-items: center;
+        padding-top: 10px;
+      }
+      .filter-unit .detent::after {
+        content: '';
+        position: absolute;
+        left: 50%;
+        top: -2px;
+        bottom: -2px;
+        width: 1px;
+        background: rgba(255, 255, 255, 0.22);
+      }
+      .filter-unit [data-filter='a'] {
+        --deck: var(--a);
+      }
+      .filter-unit [data-filter='b'] {
+        --deck: var(--b);
+      }
+      .filters {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+      .xfader-block {
+        padding: 9px 10px 6px;
+        border-radius: 9px;
+        border: 1px solid var(--line-soft);
+        background: linear-gradient(#0e0e13, #08080b);
       }
       .xfade-head {
         display: flex;
         justify-content: space-between;
-        font-size: 11px;
-        color: var(--muted);
+        align-items: baseline;
+        font: 700 8px/1 inherit;
+        letter-spacing: 0.2em;
+        color: var(--dim);
+      }
+      #xfade-val {
+        font: 800 11px/1 var(--mono);
+        color: var(--ink);
+        letter-spacing: 0;
       }
       #xfade {
-        --deck: var(--accent2);
+        --deck: #cfd3dd;
+        height: 26px;
       }
-      .footer {
+      #xfade::-webkit-slider-runnable-track {
+        height: 6px;
+        background: linear-gradient(90deg, var(--a), #1a1b22 50%, var(--b));
+        border-radius: 99px;
+        border: 1px solid #050507;
+      }
+      #xfade::-webkit-slider-thumb {
+        width: 26px;
+        height: 26px;
+        margin-top: -11px;
+        border-radius: 4px;
+        background:
+          linear-gradient(90deg, #2a2b33 0 2px, #c7cbd4 2px calc(100% - 2px), #2a2b33 calc(100% - 2px)), #9aa0ad;
+        box-shadow:
+          0 2px 4px rgba(0, 0, 0, 0.8),
+          inset 0 1px 0 rgba(255, 255, 255, 0.6);
+      }
+      .mixer-foot {
         display: flex;
-        gap: 10px;
-        align-items: center;
-        flex-wrap: wrap;
+        flex-direction: column;
+        gap: 6px;
+        border-top: 1px solid var(--line-soft);
+        padding-top: 8px;
+      }
+      /* live match readout — real BPM/tempo data from both decks */
+      .match-block {
+        display: grid;
+        gap: 6px;
+        padding: 9px 10px 10px;
+        border-radius: 9px;
+        border: 1px solid var(--line-soft);
+        background: linear-gradient(#0e0e13, #08080b);
+      }
+      .match-block .match-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        font: 700 11px/1 var(--mono);
+        letter-spacing: 0.04em;
+        color: #d6d9e2;
+      }
+      .match-block .tag {
+        font: 700 8px/1 inherit;
+        letter-spacing: 0.18em;
+        color: var(--dim-2);
+        font-family: inherit;
+      }
+      #match-a {
+        color: var(--a);
+      }
+      #match-b {
+        color: var(--b);
+      }
+      #engine {
+        font: 700 9px/1.3 inherit;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--dim);
+      }
+      .hints {
+        font-size: 10px;
+        line-height: 1.7;
+        color: var(--dim-2);
       }
       .kbd {
-        font:
-          600 11px/1.4 ui-monospace,
-          SFMono-Regular,
-          Menlo,
-          monospace;
-        background: rgba(255, 255, 255, 0.06);
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        padding: 2px 6px;
-        color: var(--muted);
+        display: inline-block;
+        font: 600 9px/1.3 var(--mono);
+        background: #17171d;
+        border: 1px solid #2c2c35;
+        border-bottom-width: 2px;
+        border-radius: 4px;
+        padding: 1px 4px;
+        color: #aeb1bd;
       }
+      /* ---------- toasts ---------- */
       #toasts {
         position: fixed;
         right: 16px;
@@ -339,227 +1065,333 @@
         max-width: 320px;
       }
       .toast {
-        background: rgba(12, 14, 26, 0.95);
+        background: rgba(12, 13, 18, 0.96);
         border: 1px solid var(--line);
-        border-left: 3px solid var(--accent);
-        border-radius: 10px;
+        border-left: 3px solid var(--a);
+        border-radius: 8px;
         padding: 9px 12px;
-        font-size: 12px;
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+        font-size: 11px;
+        letter-spacing: 0.02em;
+        box-shadow: 0 10px 26px rgba(0, 0, 0, 0.55);
       }
       .toast.error {
-        border-left-color: #f43f5e;
+        border-left-color: var(--red);
       }
       .toast.success {
-        border-left-color: #22c55e;
-      }
-      .bpm {
-        font-variant-numeric: tabular-nums;
+        border-left-color: var(--green);
       }
     </style>
   </head>
   <body>
-    <header>
-      <span class="dot" id="conn"></span>
-      <h1>Live Decks</h1>
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo-led" aria-hidden="true"></span>
+        <h1>VAPORZR</h1>
+        <span class="model">LIVE DECKS</span>
+      </div>
       <select id="guild-select" title="Which server's decks you're controlling"></select>
-      <span class="muted" id="status">connecting…</span>
+      <span class="conn"><span class="dot" id="conn"></span><span id="status">connecting…</span></span>
       <span class="spacer"></span>
-      <button class="mini" id="btn-sync">SYNC B → A</button>
-      <button class="mini" id="btn-lock">Lock</button>
-      <button class="mini" id="btn-rec">Record</button>
-      <button class="mini" id="btn-play">Play both</button>
-      <button class="mini" id="btn-pause">Pause</button>
-      <button class="mini" id="btn-stop">Stop decks</button>
+      <button class="fn" id="btn-sync"><span class="led"></span>SYNC</button>
+      <button class="fn" id="btn-lock"><span class="led"></span><span class="lbl">BEAT LOCK</span></button>
+      <button class="fn rec" id="btn-rec"><span class="led"></span><span class="lbl">RECORD</span></button>
+      <button class="fn" id="btn-play"><span class="led"></span>PLAY BOTH</button>
+      <button class="fn" id="btn-pause">PAUSE</button>
+      <button class="fn" id="btn-stop">STOP</button>
     </header>
 
-    <div class="decks">
+    <main class="rig">
       <section class="deck a" data-deck="a">
         <div class="deck-head">
-          <span class="badge">A</span>
-          <span class="title" data-role="title">—</span>
-          <span class="bpm" data-role="bpm"></span>
+          <div class="deck-id">
+            <span class="deck-letter">A</span>
+            <span class="deck-meta">DECK</span>
+          </div>
+          <div class="load-row">
+            <input type="text" data-role="query" placeholder="Search or paste a link" />
+            <button class="load-btn" data-role="load">LOAD</button>
+          </div>
         </div>
-        <div class="sub" data-role="artist"></div>
-        <canvas class="wave" data-role="wave" height="52"></canvas>
-        <div class="seek" data-role="seek"><i></i></div>
-        <div class="row" style="justify-content: space-between">
-          <span class="time" data-role="time">0:00</span>
-          <span class="time" data-role="dur">0:00</span>
+
+        <div class="display">
+          <div class="display-main">
+            <div class="track-line">
+              <span class="title" data-role="title">—</span>
+              <span class="bpm" data-role="bpm"></span>
+            </div>
+            <div class="sub" data-role="artist">empty</div>
+            <canvas class="wave" data-role="wave"></canvas>
+            <div class="seek" data-role="seek"><i></i></div>
+            <div class="times">
+              <span data-role="time">0:00</span>
+              <span class="dim">/</span>
+              <span data-role="dur">0:00</span>
+              <span data-role="loop">no loop</span>
+            </div>
+          </div>
+          <div class="meter" aria-hidden="true">
+            <i style="--d: 0"></i><i style="--d: 1"></i><i style="--d: 2"></i><i style="--d: 3"></i>
+            <i style="--d: 4"></i><i style="--d: 5"></i><i style="--d: 6"></i><i style="--d: 7"></i>
+            <i style="--d: 8"></i><i style="--d: 9"></i><i style="--d: 10"></i><i style="--d: 11"></i>
+          </div>
         </div>
-        <div class="row">
-          <input type="text" data-role="query" placeholder="Song name or link…" />
-          <button class="primary mini" data-role="load">Load</button>
+
+        <div class="jog-row">
+          <div class="jog" data-role="jog">
+            <div class="jog-face">
+              <div class="jog-time" data-role="jog-time">0:00</div>
+              <div class="jog-sub">TRACK POSITION</div>
+            </div>
+          </div>
+          <div class="fader-col">
+            <div class="fader-label">TEMPO</div>
+            <div class="pitch-wrap">
+              <input
+                class="pitch"
+                type="range"
+                data-role="tempo"
+                min="92"
+                max="108"
+                step="0.1"
+                value="100"
+                aria-label="Deck A tempo"
+              />
+            </div>
+            <output data-out="tempo">100</output>
+          </div>
         </div>
-        <div class="row">
-          <button class="wide" data-role="toggle">Play</button>
-          <button class="mini" data-role="cue">Cue 0:00</button>
+
+        <div class="transport">
+          <button class="play" data-role="toggle">PLAY</button>
+          <button class="cue" data-role="cue">CUE</button>
+          <div class="nudge">
+            <button data-nudge="-25" title="Nudge 25 ms back">−</button>
+            <span>NUDGE</span>
+            <button data-nudge="25" title="Nudge 25 ms forward">+</button>
+          </div>
         </div>
-        <div class="eq" data-role="eq">
-          <label>LOW</label><input type="range" data-band="low" min="-40" max="6" step="1" value="0" /><output
-            data-out="low"
-            >0</output
-          >
-          <label>MID</label><input type="range" data-band="mid" min="-40" max="6" step="1" value="0" /><output
-            data-out="mid"
-            >0</output
-          >
-          <label>HIGH</label><input type="range" data-band="high" min="-40" max="6" step="1" value="0" /><output
-            data-out="high"
-            >0</output
-          >
+
+        <div class="channel">
+          <div class="eq" data-role="eq">
+            <label>LOW</label>
+            <input type="range" data-band="low" min="-40" max="6" step="1" value="0" aria-label="Deck A low" />
+            <output data-out="low">0</output>
+            <label>MID</label>
+            <input type="range" data-band="mid" min="-40" max="6" step="1" value="0" aria-label="Deck A mid" />
+            <output data-out="mid">0</output>
+            <label>HIGH</label>
+            <input type="range" data-band="high" min="-40" max="6" step="1" value="0" aria-label="Deck A high" />
+            <output data-out="high">0</output>
+            <label>TRIM</label>
+            <input type="range" data-role="gain" min="0" max="100" step="1" value="100" aria-label="Deck A trim" />
+            <output data-out="gain">100</output>
+          </div>
+          <div class="kill-row">
+            <button data-kill="low">KILL LOW</button>
+            <button data-kill="mid">KILL MID</button>
+            <button data-kill="high">KILL HIGH</button>
+          </div>
         </div>
-        <div class="row">
-          <button class="mini" data-kill="low">Kill low</button>
-          <button class="mini" data-kill="mid">Kill mid</button>
-          <button class="mini" data-kill="high">Kill high</button>
+
+        <div class="pads-block">
+          <div class="block-label">HOT CUE<span class="hint">click set / jump · right-click clear</span></div>
+          <div class="pads" data-role="pads">
+            <button class="pad" data-pad="1" title="Set or jump to hot cue 1">1</button>
+            <button class="pad" data-pad="2" title="Set or jump to hot cue 2">2</button>
+            <button class="pad" data-pad="3" title="Set or jump to hot cue 3">3</button>
+            <button class="pad" data-pad="4" title="Set or jump to hot cue 4">4</button>
+            <button class="pad" data-pad="5" title="Set or jump to hot cue 5">5</button>
+            <button class="pad" data-pad="6" title="Set or jump to hot cue 6">6</button>
+            <button class="pad" data-pad="7" title="Set or jump to hot cue 7">7</button>
+            <button class="pad" data-pad="8" title="Set or jump to hot cue 8">8</button>
+          </div>
         </div>
-        <div class="eq">
-          <label>TRIM</label><input type="range" data-role="gain" min="0" max="100" step="1" value="100" /><output
-            data-out="gain"
-            >100</output
-          >
-          <label>SPEED</label><input type="range" data-role="tempo" min="92" max="108" step="0.1" value="100" /><output
-            data-out="tempo"
-            >100</output
-          >
-          <label>NUDGE</label>
-          <span class="row" style="gap: 6px">
-            <button class="mini" data-nudge="-25">−25ms</button>
-            <button class="mini" data-nudge="25">+25ms</button>
+
+        <div class="loop-block">
+          <div class="block-label">BEAT LOOP</div>
+          <div class="loop-pads">
+            <button data-loop="1">1 BEAT</button>
+            <button data-loop="4">4</button>
+            <button data-loop="8">8</button>
+            <button data-loop="16">16</button>
+            <button data-loop="off">EXIT</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="mixer">
+        <div class="mixer-head"><span>MIXER</span><span class="dim">MASTER</span></div>
+
+        <div class="filters">
+          <div class="filter-unit">
+            <div class="filter-top"><span class="f-name">FILTER A</span><span>LPF · OFF · HPF</span></div>
+            <div class="detent">
+              <input type="range" data-filter="a" min="0" max="100" step="1" value="50" aria-label="Filter deck A" />
+            </div>
+          </div>
+          <div class="filter-unit">
+            <div class="filter-top"><span class="f-name">FILTER B</span><span>LPF · OFF · HPF</span></div>
+            <div class="detent">
+              <input type="range" data-filter="b" min="0" max="100" step="1" value="50" aria-label="Filter deck B" />
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div class="block-label">BEAT FX</div>
+          <div class="pads" id="fx-pads"></div>
+        </div>
+
+        <div>
+          <div class="block-label">SAMPLE BANK <span id="samples-count" class="muted"></span></div>
+          <div class="pads" id="sample-pads"></div>
+        </div>
+
+        <div class="match-block">
+          <div class="block-label">SYNC / MATCH</div>
+          <div class="match-row"><span class="tag">A · BPM / TEMPO</span><span id="match-a">—</span></div>
+          <div class="match-row"><span class="tag">B · BPM / TEMPO</span><span id="match-b">—</span></div>
+          <div class="match-row"><span class="tag">DRIFT</span><span id="match-delta">—</span></div>
+        </div>
+
+        <div class="xfader-block">
+          <div class="xfade-head">
+            <span>A</span>
+            <span id="xfade-val">50%</span>
+            <span>B</span>
+          </div>
+          <input id="xfade" type="range" min="0" max="100" step="1" value="50" aria-label="Crossfader" />
+        </div>
+
+        <div class="mixer-foot">
+          <span id="engine">engine idle</span>
+          <span id="midi-status" class="muted">MIDI: waiting for a device…</span>
+          <span class="hints">
+            <span class="kbd">space</span> play/pause · <span class="kbd">←</span><span class="kbd">→</span> fader ·
+            <span class="kbd">1-8</span> cues A · <span class="kbd">shift+1-8</span> cues B ·
+            <span class="kbd">q w e r t y u i</span> FX
           </span>
-          <output></output>
-        </div>
-        <div class="label">HOT CUES</div>
-        <div class="row pads" data-role="pads">
-          <button class="mini pad" data-pad="1" title="Click: set / jump · Right-click: clear">1</button>
-          <button class="mini pad" data-pad="2">2</button>
-          <button class="mini pad" data-pad="3">3</button>
-          <button class="mini pad" data-pad="4">4</button>
-          <button class="mini pad" data-pad="5">5</button>
-          <button class="mini pad" data-pad="6">6</button>
-          <button class="mini pad" data-pad="7">7</button>
-          <button class="mini pad" data-pad="8">8</button>
-        </div>
-        <div class="row">
-          <button class="mini" data-loop="1">1 beat</button>
-          <button class="mini" data-loop="4">4</button>
-          <button class="mini" data-loop="8">8</button>
-          <button class="mini" data-loop="16">16</button>
-          <button class="mini" data-loop="off">Off</button>
-          <span class="time" data-role="loop">no loop</span>
         </div>
       </section>
 
       <section class="deck b" data-deck="b">
         <div class="deck-head">
-          <span class="badge">B</span>
-          <span class="title" data-role="title">—</span>
-          <span class="bpm" data-role="bpm"></span>
+          <div class="deck-id">
+            <span class="deck-letter">B</span>
+            <span class="deck-meta">DECK</span>
+          </div>
+          <div class="load-row">
+            <input type="text" data-role="query" placeholder="Search or paste a link" />
+            <button class="load-btn" data-role="load">LOAD</button>
+          </div>
         </div>
-        <div class="sub" data-role="artist"></div>
-        <canvas class="wave" data-role="wave" height="52"></canvas>
-        <div class="seek" data-role="seek"><i></i></div>
-        <div class="row" style="justify-content: space-between">
-          <span class="time" data-role="time">0:00</span>
-          <span class="time" data-role="dur">0:00</span>
+
+        <div class="display">
+          <div class="display-main">
+            <div class="track-line">
+              <span class="title" data-role="title">—</span>
+              <span class="bpm" data-role="bpm"></span>
+            </div>
+            <div class="sub" data-role="artist">empty</div>
+            <canvas class="wave" data-role="wave"></canvas>
+            <div class="seek" data-role="seek"><i></i></div>
+            <div class="times">
+              <span data-role="time">0:00</span>
+              <span class="dim">/</span>
+              <span data-role="dur">0:00</span>
+              <span data-role="loop">no loop</span>
+            </div>
+          </div>
+          <div class="meter" aria-hidden="true">
+            <i style="--d: 0"></i><i style="--d: 1"></i><i style="--d: 2"></i><i style="--d: 3"></i>
+            <i style="--d: 4"></i><i style="--d: 5"></i><i style="--d: 6"></i><i style="--d: 7"></i>
+            <i style="--d: 8"></i><i style="--d: 9"></i><i style="--d: 10"></i><i style="--d: 11"></i>
+          </div>
         </div>
-        <div class="row">
-          <input type="text" data-role="query" placeholder="Song name or link…" />
-          <button class="primary mini" data-role="load">Load</button>
+
+        <div class="jog-row">
+          <div class="jog" data-role="jog">
+            <div class="jog-face">
+              <div class="jog-time" data-role="jog-time">0:00</div>
+              <div class="jog-sub">TRACK POSITION</div>
+            </div>
+          </div>
+          <div class="fader-col">
+            <div class="fader-label">TEMPO</div>
+            <div class="pitch-wrap">
+              <input
+                class="pitch"
+                type="range"
+                data-role="tempo"
+                min="92"
+                max="108"
+                step="0.1"
+                value="100"
+                aria-label="Deck B tempo"
+              />
+            </div>
+            <output data-out="tempo">100</output>
+          </div>
         </div>
-        <div class="row">
-          <button class="wide" data-role="toggle">Play</button>
-          <button class="mini" data-role="cue">Cue 0:00</button>
+
+        <div class="transport">
+          <button class="play" data-role="toggle">PLAY</button>
+          <button class="cue" data-role="cue">CUE</button>
+          <div class="nudge">
+            <button data-nudge="-25" title="Nudge 25 ms back">−</button>
+            <span>NUDGE</span>
+            <button data-nudge="25" title="Nudge 25 ms forward">+</button>
+          </div>
         </div>
-        <div class="eq" data-role="eq">
-          <label>LOW</label><input type="range" data-band="low" min="-40" max="6" step="1" value="0" /><output
-            data-out="low"
-            >0</output
-          >
-          <label>MID</label><input type="range" data-band="mid" min="-40" max="6" step="1" value="0" /><output
-            data-out="mid"
-            >0</output
-          >
-          <label>HIGH</label><input type="range" data-band="high" min="-40" max="6" step="1" value="0" /><output
-            data-out="high"
-            >0</output
-          >
+
+        <div class="channel">
+          <div class="eq" data-role="eq">
+            <label>LOW</label>
+            <input type="range" data-band="low" min="-40" max="6" step="1" value="0" aria-label="Deck B low" />
+            <output data-out="low">0</output>
+            <label>MID</label>
+            <input type="range" data-band="mid" min="-40" max="6" step="1" value="0" aria-label="Deck B mid" />
+            <output data-out="mid">0</output>
+            <label>HIGH</label>
+            <input type="range" data-band="high" min="-40" max="6" step="1" value="0" aria-label="Deck B high" />
+            <output data-out="high">0</output>
+            <label>TRIM</label>
+            <input type="range" data-role="gain" min="0" max="100" step="1" value="100" aria-label="Deck B trim" />
+            <output data-out="gain">100</output>
+          </div>
+          <div class="kill-row">
+            <button data-kill="low">KILL LOW</button>
+            <button data-kill="mid">KILL MID</button>
+            <button data-kill="high">KILL HIGH</button>
+          </div>
         </div>
-        <div class="row">
-          <button class="mini" data-kill="low">Kill low</button>
-          <button class="mini" data-kill="mid">Kill mid</button>
-          <button class="mini" data-kill="high">Kill high</button>
+
+        <div class="pads-block">
+          <div class="block-label">HOT CUE<span class="hint">click set / jump · right-click clear</span></div>
+          <div class="pads" data-role="pads">
+            <button class="pad" data-pad="1" title="Set or jump to hot cue 1">1</button>
+            <button class="pad" data-pad="2" title="Set or jump to hot cue 2">2</button>
+            <button class="pad" data-pad="3" title="Set or jump to hot cue 3">3</button>
+            <button class="pad" data-pad="4" title="Set or jump to hot cue 4">4</button>
+            <button class="pad" data-pad="5" title="Set or jump to hot cue 5">5</button>
+            <button class="pad" data-pad="6" title="Set or jump to hot cue 6">6</button>
+            <button class="pad" data-pad="7" title="Set or jump to hot cue 7">7</button>
+            <button class="pad" data-pad="8" title="Set or jump to hot cue 8">8</button>
+          </div>
         </div>
-        <div class="eq">
-          <label>TRIM</label><input type="range" data-role="gain" min="0" max="100" step="1" value="100" /><output
-            data-out="gain"
-            >100</output
-          >
-          <label>SPEED</label><input type="range" data-role="tempo" min="92" max="108" step="0.1" value="100" /><output
-            data-out="tempo"
-            >100</output
-          >
-          <label>NUDGE</label>
-          <span class="row" style="gap: 6px">
-            <button class="mini" data-nudge="-25">−25ms</button>
-            <button class="mini" data-nudge="25">+25ms</button>
-          </span>
-          <output></output>
-        </div>
-        <div class="label">HOT CUES</div>
-        <div class="row pads" data-role="pads">
-          <button class="mini pad" data-pad="1" title="Click: set / jump · Right-click: clear">1</button>
-          <button class="mini pad" data-pad="2">2</button>
-          <button class="mini pad" data-pad="3">3</button>
-          <button class="mini pad" data-pad="4">4</button>
-          <button class="mini pad" data-pad="5">5</button>
-          <button class="mini pad" data-pad="6">6</button>
-          <button class="mini pad" data-pad="7">7</button>
-          <button class="mini pad" data-pad="8">8</button>
-        </div>
-        <div class="row">
-          <button class="mini" data-loop="1">1 beat</button>
-          <button class="mini" data-loop="4">4</button>
-          <button class="mini" data-loop="8">8</button>
-          <button class="mini" data-loop="16">16</button>
-          <button class="mini" data-loop="off">Off</button>
-          <span class="time" data-role="loop">no loop</span>
+
+        <div class="loop-block">
+          <div class="block-label">BEAT LOOP</div>
+          <div class="loop-pads">
+            <button data-loop="1">1 BEAT</button>
+            <button data-loop="4">4</button>
+            <button data-loop="8">8</button>
+            <button data-loop="16">16</button>
+            <button data-loop="off">EXIT</button>
+          </div>
         </div>
       </section>
-    </div>
-
-    <section class="mixer">
-      <div class="xfade-head"><span>FILTER A</span><span class="muted">LPF ← off → HPF</span><span>FILTER B</span></div>
-      <div class="row">
-        <input type="range" data-filter="a" min="0" max="100" step="1" value="50" style="flex: 1" />
-        <input type="range" data-filter="b" min="0" max="100" step="1" value="50" style="flex: 1" />
-      </div>
-      <div class="xfade-head"><span>A</span><span id="xfade-val">50%</span><span>B</span></div>
-      <input type="range" id="xfade" min="0" max="100" step="1" value="50" />
-      <div class="footer">
-        <span class="muted">Load both decks, hit <span class="kbd">SYNC</span>, then walk the fader.</span>
-        <span class="spacer"></span>
-        <span class="muted" id="engine">engine idle</span>
-      </div>
-    </section>
-
-    <section class="mixer">
-      <div class="xfade-head">
-        <span>FX / SAMPLE PADS</span>
-        <span id="midi-status" class="muted">MIDI: waiting for a device…</span>
-      </div>
-      <div class="row pads" id="fx-pads"></div>
-      <div class="xfade-head"><span>SAMPLE BANK</span><span class="muted" id="samples-count"></span></div>
-      <div class="row pads" id="sample-pads"></div>
-      <div class="footer">
-        <span class="muted">
-          Keys: <span class="kbd">space</span> play/pause · <span class="kbd">←</span><span class="kbd">→</span> fader ·
-          <span class="kbd">1-8</span> cues (A) · <span class="kbd">shift+1-8</span> cues (B) ·
-          <span class="kbd">q w e r t y u i</span> FX
-        </span>
-      </div>
-    </section>
+    </main>
 
     <div id="toasts"></div>
 
@@ -633,16 +1465,19 @@
          *  ~600 buckets per deck. */
         function drawWave(id) {
           var slot = state[id];
-          var cv = el('[data-role="wave"]', el('.deck.' + id));
+          var rootEl = el('.deck.' + id);
+          var cv = el('[data-role="wave"]', rootEl);
           if (!cv) return;
           var dpr = window.devicePixelRatio || 1;
           var w = cv.clientWidth || 320;
-          var h = 52;
+          var h = cv.clientHeight || 74;
           if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
             cv.width = Math.round(w * dpr);
             cv.height = Math.round(h * dpr);
           }
-          var inked = getComputedStyle(document.documentElement).getPropertyValue('--deck').trim() || '#6a5cff';
+          // Use this deck's own accent rather than the document fallback, so A
+          // and B keep their identity on the waveform.
+          var inked = getComputedStyle(rootEl).getPropertyValue('--deck').trim() || '#58c8ff';
           var g = cv.getContext('2d');
           g.setTransform(dpr, 0, 0, dpr, 0, 0);
           g.clearRect(0, 0, w, h);
@@ -651,10 +1486,10 @@
           if (peaks && peaks.length) {
             var bw = w / peaks.length;
             g.fillStyle = inked;
-            g.globalAlpha = 0.75;
+            g.globalAlpha = 0.8;
             for (var i = 0; i < peaks.length; i++) {
-              var ph = Math.max(2, peaks[i] * (h - 8));
-              g.fillRect(i * bw, (h - ph) / 2, Math.max(1, bw * 0.8), ph);
+              var ph = Math.max(2, peaks[i] * (h - 10));
+              g.fillRect(i * bw, (h - ph) / 2, Math.max(1, bw * 0.82), ph);
             }
             g.globalAlpha = 1;
           }
@@ -662,9 +1497,9 @@
           if (slot.loop) {
             var lx = (slot.loop.inMs / dur) * w;
             var lw = ((slot.loop.outMs - slot.loop.inMs) / dur) * w;
-            g.fillStyle = 'rgba(0, 240, 255, 0.18)';
+            g.fillStyle = 'rgba(255, 166, 46, 0.16)';
             g.fillRect(lx, 0, lw, h);
-            g.strokeStyle = 'rgba(0, 240, 255, 0.85)';
+            g.strokeStyle = 'rgba(255, 182, 80, 0.9)';
             g.lineWidth = 1;
             g.strokeRect(lx + 0.5, 0.5, Math.max(1, lw - 1), h - 1);
           }
@@ -672,9 +1507,9 @@
           slot.cues.forEach(function (cue, i) {
             if (cue == null) return;
             var x = (cue / dur) * w;
-            g.fillStyle = '#fbbf24';
+            g.fillStyle = '#f2f4f8';
             g.fillRect(x, 0, 1.5, h);
-            g.font = '9px system-ui, sans-serif';
+            g.font = '9px ui-monospace, monospace';
             g.fillText(String(i + 1), x + 2, 10);
           });
           // Playhead (or the drag marker while scrubbing).
@@ -735,9 +1570,17 @@
             el('[data-role="bpm"]', root).textContent = slot.bpm ? Math.round(slot.bpm) + ' BPM' : '';
             el('[data-role="time"]', root).textContent = fmt(pos);
             el('[data-role="dur"]', root).textContent = fmt(slot.durationMs);
-            el('[data-role="toggle"]', root).textContent = slot.playing ? 'Pause' : slot.ended ? 'Replay' : 'Play';
+            el('[data-role="toggle"]', root).textContent = slot.playing ? 'PAUSE' : slot.ended ? 'REPLAY' : 'PLAY';
             var pct = slot.durationMs ? Math.min(100, (pos / slot.durationMs) * 100) : 0;
             el('[data-role="seek"] > i', root).style.width = pct + '%';
+            // Hardware-style state cues: LED ring, meter, transport glow.
+            root.classList.toggle('playing', !!slot.playing);
+            root.classList.toggle('looping', !!(slot.loop && slot.looping));
+            root.classList.toggle('master', !!(state.sync && state.sync.master === id));
+            var jog = el('[data-role="jog"]', root);
+            if (jog) jog.style.setProperty('--prog', String(Math.round(pct)));
+            var jogTime = el('[data-role="jog-time"]', root);
+            if (jogTime) jogTime.textContent = fmt(pos);
             all('[data-band]', root).forEach(function (input) {
               var band = input.getAttribute('data-band');
               var v = Math.round(slot.eq[band]);
@@ -762,15 +1605,17 @@
           });
           var lock = el('#btn-lock');
           lock.classList.toggle('on', !!state.sync);
-          lock.textContent = state.sync
-            ? 'Locked ' + state.sync.follower.toUpperCase() + ' → ' + state.sync.master.toUpperCase()
-            : 'Lock';
+          // textContent, not innerHTML: the follower/master ids come from server
+          // state, so never build markup out of them (CodeQL js/xss).
+          el('.lbl', lock).textContent = state.sync
+            ? 'LOCKED ' + String(state.sync.follower).toUpperCase() + ' → ' + String(state.sync.master).toUpperCase()
+            : 'BEAT LOCK';
           var rec = el('#btn-rec');
           rec.classList.toggle('on', !!(state.record && state.record.active));
-          rec.textContent =
+          el('.lbl', rec).textContent =
             state.record && state.record.active
-              ? '■ Stop rec ' + Math.round(state.record.elapsedMs / 1000) + 's'
-              : 'Record';
+              ? 'STOP REC ' + Math.round(state.record.elapsedMs / 1000) + 'S'
+              : 'RECORD';
           // Sample bank pads come from the server's data/samples folder.
           var samples = (state.a && state.a.samples) || [];
           var key = samples.join('|');
@@ -783,7 +1628,7 @@
               : 'empty — drop files in data/samples';
             samples.slice(0, 8).forEach(function (name, i) {
               var b = document.createElement('button');
-              b.className = 'mini pad';
+              b.className = 'pad';
               b.textContent = i + 1 + ' ' + name.slice(0, 10);
               b.title = name;
               b.onclick = function () {
@@ -807,6 +1652,22 @@
           var xf = el('#xfade');
           if (document.activeElement !== xf) xf.value = Math.round(state.crossfader * 100);
           el('#xfade-val').textContent = Math.round(state.crossfader * 100) + '%';
+          // Live match readout: effective BPM per deck (BPM × tempo) plus drift.
+          var a = state.a;
+          var b = state.b;
+          var tempoA = a.tempo || 1;
+          var tempoB = b.tempo || 1;
+          var effA = a.bpm ? a.bpm * tempoA : null;
+          var effB = b.bpm ? b.bpm * tempoB : null;
+          el('#match-a').textContent = effA
+            ? Math.round(effA * 10) / 10 + ' · ' + (tempoA * 100).toFixed(1) + '%'
+            : '—';
+          el('#match-b').textContent = effB
+            ? Math.round(effB * 10) / 10 + ' · ' + (tempoB * 100).toFixed(1) + '%'
+            : '—';
+          var drift = effA && effB ? (effB / effA - 1) * 100 : null;
+          el('#match-delta').textContent =
+            drift == null ? '—' : (drift >= 0 ? '+' : '') + drift.toFixed(1) + '%' + (state.sync ? ' · LOCKED' : '');
           var active = state.a.playing || state.b.playing;
           el('#engine').textContent = active
             ? 'live — feeding the voice channel'
@@ -1017,7 +1878,7 @@
           var fxRoot = el('#fx-pads');
           FX.forEach(function (fx, i) {
             var b = document.createElement('button');
-            b.className = 'mini pad';
+            b.className = 'pad';
             b.textContent = i + 1 + ' ' + fx.label;
             b.title = 'Drop ' + fx.label + ' over the mix';
             b.onclick = function () {
