@@ -126,6 +126,12 @@ the number inside is milliseconds.
 playhead onto the other deck's first free cue pad — the fast way to line up a
 drop you just found.
 
+**Type-ahead.** Start typing in either deck's load box and a short list of
+matches appears (Spotify first, then YouTube), with source and duration. Arrow
+keys move, `Enter` loads the exact track the row points at — no re-resolving a
+misspelled search. The same `/api/search` powers the panel's search box and the
+`/request` jam page, so every Vaporzr search behaves the same way.
+
 ## 4a. DJ filter
 
 Each deck has a single filter knob: **left of centre closes a low-pass**

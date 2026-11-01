@@ -573,6 +573,8 @@ function grantRequestPage(req: http.IncomingMessage, url: URL, res: http.ServerR
  * socket presents once.
  */
 const activityPairs = new Map<string, { createdAt: number; invite?: string }>();
+/** Short-lived search results so type-ahead keystrokes don't hit Spotify each time. */
+const searchCache = new Map<string, { at: number; items: unknown[] }>();
 const ACTIVITY_PAIR_TTL_MS = 5 * 60 * 1000;
 const ACTIVITY_INVITE_TTL_MS = 20 * 60 * 1000;
 const activityPairTries = new Map<string, { count: number; windowStart: number }>();
@@ -1702,6 +1704,51 @@ async function handleRoute(
         );
         res.writeHead(out.ok ? 200 : 400, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
         res.end(JSON.stringify(out));
+        break;
+      }
+
+      case '/api/search': {
+        if (req.method !== 'GET') {
+          res.writeHead(405);
+          res.end();
+          return;
+        }
+        if (!hasRequestAccess(req, url) && !hasShareAccess(req, url, 'view')) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'forbidden' }));
+          return;
+        }
+        const bot = bridgeRef();
+        if (!bot?.onSearch) {
+          res.writeHead(503, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'bot offline' }));
+          return;
+        }
+        const q = (url.searchParams.get('q') ?? '').trim().slice(0, 120);
+        const limit = Math.max(1, Math.min(10, Number(url.searchParams.get('limit')) || 6));
+        if (q.length < 2) {
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          res.end(JSON.stringify({ ok: true, items: [] }));
+          return;
+        }
+        // Every keystroke would otherwise become a Spotify + YouTube call.
+        const cacheKey = `${limit}:${q.toLowerCase()}`;
+        const cached = searchCache.get(cacheKey);
+        if (cached && Date.now() - cached.at < 30_000) {
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          res.end(JSON.stringify({ ok: true, items: cached.items }));
+          return;
+        }
+        try {
+          const items = await bot.onSearch(q, limit);
+          if (searchCache.size > 200) searchCache.clear();
+          searchCache.set(cacheKey, { at: Date.now(), items });
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          res.end(JSON.stringify({ ok: true, items }));
+        } catch {
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          res.end(JSON.stringify({ ok: false, items: [] }));
+        }
         break;
       }
 

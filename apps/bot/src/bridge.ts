@@ -160,6 +160,24 @@ export class Bridge {
         name: string,
       ) => Promise<{ ok: boolean; message?: string }>)
     | null = null;
+  /**
+   * Song search for the type-ahead used by the deck page, panel, request page
+   * and the Discord Activity. The bot owns the Spotify/YouTube credentials.
+   */
+  onSearch:
+    | ((
+        query: string,
+        limit: number,
+      ) => Promise<
+        Array<{
+          title: string;
+          artist: string;
+          durationMs: number;
+          source: string;
+          uri: string;
+        }>
+      >)
+    | null = null;
   /** Per-socket auth state: true = key holder (full control), false = guest (view-only). */
   /** Per-socket credential level: control (panel), view (watch/listen) or guest (Activity). */
   private socketScope = new Map<WebSocket, AccessScope | 'guest'>();
