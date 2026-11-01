@@ -1738,8 +1738,27 @@
       }
       #sample-search {
         width: 100%;
-        padding: 6px 8px;
+        padding: 7px 9px;
         font-size: 11px;
+        color: var(--ink);
+        background: #080b18;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        appearance: none;
+      }
+      #sample-search::placeholder {
+        color: var(--dim-2);
+      }
+      #sample-search::-webkit-search-cancel-button {
+        -webkit-appearance: none;
+      }
+      #sample-search:hover {
+        border-color: #2a3560;
+      }
+      #sample-search:focus {
+        outline: none;
+        border-color: var(--brand);
+        box-shadow: 0 0 0 2px rgba(124, 92, 255, 0.18);
       }
       .sample-sets {
         display: flex;
@@ -1749,8 +1768,45 @@
       .sample-sets select {
         flex: 1;
         min-width: 0;
-        padding: 5px 6px;
+        padding: 6px 8px;
         font-size: 10.5px;
+        color: var(--ink);
+        background: #080b18;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        appearance: none;
+        background-image:
+          linear-gradient(45deg, transparent 50%, var(--dim) 50%),
+          linear-gradient(135deg, var(--dim) 50%, transparent 50%);
+        background-position:
+          calc(100% - 13px) 52%,
+          calc(100% - 8px) 52%;
+        background-size:
+          5px 5px,
+          5px 5px;
+        background-repeat: no-repeat;
+        padding-right: 22px;
+      }
+      .sample-sets select:focus {
+        outline: none;
+        border-color: var(--brand);
+      }
+      .sample-lib-list {
+        scrollbar-width: thin;
+        scrollbar-color: #2a3560 transparent;
+      }
+      .sample-lib-list::-webkit-scrollbar {
+        width: 8px;
+      }
+      .sample-lib-list::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      .sample-lib-list::-webkit-scrollbar-thumb {
+        background: #222b52;
+        border-radius: 8px;
+      }
+      .sample-lib-list::-webkit-scrollbar-thumb:hover {
+        background: #2f3b6d;
       }
       .sample-sets .mini-btn {
         flex: none;
