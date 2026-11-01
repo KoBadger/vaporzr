@@ -1313,6 +1313,12 @@ export class DiscordBot {
         case 'kill':
           quiet(decks.kill(deck, (msg.band ?? 'mid') as keyof DeckEq));
           break;
+        case 'filter':
+          quiet(decks.filter(deck, msg.value ?? 0.5));
+          break;
+        case 'sample':
+          quiet(await decks.playSample(msg.slot ?? 1));
+          break;
         case 'tempo':
           quiet(decks.tempo(deck, msg.tempo ?? 1));
           break;

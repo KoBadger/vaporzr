@@ -979,7 +979,7 @@
       }
       .loop-pads {
         display: grid;
-        grid-template-columns: repeat(5, 1fr);
+        grid-template-columns: repeat(4, 1fr);
         gap: 6px;
       }
       .loop-pads button {
@@ -993,6 +993,12 @@
       .loop-pads button:hover {
         border-color: #8a4a1f;
         color: #ffd0a8;
+      }
+      .loop-pads button.on {
+        color: #ffd0a8;
+        border-color: #8a4a1f;
+        background: linear-gradient(#2a1a12, #140c08);
+        box-shadow: inset 0 0 0 1px rgba(255, 138, 61, 0.35);
       }
       /* ---------- mixer ---------- */
       .mixer {
@@ -1208,6 +1214,165 @@
       .toast.success {
         border-left-color: var(--green);
       }
+      /* ---------- hands-on controller polish ---------- */
+      /* Physical controls own the gesture: no page scroll or text selection
+         while a fader, platter or pad is being dragged. */
+      button,
+      .pad,
+      .seek {
+        touch-action: manipulation;
+      }
+      input[type='range'],
+      .jog {
+        touch-action: none;
+      }
+      .jog {
+        cursor: grab;
+      }
+      .jog.scrubbing {
+        cursor: grabbing;
+      }
+      .jog::before {
+        transform: rotate(var(--spin, 0deg));
+        transition: transform 0.08s linear;
+      }
+      .pads .pad {
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
+      }
+      .pads .pad.pressing {
+        border-color: var(--red);
+        color: #ffd3dd;
+        box-shadow: inset 0 0 0 1px rgba(255, 60, 95, 0.35);
+      }
+      /* Filter readout, so the sweep is legible without moving the knob. */
+      .filter-unit .filter-val {
+        font: 700 9px/1 var(--mono);
+        color: var(--deck, var(--a));
+        letter-spacing: 0;
+        white-space: nowrap;
+      }
+      /* MIDI out (Traktor / Serato bridge) */
+      .midi-row {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        min-width: 0;
+        font: 700 8px/1 inherit;
+        letter-spacing: 0.14em;
+        color: var(--dim-2);
+      }
+      .midi-row select {
+        flex: 1;
+        min-width: 0;
+        appearance: none;
+        background: #080915;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        color: var(--ink);
+        font: 600 10px/1.2 inherit;
+        letter-spacing: 0.02em;
+        padding: 5px 6px;
+      }
+      .midi-row button {
+        padding: 5px 8px;
+        font-size: 8px;
+        letter-spacing: 0.14em;
+        white-space: nowrap;
+      }
+      .midi-row button.on {
+        color: #d6e0ff;
+        border-color: #2f7a63;
+        background: linear-gradient(#182630, #0d141c);
+      }
+      /* ---------- mobile thumb dock ---------- */
+      .thumbbar {
+        display: none;
+      }
+      .thumbbar button {
+        padding: 13px 10px;
+        font-size: 9px;
+        letter-spacing: 0.14em;
+        white-space: nowrap;
+      }
+      .thumbbar .tb-a {
+        color: var(--a);
+        border-color: color-mix(in srgb, var(--a) 45%, var(--line));
+      }
+      .thumbbar .tb-b {
+        color: var(--b);
+        border-color: color-mix(in srgb, var(--b) 45%, var(--line));
+      }
+      .thumbbar button.on {
+        color: #04121a;
+        background: linear-gradient(var(--green), #17c48c);
+        border-color: #17c48c;
+        box-shadow: 0 0 14px rgba(34, 230, 164, 0.35);
+      }
+      .thumbbar .tb-x {
+        min-width: 0;
+        height: 30px;
+      }
+      @media (max-width: 760px) {
+        /* A phone shows one column, so the deck's transport scrolls out of
+           thumb reach by the time you reach the pads. This dock keeps play/cue
+           for both decks and the crossfader under the thumb at all times. */
+        .thumbbar {
+          display: grid;
+          grid-template-columns: auto auto minmax(70px, 1fr) auto auto;
+          gap: 7px;
+          align-items: center;
+          position: fixed;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          z-index: 40;
+          padding: 9px 10px calc(9px + env(safe-area-inset-bottom));
+          background: linear-gradient(#101123, #07070f);
+          border-top: 1px solid var(--line);
+          box-shadow: 0 -14px 30px rgba(0, 0, 0, 0.62);
+        }
+        body {
+          padding-bottom: 92px;
+        }
+        .hints,
+        #midi-status {
+          display: none;
+        }
+        .pads .pad {
+          padding: 15px 0;
+          font-size: 12px;
+        }
+        .loop-pads button {
+          padding: 12px 0;
+          font-size: 10px;
+        }
+        .kill-row button {
+          padding: 11px 0;
+        }
+        .transport button {
+          padding: 13px 10px;
+        }
+        .nudge button {
+          padding: 10px 14px;
+        }
+        .jog {
+          width: min(196px, 62vw);
+        }
+        .wave {
+          height: 88px;
+        }
+        #toasts {
+          bottom: 104px;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .meter i,
+        .fn.rec.on .led {
+          animation: none !important;
+        }
+      }
     </style>
   </head>
   <body>
@@ -1227,8 +1392,8 @@
       <span class="conn"><span class="dot" id="conn"></span><span id="status">connecting…</span></span>
       <span class="spacer"></span>
       <button class="fn" id="btn-sync"><span class="led"></span>SYNC</button>
-      <button class="fn" id="btn-lock"><span class="led"></span><span class="lbl">BEAT LOCK</span></button>
-      <button class="fn rec" id="btn-rec"><span class="led"></span><span class="lbl">RECORD</span></button>
+      <button class="fn" id="btn-lock"><span class="led"></span><span class="lbl">LOCK</span></button>
+      <button class="fn rec" id="btn-rec"><span class="led"></span><span class="lbl">REC</span></button>
       <button class="fn" id="btn-play"><span class="led"></span>PLAY BOTH</button>
       <button class="fn" id="btn-pause">PAUSE</button>
       <button class="fn" id="btn-stop">STOP</button>
@@ -1274,7 +1439,7 @@
           <div class="jog" data-role="jog">
             <div class="jog-face">
               <div class="jog-time" data-role="jog-time">0:00</div>
-              <div class="jog-sub">TRACK POSITION</div>
+              <div class="jog-sub">SCRUB</div>
             </div>
           </div>
           <div class="fader-col">
@@ -1328,7 +1493,7 @@
         </div>
 
         <div class="pads-block">
-          <div class="block-label">HOT CUE<span class="hint">click set / jump · right-click clear</span></div>
+          <div class="block-label">HOT CUE<span class="hint">tap = set / jump · hold = clear</span></div>
           <div class="pads" data-role="pads">
             <button class="pad" data-pad="1" title="Set or jump to hot cue 1">1</button>
             <button class="pad" data-pad="2" title="Set or jump to hot cue 2">2</button>
@@ -1344,10 +1509,13 @@
         <div class="loop-block">
           <div class="block-label">BEAT LOOP</div>
           <div class="loop-pads">
-            <button data-loop="1">1 BEAT</button>
+            <button data-loop="0.25">1/4</button>
+            <button data-loop="0.5">1/2</button>
+            <button data-loop="1">1</button>
+            <button data-loop="2">2</button>
             <button data-loop="4">4</button>
             <button data-loop="8">8</button>
-            <button data-loop="16">16</button>
+            <button data-loop="toggle">ON/OFF</button>
             <button data-loop="off">EXIT</button>
           </div>
         </div>
@@ -1358,13 +1526,17 @@
 
         <div class="filters">
           <div class="filter-unit">
-            <div class="filter-top"><span class="f-name">FILTER A</span><span>LPF · OFF · HPF</span></div>
+            <div class="filter-top">
+              <span class="f-name">FILTER A</span><span class="filter-val" data-filter-val="a">OFF</span>
+            </div>
             <div class="detent">
               <input type="range" data-filter="a" min="0" max="100" step="1" value="50" aria-label="Filter deck A" />
             </div>
           </div>
           <div class="filter-unit">
-            <div class="filter-top"><span class="f-name">FILTER B</span><span>LPF · OFF · HPF</span></div>
+            <div class="filter-top">
+              <span class="f-name">FILTER B</span><span class="filter-val" data-filter-val="b">OFF</span>
+            </div>
             <div class="detent">
               <input type="range" data-filter="b" min="0" max="100" step="1" value="50" aria-label="Filter deck B" />
             </div>
@@ -1399,11 +1571,19 @@
 
         <div class="mixer-foot">
           <span id="engine">engine idle</span>
-          <span id="midi-status" class="muted">MIDI: waiting for a device…</span>
+          <div class="midi-row">
+            <span>MIDI OUT</span>
+            <select id="midi-out" aria-label="MIDI output port">
+              <option value="">none</option>
+            </select>
+            <button id="midi-clock" title="Send start/stop and 24 PPQN clock to the selected port">CLOCK</button>
+          </div>
+          <span id="midi-status" class="muted">MIDI IN: waiting for a device…</span>
           <span class="hints">
-            <span class="kbd">space</span> play/pause · <span class="kbd">←</span><span class="kbd">→</span> fader ·
+            <span class="kbd">space</span> both · <span class="kbd">A</span>/<span class="kbd">B</span> play ·
+            <span class="kbd">S</span> sync · <span class="kbd">L</span> lock · <span class="kbd">←→</span> fader<br />
             <span class="kbd">1-8</span> cues A · <span class="kbd">shift+1-8</span> cues B ·
-            <span class="kbd">q w e r t y u i</span> FX
+            <span class="kbd">Q-Y</span> FX
           </span>
         </div>
       </section>
@@ -1447,7 +1627,7 @@
           <div class="jog" data-role="jog">
             <div class="jog-face">
               <div class="jog-time" data-role="jog-time">0:00</div>
-              <div class="jog-sub">TRACK POSITION</div>
+              <div class="jog-sub">SCRUB</div>
             </div>
           </div>
           <div class="fader-col">
@@ -1501,7 +1681,7 @@
         </div>
 
         <div class="pads-block">
-          <div class="block-label">HOT CUE<span class="hint">click set / jump · right-click clear</span></div>
+          <div class="block-label">HOT CUE<span class="hint">tap = set / jump · hold = clear</span></div>
           <div class="pads" data-role="pads">
             <button class="pad" data-pad="1" title="Set or jump to hot cue 1">1</button>
             <button class="pad" data-pad="2" title="Set or jump to hot cue 2">2</button>
@@ -1517,15 +1697,26 @@
         <div class="loop-block">
           <div class="block-label">BEAT LOOP</div>
           <div class="loop-pads">
-            <button data-loop="1">1 BEAT</button>
+            <button data-loop="0.25">1/4</button>
+            <button data-loop="0.5">1/2</button>
+            <button data-loop="1">1</button>
+            <button data-loop="2">2</button>
             <button data-loop="4">4</button>
             <button data-loop="8">8</button>
-            <button data-loop="16">16</button>
+            <button data-loop="toggle">ON/OFF</button>
             <button data-loop="off">EXIT</button>
           </div>
         </div>
       </section>
     </main>
+
+    <div class="thumbbar" id="thumb">
+      <button id="thumb-a" class="tb-a" title="Play or pause deck A">A PLAY</button>
+      <button id="thumb-a-cue" class="tb-a" title="Cue deck A back to the start">CUE</button>
+      <input id="thumb-xfade" class="tb-x" type="range" min="0" max="100" step="1" value="50" aria-label="Crossfader" />
+      <button id="thumb-b-cue" class="tb-b" title="Cue deck B back to the start">CUE</button>
+      <button id="thumb-b" class="tb-b" title="Play or pause deck B">B PLAY</button>
+    </div>
 
     <div id="toasts"></div>
 
@@ -1540,6 +1731,8 @@
         var scrub = null;
         /** Guild this page is looking at; deck broadcasts from other servers are ignored. */
         var viewGuildId = null;
+        /** MIDI access + outgoing clock state (Traktor/Serato bridge). */
+        var midi = { access: null, clockTimer: null, bpm: 120 };
         var FX = [
           { id: 'riser', label: 'RISER' },
           { id: 'reverse', label: 'REVERSE' },
@@ -1563,6 +1756,13 @@
           return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
         }
 
+        /** Knob 0..100 → "LPF 320" / "OFF" / "HPF 2.4k", same law as the server. */
+        function filterLabelFromKnob(v) {
+          if (v === 50) return 'OFF';
+          var hz = v < 50 ? 180 * Math.pow(50, v / 50) : 9000 * Math.pow(1 / 50, (v - 50) / 50);
+          return (v < 50 ? 'LPF ' : 'HPF ') + (hz >= 1000 ? (hz / 1000).toFixed(1) + 'k' : String(Math.round(hz)));
+        }
+
         function toast(level, text) {
           var t = document.createElement('div');
           t.className = 'toast ' + (level || 'info');
@@ -1578,20 +1778,55 @@
         }
         function control(action, extra) {
           send(Object.assign({ type: 'deck:control', action: action }, extra || {}));
+          // With the clock bridge armed, transport follows the decks so a DAW
+          // or Traktor starts and stops with the mix.
+          if (midi.clockTimer) {
+            if (action === 'play') midiSend(0xfa);
+            else if (action === 'pause' || action === 'stop') midiSend(0xfc);
+          }
         }
-        /* Slider drags fire dozens of events — keep the socket sane. */
+        /* Slider drags fire dozens of events. The first value goes out at once so
+           the control answers the finger immediately; after that at most one
+           packet per 20 ms, and the final value is always flushed on release —
+           a dropped last value is what makes a fader feel like it sticks. */
+        var pendingControl = {};
         function controlThrottled(key, action, extra) {
           var now = Date.now();
-          if (lastSent[key] && now - lastSent[key] < 55) {
-            clearTimeout(lastSent[key + ':t']);
-            lastSent[key + ':t'] = setTimeout(function () {
-              lastSent[key] = Date.now();
-              control(action, extra);
-            }, 60);
+          var last = lastSent[key] || 0;
+          if (now - last >= 20) {
+            lastSent[key] = now;
+            clearTimeout(pendingControl[key + ':t']);
+            pendingControl[key + ':t'] = null;
+            pendingControl[key] = null;
+            control(action, extra);
             return;
           }
-          lastSent[key] = now;
-          control(action, extra);
+          pendingControl[key] = { action: action, extra: extra };
+          if (!pendingControl[key + ':t']) {
+            pendingControl[key + ':t'] = setTimeout(
+              function () {
+                flushControl(key);
+              },
+              Math.max(6, 20 - (now - last)),
+            );
+          }
+        }
+        function flushControl(key) {
+          clearTimeout(pendingControl[key + ':t']);
+          pendingControl[key + ':t'] = null;
+          var p = pendingControl[key];
+          pendingControl[key] = null;
+          if (!p) return;
+          lastSent[key] = Date.now();
+          control(p.action, p.extra);
+        }
+        /* Ranges: the release must not depend on a trailing timer. */
+        function flushOnRelease(input, key) {
+          ['pointerup', 'pointercancel', 'change'].forEach(function (ev) {
+            input.addEventListener(ev, function () {
+              flushControl(key);
+            });
+          });
         }
 
         /** Draw the decoded waveform with cue markers, the loop region and the
@@ -1741,6 +1976,15 @@
             el('[data-role="loop"]', root).textContent = slot.loop
               ? 'loop ' + fmt(slot.loop.outMs - slot.loop.inMs) + (slot.looping ? ' ●' : '')
               : 'no loop';
+            all('[data-loop]', root).forEach(function (btn) {
+              var v = btn.getAttribute('data-loop');
+              var on =
+                v === 'toggle'
+                  ? !!slot.loop
+                  : v !== 'off' &&
+                    !!(slot.loop && slot.loop.beats != null && Math.abs(slot.loop.beats - Number(v)) < 0.01);
+              btn.classList.toggle('on', on);
+            });
             drawWave(id);
           });
           var lock = el('#btn-lock');
@@ -1748,14 +1992,12 @@
           // textContent, not innerHTML: the follower/master ids come from server
           // state, so never build markup out of them (CodeQL js/xss).
           el('.lbl', lock).textContent = state.sync
-            ? 'LOCKED ' + String(state.sync.follower).toUpperCase() + ' → ' + String(state.sync.master).toUpperCase()
-            : 'BEAT LOCK';
+            ? 'LOCK ' + String(state.sync.follower).toUpperCase() + '→' + String(state.sync.master).toUpperCase()
+            : 'LOCK';
           var rec = el('#btn-rec');
           rec.classList.toggle('on', !!(state.record && state.record.active));
           el('.lbl', rec).textContent =
-            state.record && state.record.active
-              ? 'STOP REC ' + Math.round(state.record.elapsedMs / 1000) + 'S'
-              : 'RECORD';
+            state.record && state.record.active ? 'STOP ' + Math.round(state.record.elapsedMs / 1000) + 'S' : 'REC';
           // Sample bank pads come from the server's data/samples folder.
           var samples = (state.a && state.a.samples) || [];
           var key = samples.join('|');
@@ -1777,6 +2019,14 @@
               bank.appendChild(b);
             });
           }
+          // Thumb dock (phones): keep its transport LEDs and fader in step with
+          // the deck cards it duplicates.
+          var thumbA = el('#thumb-a');
+          var thumbB = el('#thumb-b');
+          if (thumbA) thumbA.classList.toggle('on', !!state.a.playing);
+          if (thumbB) thumbB.classList.toggle('on', !!state.b.playing);
+          var thumbX = el('#thumb-xfade');
+          if (thumbX && document.activeElement !== thumbX) thumbX.value = Math.round(state.crossfader * 100);
           // Filter knobs mirror the server value.
           all('[data-filter]').forEach(function (input) {
             var fid = input.getAttribute('data-filter');
@@ -1788,6 +2038,14 @@
                 : 50 + (f.type === 'hpf' ? 1 : -1) * (50 - (50 * Math.log(f.cutoff / 180)) / Math.log(9000 / 180));
             v = Math.max(0, Math.min(100, Math.round(v)));
             if (document.activeElement !== input) input.value = v;
+            var label = el('[data-filter-val="' + fid + '"]');
+            if (label) {
+              label.textContent =
+                f.type === 'off'
+                  ? 'OFF'
+                  : (f.type === 'lpf' ? 'LPF ' : 'HPF ') +
+                    (f.cutoff >= 1000 ? (f.cutoff / 1000).toFixed(1) + 'k' : String(Math.round(f.cutoff)));
+            }
           });
           var xf = el('#xfade');
           if (document.activeElement !== xf) xf.value = Math.round(state.crossfader * 100);
@@ -1814,6 +2072,12 @@
             : state.active
               ? 'cued'
               : 'engine idle';
+          // Keep an outgoing MIDI clock locked to the decks' tempo.
+          var clockBpm = state.b.bpm || state.a.bpm || 120;
+          if (Math.abs(clockBpm - midi.bpm) > 0.5) {
+            if (midi.restart) midi.restart(clockBpm);
+            else midi.bpm = clockBpm;
+          }
         }
 
         function connect() {
@@ -1863,6 +2127,16 @@
         }
 
         document.addEventListener('DOMContentLoaded', function () {
+          /** One transport rule for the deck card and the mobile thumb dock. */
+          function deckToggle(id) {
+            if (!state) return;
+            if (state[id].ended) {
+              control('seek', { deck: id, positionMs: 0 });
+              control('play', { deck: id });
+            } else {
+              control(state[id].playing ? 'pause' : 'play', { deck: id });
+            }
+          }
           all('.deck').forEach(function (root) {
             var id = root.getAttribute('data-deck');
             el('[data-role="load"]', root).onclick = function () {
@@ -1875,20 +2149,42 @@
               if (e.key === 'Enter') el('[data-role="load"]', root).click();
             });
             el('[data-role="toggle"]', root).onclick = function () {
-              if (!state) return;
-              if (state[id].ended) {
-                control('seek', { deck: id, positionMs: 0 });
-                control('play', { deck: id });
-              } else {
-                control(state[id].playing ? 'pause' : 'play', { deck: id });
-              }
+              deckToggle(id);
             };
             el('[data-role="cue"]', root).onclick = function () {
               control('cue', { deck: id });
             };
+            /* Pads: tap = set/jump, hold = clear (the right-click of a phone).
+               The click after a completed hold is swallowed so clearing a cue
+               can never also fire it. */
             all('[data-pad]', root).forEach(function (btn) {
               var pad = Number(btn.getAttribute('data-pad'));
+              var holdTimer = null;
+              var held = false;
+              function release() {
+                clearTimeout(holdTimer);
+                holdTimer = null;
+                btn.classList.remove('pressing');
+              }
+              btn.addEventListener('pointerdown', function () {
+                held = false;
+                btn.classList.add('pressing');
+                if (navigator.vibrate) navigator.vibrate(6);
+                holdTimer = setTimeout(function () {
+                  held = true;
+                  btn.classList.remove('pressing');
+                  if (navigator.vibrate) navigator.vibrate(12);
+                  control('cue-clear', { deck: id, slot: pad });
+                }, 550);
+              });
+              ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (ev) {
+                btn.addEventListener(ev, release);
+              });
               btn.onclick = function () {
+                if (held) {
+                  held = false;
+                  return;
+                }
                 if (!state) return;
                 var set = state[id].cues[pad - 1] != null;
                 control(set ? 'cue-jump' : 'cue-set', { deck: id, slot: pad });
@@ -1902,6 +2198,7 @@
               btn.onclick = function () {
                 var v = btn.getAttribute('data-loop');
                 if (v === 'off') control('loop-clear', { deck: id });
+                else if (v === 'toggle') control('loop-toggle', { deck: id });
                 else control('loop-beats', { deck: id, beats: Number(v) });
               };
             });
@@ -1911,26 +2208,87 @@
               var pct = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
               control('seek', { deck: id, positionMs: pct * state[id].durationMs });
             };
-            all('[data-band]', root).forEach(function (input) {
-              input.addEventListener('input', function () {
-                var band = input.getAttribute('data-band');
-                el('[data-out="' + band + '"]', root).textContent = input.value;
-                controlThrottled(id + ':eq:' + band, 'eq', { deck: id, band: band, db: Number(input.value) });
+
+            /* Platter drag = scrub, the gesture a CDJ/Numark jog teaches. The
+               preview redraws at pointer rate but only re-seeks the decoder a
+               few times a second (each seek restarts ffmpeg), then lands exactly
+               on the release position. */
+            var jogEl = el('[data-role="jog"]', root);
+            if (jogEl) {
+              var jogDrag = null;
+              jogEl.addEventListener('pointerdown', function (e) {
+                if (!state || !state[id].durationMs) return;
+                try {
+                  jogEl.setPointerCapture(e.pointerId);
+                } catch (err) {}
+                var pct = Math.max(0, Math.min(1, state[id].positionMs / state[id].durationMs));
+                jogDrag = { startX: e.clientX, pct: pct, lastSend: 0 };
+                jogEl.classList.add('scrubbing');
+                scrub = { deck: id, pct: pct };
+                paint();
               });
+              jogEl.addEventListener('pointermove', function (e) {
+                if (!jogDrag || !state) return;
+                var width = Math.max(160, jogEl.clientWidth);
+                var dx = e.clientX - jogDrag.startX;
+                var pct = Math.max(0, Math.min(1, jogDrag.pct + dx / width));
+                jogEl.style.setProperty('--spin', (jogDrag.pct - pct) * -540 + 'deg');
+                scrub = { deck: id, pct: pct };
+                jogDrag.cur = pct;
+                var now = Date.now();
+                if (now - jogDrag.lastSend > 250) {
+                  jogDrag.lastSend = now;
+                  control('seek', { deck: id, positionMs: pct * state[id].durationMs });
+                }
+                paint();
+              });
+              var endJog = function () {
+                if (!jogDrag) return;
+                var pct = jogDrag.cur != null ? jogDrag.cur : jogDrag.pct;
+                jogDrag = null;
+                jogEl.classList.remove('scrubbing');
+                scrub = null;
+                if (state && state[id].durationMs) {
+                  control('seek', { deck: id, positionMs: pct * state[id].durationMs });
+                }
+                paint();
+              };
+              jogEl.addEventListener('pointerup', endJog);
+              jogEl.addEventListener('pointercancel', endJog);
+            }
+            all('[data-band]', root).forEach(function (input) {
+              var band = input.getAttribute('data-band');
+              var key = id + ':eq:' + band;
+              input.addEventListener('input', function () {
+                el('[data-out="' + band + '"]', root).textContent = input.value;
+                controlThrottled(key, 'eq', { deck: id, band: band, db: Number(input.value) });
+              });
+              flushOnRelease(input, key);
             });
             all('[data-kill]', root).forEach(function (btn) {
               btn.onclick = function () {
                 control('kill', { deck: id, band: btn.getAttribute('data-kill') });
               };
             });
-            el('[data-role="gain"]', root).addEventListener('input', function (e) {
+            var gainEl = el('[data-role="gain"]', root);
+            gainEl.addEventListener('input', function (e) {
               el('[data-out="gain"]', root).textContent = e.target.value;
               controlThrottled(id + ':gain', 'gain', { deck: id, value: Number(e.target.value) / 100 });
             });
-            el('[data-role="tempo"]', root).addEventListener('input', function (e) {
-              el('[data-out="tempo"]', root).textContent = Number(e.target.value).toFixed(1);
-              controlThrottled(id + ':tempo', 'tempo', { deck: id, tempo: Number(e.target.value) / 100 });
+            flushOnRelease(gainEl, id + ':gain');
+            var tempoEl = el('[data-role="tempo"]', root);
+            tempoEl.addEventListener('input', function (e) {
+              var v = Number(e.target.value);
+              // Hardware pitch faders have a 0% detent: snap through it instead
+              // of letting the deck sit 0.3% off and drift all set.
+              if (Math.abs(v - 100) < 0.7) {
+                v = 100;
+                e.target.value = '100';
+              }
+              el('[data-out="tempo"]', root).textContent = v.toFixed(1);
+              controlThrottled(id + ':tempo', 'tempo', { deck: id, tempo: v / 100 });
             });
+            flushOnRelease(tempoEl, id + ':tempo');
             all('[data-nudge]', root).forEach(function (btn) {
               btn.onclick = function () {
                 control('nudge', { deck: id, positionMs: Number(btn.getAttribute('data-nudge')) });
@@ -1938,10 +2296,14 @@
             });
           });
 
-          el('#xfade').addEventListener('input', function (e) {
+          var xfade = el('#xfade');
+          xfade.addEventListener('input', function (e) {
             el('#xfade-val').textContent = e.target.value + '%';
+            var thumb = el('#thumb-xfade');
+            if (thumb && document.activeElement !== thumb) thumb.value = e.target.value;
             controlThrottled('xfade', 'crossfader', { value: Number(e.target.value) / 100 });
           });
+          flushOnRelease(xfade, 'xfade');
           el('#guild-select').addEventListener('change', function (e) {
             viewGuildId = e.target.value || null;
             // Peaks belong to the previous server's tracks — drop them so a
@@ -1958,9 +2320,14 @@
           });
           all('[data-filter]').forEach(function (input) {
             var deckId = input.getAttribute('data-filter');
+            var key = 'filter:' + deckId;
             input.addEventListener('input', function (e) {
-              controlThrottled('filter:' + deckId, 'filter', { deck: deckId, value: Number(e.target.value) / 100 });
+              var v = Number(e.target.value);
+              var label = el('[data-filter-val="' + deckId + '"]');
+              if (label) label.textContent = filterLabelFromKnob(v);
+              controlThrottled(key, 'filter', { deck: deckId, value: v / 100 });
             });
+            flushOnRelease(input, key);
           });
           el('#btn-sync').onclick = function () {
             control('sync');
@@ -1982,6 +2349,28 @@
           el('#btn-stop').onclick = function () {
             control('stop');
           };
+
+          /* Thumb dock: the same actions as the deck cards, within reach. */
+          el('#thumb-a').onclick = function () {
+            deckToggle('a');
+          };
+          el('#thumb-b').onclick = function () {
+            deckToggle('b');
+          };
+          el('#thumb-a-cue').onclick = function () {
+            control('cue', { deck: 'a' });
+          };
+          el('#thumb-b-cue').onclick = function () {
+            control('cue', { deck: 'b' });
+          };
+          var thumbXfade = el('#thumb-xfade');
+          thumbXfade.addEventListener('input', function (e) {
+            var main = el('#xfade');
+            if (document.activeElement !== main) main.value = e.target.value;
+            el('#xfade-val').textContent = e.target.value + '%';
+            controlThrottled('xfade', 'crossfader', { value: Number(e.target.value) / 100 });
+          });
+          flushOnRelease(thumbXfade, 'xfade');
 
           all('[data-role="wave"]').forEach(function (cv) {
             var id = cv.closest('.deck').getAttribute('data-deck');
@@ -2028,15 +2417,29 @@
           });
 
           document.addEventListener('keydown', function (e) {
-            if (e.target && /input|textarea/i.test(e.target.tagName)) return;
+            if (e.target && /input|textarea|select/i.test(e.target.tagName)) return;
+            if (e.metaKey || e.ctrlKey || e.altKey) return;
             var k = e.key.toLowerCase();
             if (k === ' ') {
               e.preventDefault();
               if (state) control(state.a.playing || state.b.playing ? 'pause' : 'play');
               return;
             }
+            if (!state) return;
+            /* Per-deck transport on the home row, like a controller's A/B keys. */
+            if (k === 'a' || k === 'b') {
+              deckToggle(k);
+              return;
+            }
+            if (k === 's') {
+              control('sync');
+              return;
+            }
+            if (k === 'l') {
+              control('lock', state.sync ? { enabled: false } : { deck: 'a', enabled: true });
+              return;
+            }
             if (k === 'arrowleft' || k === 'arrowright') {
-              if (!state) return;
               e.preventDefault();
               control('crossfader', {
                 value: Math.max(0, Math.min(1, state.crossfader + (k === 'arrowright' ? 0.04 : -0.04))),
@@ -2044,7 +2447,6 @@
               return;
             }
             if (k >= '1' && k <= '8') {
-              if (!state) return;
               var pad = Number(k);
               var dk = e.shiftKey ? 'b' : 'a';
               control(state[dk].cues[pad - 1] != null ? 'cue-jump' : 'cue-set', { deck: dk, slot: pad });
@@ -2054,54 +2456,127 @@
             if (fxIdx >= 0 && FX[fxIdx]) send({ type: 'cmd', command: 'sfx', sfxId: FX[fxIdx].id });
           });
 
-          // MIDI: any class-compliant controller (knobs 1-9, pads from note 36).
+          // MIDI: any class-compliant controller in (knobs 1-9, pads from note
+          // 36); MIDI OUT doubles as a Traktor/Serato bridge — pick a virtual
+          // port (loopMIDI on Windows, IAC on macOS) and CLOCK sends start/stop
+          // plus 24 PPQN from the decks' tempo.
+          function midiPort() {
+            if (!midi.access) return null;
+            var id = el('#midi-out').value;
+            if (!id) return null;
+            var out = midi.access.outputs.get(id);
+            return out && out.state !== 'disconnected' ? out : null;
+          }
+          function midiSend(byte) {
+            var port = midiPort();
+            if (!port) return;
+            try {
+              port.send([byte]);
+              return true;
+            } catch (e) {
+              return false;
+            }
+          }
+          function fillMidiOut() {
+            var sel = el('#midi-out');
+            if (!sel || !midi.access) return;
+            var keep = sel.value;
+            while (sel.options.length > 1) sel.remove(1);
+            midi.access.outputs.forEach(function (out) {
+              var o = document.createElement('option');
+              o.value = out.id;
+              o.textContent = out.name || out.id;
+              sel.appendChild(o);
+            });
+            if (keep) sel.value = keep;
+          }
+          function stopClock(tellPort) {
+            if (midi.clockTimer) {
+              clearInterval(midi.clockTimer);
+              midi.clockTimer = null;
+            }
+            if (tellPort !== false) midiSend(0xfc);
+            el('#midi-clock').classList.remove('on');
+          }
+          function startClock() {
+            stopClock(false);
+            if (!midiPort()) {
+              toast('error', 'Pick a MIDI output port first.');
+              return;
+            }
+            midiSend(0xfa);
+            var bpm = midi.bpm || 120;
+            midi.clockTimer = setInterval(
+              function () {
+                midiSend(0xf8);
+              },
+              Math.round(60000 / (bpm * 24)),
+            );
+            el('#midi-clock').classList.add('on');
+          }
+          el('#midi-clock').onclick = function () {
+            if (midi.clockTimer) stopClock(true);
+            else startClock();
+          };
+          el('#midi-out').addEventListener('change', function () {
+            if (midi.clockTimer) startClock();
+          });
+          midi.restart = function (bpm) {
+            midi.bpm = bpm;
+            if (midi.clockTimer) startClock();
+          };
+
+          function bindInput(input) {
+            el('#midi-status').textContent = 'MIDI IN: ' + (input.name || 'device');
+            input.onmidimessage = function (m) {
+              var d = m.data;
+              if (!d || d.length < 3) return;
+              var status = d[0] & 0xf0;
+              var cc = d[1];
+              var val = d[2];
+              var v = val / 127;
+              if (status === 0xb0) {
+                if (cc === 1) controlThrottled('midi:xfade', 'crossfader', { value: v });
+                else if (cc === 2) controlThrottled('midi:a:gain', 'gain', { deck: 'a', value: v });
+                else if (cc === 3) controlThrottled('midi:b:gain', 'gain', { deck: 'b', value: v });
+                else if (cc >= 4 && cc <= 9) {
+                  var bands = ['low', 'mid', 'high'];
+                  var mdeck = cc < 7 ? 'a' : 'b';
+                  var band = bands[(cc - 4) % 3];
+                  controlThrottled('midi:' + mdeck + band, 'eq', { deck: mdeck, band: band, db: -40 + v * 46 });
+                } else if (cc === 10 || cc === 11) {
+                  var fdeck = cc === 10 ? 'a' : 'b';
+                  controlThrottled('midi:filter:' + fdeck, 'filter', { deck: fdeck, value: v });
+                }
+              } else if (status === 0x90 && val > 0) {
+                var idx = cc - 36;
+                if (idx >= 0 && idx < FX.length) {
+                  send({ type: 'cmd', command: 'sfx', sfxId: FX[idx].id });
+                } else if (cc >= 48 && cc < 56 && state) {
+                  var slot = cc - 47;
+                  control(state.a.cues[slot - 1] != null ? 'cue-jump' : 'cue-set', { deck: 'a', slot: slot });
+                }
+              }
+            };
+          }
+
           if (navigator.requestMIDIAccess) {
             navigator
               .requestMIDIAccess()
               .then(function (access) {
-                function bind(input) {
-                  el('#midi-status').textContent = 'MIDI: ' + (input.name || 'device');
-                  input.onmidimessage = function (m) {
-                    var d = m.data;
-                    if (!d || d.length < 3) return;
-                    var status = d[0] & 0xf0;
-                    var cc = d[1];
-                    var val = d[2];
-                    var v = val / 127;
-                    if (status === 0xb0) {
-                      if (cc === 1) controlThrottled('midi:xfade', 'crossfader', { value: v });
-                      else if (cc === 2) controlThrottled('midi:a:gain', 'gain', { deck: 'a', value: v });
-                      else if (cc === 3) controlThrottled('midi:b:gain', 'gain', { deck: 'b', value: v });
-                      else if (cc >= 4 && cc <= 9) {
-                        var bands = ['low', 'mid', 'high'];
-                        var mdeck = cc < 7 ? 'a' : 'b';
-                        var band = bands[(cc - 4) % 3];
-                        controlThrottled('midi:' + mdeck + band, 'eq', { deck: mdeck, band: band, db: -40 + v * 46 });
-                      } else if (cc === 10 || cc === 11) {
-                        var fdeck = cc === 10 ? 'a' : 'b';
-                        controlThrottled('midi:filter:' + fdeck, 'filter', { deck: fdeck, value: v });
-                      }
-                    } else if (status === 0x90 && val > 0) {
-                      var idx = cc - 36;
-                      if (idx >= 0 && idx < FX.length) {
-                        send({ type: 'cmd', command: 'sfx', sfxId: FX[idx].id });
-                      } else if (cc >= 48 && cc < 56 && state) {
-                        var slot = cc - 47;
-                        control(state.a.cues[slot - 1] != null ? 'cue-jump' : 'cue-set', { deck: 'a', slot: slot });
-                      }
-                    }
-                  };
-                }
-                Array.prototype.forEach.call(access.inputs.values(), bind);
+                midi.access = access;
+                fillMidiOut();
+                access.inputs.forEach(bindInput);
                 access.onstatechange = function () {
-                  Array.prototype.forEach.call(access.inputs.values(), bind);
+                  access.inputs.forEach(bindInput);
+                  fillMidiOut();
                 };
               })
               .catch(function () {
-                el('#midi-status').textContent = 'MIDI: not available';
+                el('#midi-status').textContent = 'MIDI IN: not available';
               });
           } else {
-            el('#midi-status').textContent = 'MIDI: browser unsupported';
+            el('#midi-status').textContent = 'MIDI IN: browser unsupported';
           }
 
           setInterval(function () {

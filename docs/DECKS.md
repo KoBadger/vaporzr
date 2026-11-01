@@ -177,3 +177,61 @@ V@deck rec | rec stop      record the set (posts track count + top artists)
 - Discord voice is the ceiling: 48 kHz Opus at 64–256 kbps depending on boost tier.
 - Deck loads need YouTube to cooperate; if a load fails, try a different upload or
   a Spotify name instead of a link.
+
+---
+
+## 10. Controller and DAW integration
+
+### Hands-on gestures (built in)
+
+| Gesture | What it does |
+| --- | --- |
+| Drag the platter | Scrub; the deck lands exactly where you release |
+| Press **A** / **B** | Play/pause that deck (desktop keyboard) |
+| **S** / **L** | Sync B to A / toggle beat-lock |
+| Tap a hot cue | Set it when empty, jump to it when set |
+| Hold a hot cue (~0.5 s) | Clear it (the right-click of a phone) |
+| Space / `←` `→` | Both decks play-pause / crossfader |
+| Pitch fader | Snaps through the 0 % detent, like hardware |
+
+Phones get a fixed **thumb dock** under the page (A play, A cue, crossfader,
+B cue, B play) so transport never scrolls out of reach, plus 44 px+ pads.
+
+### MIDI in (hardware controller)
+
+Any class-compliant controller is mapped without configuration:
+
+| Control | Deck page action |
+| --- | --- |
+| CC 1 | Crossfader |
+| CC 2 / 3 | Trim A / B |
+| CC 4-9 | EQ low/mid/high, A then B |
+| CC 10 / 11 | Filter A / B |
+| Notes 36-43 | FX pads (`q w e r t y u i`) |
+| Notes 48-55 | Hot cues 1-8 on deck A |
+
+### MIDI out — Traktor, Serato and DAWs
+
+The mixer footer has **MIDI OUT** with a port picker and a **CLOCK** button.
+
+1. Install a virtual MIDI port: **loopMIDI** (Windows) or enable **IAC Driver**
+   (macOS Audio MIDI Setup).
+2. Open `/deck`, pick that port in **MIDI OUT**, press **CLOCK**.
+3. The page now sends `Start`/`Stop` with the decks and **24 PPQN** clock at the
+   playing deck's BPM (it follows tempo changes).
+
+What each host does with that:
+
+- **Traktor Pro** — set its clock to **MIDI Clock, slave** and choose the same
+  port as input (`Preferences → Controller Manager → Add → Generic MIDI` for
+  transport/CC mapping). Beat-phase sync then follows Vaporzr's decks.
+- **Serato DJ Pro** — has no MIDI-clock sync (it syncs via Ableton Link, which a
+  browser cannot join). It can still be **controlled by** or **control** the page
+  through a virtual port + its MIDI mapping: map its faders/knobs to the CC list
+  above, and its transport buttons to notes 48-55 for cues.
+- **Ableton Live / Bitwig** — enable the port as a *Sync* input and turn on EXT;
+  the clock will drive the session tempo.
+- **Rekordbox** — accepts MIDI clock on the same terms as Traktor.
+
+Browser note: Web MIDI needs a secure origin — `/deck` is served over the panel's
+HTTPS tunnel, so this works on the deployed host but not over plain LAN `http://`.
