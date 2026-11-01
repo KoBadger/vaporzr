@@ -15,6 +15,7 @@ import {
 } from '@discordjs/voice';
 import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
+import path from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { config } from '@vaporzr/core/config';
 import { tailFadeSeconds } from '@vaporzr/core/crossfade';
@@ -28,6 +29,26 @@ interface OpusScriptLike {
   decode(packet: Buffer): Buffer;
 }
 type OpusScriptCtor = new (rate: number, channels: number, app?: number) => OpusScriptLike;
+
+/** One-shot packet dump so a decode failure can be analysed offline. */
+let dumpWritten = false;
+function dumpUndecodablePackets(packets: Buffer[]): void {
+  if (dumpWritten || packets.length === 0) return;
+  dumpWritten = true;
+  try {
+    const parts: Buffer[] = [];
+    for (const p of packets) {
+      const len = Buffer.alloc(4);
+      len.writeUInt32BE(p.length, 0);
+      parts.push(len, p);
+    }
+    const file = path.join(config.dataDir, 'opus-dump.bin');
+    fs.writeFileSync(file, Buffer.concat(parts));
+    console.warn(`[weasel] ears: wrote ${packets.length} undecodable packet(s) to ${file} for analysis`);
+  } catch (err) {
+    console.warn('[weasel] ears: packet dump failed —', err instanceof Error ? err.message : err);
+  }
+}
 
 /**
  * The slice of a discord.js voice channel the bitrate negotiation needs, kept
@@ -147,6 +168,8 @@ export class VoiceManager implements AudioTransport {
   private activeVoiceCaptures = new Set<string>();
   /** Cached `opusscript` decoder loader (resolved when the ears are armed). */
   private opusScriptLoad: Promise<OpusScriptCtor | null> | null = null;
+  /** Cached factory for the per-capture Opus decoder (native preferred). */
+  private opusDecoderFactory: Promise<(() => OpusScriptLike) | null> | null = null;
 
   /** True when the voice connection is alive but a SERVER-SIDE stream has died
    *  (ffmpeg crashed, pipe broken, etc.) — resume should re-stream instead of unpause.
@@ -398,6 +421,15 @@ export class VoiceManager implements AudioTransport {
           : undefined;
       console.log(`[voice] conn ${oldS.status} → ${newS.status}${reason ? ` (reason=${reason})` : ''}`);
       if (newS.status === VoiceConnectionStatus.Ready && oldS.status !== VoiceConnectionStatus.Ready) {
+        // DAVE (E2EE) state matters for capture: when no DAVE session is ready,
+        // @discordjs/voice passes inbound frames through still encrypted, which
+        // no Opus decoder can read.
+        const net = (newS as unknown as { networking?: { state?: { dave?: unknown; protocolVersion?: number } } })
+          .networking;
+        const daveOn = Boolean(net?.state?.dave);
+        console.log(
+          `[voice] dave ${daveOn ? `session active (protocol v${net?.state?.protocolVersion ?? '?'})` : 'off (transport encryption only)'}`,
+        );
         if (this.voiceLinkDown) {
           this.voiceLinkDown = false;
           this.forcedRejoins = 0;
@@ -1460,10 +1492,10 @@ export class VoiceManager implements AudioTransport {
   /** Enable or disable live voice-channel speech capture (`v@w listen on`). */
   setVoiceListenHandler(fn: ((userId: string, pcmMono48k: Buffer) => void) | null): void {
     this.voiceListenHandler = fn;
-    // Warm the decoder as soon as the ears are switched on: doing the dynamic
+    // Warm the decoders as soon as the ears are switched on: doing the dynamic
     // import inside the speaking handler cost the first syllables of the first
     // utterance, which is exactly where "Hey Weasel, ..." lives.
-    if (fn) void this.loadOpusScript();
+    if (fn) void this.loadOpusDecoder();
     else this.activeVoiceCaptures.clear();
   }
 
@@ -1484,19 +1516,64 @@ export class VoiceManager implements AudioTransport {
     return this.opusScriptLoad;
   }
 
+  /**
+   * Resolve the best Opus decoder factory available. The native libopus binding
+   * (`@discordjs/opus`) is preferred — it handles the full range of client
+   * packets (multi-frame, FEC, DTX) that the 2016 `opusscript` decoder can
+   * reject — with opusscript as the fallback.
+   */
+  private loadOpusDecoder(): Promise<(() => OpusScriptLike) | null> {
+    if (!this.opusDecoderFactory) {
+      this.opusDecoderFactory = (async () => {
+        try {
+          const mod = (await import('@discordjs/opus')) as unknown as {
+            OpusEncoder?: new (rate: number, channels: number) => { decode(buf: Buffer, frameSize?: number): Buffer };
+          };
+          const NativeCtor = mod.OpusEncoder;
+          if (NativeCtor) {
+            return () => {
+              const decoder = new NativeCtor(48_000, 2);
+              return {
+                decode(packet: Buffer): Buffer {
+                  const stereo = decoder.decode(packet, 960);
+                  const mono = Buffer.allocUnsafe(stereo.length / 2);
+                  const samples = Math.floor(stereo.length / 4);
+                  for (let i = 0; i < samples; i++) {
+                    const l = stereo.readInt16LE(i * 4);
+                    const r = stereo.readInt16LE(i * 4 + 2);
+                    mono.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round((l + r) / 2))), i * 2);
+                  }
+                  return mono.subarray(0, samples * 2);
+                },
+              };
+            };
+          }
+        } catch {
+          /* fall through to opusscript */
+        }
+        const OpusScriptCtor = await this.loadOpusScript();
+        if (!OpusScriptCtor) return null;
+        console.log('[weasel] ears: using opusscript decoder (no native @discordjs/opus)');
+        return () => new OpusScriptCtor(48_000, 1, 2049);
+      })();
+    }
+    return this.opusDecoderFactory;
+  }
+
   private captureUserUtterance(connection: VoiceConnection, userId: string): void {
     if (!this.voiceListenHandler || this.activeVoiceCaptures.has(userId)) return;
     this.activeVoiceCaptures.add(userId);
     void (async () => {
-      const OpusScriptCtor = await this.loadOpusScript();
-      if (!OpusScriptCtor) {
+      const makeDecoder = await this.loadOpusDecoder();
+      if (!makeDecoder) {
+        console.warn('[weasel] ears: no Opus decoder available (native or opusscript)');
         this.activeVoiceCaptures.delete(userId);
         return;
       }
       let opusStream: Readable;
       let decoder: OpusScriptLike;
       try {
-        decoder = new OpusScriptCtor(48_000, 1, 2049);
+        decoder = makeDecoder();
         opusStream = connection.receiver.subscribe(userId, {
           end: { behavior: EndBehaviorType.AfterSilence, duration: 900 },
         }) as unknown as Readable;
@@ -1506,8 +1583,12 @@ export class VoiceManager implements AudioTransport {
         return;
       }
       const chunks: Buffer[] = [];
+      const raw: Buffer[] = [];
       let totalBytes = 0;
       let decodeErrors = 0;
+      let packets = 0;
+      let firstError: string | null = null;
+      let firstPacket: Buffer | null = null;
       let finished = false;
       let guard: NodeJS.Timeout | null = null;
       const maxBytes = 48_000 * 2 * 8; // cap at 8s of 48kHz mono Int16 PCM
@@ -1523,7 +1604,12 @@ export class VoiceManager implements AudioTransport {
         }
         const seconds = totalBytes / (48_000 * 2);
         if (decodeErrors > 0) {
-          console.warn(`[weasel] ears: ${decodeErrors} packet(s) from ${userId} failed to decode`);
+          const head = firstPacket ? firstPacket.subarray(0, 8).toString('hex') : 'n/a';
+          console.warn(
+            `[weasel] ears: ${decodeErrors}/${packets} packet(s) from ${userId} failed to decode — ` +
+              `first error: ${firstError ?? 'unknown'} · len=${firstPacket?.length ?? 0} head=${head}`,
+          );
+          dumpUndecodablePackets(raw);
         }
         if (totalBytes < 48_000) {
           console.log(`[weasel] ears: ${seconds.toFixed(1)}s from ${userId} dropped (${why}, under 0.5s)`);
@@ -1539,6 +1625,7 @@ export class VoiceManager implements AudioTransport {
       guard = setTimeout(() => finish('timeout'), 20_000);
       guard.unref?.();
       opusStream.on('data', (packet: Buffer) => {
+        packets++;
         if (totalBytes >= maxBytes) return;
         try {
           const pcm = decoder.decode(packet);
@@ -1546,8 +1633,11 @@ export class VoiceManager implements AudioTransport {
             chunks.push(pcm);
             totalBytes += pcm.length;
           }
-        } catch {
+        } catch (err) {
           decodeErrors++;
+          if (raw.length < 30) raw.push(Buffer.from(packet));
+          if (!firstError) firstError = err instanceof Error ? err.message : String(err);
+          if (!firstPacket) firstPacket = Buffer.from(packet);
         }
       });
       opusStream.once('end', () => finish('silence'));
