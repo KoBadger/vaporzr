@@ -10157,6 +10157,7 @@ export class DiscordBot {
           line('A', st.a),
           line('B', st.b),
           `Crossfader ${Math.round(st.crossfader * 100)}% · ${syncLine}${recLine} · open \`/deck\` for faders, EQ knobs and cue pads.`,
+          `🔗 ${this.bridge.deckLink()}`,
           '`V@deck a <song>` · `play` · `pause` · `pad a 3` · `loop a 4` · `lock` · `rec` · `sync` · `cross 60` · `stop`',
         ].join('\n');
       }

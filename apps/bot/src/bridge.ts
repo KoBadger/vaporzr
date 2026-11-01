@@ -106,6 +106,8 @@ export class Bridge {
   private sensitivity = 1.0;
   /** Seconds each visual preset dwells before auto-advancing (panel-controlled). */
   private presetCycleSec = 45;
+  /** Cached control invite behind `deckLink()` (rotates monthly). */
+  private deckInvite: { token: string; expiresAt: number } | null = null;
   /** Canonical preset list + cursor. The bridge owns the choice so every
    *  visualizer shows the same preset, instead of each advancing its own pool
    *  on its own timer — which is what let the player and the Activity drift. */
@@ -1352,6 +1354,23 @@ export class Bridge {
     this.broadcastPanels({ type: 'deck:waveform', deck, peaks, durationMs, guildId });
   }
 
+  /**
+   * Shareable deck link for surfaces that have no session cookie (the desktop
+   * app opens it in the system browser, and `V@deck` posts it into chat). The
+   * token is a long-lived, multi-use *control invite*, not the master key — so a
+   * leaked link stops working when it rotates instead of exposing the key.
+   */
+  deckLink(): string {
+    const base = config.staticBaseUrl ? config.staticBaseUrl.replace(/\/+$/, '') : '';
+    if (!config.shareKey) return `${base}/deck`;
+    const now = Date.now();
+    if (!this.deckInvite || this.deckInvite.expiresAt - now < 24 * 60 * 60 * 1000) {
+      const minted = mintInvite('control', 'deck link', 30 * 24 * 60 * 60 * 1000, now, 0);
+      this.deckInvite = { token: minted.token, expiresAt: minted.invite.expiresAt };
+    }
+    return `${base}/deck?invite=${encodeURIComponent(this.deckInvite.token)}`;
+  }
+
   /** Toast panels, plus a direct copy to the socket that asked: the desktop
    *  player connects as a visualizer, so a panels-only broadcast would leave
    *  its add box silent on successes and failures alike. */
@@ -1636,7 +1655,7 @@ export class Bridge {
       guilds: guildsForClient.length > 0 ? guildsForClient : undefined,
       sensitivity: this.sensitivity,
       presetCycle: this.presetCycleSec,
-      deckUrl: config.staticBaseUrl ? `${config.staticBaseUrl.replace(/\/+$/, '')}/deck` : '/deck',
+      deckUrl: this.deckLink(),
       preset:
         this.presetIdx >= 0 && this.presetNames[this.presetIdx]
           ? { name: this.presetNames[this.presetIdx], index: this.presetIdx }
