@@ -1128,6 +1128,43 @@ export class DiscordBot {
       }
       return { ...payload(), ok: result.ok, message: result.message };
     };
+    // Type-ahead for every search box (deck page, panel, request page, Activity).
+    // Spotify first for rich metadata, then YouTube so uploads and obscure
+    // tracks still show up; the client sends the picked uri straight through.
+    bridge.onSearch = async (query, limit) => {
+      const q = String(query ?? '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (q.length < 2) return [];
+      const want = Math.max(1, Math.min(10, Math.round(limit) || 6));
+      const out: Array<{ title: string; artist: string; durationMs: number; source: string; uri: string }> = [];
+      const seen = new Set<string>();
+      const push = (title: string, artist: string, durationMs: number, source: string, uri: string): void => {
+        const key = `${title} — ${artist}`.toLowerCase();
+        if (!title || !uri || seen.has(key)) return;
+        seen.add(key);
+        out.push({ title, artist, durationMs: Math.max(0, Math.round(durationMs || 0)), source, uri });
+      };
+      try {
+        const hits = await searchTracks(q, Math.min(8, want));
+        for (const t of hits) {
+          push(t.name, (t.artists ?? []).join(', '), t.durationMs ?? 0, t.source ?? 'spotify', t.uri);
+        }
+      } catch {
+        /* Spotify down — YouTube still answers */
+      }
+      if (out.length < want) {
+        try {
+          const hits = await searchYoutube(q, Math.min(6, want));
+          for (const t of hits) {
+            push(t.name, (t.artists ?? []).join(', '), t.durationMs ?? 0, t.source ?? 'youtube', t.uri);
+          }
+        } catch {
+          /* leave whatever Spotify returned */
+        }
+      }
+      return out.slice(0, want);
+    };
     bridge.onDeckFileUpload = async (guildId, deck, file, name) => {
       const gid = guildId ?? bridge.getPrimaryGuildId() ?? '';
       const controller = gid ? this.deckControllers.get(gid) : undefined;
