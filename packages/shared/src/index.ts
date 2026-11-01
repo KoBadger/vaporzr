@@ -106,6 +106,8 @@ export interface DeckSlotState {
   tempo: number;
   /** Effective BPM (follows tempo changes). */
   bpm: number | null;
+  /** Musical key of the loaded track as a Camelot code (e.g. `8A`), or null. */
+  key?: string | null;
   /** Eight hot-cue pads, in ms (null = empty). */
   cues: Array<number | null>;
   /** Loop region, or null when no loop is stored. */

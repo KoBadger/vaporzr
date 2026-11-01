@@ -1674,6 +1674,15 @@
       }
       .bank-head .block-label {
         flex: 1;
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .bank-head .mini-btn {
+        padding: 3px 6px;
+        letter-spacing: 0.06em;
+        font-size: 8.5px;
       }
       .mini-btn {
         padding: 4px 8px;
@@ -1735,6 +1744,248 @@
       .sample-chip:hover {
         border-color: var(--brand);
         color: #fff;
+      }
+
+      /* ---------- sample search suggestions ---------- */
+      .search-wrap {
+        position: relative;
+      }
+      .sample-suggest {
+        position: absolute;
+        z-index: 9;
+        left: 0;
+        right: 0;
+        top: calc(100% + 4px);
+        max-height: 148px;
+        overflow-y: auto;
+        padding: 4px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #080b18;
+        box-shadow: 0 14px 30px rgba(0, 0, 0, 0.6);
+        scrollbar-width: thin;
+        scrollbar-color: #2a3560 transparent;
+      }
+      .sample-suggest[hidden] {
+        display: none;
+      }
+      .sample-suggest::-webkit-scrollbar {
+        width: 8px;
+      }
+      .sample-suggest::-webkit-scrollbar-thumb {
+        background: #222b52;
+        border-radius: 8px;
+      }
+      .sg-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        padding: 5px 7px;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        color: #c9d4ff;
+        font: 500 10.5px/1.2 inherit;
+        text-align: left;
+        cursor: pointer;
+      }
+      .sg-item .sg-name {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .sg-item .sg-cat {
+        flex: none;
+        font: 700 8px/1 var(--mono);
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--dim-2);
+      }
+      .sg-item:hover,
+      .sg-item.active {
+        background: #151b34;
+        color: #fff;
+      }
+      .sg-item.active .sg-cat {
+        color: var(--brand);
+      }
+
+      /* ---------- mixer key badges ---------- */
+      .mixer-head {
+        align-items: center;
+      }
+      .mixer-head .keys {
+        display: flex;
+        gap: 5px;
+        margin-left: auto;
+        margin-right: 8px;
+      }
+      .key-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 3px 6px;
+        border-radius: 5px;
+        border: 1px solid var(--line);
+        background: #0b0e1d;
+        font: 700 9px/1 var(--mono);
+        letter-spacing: 0.06em;
+        color: var(--dim-2);
+        white-space: nowrap;
+      }
+      .key-badge b {
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        color: var(--dim);
+      }
+      .key-badge.set {
+        color: var(--ink);
+        border-color: #2a3560;
+      }
+      .key-badge.set b {
+        color: var(--dim);
+      }
+      .key-badge.harmonic {
+        border-color: #17c48c;
+        color: #7ff0c4;
+      }
+      .key-badge.energy {
+        border-color: var(--amber);
+        color: #ffd39b;
+      }
+      .key-badge.clash {
+        border-color: var(--red);
+        color: #ff9db0;
+      }
+
+      /* ---------- drift ring ---------- */
+      .match-top {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .match-rows {
+        flex: 1;
+        display: grid;
+        gap: 6px;
+      }
+      .drift-ring {
+        position: relative;
+        flex: none;
+        width: 52px;
+        height: 52px;
+      }
+      .drift-ring svg {
+        width: 100%;
+        height: 100%;
+        transform: rotate(-90deg);
+      }
+      .drift-ring .ring-track {
+        fill: none;
+        stroke: #1a2036;
+        stroke-width: 3.5;
+      }
+      .drift-ring .ring-arc {
+        fill: none;
+        stroke: var(--green);
+        stroke-width: 3.5;
+        stroke-linecap: round;
+        transition:
+          stroke-dasharray 0.25s ease,
+          stroke 0.2s ease;
+      }
+      .drift-ring .ring-ms {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        align-content: center;
+        gap: 1px;
+        font: 800 10px/1 var(--mono);
+        color: var(--ink);
+      }
+      .drift-ring .ring-ms small {
+        font: 700 6.5px/1 inherit;
+        letter-spacing: 0.14em;
+        color: var(--dim-2);
+      }
+      .drift-ring.locked .ring-arc {
+        stroke: var(--green);
+      }
+      .drift-ring.warn .ring-arc {
+        stroke: var(--amber);
+      }
+      .drift-ring.off .ring-ms {
+        color: var(--dim-2);
+      }
+
+      /* ---------- mix headroom ---------- */
+      .headroom {
+        display: grid;
+        gap: 4px;
+        padding-top: 6px;
+      }
+      .hr-legend {
+        display: flex;
+        justify-content: space-between;
+        font: 700 7.5px/1 inherit;
+        letter-spacing: 0.18em;
+        color: var(--dim-2);
+        text-transform: uppercase;
+      }
+      .hr-bars {
+        display: grid;
+        gap: 4px;
+      }
+      .hr-bar {
+        height: 5px;
+        border-radius: 2px;
+        background: #161b2e;
+        overflow: hidden;
+      }
+      .hr-bar i {
+        display: block;
+        height: 100%;
+        width: 0;
+        border-radius: 2px;
+        background: linear-gradient(90deg, #17c48c, #7ff0c4);
+        transition: width 0.16s linear;
+      }
+      .hr-bar i.b {
+        background: linear-gradient(90deg, #8b5cf6, #e0d3ff);
+      }
+      #hr-clip {
+        font: 800 8px/1 var(--mono);
+        letter-spacing: 0.14em;
+        color: var(--dim-2);
+      }
+      #hr-clip.on {
+        color: #fff;
+        text-shadow: 0 0 8px var(--red);
+      }
+
+      /* ---------- capture row under the hot cues ---------- */
+      .capture-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-top: 6px;
+      }
+      .capture-row .cap-label {
+        flex: 1;
+        font: 700 8px/1 inherit;
+        letter-spacing: 0.16em;
+        color: var(--dim-2);
+        text-transform: uppercase;
+      }
+      .capture-row .mini-btn[disabled] {
+        opacity: 0.4;
+        cursor: default;
+        border-color: var(--line);
+        color: var(--dim);
       }
       #sample-search {
         width: 100%;
@@ -1974,6 +2225,15 @@
             <button class="pad pro-only" data-pad="7" title="Set or jump to hot cue 7">7</button>
             <button class="pad pro-only" data-pad="8" title="Set or jump to hot cue 8">8</button>
           </div>
+          <div class="capture-row">
+            <span class="cap-label">Capture cue →</span>
+            <button class="mini-btn" data-capture="a" title="Copy this playhead to deck A's first free cue pad">
+              A
+            </button>
+            <button class="mini-btn" data-capture="b" title="Copy this playhead to deck B's first free cue pad">
+              B
+            </button>
+          </div>
         </div>
 
         <div class="loop-block">
@@ -1992,7 +2252,14 @@
       </section>
 
       <section class="mixer">
-        <div class="mixer-head"><span>MIXER</span><span class="dim">MASTER</span></div>
+        <div class="mixer-head">
+          <span>MIXER</span>
+          <span class="keys">
+            <span class="key-badge" id="key-a"><b>KEY A</b><span>—</span></span>
+            <span class="key-badge" id="key-b"><b>KEY B</b><span>—</span></span>
+          </span>
+          <span class="dim">MASTER</span>
+        </div>
 
         <div class="filters">
           <div class="filter-unit">
@@ -2021,13 +2288,26 @@
         <div>
           <div class="bank-head">
             <div class="block-label">SAMPLE BANK <span id="samples-count" class="muted"></span></div>
+            <button class="mini-btn" id="sample-fill" title="Fill any empty pads from the library">FILL</button>
+            <button class="mini-btn" id="sample-reset" title="Restore the starter eight">RESET</button>
             <button class="mini-btn" id="sample-lib-toggle" title="Browse every sample on the server">LIBRARY</button>
             <button class="mini-btn" id="sample-add" title="Add a one-shot (WAV, MP3, OGG, FLAC, M4A)">+</button>
           </div>
           <div class="pads" id="sample-pads" data-drop="sample" title="Drop a WAV or MP3 here"></div>
           <div class="drop-hint" id="sample-hint">Drop audio on the bank, or press +</div>
           <div class="sample-lib" id="sample-lib" hidden>
-            <input id="sample-search" type="search" placeholder="Search samples…" autocomplete="off" />
+            <div class="search-wrap">
+              <input
+                id="sample-search"
+                type="search"
+                placeholder="Search samples…"
+                autocomplete="off"
+                role="combobox"
+                aria-expanded="false"
+                aria-controls="sample-suggest"
+              />
+              <div class="sample-suggest" id="sample-suggest" role="listbox" hidden></div>
+            </div>
             <div class="sample-lib-list" id="sample-lib-list"></div>
             <div class="sample-sets">
               <select id="sample-setup" aria-label="Saved sample setups">
@@ -2043,9 +2323,20 @@
 
         <div class="match-block pro-only">
           <div class="block-label">SYNC / MATCH</div>
-          <div class="match-row"><span class="tag">A · BPM / TEMPO</span><span id="match-a">—</span></div>
-          <div class="match-row"><span class="tag">B · BPM / TEMPO</span><span id="match-b">—</span></div>
-          <div class="match-row"><span class="tag">DRIFT</span><span id="match-delta">—</span></div>
+          <div class="match-top">
+            <div class="drift-ring" id="drift-ring">
+              <svg viewBox="0 0 52 52" aria-hidden="true">
+                <circle class="ring-track" cx="26" cy="26" r="22"></circle>
+                <circle class="ring-arc" id="drift-arc" cx="26" cy="26" r="22"></circle>
+              </svg>
+              <div class="ring-ms"><span id="drift-ms">—</span><small>DRIFT</small></div>
+            </div>
+            <div class="match-rows">
+              <div class="match-row"><span class="tag">A · BPM / TEMPO</span><span id="match-a">—</span></div>
+              <div class="match-row"><span class="tag">B · BPM / TEMPO</span><span id="match-b">—</span></div>
+              <div class="match-row"><span class="tag">PHASE</span><span id="match-delta">—</span></div>
+            </div>
+          </div>
         </div>
 
         <div class="xfader-block">
@@ -2055,6 +2346,13 @@
             <span>B</span>
           </div>
           <input id="xfade" type="range" min="0" max="100" step="1" value="50" aria-label="Crossfader" />
+          <div class="headroom">
+            <div class="hr-legend"><span>MIX HEADROOM</span><span id="hr-clip">CLIP</span></div>
+            <div class="hr-bars">
+              <div class="hr-bar"><i id="hr-a"></i></div>
+              <div class="hr-bar"><i class="b" id="hr-b"></i></div>
+            </div>
+          </div>
         </div>
 
         <div class="mixer-foot">
@@ -2187,6 +2485,15 @@
             <button class="pad pro-only" data-pad="6" title="Set or jump to hot cue 6">6</button>
             <button class="pad pro-only" data-pad="7" title="Set or jump to hot cue 7">7</button>
             <button class="pad pro-only" data-pad="8" title="Set or jump to hot cue 8">8</button>
+          </div>
+          <div class="capture-row">
+            <span class="cap-label">Capture cue →</span>
+            <button class="mini-btn" data-capture="a" title="Copy this playhead to deck A's first free cue pad">
+              A
+            </button>
+            <button class="mini-btn" data-capture="b" title="Copy this playhead to deck B's first free cue pad">
+              B
+            </button>
           </div>
         </div>
 
@@ -2620,6 +2927,63 @@
           var drift = effA && effB ? (effB / effA - 1) * 100 : null;
           el('#match-delta').textContent =
             drift == null ? '—' : (drift >= 0 ? '+' : '') + drift.toFixed(1) + '%' + (state.sync ? ' · LOCKED' : '');
+
+          // Drift ring: phase error the controller reports while beat-locked,
+          // filled from the centre so the eye reads "how far off" at a glance.
+          var ring = el('#drift-ring');
+          var arc = el('#drift-arc');
+          var sync = state.sync;
+          el('#drift-ms').textContent = '—';
+          if (ring && arc) {
+            ring.classList.remove('locked', 'warn', 'off');
+            var errMs = sync ? Math.round(sync.driftMs) : 0;
+            var mag = Math.min(1, Math.abs(errMs) / 60); // full ring at ±60 ms
+            arc.setAttribute('stroke-dasharray', mag * 138.2 + ' 999');
+            arc.setAttribute('stroke-dashoffset', '0');
+            if (!sync) {
+              ring.classList.add('off');
+              arc.setAttribute('stroke-dasharray', '0 999');
+            } else {
+              el('#drift-ms').textContent = (errMs > 0 ? '+' : '') + errMs;
+              if (Math.abs(errMs) <= 4) ring.classList.add('locked');
+              else if (Math.abs(errMs) > 20) ring.classList.add('warn');
+            }
+          }
+
+          // Key badges: Camelot code per deck, tinted by harmonic distance.
+          ['a', 'b'].forEach(function (id) {
+            var badge = el('#key-' + id);
+            if (!badge) return;
+            var val = badge.querySelector('span');
+            var k = state[id].key || '';
+            badge.className = 'key-badge';
+            val.textContent = k || '—';
+            if (k) badge.classList.add('set');
+          });
+          var ka = state.a.key;
+          var kb = state.b.key;
+          var compat = camelotCompat(ka, kb);
+          if (compat) {
+            el('#key-a').classList.add(compat);
+            el('#key-b').classList.add(compat);
+          }
+
+          // Mix headroom: what each side contributes after the crossfader, so a
+          // hot trim shows up before the voice stream clips.
+          var xfadeAmt = state.crossfader;
+          var mixA = Math.max(0, state.a.gain) * (1 - xfadeAmt) * (state.a.playing ? 1 : 0.6);
+          var mixB = Math.max(0, state.b.gain) * xfadeAmt * (state.b.playing ? 1 : 0.6);
+          el('#hr-a').style.width = Math.min(100, Math.round(mixA * 86)) + '%';
+          el('#hr-b').style.width = Math.min(100, Math.round(mixB * 86)) + '%';
+          var clip = el('#hr-clip');
+          clip.classList.toggle('on', mixA + mixB > 0.98);
+
+          // Capture buttons grey out when the source deck has nothing loaded.
+          all('[data-capture]').forEach(function (btn) {
+            var srcDeck = btn.closest('.deck');
+            var srcId = srcDeck && srcDeck.getAttribute('data-deck');
+            btn.disabled = !srcId || !state[srcId] || !state[srcId].source;
+          });
           var active = state.a.playing || state.b.playing;
           el('#engine').textContent = active
             ? 'live — feeding the voice channel'
@@ -2801,7 +3165,7 @@
                 bank.appendChild(b);
               })(s);
             }
-            el('#samples-count').textContent = filled + ' / 8 loaded';
+            el('#samples-count').textContent = filled + '/8';
           }
           function loadSampleBank() {
             fetch('/api/deck/samples', { credentials: 'same-origin' })
@@ -2815,6 +3179,128 @@
                 renderSampleSetups();
               })
               .catch(function () {});
+          }
+          function camelotCompat(a, b) {
+            if (!a || !b) return null;
+            var ra = /^(\d+)([AB])$/.exec(a);
+            var rb = /^(\d+)([AB])$/.exec(b);
+            if (!ra || !rb) return null;
+            var na = Number(ra[1]);
+            var nb = Number(rb[1]);
+            var d = Math.abs(na - nb);
+            if (d > 6) d = 12 - d;
+            if (na === nb && ra[2] === rb[2]) return 'harmonic';
+            if (ra[2] === rb[2] && d === 1) return 'harmonic';
+            if (na === nb) return 'energy';
+            if (d <= 2) return 'energy';
+            return 'clash';
+          }
+          function sampleOp(op) {
+            fetch('/api/deck/samples?op=' + op, { method: 'POST', credentials: 'same-origin' })
+              .then(function (r) {
+                return r.json();
+              })
+              .then(function (d) {
+                if (d && d.library) {
+                  sampleBank = d;
+                  renderSampleLib();
+                  renderSampleSetups();
+                }
+                if (d && d.message) toast(d.ok ? 'ok' : 'error', d.message);
+                requestDeckState();
+              })
+              .catch(function () {
+                toast('error', 'Sample bank is unreachable.');
+              });
+          }
+          var suggestItems = [];
+          var suggestIndex = -1;
+          /** Subsequence match: "htcl" still finds hat-closed. */
+          function suggestMatch(q, hay) {
+            if (hay.indexOf(q) >= 0) return true;
+            var i = 0;
+            for (var j = 0; j < hay.length && i < q.length; j++) {
+              if (hay.charAt(j) === q.charAt(i)) i++;
+            }
+            return i === q.length;
+          }
+          function suggestBuild() {
+            var q = (el('#sample-search').value || '').trim().toLowerCase();
+            var hits = [];
+            (sampleBank.library || []).forEach(function (it) {
+              var hay = (it.name + ' ' + it.file).toLowerCase();
+              if (!q || suggestMatch(q, hay)) {
+                hits.push({
+                  kind: 'sample',
+                  label: it.name,
+                  cat: it.category,
+                  file: it.file,
+                  rank: hay.indexOf(q),
+                });
+              }
+            });
+            hits.sort(function (x, y) {
+              if (x.rank !== y.rank) return x.rank - y.rank;
+              return x.label.localeCompare(y.label);
+            });
+            (sampleBank.setups || []).forEach(function (name) {
+              if (!q || name.toLowerCase().indexOf(q) >= 0) {
+                hits.push({ kind: 'setup', label: name, cat: 'setup' });
+              }
+            });
+            return hits.slice(0, 40);
+          }
+          function suggestHide() {
+            var box = el('#sample-suggest');
+            if (box) box.hidden = true;
+            el('#sample-search').setAttribute('aria-expanded', 'false');
+            suggestIndex = -1;
+          }
+          function suggestPaint() {
+            all('.sg-item', el('#sample-suggest')).forEach(function (row, i) {
+              row.classList.toggle('active', i === suggestIndex);
+              if (i === suggestIndex) row.scrollIntoView({ block: 'nearest' });
+            });
+          }
+          function suggestRender() {
+            var box = el('#sample-suggest');
+            if (!box) return;
+            suggestItems = suggestBuild();
+            box.innerHTML = '';
+            suggestItems.forEach(function (it, idx) {
+              var row = document.createElement('button');
+              row.type = 'button';
+              row.className = 'sg-item';
+              row.setAttribute('role', 'option');
+              var name = document.createElement('span');
+              name.className = 'sg-name';
+              name.textContent = it.label;
+              var cat = document.createElement('span');
+              cat.className = 'sg-cat';
+              cat.textContent = it.cat;
+              row.appendChild(name);
+              row.appendChild(cat);
+              row.addEventListener('mousedown', function (e) {
+                // mousedown, not click: the input's blur would hide the list first.
+                e.preventDefault();
+                suggestPick(idx);
+              });
+              box.appendChild(row);
+            });
+            suggestIndex = suggestItems.length ? 0 : -1;
+            box.hidden = suggestItems.length === 0;
+            el('#sample-search').setAttribute('aria-expanded', String(!box.hidden));
+            suggestPaint();
+          }
+          function suggestPick(idx) {
+            var it = suggestItems[idx];
+            if (!it) return;
+            suggestHide();
+            if (it.kind === 'setup') {
+              sampleBankAction('PUT', it.label);
+              return;
+            }
+            assignSample(it.file, 0);
           }
           function renderSampleLib() {
             var host = el('#sample-lib-list');
@@ -3009,7 +3495,66 @@
             el('#sample-lib-toggle').classList.toggle('on', !panel.hidden);
             if (!panel.hidden) loadSampleBank();
           };
-          el('#sample-search').addEventListener('input', renderSampleLib);
+          el('#sample-search').addEventListener('input', function () {
+            renderSampleLib();
+            suggestRender();
+          });
+          el('#sample-search').addEventListener('focus', suggestRender);
+          el('#sample-search').addEventListener('blur', function () {
+            // Give a click on a suggestion time to land before hiding.
+            setTimeout(suggestHide, 120);
+          });
+          el('#sample-search').addEventListener('keydown', function (e) {
+            var open = !el('#sample-suggest').hidden;
+            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+              if (!open) {
+                suggestRender();
+                return;
+              }
+              e.preventDefault();
+              var n = suggestItems.length;
+              if (!n) return;
+              suggestIndex = (suggestIndex + (e.key === 'ArrowDown' ? 1 : -1) + n) % n;
+              suggestPaint();
+            } else if (e.key === 'Enter') {
+              if (open) {
+                e.preventDefault();
+                suggestPick(suggestIndex);
+              }
+            } else if (e.key === 'Escape') {
+              suggestHide();
+            }
+          });
+          el('#sample-fill').onclick = function () {
+            sampleOp('fill');
+          };
+          el('#sample-reset').onclick = function () {
+            sampleOp('reset');
+          };
+          all('[data-capture]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+              var card = btn.closest('.deck');
+              var srcId = card && card.getAttribute('data-deck');
+              var dstId = btn.getAttribute('data-capture');
+              if (!srcId || !state || !state[srcId] || !state[dstId]) return;
+              var src = state[srcId];
+              var cues = state[dstId].cues || [];
+              var slot = 0;
+              for (var i = 0; i < cues.length; i++) {
+                if (cues[i] == null) {
+                  slot = i + 1;
+                  break;
+                }
+              }
+              if (!slot) {
+                toast('info', 'Deck ' + dstId.toUpperCase() + ' has all eight cues set.');
+                return;
+              }
+              var ms = src.positionMs + (src.playing && localClock.at ? Date.now() - localClock.at : 0);
+              control('cue-set', { deck: dstId, slot: slot, positionMs: Math.round(ms) });
+              toast('ok', 'Cue ' + slot + ' on ' + dstId.toUpperCase() + ' ← ' + srcId.toUpperCase() + ' ' + fmt(ms));
+            });
+          });
           el('#sample-setup-save').onclick = function () {
             var name = window.prompt('Name this sample setup');
             if (name) sampleBankAction('POST', name);

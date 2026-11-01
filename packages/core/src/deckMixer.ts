@@ -330,6 +330,7 @@ const emptySlot = (): DeckSlotState => ({
   eq: { ...FLAT_EQ },
   tempo: 1,
   bpm: null,
+  key: null,
   cues: new Array<number | null>(DECK_CUE_SLOTS).fill(null),
   loop: null,
   looping: false,
@@ -636,6 +637,15 @@ export class DeckMixer {
     const slot = this.slot(id);
     slot.state.bpm = bpm && bpm > 0 ? Number(bpm.toFixed(2)) : null;
     if (slot.state.source) slot.state.source.bpm = slot.state.bpm;
+    this.emit();
+  }
+
+  /** Camelot key for the loaded track (set by the deck controller's analysis). */
+  setKey(id: DeckId, key: string | null): void {
+    const slot = this.slot(id);
+    const next = key && /^[1-9][0-9]?[AB]$/.test(key) ? key : null;
+    if (slot.state.key === next) return;
+    slot.state.key = next;
     this.emit();
   }
 

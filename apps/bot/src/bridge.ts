@@ -142,7 +142,7 @@ export class Bridge {
   /** Sample library + saved layouts, for the deck page's library panel. */
   onSampleBank:
     | ((
-        action: 'list' | 'save' | 'apply' | 'delete',
+        action: 'list' | 'save' | 'apply' | 'delete' | 'reset' | 'fill',
         name?: string,
       ) => {
         ok: boolean;
