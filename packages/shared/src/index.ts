@@ -359,6 +359,8 @@ export type OutboundMessage =
       /** Absolute URL of the live-deck page (relative `/deck` when no public base is set). */
       deckUrl?: string;
       preset?: { name: string; index: number };
+      /** Access level of this socket; only `control` can drive the decks. */
+      scope?: 'control' | 'view' | 'guest';
       guest?: boolean;
       endlesswave?: boolean;
       endlesswaveMode?: 'off' | 'basic' | 'smart';
