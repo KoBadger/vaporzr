@@ -294,6 +294,8 @@ export class DeckMixer {
   private b: SlotRuntime;
   private crossfader = 0.5;
   private masterGain = 1;
+  /** Master limiter gain, chasing 1 from below on release. */
+  private limiterGain = 1;
   private timer: ReturnType<typeof setInterval> | null = null;
   private blocked = false;
   private readonly sampleRate: number;
@@ -838,7 +840,21 @@ export class DeckMixer {
       }
     }
 
-    floatToInt16(this.acc, this.out, this.masterGain * MASTER_HEADROOM);
+    // Master limiter. Two decks at full trim can sum past unity, and a hard
+    // clip sounds like a crackle rather than a DJ pushing the master. Fast
+    // attack / slow release keeps peaks under the ceiling without pumping on
+    // normal material, and lets the trims be run hotter than the 0.9 headroom.
+    let peak = 0;
+    for (let i = 0; i < this.acc.length; i++) {
+      const sample = this.acc[i]!;
+      const abs = sample < 0 ? -sample : sample;
+      if (abs > peak) peak = abs;
+    }
+    const base = this.masterGain * MASTER_HEADROOM;
+    const ceiling = 0.98;
+    const target = peak > 0 && peak * base > ceiling ? ceiling / (peak * base) : 1;
+    this.limiterGain = target < this.limiterGain ? target : this.limiterGain + (1 - this.limiterGain) * 0.05;
+    floatToInt16(this.acc, this.out, base * this.limiterGain);
     const accepted = this.sink(this.out);
     if (!accepted) this.blocked = true;
   }

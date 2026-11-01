@@ -7,6 +7,7 @@ import vm from 'node:vm';
 import { WebSocket, WebSocketServer } from 'ws';
 import {
   emptyState,
+  type DeckId,
   type DeckMixerState,
   type InboundMessage,
   type OutboundMessage,
@@ -1339,7 +1340,16 @@ export class Bridge {
 
   /** Push live-deck state to every control surface (panels filter by guild). */
   broadcastDeck(state: DeckMixerState, guildId?: string): void {
-    this.broadcastPanels({ type: 'deck:state', state, guildId });
+    const msg = { type: 'deck:state' as const, state, guildId };
+    this.broadcastPanels(msg);
+    // Visualizers draw an "on air" strip from the same payload, so the desktop
+    // player shows the decks instead of the idle queue.
+    this.broadcastVisualizers(msg);
+  }
+
+  /** Push a freshly decoded waveform to the deck page. */
+  broadcastDeckWaveform(guildId: string, deck: DeckId, peaks: number[], durationMs: number): void {
+    this.broadcastPanels({ type: 'deck:waveform', deck, peaks, durationMs, guildId });
   }
 
   /** Toast panels, plus a direct copy to the socket that asked: the desktop

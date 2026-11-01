@@ -46,6 +46,11 @@ export interface EndlessWaveState {
   longestRun: number;
   /** Distinct artists auto-queued this session. */
   artistSet: Set<string>;
+  /** Artists a listener skipped early — avoided until the penalty expires. */
+  penalisedArtists: Map<string, number>;
+  /** Refill statistics for the health readout. */
+  refillAttempts: number;
+  refillQueued: number;
   /** cosine.club ids of tracks auto-queued this session — audio-based dedup so
    *  the same recording under a different upload can't be queued twice. */
   queuedCosineIds: Set<string>;
@@ -136,6 +141,9 @@ export function createState(overrides?: Partial<EWConfig>): EndlessWaveState {
     longestRun: 0,
     artistSet: new Set(),
     queuedCosineIds: new Set(),
+    penalisedArtists: new Map(),
+    refillAttempts: 0,
+    refillQueued: 0,
   };
 }
 
@@ -166,6 +174,9 @@ function resetSession(state: EndlessWaveState): void {
   state.longestRun = 0;
   state.artistSet.clear();
   state.queuedCosineIds.clear();
+  state.penalisedArtists.clear();
+  state.refillAttempts = 0;
+  state.refillQueued = 0;
 }
 
 /**
@@ -285,6 +296,11 @@ export interface EndlessWavePersist {
   longestRun: number;
   artistSet: string[];
   queuedCosineIds: string[];
+  /** artist -> epoch ms when the penalty expires. */
+  penalisedArtists?: Record<string, number>;
+  /** Refill outcomes for the health readout (`V@autoplay`). */
+  refillAttempts?: number;
+  refillQueued?: number;
 }
 
 /** Flatten a live state for on-disk persistence. */
@@ -305,6 +321,9 @@ export function serializeState(state: EndlessWaveState): EndlessWavePersist {
     longestRun: state.longestRun,
     artistSet: [...state.artistSet],
     queuedCosineIds: [...state.queuedCosineIds],
+    penalisedArtists: Object.fromEntries(state.penalisedArtists),
+    refillAttempts: state.refillAttempts,
+    refillQueued: state.refillQueued,
   };
 }
 
@@ -328,6 +347,12 @@ export function restoreState(data: Partial<EndlessWavePersist>): EndlessWaveStat
   if (typeof data.longestRun === 'number') s.longestRun = data.longestRun;
   for (const a of data.artistSet ?? []) s.artistSet.add(String(a).toLowerCase().trim());
   for (const id of (data.queuedCosineIds ?? []).slice(-COSINE_HISTORY_MAX)) s.queuedCosineIds.add(String(id));
+  const now = Date.now();
+  for (const [artist, until] of Object.entries(data.penalisedArtists ?? {})) {
+    if (typeof until === 'number' && until > now) s.penalisedArtists.set(String(artist), until);
+  }
+  if (typeof data.refillAttempts === 'number') s.refillAttempts = data.refillAttempts;
+  if (typeof data.refillQueued === 'number') s.refillQueued = data.refillQueued;
   return s;
 }
 
@@ -550,8 +575,40 @@ export function isDuplicate(state: EndlessWaveState, uri: string): boolean {
 /** Check if an artist is on cooldown (appeared too recently). */
 export function isArtistOnCooldown(state: EndlessWaveState, artist: string): boolean {
   const normalArtist = artist.toLowerCase().trim();
+  if (isArtistPenalised(state, normalArtist)) return true;
   const recent = state.recentArtists.slice(-DEFAULT_CONFIG.artistCooldown);
   return recent.some((a) => a.toLowerCase().trim() === normalArtist);
+}
+
+/** True while a listener-skip penalty is live for this artist. */
+export function isArtistPenalised(state: EndlessWaveState, artist: string): boolean {
+  const until = state.penalisedArtists.get(artist.toLowerCase().trim());
+  if (!until) return false;
+  if (until > Date.now()) return true;
+  state.penalisedArtists.delete(artist.toLowerCase().trim());
+  return false;
+}
+
+/**
+ * Skip feedback: an auto-queued track skipped within its first few seconds is a
+ * stronger signal than any feature vector. Penalise its artists for a while so
+ * the wave stops serving that lane, without blacklisting it forever.
+ */
+export function penaliseArtist(state: EndlessWaveState, artist: string, minutes = 45): void {
+  const name = artist.toLowerCase().trim();
+  if (name.length < 3) return;
+  state.penalisedArtists.set(name, Date.now() + minutes * 60_000);
+  // Bound the map so a long session can't grow it without limit.
+  if (state.penalisedArtists.size > 200) {
+    const oldest = [...state.penalisedArtists.entries()].sort((a, b) => a[1] - b[1])[0];
+    if (oldest) state.penalisedArtists.delete(oldest[0]);
+  }
+}
+
+/** Record a refill attempt and whether it produced a track (health readout). */
+export function noteRefill(state: EndlessWaveState, queued: boolean): void {
+  state.refillAttempts++;
+  if (queued) state.refillQueued++;
 }
 
 /** The most recent artist NOT currently on cooldown — used as a "similar but
@@ -1356,6 +1413,7 @@ export async function pickBasicTrack(
     if (isRemixOrCover(state, c.name, c.artists)) return false;
     const main = (c.artists[0] ?? '').toLowerCase().trim();
     if (main && cooldown.has(main)) return false;
+    if (main && isArtistPenalised(state, main)) return false;
     // Compilation/setlist uploads with an empty artist still name the artist in
     // the title — reject them too (matches the smart picker's filter).
     const norm = normalizeTrackName(c.name);

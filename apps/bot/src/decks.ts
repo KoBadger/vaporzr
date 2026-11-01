@@ -39,6 +39,8 @@ export interface DeckControllerOptions {
   onState: (state: DeckMixerState) => void;
   /** Publish a finished recording (Discord upload, CDN, …). Returns a URL. */
   uploadRecording?: (file: string, name: string) => Promise<string | null>;
+  /** Waveform peaks for a newly loaded track (drawn on the deck page). */
+  onWaveform?: (deck: DeckId, peaks: number[], durationMs: number) => void;
 }
 
 export interface DeckActionResult {
@@ -144,6 +146,14 @@ export class DeckController {
     void estimateTempo(file)
       .then((bpm) => {
         if (bpm && this.mixer.state()[deck].source?.file === file) this.mixer.setBpm(deck, bpm);
+      })
+      .catch(() => {});
+    // Waveform for the deck page — also off the critical path.
+    void computePeaks(file)
+      .then((peaks) => {
+        if (peaks && this.mixer.state()[deck].source?.file === file) {
+          this.opts.onWaveform?.(deck, peaks, durationMs);
+        }
       })
       .catch(() => {});
     return {
@@ -558,8 +568,64 @@ function formatMs(ms: number): string {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
 }
 
-/** Encode the raw 48 kHz stereo s16le capture to mp3 (Discord-friendly). */
-function encodeMp3(pcmFile: string, mp3File: string): Promise<boolean> {
+/**
+ * Peak envelope for the deck page: decode to 8 kHz mono and keep the loudest
+ * |sample| per bucket. 600 buckets is ~1 point per 4 px on a typical panel and
+ * costs one fast ffmpeg pass over a local file.
+ */
+function computePeaks(file: string, buckets = 600): Promise<number[] | null> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (v: number[] | null): void => {
+      if (settled) return;
+      settled = true;
+      resolve(v);
+    };
+    try {
+      const proc = spawn(
+        config.ffmpegPath,
+        ['-hide_banner', '-loglevel', 'error', '-i', file, '-ac', '1', '-ar', '8000', '-f', 's16le', 'pipe:1'],
+        { windowsHide: true },
+      );
+      const chunks: Buffer[] = [];
+      let bytes = 0;
+      const cap = 8000 * 2 * 60 * 30; // 30 min ceiling
+      proc.stdout?.on('data', (d: Buffer) => {
+        if (bytes < cap) {
+          chunks.push(d);
+          bytes += d.length;
+        }
+      });
+      proc.on('error', () => done(null));
+      proc.on('close', (code) => {
+        if (code !== 0) return done(null);
+        const pcm = Buffer.concat(chunks);
+        const total = Math.floor(pcm.length / 2);
+        if (total < buckets * 2) return done(null);
+        const per = Math.floor(total / buckets);
+        const peaks: number[] = [];
+        for (let b = 0; b < buckets; b++) {
+          let max = 0;
+          const start = b * per;
+          for (let i = start; i < start + per; i++) {
+            const v = Math.abs(pcm.readInt16LE(i * 2));
+            if (v > max) max = v;
+          }
+          // sqrt shape: quiet intros stay visible without the drops clipping flat.
+          peaks.push(Number(Math.sqrt(max / 32768).toFixed(3)));
+        }
+        done(peaks);
+      });
+    } catch {
+      done(null);
+    }
+  });
+}
+
+/** Encode the raw 48 kHz stereo s16le capture to mp3 (Discord-friendly). */ function encodeMp3(
+  pcmFile: string,
+  mp3File: string,
+): Promise<boolean> {
   return new Promise((resolve) => {
     let settled = false;
     const done = (ok: boolean): void => {

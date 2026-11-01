@@ -1153,6 +1153,18 @@ export class DiscordBot {
       s.playback.onTrackSkipped = (skipped) => {
         this.resolveStump(s, skipped, true);
         this.noteDuelOutcome(s, skipped, true);
+        // Skip feedback: bailing out of a wave track in its first seconds is the
+        // clearest taste signal a listener ever gives. Mute its artists for a
+        // while so the wave stops serving that lane.
+        if (EW.isAutoActive(s.endlessWave) && skipped.addedBy === 'endless-wave') {
+          const playedMs = s.queue.getState().positionMs ?? 0;
+          if (playedMs < 20_000) {
+            for (const artist of skipped.artists ?? []) EW.penaliseArtist(s.endlessWave, artist);
+            console.log(
+              `[endlesswave] skip feedback: muted "${truncate(skipped.artists.join(', ') || skipped.name, 60)}" for 45 min (skipped at ${Math.round(playedMs / 1000)}s)`,
+            );
+          }
+        }
       };
       // When the queue runs dry, post a friendly notice so listeners aren't left
       // wondering why the music stopped. An active wave ignores the backoff here
@@ -1227,6 +1239,7 @@ export class DiscordBot {
         // `V@r` picks up exactly where the set interrupted it.
         pauseQueue: () => s.playback.pause(),
         onState: (state) => this.bridge.broadcastDeck(state, guildId),
+        onWaveform: (deck, peaks, durationMs) => this.bridge.broadcastDeckWaveform(guildId, deck, peaks, durationMs),
         uploadRecording: async (file, name) => {
           const channel = await this.panelShareChannel(guildId);
           if (!channel) return null;
@@ -7731,6 +7744,18 @@ export class DiscordBot {
         lines.push(`• steering: ${EW.describeCalibration(s.endlessWave)}`);
         if (snap.deadEnds) lines.push(`• dead-ends: ${snap.deadEnds}`);
       }
+      // Health readout: how often a refill actually found something. A number
+      // below ~50% means the pool is starving (or YouTube is blocking), which
+      // is otherwise only visible in the logs.
+      const attempts = s.endlessWave.refillAttempts;
+      const queued = s.endlessWave.refillQueued;
+      if (attempts > 0) {
+        const pct = Math.round((queued / attempts) * 100);
+        const skipped = s.endlessWave.penalisedArtists.size;
+        lines.push(
+          `• refills: ${queued}/${attempts} found a track (${pct}%)${skipped ? ` · ${skipped} artist${skipped === 1 ? '' : 's'} muted by skips` : ''}`,
+        );
+      }
     }
     lines.push('Change with `V@autoplay off|basic|smart` · `V@autoplay count 5` · `/autoplay`.');
     return lines.join('\n');
@@ -12009,6 +12034,7 @@ export class DiscordBot {
     if ((this.ewRetryAfter.get(s.guildId) ?? 0) > Date.now()) return;
     if (this.ewBusy.has(s.guildId)) return;
     this.ewBusy.add(s.guildId);
+    EW.noteRefill(s.endlessWave, false);
     const smart = s.endlessWave.active;
     // Smart keeps a 3-track lookahead; basic just needs the next track ready.
     // A per-guild override (V@autoplay count N) wins when set.
@@ -12092,6 +12118,7 @@ export class DiscordBot {
         s.queue.enqueue(resolved, 'endless-wave', { keepCursor: true, background: true });
         enqueuedThisRun++;
         s.endlessWave.generated++;
+        s.endlessWave.refillQueued++;
         EW.noteWaveQueued(s.endlessWave, resolved.artists);
         this.bridge.broadcast({
           type: 'endlesswave',
