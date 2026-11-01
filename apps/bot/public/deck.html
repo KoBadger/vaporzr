@@ -52,6 +52,20 @@
         letter-spacing: 0.02em;
         font-weight: 700;
       }
+      #guild-select {
+        max-width: 190px;
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        color: var(--text);
+        padding: 5px 8px;
+        font:
+          600 12px/1.2 system-ui,
+          sans-serif;
+      }
+      #guild-select:focus {
+        outline: 1px solid var(--accent);
+      }
       .dot {
         width: 8px;
         height: 8px;
@@ -348,6 +362,7 @@
     <header>
       <span class="dot" id="conn"></span>
       <h1>Live Decks</h1>
+      <select id="guild-select" title="Which server's decks you're controlling"></select>
       <span class="muted" id="status">connecting…</span>
       <span class="spacer"></span>
       <button class="mini" id="btn-sync">SYNC B → A</button>
@@ -557,6 +572,8 @@
         var waves = { a: null, b: null };
         var lastSamplesKey = '';
         var scrub = null;
+        /** Guild this page is looking at; deck broadcasts from other servers are ignored. */
+        var viewGuildId = null;
         var FX = [
           { id: 'riser', label: 'RISER' },
           { id: 'reverse', label: 'REVERSE' },
@@ -677,6 +694,34 @@
           g.fillRect(px, 0, 2, h);
         }
 
+        /** Fill the server picker from the bridge snapshot. */
+        function fillGuilds(guilds, current) {
+          var sel = el('#guild-select');
+          var want = current || viewGuildId;
+          sel.innerHTML = '';
+          guilds.forEach(function (g) {
+            var o = document.createElement('option');
+            o.value = g.id;
+            o.textContent = g.name;
+            sel.appendChild(o);
+          });
+          if (
+            want &&
+            guilds.some(function (g) {
+              return g.id === want;
+            })
+          ) {
+            viewGuildId = want;
+          } else if (guilds.length) {
+            viewGuildId = guilds[0].id;
+          }
+          if (viewGuildId) sel.value = viewGuildId;
+          sel.style.display = guilds.length > 1 ? '' : 'none';
+          el('#status').textContent = viewGuildId
+            ? 'connected — ' + (sel.options[sel.selectedIndex] || {}).textContent
+            : 'connected';
+        }
+
         function paint() {
           if (!state) return;
           ['a', 'b'].forEach(function (id) {
@@ -794,12 +839,22 @@
               return;
             }
             if (msg.type === 'deck:state') {
+              // The bridge fans deck state out to every panel; only apply the
+              // server this page is switched to, otherwise a busy guild's decks
+              // would appear here.
+              if (viewGuildId && msg.guildId && msg.guildId !== viewGuildId) return;
               state = msg.state;
               localClock.at = Date.now();
               paint();
             } else if (msg.type === 'deck:waveform') {
+              if (viewGuildId && msg.guildId && msg.guildId !== viewGuildId) return;
               waves[msg.deck] = msg.peaks;
               if (state) paint();
+            } else if (msg.type === 'snapshot') {
+              if (msg.guilds) fillGuilds(msg.guilds, msg.primaryGuildId || null);
+              if (msg.guest) toast('error', 'Read-only — open /deck with the control key to mix.');
+              // Ask for the decks of the server we just resolved, explicitly.
+              if (viewGuildId) send({ type: 'deck:request', guildId: viewGuildId });
             } else if (msg.type === 'panel:notice') {
               toast(msg.level, msg.text);
             }
@@ -885,6 +940,20 @@
           el('#xfade').addEventListener('input', function (e) {
             el('#xfade-val').textContent = e.target.value + '%';
             controlThrottled('xfade', 'crossfader', { value: Number(e.target.value) / 100 });
+          });
+          el('#guild-select').addEventListener('change', function (e) {
+            viewGuildId = e.target.value || null;
+            // Peaks belong to the previous server's tracks — drop them so a
+            // stale waveform can't sit under the new deck's playhead.
+            waves = { a: null, b: null };
+            lastSamplesKey = '';
+            if (viewGuildId) {
+              send({ type: 'cmd', command: 'switchGuild', guildId: viewGuildId });
+              send({ type: 'panel:subscribe', channels: ['state'], guildId: viewGuildId });
+              send({ type: 'deck:request', guildId: viewGuildId });
+            }
+            var sel = e.target;
+            el('#status').textContent = 'connected — ' + ((sel.options[sel.selectedIndex] || {}).textContent || '');
           });
           all('[data-filter]').forEach(function (input) {
             var deckId = input.getAttribute('data-filter');
