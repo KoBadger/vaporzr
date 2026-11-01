@@ -86,6 +86,13 @@ export interface DeckLoop {
   beats: number | null;
 }
 
+/** Per-deck DJ filter. A single knob sweeps low-pass → off → high-pass. */
+export interface DeckFilter {
+  type: 'off' | 'lpf' | 'hpf';
+  /** Corner frequency in Hz. */
+  cutoff: number;
+}
+
 export interface DeckSlotState {
   source: DeckSource | null;
   playing: boolean;
@@ -107,6 +114,10 @@ export interface DeckSlotState {
   looping: boolean;
   /** Fine tempo correction applied for sync-lock (1 = none). */
   drift: number;
+  /** DJ filter state (single-knob LPF ↔ off ↔ HPF). */
+  filter: DeckFilter;
+  /** Cue samples available to the pad bank (controller-provided). */
+  samples?: string[];
 }
 
 /** Set-recording status surfaced to both control surfaces. */
@@ -160,7 +171,9 @@ export type DeckAction =
   | 'loop-beats'
   | 'lock'
   | 'rec-start'
-  | 'rec-stop';
+  | 'rec-stop'
+  | 'filter'
+  | 'sample';
 
 export interface GuildPermissions {
   roles: Record<PermissionLevel, string[]>;

@@ -54,8 +54,12 @@ export interface DeckActionResult {
 const EQ_BANDS: Array<keyof DeckEq> = ['low', 'mid', 'high'];
 /** How often the beat-lock servo measures and corrects drift. */
 const DRIFT_INTERVAL_MS = 400;
+/** Start cue jumps this early so the hit lands on the beat through Discord. */
+const CUE_PREROLL_MS = 140;
 /** Audio written to disk while recording: 48 kHz stereo Int16. */
 const REC_BYTES_PER_MS = 192;
+/** Longest one-shot the sample bank will hold in memory. */
+const SAMPLE_MAX_SEC = 12;
 
 interface Recording {
   stream: fs.WriteStream;
@@ -77,6 +81,11 @@ export class DeckController {
   private record: DeckRecordState = { active: false, elapsedMs: 0, lastUrl: null, lastName: null };
   /** uri -> downloaded file, so re-loading a track doesn't re-download it. */
   private fileCache = new Map<string, string>();
+  /** One-shot pad bank: file path -> decoded 48 kHz stereo PCM. */
+  private sampleCache = new Map<string, { pcm: Buffer; at: number }>();
+  private sampleListCache: { files: string[]; at: number } | null = null;
+  /** Tracks loaded this session, for the recording summary. */
+  private history: Array<{ title: string; artist: string; at: number }> = [];
   private readonly opts: DeckControllerOptions;
 
   constructor(opts: DeckControllerOptions) {
@@ -103,7 +112,10 @@ export class DeckController {
           driftMs: this.driftMs,
         }
       : null;
-    return { ...this.mixer.state(), sync, record: { ...this.record } };
+    const base = this.mixer.state();
+    const samples = this.sampleFiles().map((f) => path.basename(f).replace(/\.[^.]+$/, ''));
+    for (const slot of [base.a, base.b]) slot.samples = samples;
+    return { ...base, sync, record: { ...this.record } };
   }
 
   isEngaged(): boolean {
@@ -156,6 +168,8 @@ export class DeckController {
         }
       })
       .catch(() => {});
+    this.history.push({ title: track.name, artist: (track.artists ?? []).join(', '), at: Date.now() });
+    if (this.history.length > 300) this.history.splice(0, this.history.length - 300);
     return {
       ok: true,
       message: `Deck ${deck.toUpperCase()} cued: **${track.name}**${durationMs ? ` (${Math.round(durationMs / 1000)}s)` : ''}.`,
@@ -297,14 +311,113 @@ export class DeckController {
   }
 
   jumpCue(deck: DeckId, slot: number): DeckActionResult {
-    if (!this.mixer.jumpCue(deck, slot)) {
+    const st = this.mixer.state()[deck];
+    const cue = st.cues[Math.round(slot) - 1];
+    if (cue == null) {
       return {
         ok: false,
         message: `Cue ${slot} on ${deck.toUpperCase()} is empty — tap it again while playing to set it.`,
       };
     }
-    const at = this.mixer.state()[deck].positionMs;
-    return { ok: true, message: `Deck ${deck.toUpperCase()} → cue ${slot} (${formatMs(at)}).` };
+    // Start slightly before the cue so the hit lands ON the beat through
+    // Discord's ~200 ms jitter buffer instead of after it.
+    const preroll = st.playing ? CUE_PREROLL_MS : 0;
+    this.mixer.seek(deck, Math.max(0, cue - preroll));
+    return { ok: true, message: `Deck ${deck.toUpperCase()} → cue ${slot} (${formatMs(cue)}).` };
+  }
+
+  /** DJ filter knob: 0..1, centre = bypass. */
+  filter(deck: DeckId, value: number): DeckActionResult {
+    this.mixer.setFilterKnob(deck, value);
+    const f = this.mixer.state()[deck].filter;
+    const label = f.type === 'off' ? 'off' : `${f.type.toUpperCase()} ${Math.round(f.cutoff)} Hz`;
+    return { ok: true, message: `Deck ${deck.toUpperCase()} filter ${label}.` };
+  }
+
+  /* ------------------------------------------------------------ sample bank -- */
+
+  /** One-shots in `<dataDir>/samples` (sorted), cached briefly. */
+  sampleFiles(): string[] {
+    const cached = this.sampleListCache;
+    if (cached && Date.now() - cached.at < 8_000) return cached.files;
+    let files: string[] = [];
+    try {
+      const dir = path.join(config.dataDir, 'samples');
+      files = fs
+        .readdirSync(dir)
+        .filter((f) => /\.(wav|mp3|ogg|flac|m4a|opus)$/i.test(f))
+        .sort()
+        .map((f) => path.join(dir, f));
+    } catch {
+      files = [];
+    }
+    this.sampleListCache = { files, at: Date.now() };
+    return files;
+  }
+
+  /** Fire pad `slot` (1-based) from the sample bank over the live mix. */
+  async playSample(slot: number): Promise<DeckActionResult> {
+    const files = this.sampleFiles();
+    const file = files[Math.round(slot) - 1];
+    if (!file) return { ok: false, message: `No sample in pad ${slot} — drop files in \`data/samples/\`.` };
+    if (!this.engaged) return { ok: false, message: 'Load a deck first.' };
+    const pcm = await this.samplePcm(file);
+    if (!pcm) return { ok: false, message: `Couldn't decode ${path.basename(file)}.` };
+    this.opts.voice.queueSfxPcm(pcm);
+    return { ok: true, message: `▶ ${path.basename(file).replace(/\.[^.]+$/, '')}` };
+  }
+
+  /** Decode a one-shot to 48 kHz stereo s16le, cached (bounded). */
+  private samplePcm(file: string): Promise<Buffer | null> {
+    const cached = this.sampleCache.get(file);
+    if (cached) return Promise.resolve(cached.pcm);
+    return new Promise((resolve) => {
+      let settled = false;
+      const done = (v: Buffer | null): void => {
+        if (settled) return;
+        settled = true;
+        resolve(v);
+      };
+      try {
+        const proc = spawn(
+          config.ffmpegPath,
+          [
+            '-hide_banner',
+            '-loglevel',
+            'error',
+            '-i',
+            file,
+            '-t',
+            String(SAMPLE_MAX_SEC),
+            '-ac',
+            '2',
+            '-ar',
+            '48000',
+            '-f',
+            's16le',
+            'pipe:1',
+          ],
+          { windowsHide: true },
+        );
+        const chunks: Buffer[] = [];
+        proc.stdout?.on('data', (d: Buffer) => chunks.push(d));
+        proc.on('error', () => done(null));
+        proc.on('close', (code) => {
+          if (code !== 0 || chunks.length === 0) return done(null);
+          const pcm = Buffer.concat(chunks);
+          this.sampleCache.set(file, { pcm, at: Date.now() });
+          // ~40 one-shots of 12 s is plenty; drop the oldest past that.
+          while (this.sampleCache.size > 40) {
+            const oldest = [...this.sampleCache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+            if (!oldest) break;
+            this.sampleCache.delete(oldest[0]);
+          }
+          done(pcm);
+        });
+      } catch {
+        done(null);
+      }
+    });
   }
 
   clearCue(deck: DeckId, slot: number): DeckActionResult {
@@ -460,9 +573,25 @@ export class DeckController {
     this.record = { active: false, elapsedMs: 0, lastUrl: url, lastName: name };
     this.opts.onState(this.state());
     const mins = Math.round(rec.bytes / REC_BYTES_PER_MS / 1000 / 60);
+    // Set stats: how many tracks went through the decks and the busiest artists.
+    const counts = new Map<string, number>();
+    for (const h of this.history) {
+      const key = h.artist || 'unknown';
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    const top = [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([a, n]) => `${a} (${n})`)
+      .join(', ');
+    const stats = this.history.length
+      ? ` · ${this.history.length} track${this.history.length === 1 ? '' : 's'}${top ? ` · ${top}` : ''}`
+      : '';
     return {
       ok: true,
-      message: url ? `🎚️ Set saved (${mins} min): ${url}` : `🎚️ Set saved on the server: \`${mp3}\` (${mins} min).`,
+      message: url
+        ? `🎚️ Set saved (${mins} min${stats}): ${url}`
+        : `🎚️ Set saved on the server: \`${mp3}\` (${mins} min${stats}).`,
       file: url ? undefined : mp3,
       fileName: name,
     };

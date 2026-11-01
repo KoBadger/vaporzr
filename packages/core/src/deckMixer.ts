@@ -152,6 +152,42 @@ export function peakingCoefs(freq: number, gainDb: number, q = 0.9, sampleRate =
   return normalise(1 + alpha * A, -2 * Math.cos(w0), 1 - alpha * A, 1 + alpha / A, -2 * Math.cos(w0), 1 - alpha / A);
 }
 
+/** RBJ low-pass (12 dB/oct) — the DJ filter's closed end. */
+export function lowPassCoefs(freq: number, q = 0.7, sampleRate = DEFAULT_SAMPLE_RATE): BiquadCoefs {
+  const f = Math.max(40, Math.min(sampleRate / 2 - 100, freq));
+  const w0 = (2 * Math.PI * f) / sampleRate;
+  const cos = Math.cos(w0);
+  const alpha = Math.sin(w0) / (2 * q);
+  return normalise((1 - cos) / 2, 1 - cos, (1 - cos) / 2, 1 + alpha, -2 * cos, 1 - alpha);
+}
+
+/** RBJ high-pass (12 dB/oct) — the DJ filter's open end. */
+export function highPassCoefs(freq: number, q = 0.7, sampleRate = DEFAULT_SAMPLE_RATE): BiquadCoefs {
+  const f = Math.max(40, Math.min(sampleRate / 2 - 100, freq));
+  const w0 = (2 * Math.PI * f) / sampleRate;
+  const cos = Math.cos(w0);
+  const alpha = Math.sin(w0) / (2 * q);
+  return normalise((1 + cos) / 2, -(1 + cos), (1 + cos) / 2, 1 + alpha, -2 * cos, 1 - alpha);
+}
+
+/**
+ * Map a 0..1 knob to the deck filter. Centre is bypass; left half closes a
+ * low-pass (down to 180 Hz), right half opens a high-pass (up to 9 kHz). This is
+ * the one-knob behaviour every CDJ has, and it keeps the UI to a single control.
+ */
+export function filterFromKnob(value: number): { type: 'off' | 'lpf' | 'hpf'; cutoff: number } {
+  const v = Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0.5));
+  if (v > 0.47 && v < 0.53) return { type: 'off', cutoff: 20_000 };
+  if (v < 0.5) {
+    // Left half: close the low-pass from fully open (centre) down to 180 Hz.
+    const t = Math.max(0, Math.min(1, (0.47 - v) / 0.47));
+    return { type: 'lpf', cutoff: Math.round(9000 * Math.pow(180 / 9000, t)) };
+  }
+  // Right half: open the high-pass from 180 Hz up to 9 kHz.
+  const t = Math.max(0, Math.min(1, (v - 0.53) / 0.47));
+  return { type: 'hpf', cutoff: Math.round(180 * Math.pow(9000 / 180, t)) };
+}
+
 /** dB -> linear gain. */
 export function dbToGain(db: number): number {
   return Math.pow(10, db / 20);
@@ -251,6 +287,9 @@ interface SlotRuntime {
   procEnded: boolean;
   coefs: BiquadCoefs[];
   eqState: BiquadState[][]; // [band][channel]
+  /** DJ filter coefficients + per-channel state (identity when bypassed). */
+  filterCoefs: BiquadCoefs;
+  filterState: BiquadState[];
   /** Gain currently applied, ramped toward the target each frame. */
   gainNow: number;
   /** Frames of fade-in remaining after a (re)start, to avoid a click. */
@@ -287,6 +326,7 @@ const emptySlot = (): DeckSlotState => ({
   loop: null,
   looping: false,
   drift: 1,
+  filter: { type: 'off', cutoff: 20_000 },
 });
 
 export class DeckMixer {
@@ -331,6 +371,8 @@ export class DeckMixer {
       procEnded: false,
       coefs: [IDENTITY_BIQUAD, IDENTITY_BIQUAD, IDENTITY_BIQUAD],
       eqState: [newBiquadState(), newBiquadState(), newBiquadState()].map(() => [newBiquadState(), newBiquadState()]),
+      filterCoefs: IDENTITY_BIQUAD,
+      filterState: [newBiquadState(), newBiquadState()],
       gainNow: 1,
       fadeFrames: 0,
       baseMs: 0,
@@ -354,6 +396,7 @@ export class DeckMixer {
       eq: { ...slot.state.eq },
       cues: [...slot.state.cues],
       loop: slot.state.loop ? { ...slot.state.loop } : null,
+      filter: { ...slot.state.filter },
     });
     return {
       active: this.a.state.playing || this.b.state.playing || Boolean(this.a.state.source || this.b.state.source),
@@ -382,6 +425,8 @@ export class DeckMixer {
     slot.state.tempo = 1;
     slot.state.gain = 1;
     slot.state.eq = { ...FLAT_EQ };
+    slot.state.filter = { type: 'off', cutoff: 20_000 };
+    slot.filterCoefs = IDENTITY_BIQUAD;
     // A new track invalidates every musical anchor from the old one.
     slot.state.cues = new Array<number | null>(DECK_CUE_SLOTS).fill(null);
     slot.state.loop = null;
@@ -617,6 +662,19 @@ export class DeckMixer {
     this.emit();
   }
 
+  /** DJ filter: 0..1 sweeps low-pass → bypass → high-pass (centre = off). */
+  setFilterKnob(id: DeckId, value: number): void {
+    const slot = this.slot(id);
+    slot.state.filter = filterFromKnob(value);
+    slot.filterCoefs =
+      slot.state.filter.type === 'lpf'
+        ? lowPassCoefs(slot.state.filter.cutoff, 0.9, this.sampleRate)
+        : slot.state.filter.type === 'hpf'
+          ? highPassCoefs(slot.state.filter.cutoff, 0.9, this.sampleRate)
+          : IDENTITY_BIQUAD;
+    this.emit();
+  }
+
   /** Force a resync of the tick loop after the sink reported backpressure. */
   resumeSink(): void {
     if (!this.blocked) return;
@@ -635,6 +693,8 @@ export class DeckMixer {
       slot.consumedFrames = 0;
       slot.fadeFrames = 0;
       slot.coefs = [IDENTITY_BIQUAD, IDENTITY_BIQUAD, IDENTITY_BIQUAD];
+      slot.filterCoefs = IDENTITY_BIQUAD;
+      slot.filterState = [newBiquadState(), newBiquadState()];
       slot.micro = 1;
       slot.frac = 0;
       slot.lastLoop = null;
@@ -870,6 +930,7 @@ export class DeckMixer {
     const coefs = slot.coefs;
     const [lowC, midC, highC] = coefs as [BiquadCoefs, BiquadCoefs, BiquadCoefs];
     const anyEq = !isIdentityBiquad(lowC) || !isIdentityBiquad(midC) || !isIdentityBiquad(highC);
+    const anyFilter = !isIdentityBiquad(slot.filterCoefs);
     // Ramp gain across the frame so slider moves don't click.
     const start = slot.gainNow;
     const step = (target - start) / Math.max(1, outFrames);
@@ -917,6 +978,11 @@ export class DeckMixer {
           l = applyBiquad(highC, l2[0]!, l);
           r = applyBiquad(highC, l2[1]!, r);
         }
+      }
+      // DJ filter sits after the EQ, like a real mixer's filter section.
+      if (anyFilter) {
+        l = applyBiquad(slot.filterCoefs, slot.filterState[0]!, l);
+        r = applyBiquad(slot.filterCoefs, slot.filterState[1]!, r);
       }
       gain += step;
       acc[i * 2] = acc[i * 2]! + l * gain;

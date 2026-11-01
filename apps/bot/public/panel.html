@@ -3170,6 +3170,9 @@
               return;
             }
             switch (msg.type) {
+              case 'deck:state':
+                if (window.__vzDeck) window.__vzDeck(msg.state);
+                break;
               case 'jam:presence':
                 jam = msg;
                 renderJam();
@@ -3997,6 +4000,42 @@
               .catch(function () {});
           });
         }
+      })();
+    </script>
+    <script>
+      /* Live-deck strip: the panel already receives deck:state, so show the decks
+         and a link to the full mixer instead of making you open a second tab. */
+      (function () {
+        var strip = null;
+        var last = 0;
+        window.__vzDeck = function (state) {
+          if (!state) return;
+          var live = !!(state.a && state.a.source) || !!(state.b && state.b.source);
+          if (!strip) {
+            strip = document.createElement('div');
+            strip.id = 'deck-strip';
+            strip.style.cssText =
+              'position:fixed;right:14px;bottom:14px;z-index:60;display:flex;gap:10px;align-items:center;' +
+              'padding:8px 10px;border-radius:12px;font:600 12px/1.25 system-ui,sans-serif;color:#e8ecf8;' +
+              'background:rgba(10,12,24,.9);border:1px solid rgba(255,255,255,.14);' +
+              'box-shadow:0 6px 20px rgba(0,0,0,.45);transition:opacity .3s';
+            strip.innerHTML =
+              '<span id="deck-strip-text" style="opacity:.92"></span>' +
+              '<a href="/deck" style="color:#00f0ff;text-decoration:none;white-space:nowrap">Decks →</a>';
+            document.body.appendChild(strip);
+          }
+          strip.style.opacity = live ? '1' : '0.75';
+          function part(label, slot) {
+            if (!slot || !slot.source) return label + ' —';
+            var bpm = slot.bpm ? Math.round(slot.bpm) + ' BPM' : '…';
+            return label + ' ' + (slot.playing ? '▶' : '⏸') + ' ' + slot.source.title + ' · ' + bpm;
+          }
+          var xf = Math.round((state.crossfader || 0.5) * 100);
+          var lock = state.sync ? ' 🔒' : '';
+          document.getElementById('deck-strip-text').textContent =
+            part('A', state.a) + '  |  ' + part('B', state.b) + '  |  ' + xf + '%' + lock;
+          last = Date.now();
+        };
       })();
     </script>
   </body>
