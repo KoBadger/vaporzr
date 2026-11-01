@@ -12700,6 +12700,12 @@ export function countBulkItems(raw: string): number {
 }
 
 async function resolvePlayInput(query: string): Promise<ResolvedTrack[]> {
+  // Internal uri from the search type-ahead: `youtube:video:<id>`. Resolve the
+  // id directly instead of feeding the scheme back through text search.
+  const ytScheme = /^youtube:video:([A-Za-z0-9_-]{6,})$/.exec(query.trim());
+  if (ytScheme) {
+    return [await resolveYoutubeVideo(ytScheme[1])];
+  }
   if (isDirectMediaUrl(query)) {
     return [await resolveDirectMediaUrl(query)];
   }
