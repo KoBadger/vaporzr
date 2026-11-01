@@ -116,6 +116,10 @@ export interface DeckSlotState {
   drift: number;
   /** DJ filter state (single-knob LPF ↔ off ↔ HPF). */
   filter: DeckFilter;
+  /** Platter behaviour: vinyl = scratch on drag, cdj = bend only. */
+  jogMode: 'vinyl' | 'cdj';
+  /** Snap seeks, cue jumps and loop points to the beat grid. */
+  quantize: boolean;
   /** Cue samples available to the pad bank (controller-provided). */
   samples?: string[];
 }
@@ -173,7 +177,9 @@ export type DeckAction =
   | 'rec-start'
   | 'rec-stop'
   | 'filter'
-  | 'sample';
+  | 'sample'
+  | 'jogMode'
+  | 'quantize';
 
 export interface GuildPermissions {
   roles: Record<PermissionLevel, string[]>;
@@ -335,6 +341,10 @@ export type InboundMessage =
       slot?: number;
       /** Loop length in beats for 'loop-beats'. */
       beats?: number;
+      /** Platter mode for 'jogMode'. */
+      mode?: 'vinyl' | 'cdj';
+      /** Toggle value for 'quantize'. */
+      on?: boolean;
       /** Enable flag for 'lock' / 'loop-toggle'. */
       enabled?: boolean;
       guildId?: string;

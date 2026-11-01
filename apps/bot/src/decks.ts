@@ -257,6 +257,18 @@ export class DeckController {
     return this.seek(deck, pos + deltaMs);
   }
 
+  /** Platter behaviour: `vinyl` scratches on drag, `cdj` bends while held. */
+  setJogMode(deck: DeckId, mode: 'vinyl' | 'cdj'): DeckActionResult {
+    this.mixer.setJogMode(deck, mode);
+    return { ok: true, message: `Deck ${deck.toUpperCase()} platter: ${mode.toUpperCase()}.` };
+  }
+
+  /** Snap cue jumps, seeks and loop points to the beat grid. */
+  setQuantize(deck: DeckId, on: boolean): DeckActionResult {
+    this.mixer.setQuantize(deck, on);
+    return { ok: true, message: `Deck ${deck.toUpperCase()} quantize ${on ? 'on' : 'off'}.` };
+  }
+
   crossfader(x: number): DeckActionResult {
     this.mixer.setCrossfader(x);
     const pct = Math.round(this.mixer.getCrossfader() * 100);

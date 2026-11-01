@@ -15,6 +15,7 @@ import {
   lowShelfCoefs,
   newBiquadState,
   peakingCoefs,
+  snapToBeat,
 } from '../deckMixer.js';
 
 /** RMS of a sine pushed through a filter, for relative-gain assertions. */
@@ -197,6 +198,23 @@ describe('PcmRing', () => {
   });
 });
 
+describe('quantized seeks', () => {
+  it('snaps to the nearest beat at 120 BPM', () => {
+    expect(snapToBeat(1234, 120, true)).toBe(1000);
+    expect(snapToBeat(1260, 120, true)).toBe(1500);
+  });
+
+  it('passes the target through when quantize is off or the tempo is unknown', () => {
+    expect(snapToBeat(1234, 120, false)).toBe(1234);
+    expect(snapToBeat(1234, null, true)).toBe(1234);
+    expect(snapToBeat(1234, 0, true)).toBe(1234);
+  });
+
+  it('never returns a negative position', () => {
+    expect(snapToBeat(-900, 120, true)).toBe(0);
+  });
+});
+
 describe('DeckMixer control surface', () => {
   const mixer = () => new DeckMixer({ sink: () => true });
 
@@ -206,6 +224,16 @@ describe('DeckMixer control surface', () => {
     expect(st.crossfader).toBe(0.5);
     expect(st.a.source).toBeNull();
     expect(st.a.playing).toBe(false);
+  });
+
+  it('arms quantize and vinyl by default, and both are switchable', () => {
+    const m = mixer();
+    expect(m.state().a.jogMode).toBe('vinyl');
+    expect(m.state().b.quantize).toBe(true);
+    m.setJogMode('b', 'cdj');
+    m.setQuantize('a', false);
+    expect(m.state().b.jogMode).toBe('cdj');
+    expect(m.state().a.quantize).toBe(false);
   });
 
   it('clamps the crossfader, trim and EQ into range', () => {

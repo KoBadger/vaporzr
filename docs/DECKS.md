@@ -54,6 +54,8 @@ Each deck card has, top to bottom:
 | Trim | Per-deck gain |
 | Tempo (vertical fader) | atempo, pitch preserved (92–108 %) |
 | Nudge ±25 ms | Manual phase correction |
+| Platter mode | **VINYL** drags the track under the needle; **CDJ** turns a drag into ±ms nudges while it plays. `BAR n.n` under it is the bar at the playhead |
+| Q | Quantize: seeks snap to the beat grid (armed by default) |
 | **Filter** | One knob per deck: low-pass ← **off** → high-pass (centre detent) |
 | 8 cue pads | Tap empty = set at the playhead, tap set = jump, hold = clear (right-click works too) |
 | Loop 1/4 · 1/2 · 1 · 2 · 4 · 8 · On/Off · Exit | Beat-quantised loop, cached as PCM so the wrap is seamless |
