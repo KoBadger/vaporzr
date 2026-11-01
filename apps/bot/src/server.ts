@@ -53,17 +53,19 @@ const vendorCache = new Map<string, { body: Buffer; gzip: boolean }>();
  *
  * Host-locked on purpose: this must never become an open image proxy.
  */
-const ART_HOSTS = new Set([
-  'i.scdn.co',
-  'image-cdn-fa.spotifycdn.com',
-  'image-cdn-ak.spotifycdn.com',
-  'image-cdn-origin.spotifycdn.com',
-  'mosaic.scdn.co',
-  'i.ytimg.com',
-  'img.youtube.com',
-  'yt3.ggpht.com',
-  'lh3.googleusercontent.com',
-].map((h) => h.toLowerCase()));
+const ART_HOSTS = new Set(
+  [
+    'i.scdn.co',
+    'image-cdn-fa.spotifycdn.com',
+    'image-cdn-ak.spotifycdn.com',
+    'image-cdn-origin.spotifycdn.com',
+    'mosaic.scdn.co',
+    'i.ytimg.com',
+    'img.youtube.com',
+    'yt3.ggpht.com',
+    'lh3.googleusercontent.com',
+  ].map((h) => h.toLowerCase()),
+);
 const artCache = new Map<string, { body: Buffer; type: string; at: number }>();
 const ART_TTL_MS = 6 * 60 * 60 * 1000;
 const ART_MAX_BYTES = 6 * 1024 * 1024;
