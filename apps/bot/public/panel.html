@@ -11,11 +11,12 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Vaporzr" />
-    <meta property="og:title" content="Vaporzr — Control Panel" />
+    <meta property="og:title" content="Vaporzr - Control Panel" />
     <meta
       property="og:description"
-      content="Full playback control for the Vaporzr music bot — queue, search, soundboard, visuals."
+      content="Playback, live decks, visuals and listener links for the Vaporzr music bot."
     />
+    <meta name="twitter:card" content="summary" />
     <meta property="og:image" content="{{ORIGIN}}/logo.png" />
     <meta property="og:type" content="website" />
     <style>
@@ -2046,8 +2047,36 @@
           </div>
           <div class="sub" id="viz-now" style="margin: 6px 0 2px">Showing —</div>
           <div class="viz-links">
-            <a class="viz-link" id="link-viz" href="/viz" target="_blank">🌈 Visualizer</a>
-            <a class="viz-link" id="link-viz-fs" href="/viz" target="_blank">🖥️ Fullscreen mode</a>
+            <a
+              class="viz-link"
+              id="link-viz"
+              href="/viz"
+              target="_blank"
+              rel="noopener"
+              title="Full-screen visuals with the live deck overlay"
+            >
+              🌈 Visualizer
+            </a>
+            <a
+              class="viz-link"
+              id="link-deck"
+              href="/deck"
+              target="_blank"
+              rel="noopener"
+              title="Two live decks — cue, loop and blend"
+            >
+              🎛️ Live decks
+            </a>
+            <a
+              class="viz-link"
+              id="link-listen"
+              href="/listen"
+              target="_blank"
+              rel="noopener"
+              title="Hi-fi audio stream in the browser"
+            >
+              🎧 Hi-fi listener
+            </a>
           </div>
         </div>
       </div>
@@ -2105,16 +2134,20 @@
           </div>
           <div class="key-h2">Invite links (single use, expire)</div>
           <div class="key-row">
-            <input id="key-panel" type="text" readonly spellcheck="false" />
+            <input id="key-panel" type="text" readonly spellcheck="false" placeholder="Panel link" />
             <button id="key-copy-panel" data-tip="Copy panel link">⧉ panel</button>
           </div>
           <div class="key-row">
-            <input id="key-viz" type="text" readonly spellcheck="false" />
+            <input id="key-viz" type="text" readonly spellcheck="false" placeholder="Visualizer link" />
             <button id="key-copy-viz" data-tip="Copy visualizer link">⧉ viz</button>
           </div>
           <div class="key-row">
-            <input id="key-listen" type="text" readonly spellcheck="false" />
-            <button id="key-copy-listen" data-tip="Copy listener link">listen</button>
+            <input id="key-listen" type="text" readonly spellcheck="false" placeholder="Listener link" />
+            <button id="key-copy-listen" data-tip="Copy listener link">⧉ listen</button>
+          </div>
+          <div class="key-row">
+            <input id="key-deck" type="text" readonly spellcheck="false" placeholder="Live decks link" />
+            <button id="key-copy-deck" data-tip="Copy the live decks link (rotates monthly)">⧉ decks</button>
           </div>
         </div>
         <p class="key-sub" id="key-note" style="display: none">
@@ -2185,6 +2218,8 @@
           'key-copy-viz',
           'key-listen',
           'key-copy-listen',
+          'key-deck',
+          'key-copy-deck',
           'key-owner',
           'key-note',
           'key-signout',
@@ -3915,6 +3950,7 @@
             el['key-panel'].value = d.panelUrl || '';
             el['key-viz'].value = d.vizUrl || '';
             el['key-listen'].value = d.listenUrl || '';
+            el['key-deck'].value = d.deckUrl || '';
             keyLoaded = true;
             return true;
           } catch (e) {
@@ -3956,6 +3992,9 @@
         };
         el['key-copy-listen'].onclick = function () {
           copyText(el['key-listen'].value, 'Listener link');
+        };
+        el['key-copy-deck'].onclick = function () {
+          copyText(el['key-deck'].value, 'Live decks link');
         };
         el['key-signout'].onclick = function () {
           if (!window.confirm('Sign this device out? A key or invite is needed to return.')) return;
