@@ -99,7 +99,26 @@ async function serveArtwork(url: URL, res: http.ServerResponse): Promise<void> {
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 8000);
-    const upstream = await fetch(key, { signal: ctrl.signal, redirect: 'follow' });
+    let fetchUrl = key;
+    let upstream = await fetch(fetchUrl, { signal: ctrl.signal, redirect: 'manual' });
+    if (upstream.status >= 300 && upstream.status < 400) {
+      const location = upstream.headers.get('location');
+      if (!location) {
+        clearTimeout(timer);
+        res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Artwork unavailable.');
+        return;
+      }
+      const redirected = new URL(location, fetchUrl);
+      if (redirected.protocol !== 'https:' || !ART_HOSTS.has(redirected.hostname)) {
+        clearTimeout(timer);
+        res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Artwork host not allowed.');
+        return;
+      }
+      fetchUrl = redirected.toString();
+      upstream = await fetch(fetchUrl, { signal: ctrl.signal, redirect: 'error' });
+    }
     clearTimeout(timer);
     if (!upstream.ok) {
       res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' });
