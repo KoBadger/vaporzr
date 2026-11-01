@@ -162,6 +162,9 @@
         background: #33333b;
         box-shadow: inset 0 0 0 1px #000;
       }
+      .fn .lbl {
+        white-space: nowrap;
+      }
       .fn:hover {
         color: #fff;
         border-color: #3a3a44;
@@ -1090,8 +1093,8 @@
       <span class="conn"><span class="dot" id="conn"></span><span id="status">connecting…</span></span>
       <span class="spacer"></span>
       <button class="fn" id="btn-sync"><span class="led"></span>SYNC</button>
-      <button class="fn" id="btn-lock"><span class="led"></span>BEAT LOCK</button>
-      <button class="fn rec" id="btn-rec"><span class="led"></span>RECORD</button>
+      <button class="fn" id="btn-lock"><span class="led"></span><span class="lbl">BEAT LOCK</span></button>
+      <button class="fn rec" id="btn-rec"><span class="led"></span><span class="lbl">RECORD</span></button>
       <button class="fn" id="btn-play"><span class="led"></span>PLAY BOTH</button>
       <button class="fn" id="btn-pause">PAUSE</button>
       <button class="fn" id="btn-stop">STOP</button>
@@ -1602,18 +1605,17 @@
           });
           var lock = el('#btn-lock');
           lock.classList.toggle('on', !!state.sync);
-          lock.innerHTML =
-            '<span class="led"></span>' +
-            (state.sync
-              ? 'LOCKED ' + state.sync.follower.toUpperCase() + ' → ' + state.sync.master.toUpperCase()
-              : 'BEAT LOCK');
+          // textContent, not innerHTML: the follower/master ids come from server
+          // state, so never build markup out of them (CodeQL js/xss).
+          el('.lbl', lock).textContent = state.sync
+            ? 'LOCKED ' + String(state.sync.follower).toUpperCase() + ' → ' + String(state.sync.master).toUpperCase()
+            : 'BEAT LOCK';
           var rec = el('#btn-rec');
           rec.classList.toggle('on', !!(state.record && state.record.active));
-          rec.innerHTML =
-            '<span class="led"></span>' +
-            (state.record && state.record.active
+          el('.lbl', rec).textContent =
+            state.record && state.record.active
               ? 'STOP REC ' + Math.round(state.record.elapsedMs / 1000) + 'S'
-              : 'RECORD');
+              : 'RECORD';
           // Sample bank pads come from the server's data/samples folder.
           var samples = (state.a && state.a.samples) || [];
           var key = samples.join('|');
