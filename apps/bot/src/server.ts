@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, domainToASCII } from 'node:url';
 import { config } from '@vaporzr/core/config';
 import {
   buildAuthorizeUrl,
@@ -53,17 +53,19 @@ const vendorCache = new Map<string, { body: Buffer; gzip: boolean }>();
  *
  * Host-locked on purpose: this must never become an open image proxy.
  */
-const ART_HOSTS = new Set([
-  'i.scdn.co',
-  'image-cdn-fa.spotifycdn.com',
-  'image-cdn-ak.spotifycdn.com',
-  'image-cdn-origin.spotifycdn.com',
-  'mosaic.scdn.co',
-  'i.ytimg.com',
-  'img.youtube.com',
-  'yt3.ggpht.com',
-  'lh3.googleusercontent.com',
-]);
+const ART_HOSTS = new Set(
+  [
+    'i.scdn.co',
+    'image-cdn-fa.spotifycdn.com',
+    'image-cdn-ak.spotifycdn.com',
+    'image-cdn-origin.spotifycdn.com',
+    'mosaic.scdn.co',
+    'i.ytimg.com',
+    'img.youtube.com',
+    'yt3.ggpht.com',
+    'lh3.googleusercontent.com',
+  ].map((h) => h.toLowerCase()),
+);
 const artCache = new Map<string, { body: Buffer; type: string; at: number }>();
 const ART_TTL_MS = 6 * 60 * 60 * 1000;
 const ART_MAX_BYTES = 6 * 1024 * 1024;
@@ -80,12 +82,19 @@ async function serveArtwork(url: URL, res: http.ServerResponse): Promise<void> {
     res.end('Bad artwork URL.');
     return;
   }
-  if (target.protocol !== 'https:' || !ART_HOSTS.has(target.hostname)) {
+  const normalizedHost = domainToASCII(target.hostname).toLowerCase();
+  if (target.protocol !== 'https:' || !normalizedHost || !ART_HOSTS.has(normalizedHost)) {
     res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('Artwork host not allowed.');
     return;
   }
-  const key = target.toString();
+  // Rebuild from validated components so the fetched origin is server-controlled.
+  // Assigning pathname/search (instead of resolving a relative URL) is what keeps
+  // a "//host" path from being read as a fresh origin.
+  const safeTarget = new URL(`https://${normalizedHost}`);
+  safeTarget.pathname = target.pathname;
+  safeTarget.search = target.search;
+  const key = safeTarget.toString();
   const hit = artCache.get(key);
   if (hit && Date.now() - hit.at < ART_TTL_MS) {
     res.writeHead(200, {
@@ -99,7 +108,31 @@ async function serveArtwork(url: URL, res: http.ServerResponse): Promise<void> {
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 8000);
-    const upstream = await fetch(key, { signal: ctrl.signal, redirect: 'follow' });
+    let fetchUrl = safeTarget.toString();
+    let upstream = await fetch(fetchUrl, { signal: ctrl.signal, redirect: 'manual' });
+    if (upstream.status >= 300 && upstream.status < 400) {
+      const location = upstream.headers.get('location');
+      if (!location) {
+        clearTimeout(timer);
+        res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Artwork unavailable.');
+        return;
+      }
+      const redirected = new URL(location, fetchUrl);
+      const redirectHost = domainToASCII(redirected.hostname).toLowerCase();
+      if (redirected.protocol !== 'https:' || !redirectHost || !ART_HOSTS.has(redirectHost)) {
+        clearTimeout(timer);
+        res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Artwork host not allowed.');
+        return;
+      }
+      // Same rebuild as above: the hop's origin comes from the allowlisted host.
+      const hop = new URL(`https://${redirectHost}`);
+      hop.pathname = redirected.pathname;
+      hop.search = redirected.search;
+      fetchUrl = hop.toString();
+      upstream = await fetch(fetchUrl, { signal: ctrl.signal, redirect: 'error' });
+    }
     clearTimeout(timer);
     if (!upstream.ok) {
       res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' });
