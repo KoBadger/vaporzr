@@ -550,9 +550,25 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
       s.onerror=function(){jamQrLoading=false};
       document.head.appendChild(s);
     }
+    /* Resolve the join target to a safe absolute URL. `path` arrives over the
+       socket, so a `javascript:` value here would run on click and any other
+       scheme could bounce a viewer off-site (CodeQL js/xss,
+       js/client-side-unvalidated-url-redirection). https is fine anywhere —
+       the public jam tunnel lives on its own origin — http only for loopback
+       dev. */
+    function jamJoinUrl(path){
+      var u;
+      try{u=new URL(String(path||''),location.origin)}catch(e){return null}
+      var host=u.hostname;
+      var loopback=host==='127.0.0.1'||host==='localhost'||host==='::1'||host==='[::1]';
+      if(u.protocol==='https:')return u.href;
+      if(u.protocol==='http:'&&loopback)return u.href;
+      return null;
+    }
     function drawJamQr(path){
       if(!window.qrcode||typeof window.qrcode!=='function')return;
-      var url=/^https?:/i.test(path)?path:(location.origin+path);
+      var url=jamJoinUrl(path);
+      if(!url)return;
       if(!jamQrCanvas){
         /* The wrapper carries the position (see #jam-qr-wrap) and holds the
            clickable URL under the code: a desktop viewer cannot scan the screen
