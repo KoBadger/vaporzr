@@ -139,6 +139,19 @@ export class Bridge {
    */
   onSampleUpload:
     ((name: string, data: Buffer) => Promise<{ ok: boolean; message?: string; samples?: string[] }>) | null = null;
+  /** Sample library + saved layouts, for the deck page's library panel. */
+  onSampleBank:
+    | ((
+        action: 'list' | 'save' | 'apply' | 'delete',
+        name?: string,
+      ) => {
+        ok: boolean;
+        library?: Array<{ file: string; name: string; category: string }>;
+        pads?: Array<string | null>;
+        setups?: string[];
+        message?: string;
+      })
+    | null = null;
   onDeckFileUpload:
     | ((
         guildId: string | undefined,

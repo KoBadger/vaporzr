@@ -178,6 +178,8 @@ export type DeckAction =
   | 'rec-stop'
   | 'filter'
   | 'sample'
+  | 'sampleAssign'
+  | 'sampleSwap'
   | 'jogMode'
   | 'quantize';
 
@@ -345,6 +347,11 @@ export type InboundMessage =
       mode?: 'vinyl' | 'cdj';
       /** Toggle value for 'quantize'. */
       on?: boolean;
+      /** Library file (relative to data/samples) for 'sampleAssign'. */
+      file?: string;
+      /** Pad pair for 'sampleSwap'. */
+      from?: number;
+      to?: number;
       /** Enable flag for 'lock' / 'loop-toggle'. */
       enabled?: boolean;
       guildId?: string;

@@ -15,6 +15,7 @@ import {
   type DeckSyncState,
 } from '@vaporzr/core/deckMixer';
 import { downloadToTempFile } from '@vaporzr/core/mediaDownload';
+import { writeJsonAtomicSync } from '@vaporzr/core/jsonFile';
 import type { ResolvedTrack } from '@vaporzr/core/spotify';
 import { probeDuration } from '@vaporzr/core/suno';
 import { estimateTempo } from '@vaporzr/core/tempo';
@@ -61,6 +62,27 @@ const CUE_PREROLL_MS = 140;
 const REC_BYTES_PER_MS = 192;
 /** Longest one-shot the sample bank will hold in memory. */
 const SAMPLE_MAX_SEC = 12;
+/** Pads on the sample bank. */
+export const SAMPLE_PADS = 8;
+
+/** One entry in the on-disk sample library (`data/samples`, subfolders = categories). */
+export interface SampleLibraryItem {
+  /** Path relative to the samples dir, forward slashes. */
+  file: string;
+  /** Display name (basename without extension). */
+  name: string;
+  /** Subfolder, or 'samples' for the root. */
+  category: string;
+}
+
+interface SampleLayoutFile {
+  pads: Array<string | null>;
+  setups: Record<string, Array<string | null>>;
+}
+
+function emptyLayout(): SampleLayoutFile {
+  return { pads: new Array(SAMPLE_PADS).fill(null), setups: {} };
+}
 
 /**
  * Copy the bundled starter one-shots into `<dataDir>/samples` once. Existing
@@ -105,7 +127,9 @@ export class DeckController {
   private fileCache = new Map<string, string>();
   /** One-shot pad bank: file path -> decoded 48 kHz stereo PCM. */
   private sampleCache = new Map<string, { pcm: Buffer; at: number }>();
-  private sampleListCache: { files: string[]; at: number } | null = null;
+  private sampleListCache: { items: SampleLibraryItem[]; at: number } | null = null;
+  /** Pad layout + named setups (`data/samples.json`), loaded lazily. */
+  private sampleLayout: SampleLayoutFile | null = null;
   /** Tracks loaded this session, for the recording summary. */
   private history: Array<{ title: string; artist: string; at: number }> = [];
   private readonly opts: DeckControllerOptions;
@@ -136,7 +160,7 @@ export class DeckController {
         }
       : null;
     const base = this.mixer.state();
-    const samples = this.sampleFiles().map((f) => path.basename(f).replace(/\.[^.]+$/, ''));
+    const samples = this.samplePadNames();
     for (const slot of [base.a, base.b]) slot.samples = samples;
     return { ...base, sync, record: { ...this.record } };
   }
@@ -386,39 +410,183 @@ export class DeckController {
 
   /* ------------------------------------------------------------ sample bank -- */
 
-  /** One-shots in `<dataDir>/samples` (sorted), cached briefly. */
-  sampleFiles(): string[] {
+  /**
+   * One-shots under `<dataDir>/samples`, recursively. A subfolder is a
+   * category, so `samples/drums/kick.wav` shows up under **drums**.
+   */
+  sampleLibrary(): SampleLibraryItem[] {
     const cached = this.sampleListCache;
-    if (cached && Date.now() - cached.at < 8_000) return cached.files;
-    let files: string[] = [];
-    try {
-      const dir = path.join(config.dataDir, 'samples');
-      files = fs
-        .readdirSync(dir)
-        .filter((f) => /\.(wav|mp3|ogg|flac|m4a|opus)$/i.test(f))
-        .sort()
-        .map((f) => path.join(dir, f));
-    } catch {
-      files = [];
-    }
-    this.sampleListCache = { files, at: Date.now() };
-    return files;
+    if (cached && Date.now() - cached.at < 8_000) return cached.items;
+    const root = path.join(config.dataDir, 'samples');
+    const items: SampleLibraryItem[] = [];
+    const walk = (dir: string, rel: string): void => {
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        if (entry.name.startsWith('.')) continue;
+        const abs = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          walk(abs, rel ? `${rel}/${entry.name}` : entry.name);
+          continue;
+        }
+        if (!/\.(wav|mp3|ogg|flac|m4a|opus)$/i.test(entry.name)) continue;
+        const file = rel ? `${rel}/${entry.name}` : entry.name;
+        items.push({
+          file,
+          name: entry.name.replace(/\.[^.]+$/, ''),
+          category: rel || 'samples',
+        });
+      }
+    };
+    walk(root, '');
+    items.sort((a, b) =>
+      a.category === b.category ? a.name.localeCompare(b.name) : a.category.localeCompare(b.category),
+    );
+    this.sampleListCache = { items, at: Date.now() };
+    return items;
   }
 
-  /** Drop cached listing/PCM after an upload, and hand back the new pad list. */
+  private layoutPath(): string {
+    return path.join(config.dataDir, 'samples.json');
+  }
+
+  private loadLayout(): SampleLayoutFile {
+    if (this.sampleLayout) return this.sampleLayout;
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.layoutPath(), 'utf8')) as Partial<SampleLayoutFile>;
+      const pads = Array.isArray(raw.pads) ? raw.pads.slice(0, SAMPLE_PADS) : [];
+      while (pads.length < SAMPLE_PADS) pads.push(null);
+      this.sampleLayout = {
+        pads: pads.map((p) => (typeof p === 'string' && p ? p : null)),
+        setups: raw.setups && typeof raw.setups === 'object' ? raw.setups : {},
+      };
+    } catch {
+      this.sampleLayout = emptyLayout();
+    }
+    return this.sampleLayout;
+  }
+
+  private saveLayout(): void {
+    const layout = this.loadLayout();
+    try {
+      writeJsonAtomicSync(this.layoutPath(), layout);
+    } catch {
+      /* a failed write keeps the in-memory layout, which still plays */
+    }
+  }
+
+  /** The eight pads, falling back to the first library files when unset. */
+  samplePads(): Array<string | null> {
+    const layout = this.loadLayout();
+    const known = new Set(this.sampleLibrary().map((i) => i.file));
+    const pads: Array<string | null> = layout.pads.map((p) => (p && known.has(p) ? p : null));
+    const anyAssigned = pads.some((p) => p !== null);
+    if (!anyAssigned) {
+      this.sampleLibrary()
+        .slice(0, SAMPLE_PADS)
+        .forEach((item, i) => {
+          pads[i] = item.file;
+        });
+    }
+    return pads;
+  }
+
+  /** Pad labels for the deck page (empty string = unassigned). */
+  private samplePadNames(): string[] {
+    return this.samplePads().map((file) => (file ? path.basename(file).replace(/\.[^.]+$/, '') : ''));
+  }
+
+  /** Drop cached listings/PCM after an upload, and hand back the new pad names. */
   refreshSamples(): string[] {
     this.sampleListCache = null;
     this.sampleCache.clear();
-    return this.sampleFiles().map((f) => path.basename(f).replace(/\.[^.]+$/, ''));
+    return this.samplePadNames();
+  }
+
+  /** Put a library file on a pad. */
+  assignSample(slot: number, file: string): DeckActionResult {
+    const pad = Math.round(slot);
+    if (!Number.isFinite(pad) || pad < 1 || pad > SAMPLE_PADS) {
+      return { ok: false, message: `The bank has ${SAMPLE_PADS} pads.` };
+    }
+    const clean = String(file ?? '').replace(/\\/g, '/');
+    const item = this.sampleLibrary().find((i) => i.file === clean);
+    if (!item) return { ok: false, message: `No sample called \`${clean}\`.` };
+    const layout = this.loadLayout();
+    layout.pads[pad - 1] = item.file;
+    this.saveLayout();
+    return { ok: true, message: `Pad ${pad} → ${item.name}` };
+  }
+
+  /** Swap two pads (drag one pad onto another). */
+  swapSamples(from: number, to: number): DeckActionResult {
+    const a = Math.round(from);
+    const b = Math.round(to);
+    if (![a, b].every((n) => Number.isFinite(n) && n >= 1 && n <= SAMPLE_PADS)) {
+      return { ok: false, message: `Pads are 1-${SAMPLE_PADS}.` };
+    }
+    if (a === b) return { ok: true, message: 'Same pad.' };
+    const pads = this.samplePads();
+    const tmp = pads[a - 1] ?? null;
+    const layout = this.loadLayout();
+    layout.pads = pads;
+    layout.pads[a - 1] = pads[b - 1] ?? null;
+    layout.pads[b - 1] = tmp;
+    this.saveLayout();
+    return { ok: true, message: `Swapped pads ${a} and ${b}.` };
+  }
+
+  /** Named pad layouts, newest last. */
+  sampleSetups(): string[] {
+    return Object.keys(this.loadLayout().setups).sort((a, b) => a.localeCompare(b));
+  }
+
+  saveSampleSetup(name: string): DeckActionResult {
+    const label = String(name ?? '')
+      .trim()
+      .slice(0, 40);
+    if (!label) return { ok: false, message: 'Give the setup a name first.' };
+    const layout = this.loadLayout();
+    layout.pads = this.samplePads();
+    layout.setups[label] = [...layout.pads];
+    this.saveLayout();
+    return { ok: true, message: `Saved sample setup **${label}**.` };
+  }
+
+  applySampleSetup(name: string): DeckActionResult {
+    const label = String(name ?? '').trim();
+    const stored = this.loadLayout().setups[label];
+    if (!stored) return { ok: false, message: `No setup called \`${label}\`.` };
+    const known = new Set(this.sampleLibrary().map((i) => i.file));
+    const layout = this.loadLayout();
+    layout.pads = Array.from({ length: SAMPLE_PADS }, (_, i) => {
+      const file = stored[i];
+      return file && known.has(file) ? file : null;
+    });
+    this.saveLayout();
+    return { ok: true, message: `Loaded sample setup **${label}**.` };
+  }
+
+  deleteSampleSetup(name: string): DeckActionResult {
+    const label = String(name ?? '').trim();
+    const layout = this.loadLayout();
+    if (!layout.setups[label]) return { ok: false, message: `No setup called \`${label}\`.` };
+    delete layout.setups[label];
+    this.saveLayout();
+    return { ok: true, message: `Deleted sample setup **${label}**.` };
   }
 
   /** Fire pad `slot` (1-based) from the sample bank over the live mix. */
   async playSample(slot: number): Promise<DeckActionResult> {
-    const files = this.sampleFiles();
-    const file = files[Math.round(slot) - 1];
-    if (!file) return { ok: false, message: `No sample in pad ${slot} — drop files in \`data/samples/\`.` };
+    const pads = this.samplePads();
+    const file = pads[Math.round(slot) - 1];
+    if (!file) return { ok: false, message: `Pad ${slot} is empty — drag a sample onto it.` };
     if (!this.engaged) return { ok: false, message: 'Load a deck first.' };
-    const pcm = await this.samplePcm(file);
+    const pcm = await this.samplePcm(path.join(config.dataDir, 'samples', file));
     if (!pcm) return { ok: false, message: `Couldn't decode ${path.basename(file)}.` };
     this.opts.voice.queueSfxPcm(pcm);
     return { ok: true, message: `▶ ${path.basename(file).replace(/\.[^.]+$/, '')}` };
