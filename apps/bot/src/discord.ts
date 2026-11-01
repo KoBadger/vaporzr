@@ -107,6 +107,7 @@ import { vizTunnel } from './tunnel.js';
 import { renderPanelIconPng, PANEL_ICON_FALLBACKS } from './panelIcons.js';
 import { jamJoinLinks, type Bridge } from './bridge.js';
 import { DeckController } from './decks.js';
+import { taste } from './taste.js';
 import type { DeckEq, DeckId, InboundMessage, PermissionLevel, TrackInfo, PlaybackState } from '@vaporzr/shared';
 import * as EW from '@vaporzr/core/endlesswave';
 import { playlistStore } from '@vaporzr/core/playlists';
@@ -1144,6 +1145,8 @@ export class DiscordBot {
         // and counts as "played through" for any duel it was part of.
         this.resolveStump(s, ended, false);
         this.noteDuelOutcome(s, ended, false);
+        // Long-lived taste: a track that played through is a mild positive.
+        if (ended?.artists?.[0]) taste.note(s.guildId, ended.artists[0], 1);
         if (!EW.isAutoActive(s.endlessWave)) return;
         void this.waveTrackEnded(s, ended).catch((err) => {
           console.warn(`[endlesswave] on-end failed: ${err instanceof Error ? err.message : err}`);
@@ -1159,7 +1162,10 @@ export class DiscordBot {
         if (EW.isAutoActive(s.endlessWave) && skipped.addedBy === 'endless-wave') {
           const playedMs = s.queue.getState().positionMs ?? 0;
           if (playedMs < 20_000) {
-            for (const artist of skipped.artists ?? []) EW.penaliseArtist(s.endlessWave, artist);
+            for (const artist of skipped.artists ?? []) {
+              EW.penaliseArtist(s.endlessWave, artist);
+              taste.note(s.guildId, artist, -1);
+            }
             console.log(
               `[endlesswave] skip feedback: muted "${truncate(skipped.artists.join(', ') || skipped.name, 60)}" for 45 min (skipped at ${Math.round(playedMs / 1000)}s)`,
             );
@@ -1328,6 +1334,12 @@ export class DiscordBot {
           break;
         case 'tempo':
           quiet(decks.tempo(deck, msg.tempo ?? 1));
+          break;
+        case 'filter':
+          quiet(decks.filter(deck, msg.value ?? 0.5));
+          break;
+        case 'sample':
+          report(await decks.playSample(msg.slot ?? 1));
           break;
         case 'cue-set':
           report(decks.setCue(deck, msg.slot ?? 1));
@@ -7752,9 +7764,11 @@ export class DiscordBot {
       if (attempts > 0) {
         const pct = Math.round((queued / attempts) * 100);
         const skipped = s.endlessWave.penalisedArtists.size;
+        const t = taste.summary(s.guildId);
         lines.push(
           `• refills: ${queued}/${attempts} found a track (${pct}%)${skipped ? ` · ${skipped} artist${skipped === 1 ? '' : 's'} muted by skips` : ''}`,
         );
+        if (t.muted || t.liked) lines.push(`• taste memory: ${t.liked} liked · ${t.muted} muted (all-time)`);
       }
     }
     lines.push('Change with `V@autoplay off|basic|smart` · `V@autoplay count 5` · `/autoplay`.');
@@ -10102,6 +10116,27 @@ export class DiscordBot {
         if (/^(stop|off|end)$/i.test(value)) return (await decks.recStop()).message;
         return decks.recStart().message;
       }
+      case 'filter': {
+        const v = value === 'off' ? 50 : Number(value.replace('%', ''));
+        if (!Number.isFinite(v)) return 'Usage: `V@deck filter a 30` (0 = closed LPF, 50 = off, 100 = open HPF).';
+        return decks.filter(deck, Math.max(0, Math.min(100, v)) / 100).message;
+      }
+      case 'sample':
+      case 'smp': {
+        const samples = decks.sampleFiles().map((f) => path.basename(f).replace(/\.[^.]+$/, ''));
+        if (!value) {
+          if (!samples.length) {
+            return `No samples yet — drop one-shots into \`/app/data/samples/\` on the server, then \`V@deck samples\`.`;
+          }
+          return `🎹 **Sample bank** (${samples.length})\n${samples
+            .slice(0, 16)
+            .map((s, i) => `${i + 1}. ${s}`)
+            .join('\n')}\n\`V@deck sample <n>\``;
+        }
+        const n = Number(value);
+        if (!Number.isFinite(n) || n < 1) return 'Usage: `V@deck sample 3` (see `V@deck sample` for the list).';
+        return (await decks.playSample(n)).message;
+      }
       case 'status':
       case 'now':
       default: {
@@ -12089,7 +12124,14 @@ export class DiscordBot {
           failed.add(chosen.uri);
           const r = await EW.resolveCandidate(chosen);
           if (!r) {
-            console.log(`[endlesswave] could not resolve "${chosen.name}" — trying another`);
+            console.log(`[endlesswave] could not resolve "${chosen.name}" - trying another`);
+            continue;
+          }
+          // Long-lived taste: this room has skipped this artist enough times
+          // that a fresh pick from them is a waste of a queue slot.
+          if (taste.muted(s.guildId, r.artists[0] ?? '')) {
+            console.log(`[autoplay] "${r.name}" — artist muted by this room's taste memory, trying another`);
+            failed.add(chosen.uri);
             continue;
           }
           // Dedupe again AFTER resolution: different picks (e.g. "Blue Monday

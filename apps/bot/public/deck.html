@@ -515,6 +515,11 @@
     </div>
 
     <section class="mixer">
+      <div class="xfade-head"><span>FILTER A</span><span class="muted">LPF ← off → HPF</span><span>FILTER B</span></div>
+      <div class="row">
+        <input type="range" data-filter="a" min="0" max="100" step="1" value="50" style="flex: 1" />
+        <input type="range" data-filter="b" min="0" max="100" step="1" value="50" style="flex: 1" />
+      </div>
       <div class="xfade-head"><span>A</span><span id="xfade-val">50%</span><span>B</span></div>
       <input type="range" id="xfade" min="0" max="100" step="1" value="50" />
       <div class="footer">
@@ -530,6 +535,8 @@
         <span id="midi-status" class="muted">MIDI: waiting for a device…</span>
       </div>
       <div class="row pads" id="fx-pads"></div>
+      <div class="xfade-head"><span>SAMPLE BANK</span><span class="muted" id="samples-count"></span></div>
+      <div class="row pads" id="sample-pads"></div>
       <div class="footer">
         <span class="muted">
           Keys: <span class="kbd">space</span> play/pause · <span class="kbd">←</span><span class="kbd">→</span> fader ·
@@ -548,6 +555,8 @@
         var localClock = { at: 0, pos: { a: 0, b: 0 } };
         var lastSent = {};
         var waves = { a: null, b: null };
+        var lastSamplesKey = '';
+        var scrub = null;
         var FX = [
           { id: 'riser', label: 'RISER' },
           { id: 'reverse', label: 'REVERSE' },
@@ -651,8 +660,18 @@
             g.font = '9px system-ui, sans-serif';
             g.fillText(String(i + 1), x + 2, 10);
           });
-          // Playhead.
+          // Playhead (or the drag marker while scrubbing).
           var pos = slot.positionMs + (slot.playing && localClock.at ? Date.now() - localClock.at : 0);
+          if (scrub && scrub.deck === id) {
+            g.strokeStyle = '#fff';
+            g.setLineDash([3, 3]);
+            g.beginPath();
+            g.moveTo(scrub.pct * w, 0);
+            g.lineTo(scrub.pct * w, h);
+            g.stroke();
+            g.setLineDash([]);
+            return;
+          }
           var px = Math.min(w - 1, (pos / dur) * w);
           g.fillStyle = '#fff';
           g.fillRect(px, 0, 2, h);
@@ -707,6 +726,39 @@
             state.record && state.record.active
               ? '■ Stop rec ' + Math.round(state.record.elapsedMs / 1000) + 's'
               : 'Record';
+          // Sample bank pads come from the server's data/samples folder.
+          var samples = (state.a && state.a.samples) || [];
+          var key = samples.join('|');
+          if (key !== lastSamplesKey) {
+            lastSamplesKey = key;
+            var bank = el('#sample-pads');
+            bank.innerHTML = '';
+            el('#samples-count').textContent = samples.length
+              ? samples.length + ' loaded'
+              : 'empty — drop files in data/samples';
+            samples.slice(0, 8).forEach(function (name, i) {
+              var b = document.createElement('button');
+              b.className = 'mini pad';
+              b.textContent = i + 1 + ' ' + name.slice(0, 10);
+              b.title = name;
+              b.onclick = function () {
+                control('sample', { slot: i + 1 });
+              };
+              bank.appendChild(b);
+            });
+          }
+          // Filter knobs mirror the server value.
+          all('[data-filter]').forEach(function (input) {
+            var fid = input.getAttribute('data-filter');
+            var f = state[fid] && state[fid].filter;
+            if (!f) return;
+            var v =
+              f.type === 'off'
+                ? 50
+                : 50 + (f.type === 'hpf' ? 1 : -1) * (50 - (50 * Math.log(f.cutoff / 180)) / Math.log(9000 / 180));
+            v = Math.max(0, Math.min(100, Math.round(v)));
+            if (document.activeElement !== input) input.value = v;
+          });
           var xf = el('#xfade');
           if (document.activeElement !== xf) xf.value = Math.round(state.crossfader * 100);
           el('#xfade-val').textContent = Math.round(state.crossfader * 100) + '%';
@@ -834,6 +886,12 @@
             el('#xfade-val').textContent = e.target.value + '%';
             controlThrottled('xfade', 'crossfader', { value: Number(e.target.value) / 100 });
           });
+          all('[data-filter]').forEach(function (input) {
+            var deckId = input.getAttribute('data-filter');
+            input.addEventListener('input', function (e) {
+              controlThrottled('filter:' + deckId, 'filter', { deck: deckId, value: Number(e.target.value) / 100 });
+            });
+          });
           el('#btn-sync').onclick = function () {
             control('sync');
           };
@@ -856,13 +914,33 @@
           };
 
           all('[data-role="wave"]').forEach(function (cv) {
-            cv.onclick = function (e) {
-              var id = cv.closest('.deck').getAttribute('data-deck');
-              if (!state || !state[id].durationMs) return;
+            var id = cv.closest('.deck').getAttribute('data-deck');
+            function pctAt(e) {
               var r = cv.getBoundingClientRect();
-              var pct = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
-              control('seek', { deck: id, positionMs: pct * state[id].durationMs });
-            };
+              return Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+            }
+            cv.addEventListener('pointerdown', function (e) {
+              if (!state || !state[id].durationMs) return;
+              try {
+                cv.setPointerCapture(e.pointerId);
+              } catch (err) {}
+              scrub = { deck: id, pct: pctAt(e) };
+              paint();
+            });
+            cv.addEventListener('pointermove', function (e) {
+              if (!scrub || scrub.deck !== id) return;
+              scrub.pct = pctAt(e);
+              paint();
+            });
+            cv.addEventListener('pointerup', function (e) {
+              if (!scrub || scrub.deck !== id) return;
+              var p = pctAt(e);
+              scrub = null;
+              control('seek', { deck: id, positionMs: p * state[id].durationMs });
+            });
+            cv.addEventListener('pointercancel', function () {
+              if (scrub && scrub.deck === id) scrub = null;
+            });
           });
 
           // FX / sample bank — these ride the same soundboard the panel uses, and
@@ -929,6 +1007,9 @@
                         var mdeck = cc < 7 ? 'a' : 'b';
                         var band = bands[(cc - 4) % 3];
                         controlThrottled('midi:' + mdeck + band, 'eq', { deck: mdeck, band: band, db: -40 + v * 46 });
+                      } else if (cc === 10 || cc === 11) {
+                        var fdeck = cc === 10 ? 'a' : 'b';
+                        controlThrottled('midi:filter:' + fdeck, 'filter', { deck: fdeck, value: v });
                       }
                     } else if (status === 0x90 && val > 0) {
                       var idx = cc - 36;

@@ -6,6 +6,9 @@ import {
   PcmRing,
   applyBiquad,
   beatLoopRegion,
+  filterFromKnob,
+  highPassCoefs,
+  lowPassCoefs,
   crossfaderGains,
   floatToInt16,
   highShelfCoefs,
@@ -116,6 +119,33 @@ describe('deck EQ biquads', () => {
     expect(boosted).toBeGreaterThan(1.6);
     expect(untouched).toBeGreaterThan(0.85);
     expect(untouched).toBeLessThan(1.15);
+  });
+});
+
+describe('DJ filter', () => {
+  it('bypasses at the centre and sweeps both ways from it', () => {
+    expect(filterFromKnob(0.5).type).toBe('off');
+    expect(filterFromKnob(0.4).type).toBe('lpf');
+    expect(filterFromKnob(0.6).type).toBe('hpf');
+    const closed = filterFromKnob(0);
+    expect(closed.type).toBe('lpf');
+    expect(closed.cutoff).toBeLessThan(250);
+    const open = filterFromKnob(1);
+    expect(open.type).toBe('hpf');
+    expect(open.cutoff).toBeGreaterThan(8000);
+  });
+
+  it('is monotonic toward the centre', () => {
+    const a = filterFromKnob(0.1).cutoff;
+    const b = filterFromKnob(0.3).cutoff;
+    expect(b).toBeGreaterThan(a);
+  });
+
+  it('low-pass kills treble, high-pass kills bass', () => {
+    const lp = filteredRms(8000, lowPassCoefs(300)) / sineRms(8000);
+    const hp = filteredRms(80, highPassCoefs(6000)) / sineRms(80);
+    expect(lp).toBeLessThan(0.15);
+    expect(hp).toBeLessThan(0.15);
   });
 });
 

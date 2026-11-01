@@ -39,6 +39,7 @@ Each deck card has, top to bottom:
 | Trim | Per-deck gain |
 | Speed | atempo, pitch preserved (92–108 %) |
 | Nudge ±25 ms | Manual phase correction |
+| **Filter** | One knob per deck: low-pass ← **off** → high-pass (centre detent) |
 | 8 cue pads | Click empty = set at playhead, click set = jump, right-click = clear |
 | Loop 1 / 4 / 8 / 16 · Off | Beat-quantised loop, cached as PCM so the wrap is seamless |
 
@@ -72,13 +73,26 @@ Tips that actually matter through Discord:
 
 ---
 
-## 4. FX bank
+## 4. FX bank and sample bank
 
 Eight pads above the fader: `riser`, `reverse`, `drop`, `boom`, `zap`, `airhorn`,
 `applause`, `countdown`. They come from the bot's soundboard and are mixed over
 the deck output, so they work mid-mix without interrupting playback.
 
-Keys: `q w e r t y u i` fire them in order.
+Below them is the **sample bank**: every audio file in the bot's
+`data/samples/` folder becomes a pad (first eight shown, more via
+`V@deck sample <n>`). Drop your own one-shots there — Splice downloads, drum
+hits, vocal stabs — and they're live without a restart (the list refreshes every
+few seconds).
+
+Keys: `q w e r t y u i` fire the FX pads in order.
+
+## 4a. DJ filter
+
+Each deck has a single filter knob: **left of centre closes a low-pass**
+(down to 180 Hz), **centre is bypass**, **right of centre opens a high-pass**
+(up to 9 kHz). Sweeping it into a drop is the classic CDJ move — kill the bass
+with the HPF, then whip it back to centre on the downbeat.
 
 ---
 
@@ -92,6 +106,9 @@ Keys: `q w e r t y u i` fire them in order.
 | `shift`+`1`–`8` | Same on deck B |
 | `q w e r t y u i` | FX pads |
 
+Cue jumps start **140 ms early** on purpose: Discord's jitter buffer adds roughly
+that much, so the hit lands on the beat instead of after it.
+
 ---
 
 ## 6. MIDI
@@ -104,6 +121,7 @@ Plug in any class-compliant controller (nothing to configure). Default mapping:
 | CC 2 / CC 3 | Trim A / B |
 | CC 4–6 | EQ A: low, mid, high |
 | CC 7–9 | EQ B: low, mid, high |
+| CC 10 / 11 | DJ filter A / B (centre = bypass) |
 | Note 36–43 | FX pads 1–8 |
 | Note 48–55 | Cue pads 1–8 on deck A |
 
@@ -137,7 +155,9 @@ V@deck cross 60            0 = A, 100 = B
 V@deck gain a 85           trim %
 V@deck eq a low kill       or V@deck eq a low -12
 V@deck tempo a 104         speed %
-V@deck rec | rec stop      record the set
+V@deck filter a 30         0 = closed LPF, 50 = off, 100 = open HPF
+V@deck sample              list the sample bank     V@deck sample 3   fire pad 3
+V@deck rec | rec stop      record the set (posts track count + top artists)
 ```
 
 `V@deck` shortcuts: `V@dk`, `V@decks`.
