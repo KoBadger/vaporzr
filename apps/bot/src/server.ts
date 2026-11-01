@@ -89,7 +89,11 @@ async function serveArtwork(url: URL, res: http.ServerResponse): Promise<void> {
     return;
   }
   // Rebuild from validated components so the fetched origin is server-controlled.
-  const safeTarget = new URL(`${target.pathname}${target.search}`, `https://${normalizedHost}`);
+  // Assigning pathname/search (instead of resolving a relative URL) is what keeps
+  // a "//host" path from being read as a fresh origin.
+  const safeTarget = new URL(`https://${normalizedHost}`);
+  safeTarget.pathname = target.pathname;
+  safeTarget.search = target.search;
   const key = safeTarget.toString();
   const hit = artCache.get(key);
   if (hit && Date.now() - hit.at < ART_TTL_MS) {
@@ -115,13 +119,18 @@ async function serveArtwork(url: URL, res: http.ServerResponse): Promise<void> {
         return;
       }
       const redirected = new URL(location, fetchUrl);
-      if (redirected.protocol !== 'https:' || !ART_HOSTS.has(redirected.hostname)) {
+      const redirectHost = domainToASCII(redirected.hostname).toLowerCase();
+      if (redirected.protocol !== 'https:' || !redirectHost || !ART_HOSTS.has(redirectHost)) {
         clearTimeout(timer);
         res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
         res.end('Artwork host not allowed.');
         return;
       }
-      fetchUrl = redirected.toString();
+      // Same rebuild as above: the hop's origin comes from the allowlisted host.
+      const hop = new URL(`https://${redirectHost}`);
+      hop.pathname = redirected.pathname;
+      hop.search = redirected.search;
+      fetchUrl = hop.toString();
       upstream = await fetch(fetchUrl, { signal: ctrl.signal, redirect: 'error' });
     }
     clearTimeout(timer);
