@@ -123,7 +123,7 @@ to him without the prefix.
 | `V@w roast [@user\|target]` · `rate` | 90s MTV roast. PG-13 ceiling on normal channels; untethered uncensored in NSFW channels (floor: no hate at a protected group, no threats, nothing sexual involving minors). |
 | `V@w say [topic]` · `speak` · `mic` | Voice-channel drop in the cloned voice. |
 | `V@w vj on\|off` | Auto-VJ: spoken intros and sample notes on track changes (voice is opt-in). |
-| `V@w videos on\|off` | Official-video card on track changes (on by default, text only). |
+| `V@w videos on\|off` | Official-video card on track changes (on by default). Only real label/artist uploads, one card at a time. |
 | `V@w listen on\|off` | Voice Ears: say "Hey Weasel, play…" in the channel and he answers. |
 | `V@w memory` · `remember <fact>` | View or teach the persistent listener/room memory. |
 | `/vibe [mood]` · `V@vibe` | Mood / time-of-day / weather auto-DJ. |
@@ -152,7 +152,9 @@ skip the cleanup. `V@w say` drops the current take on the voice channel.
 | Slash | Prefix | What it does |
 |---|---|---|
 | `/diag` | `V@diag` | Diagnostics: gateway ping, DAVE, voice, librespot, sessions. |
-| `/stats` | — | Bot statistics. |
+| `/stats` | - | Bot statistics. |
+| `/privacy` | `V@privacy` | What the bot stores per server, and how to have it removed. |
+| `/servers` | `V@servers` | Operator only: every server that has added the bot, with owner and join date. |
 | `/sleep <30m\|1h>` | `V@sleep` | Sleep timer. |
 | `/help` | `V@help` | This menu. |
 | `/invite` | `V@invite` | Add Vaporzr to a server. |

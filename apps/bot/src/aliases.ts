@@ -91,6 +91,10 @@ export const V_ALIASES: Record<string, string> = {
   timer: 'sleep',
   help: 'help',
   diag: 'diag',
+  servers: 'servers',
+  guilds: 'servers',
+  privacy: 'privacy',
+  policy: 'privacy',
   save: 'playlist',
   load: 'playlist',
   playlists: 'playlist',
@@ -149,6 +153,8 @@ export const V_ALIASES: Record<string, string> = {
  *  `args`, so they are deliberately not listed here. */
 export const V_DISPATCH_ALIASES: Record<string, string> = {
   boost: 'bassboost',
+  guilds: 'servers',
+  policy: 'privacy',
   decks: 'deck',
   dk: 'deck',
   msh: 'mashup',

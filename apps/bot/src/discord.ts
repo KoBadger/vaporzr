@@ -107,6 +107,7 @@ import { vizTunnel } from './tunnel.js';
 import { renderPanelIconPng, PANEL_ICON_FALLBACKS } from './panelIcons.js';
 import { jamJoinLinks, type Bridge } from './bridge.js';
 import { DeckController } from './decks.js';
+import { guildRegistry, noteGuildJoin, noteGuildLeave, noteGuildsSeen } from './guildRegistry.js';
 import type { DeckEq, DeckId, InboundMessage, PermissionLevel, TrackInfo, PlaybackState } from '@vaporzr/shared';
 import * as EW from '@vaporzr/core/endlesswave';
 import { playlistStore } from '@vaporzr/core/playlists';
@@ -402,6 +403,11 @@ const COMMANDS = [
     .setName('jam')
     .setDescription('Post the jam invite card — QR + link so guests can request songs from their phones'),
   new SlashCommandBuilder().setName('stats').setDescription('Show bot statistics'),
+  new SlashCommandBuilder().setName('privacy').setDescription('What data the bot stores, and how to remove it'),
+  new SlashCommandBuilder()
+    .setName('servers')
+    .setDescription('Operator: list every server that has added the bot')
+    .addBooleanOption((o) => o.setName('all').setDescription('Include servers the bot has left')),
   new SlashCommandBuilder()
     .setName('sensitivity')
     .setDescription('Set beat-reactivity sensitivity for the visualizer')
@@ -852,10 +858,14 @@ export class DiscordBot {
   private weaselVjGuilds = new Set<string>();
   /** guildId -> `V@w videos off`: stop posting the official-video card. */
   private videoCardsOff = new Set<string>();
-  /** track uri -> YouTube id (null = searched, nothing found). */
-  private videoCardIds = new Map<string, string | null>();
+  /** track uri -> resolved video (null = searched, nothing suitable). */
+  private videoCardIds = new Map<string, VideoMatch | null>();
   /** guildId -> track uri the last video card represented (dedupe). */
   private videoCardPosted = new Map<string, string>();
+  /** `${guildId}:${uri}` currently being looked up — stops a duplicate post. */
+  private videoCardInFlight = new Set<string>();
+  /** guildId -> the card currently in the channel, so the next one can replace it. */
+  private videoCardMessage = new Map<string, { channelId: string; messageId: string }>();
   /** guildId -> Weasel live voice-channel ear enabled (`v@w listen on`). */
   private weaselListenGuilds = new Set<string>();
   private weaselListenBusy = new Set<string>();
@@ -1592,6 +1602,7 @@ export class DiscordBot {
     this.client.on('guildDelete', (g) => {
       this.cancelSleepTimer(g.id);
       this.syncPrimaryGuild();
+      this.handleGuildDelete(g);
     });
     // Duplicate-instance detection. Two clients sharing one token fight over the
     // single gateway session, which surfaces as rapid disconnect/reconnect churn
@@ -1631,16 +1642,48 @@ export class DiscordBot {
     void this.client.guilds.fetch().then((guilds) => {
       this.bridge.setPrimaryGuildId(guilds.first()?.id ?? null);
       this.bridge.setGuildList(guilds.map((g) => ({ id: g.id, name: g.name })));
+      // Backfill the registry: servers that added the bot before it tracked
+      // joins still get a record, dated to the first time we saw them. The
+      // fetch() result is a partial OAuth2Guild, so read the full objects from
+      // the cache it just populated.
+      noteGuildsSeen(
+        [...this.client.guilds.cache.values()].map((g) => ({
+          id: g.id,
+          name: g.name,
+          ownerId: g.ownerId,
+          memberCount: g.memberCount,
+          locale: g.preferredLocale,
+        })),
+      );
     });
   }
 
   /**
-   * Auto-setup when the bot joins a server: register commands (already handled
-   * by a sibling listener), then post a welcome embed. The server owner is an
-   * admin automatically (permissions.ts) and /help covers the rest, so this is
-   * just onboarding, not configuration.
+   * Auto-setup when the bot joins a server: record the join for the operator's
+   * registry, tell the owner, then post the welcome embed. The server owner is
+   * an admin automatically (permissions.ts) and /help covers the rest, so this
+   * is onboarding, not configuration.
    */
   private async handleGuildCreate(guild: Guild): Promise<void> {
+    // Record first: a welcome that fails (no permissions, slow channel fetch)
+    // must not make the server invisible to the operator.
+    const { first, record } = noteGuildJoin({
+      id: guild.id,
+      name: guild.name,
+      ownerId: guild.ownerId,
+      memberCount: guild.memberCount,
+      locale: guild.preferredLocale,
+    });
+    console.log(
+      `[guild] + ${guild.name} (${guild.id}) · ${guild.memberCount} members · ${first ? 'first join' : 're-added'}`,
+    );
+    void this.notifyOwner(
+      `🎧 **New server: ${guild.name}**\n` +
+        `\`${guild.id}\` · ${guild.memberCount} members · owner <@${guild.ownerId}>\n` +
+        `Added <t:${Math.floor(record.joinedAt / 1000)}:F>${first ? '' : ' · *re-added*'}\n` +
+        `-# \`V@servers\` lists every server that has added the bot.`,
+    );
+
     const channel = await this.welcomeChannel(guild);
     if (!channel) {
       console.warn(`[vaporzr] no writable channel to welcome ${guild.name}`);
@@ -1652,6 +1695,58 @@ export class DiscordBot {
     } catch (err) {
       console.warn(`[vaporzr] could not send welcome to ${guild.name}:`, err instanceof Error ? err.message : err);
     }
+  }
+
+  /** The bot was removed (or kicked): keep the record, tell the operator. */
+  private handleGuildDelete(guild: Guild): void {
+    const before = guildRegistry().guilds.find((g) => g.id === guild.id);
+    noteGuildLeave(guild.id, guild.name, guild.memberCount || before?.members || 0);
+    console.log(`[guild] - ${guild.name} (${guild.id})`);
+    void this.notifyOwner(
+      `👋 **Removed from ${guild.name}** (\`${guild.id}\`)\n` +
+        `${before ? `${before.members} members · added <t:${Math.floor(before.joinedAt / 1000)}:R>` : 'not in the registry'}`,
+    );
+  }
+
+  /**
+   * DM the operator (OWNER_ID). Falls back to the primary guild's now-playing
+   * channel when DMs are closed, so a join never goes unnoticed.
+   */
+  private async notifyOwner(text: string): Promise<void> {
+    const owner = config.ownerId;
+    if (owner) {
+      try {
+        const user = await this.client.users.fetch(owner);
+        await user.send(text);
+        return;
+      } catch {
+        /* DMs closed — fall through to a channel */
+      }
+    }
+    const gid = this.bridge.getPrimaryGuildId();
+    const chId = gid ? this.perms.getNpChannel(gid) : undefined;
+    if (!chId) return;
+    try {
+      const ch = await this.client.channels.fetch(chId);
+      if (ch && 'send' in ch) await ch.send(text);
+    } catch {
+      /* nothing to do */
+    }
+  }
+
+  /** Public base for the policy page, or null when only a LAN address is known. */
+  private privacyUrl(): string | null {
+    const base = (config.staticBaseUrl ?? '').trim();
+    if (base) return `${base.replace(/\/+$/, '')}/privacy.html`;
+    const panel = vizTunnel.panelLink();
+    if (panel.secure) {
+      try {
+        return `${new URL(panel.url).origin}/privacy.html`;
+      } catch {
+        /* malformed link */
+      }
+    }
+    return null;
   }
 
   /** The system channel, or the first text channel the bot can post embeds in. */
@@ -1675,6 +1770,7 @@ export class DiscordBot {
   }
 
   private welcomeEmbed(guild: Guild): EmbedBuilder {
+    const policy = this.privacyUrl();
     return new EmbedBuilder()
       .setTitle(`🎧 Hello, ${guild.name}!`)
       .setDescription(
@@ -1683,7 +1779,10 @@ export class DiscordBot {
           '`V@p <song or link>` — same thing, quick prefix\n' +
           '`/panel` — live control panel with buttons (server admins)\n' +
           '`/join` — join your VC and start streaming\n\n' +
-          'The server owner is **admin** here automatically — use `/perms` to grant roles. Every server has its own isolated queue, which survives reconnects — `/leave` clears it and leaves the voice channel.',
+          'The server owner is **admin** here automatically — use `/perms` to grant roles. Every server has its own isolated queue, which survives reconnects — `/leave` clears it and leaves the voice channel.\n\n' +
+          '**What I keep:** this server’s id and name, its owner id and member count (so the operator knows who added me), ' +
+          'your settings, and the current queue so a restart does not lose the set. Nothing else — nothing is sold or shared. ' +
+          `\`/privacy\` has the full list${policy ? `, also at ${policy}` : ''}.`,
       )
       .setColor(this.themeColor())
       .setFooter({ text: 'See /help for the full command list' });
@@ -3583,6 +3682,18 @@ export class DiscordBot {
         break;
       }
 
+      case 'privacy': {
+        await interaction.reply({ embeds: [this.privacyEmbed()], flags: MessageFlags.Ephemeral });
+        break;
+      }
+
+      case 'servers': {
+        if (!this.perms.isOwner(interaction.user.id)) return this.deny(interaction);
+        const all = interaction.options.getBoolean('all') ?? false;
+        await interaction.reply({ embeds: [this.serversEmbed(all)], flags: MessageFlags.Ephemeral });
+        break;
+      }
+
       case 'device': {
         const sub = interaction.options.getSubcommand(true);
         if (sub === 'list') {
@@ -5453,6 +5564,22 @@ export class DiscordBot {
 
         case 'diag': {
           await message.reply({ embeds: [this.diagEmbed(message.guildId)] });
+          break;
+        }
+
+        case 'servers': {
+          // Owner-only: this is operator bookkeeping, not server content.
+          if (!this.perms.isOwner(message.author.id)) {
+            await message.reply('🔒 `V@servers` is operator-only.');
+            break;
+          }
+          const showAll = /\ball\b/i.test(args || '');
+          await message.reply({ embeds: [this.serversEmbed(showAll)] });
+          break;
+        }
+
+        case 'privacy': {
+          await message.reply({ embeds: [this.privacyEmbed()] });
           break;
         }
 
@@ -11376,6 +11503,61 @@ export class DiscordBot {
   }
 
   /**
+   * `V@servers` — the operator's own ledger of who added the bot. Owner-only,
+   * because it lists other servers' ids, owner ids and member counts.
+   */
+  private serversEmbed(showAll: boolean): EmbedBuilder {
+    const snap = guildRegistry();
+    if (snap.total === 0) {
+      return new EmbedBuilder()
+        .setTitle('🛰 Servers')
+        .setDescription('Nothing recorded yet — the registry fills the first time a server is seen.')
+        .setColor(this.helpColor());
+    }
+    const pool = showAll ? snap.guilds : snap.guilds.filter((g) => !g.leftAt);
+    const shown = pool.slice(0, 15);
+    const lines = shown.map((g) => {
+      const state = g.leftAt ? '⚪ left' : '🟢 active';
+      const added = `<t:${Math.floor(g.joinedAt / 1000)}:R>`;
+      const who = g.ownerId ? ` · <@${g.ownerId}>` : '';
+      return `${state} **${truncate(g.name, 30)}** · \`${g.id}\` · ${g.members} members · added ${added}${who}`;
+    });
+    const hidden = pool.length - shown.length;
+    return new EmbedBuilder()
+      .setTitle('🛰 Servers')
+      .setDescription(
+        lines.join('\n') + (hidden > 0 ? `\n…and **${hidden}** more — \`V@servers all\` to list every one.` : ''),
+      )
+      .setColor(this.helpColor())
+      .setFooter({
+        text: `${snap.active} active · ${snap.total} tracked · +${snap.joinedLast7d} / -${snap.leftLast7d} in the last 7 days`,
+      });
+  }
+
+  /** `V@privacy` — what is stored, in one screen, with the policy link. */
+  private privacyEmbed(): EmbedBuilder {
+    const url = this.privacyUrl();
+    return new EmbedBuilder()
+      .setTitle('🔒 What Vaporzr stores')
+      .setDescription(
+        '**Per server**\n' +
+          '• the server **id and name**, its **owner id** and **member count** — so the operator knows who added the bot\n' +
+          '• your **settings**: roles, DJ role, volume, theme, prefix and the like\n' +
+          '• the **queue and playback state** (track names, artists, position) so a restart does not lose the set\n' +
+          '• per-server **listening stats** (tracks played, top artists, top DJs)\n\n' +
+          '**What it is not**\n' +
+          '• no stored message history, no member lists, no voice recordings\n' +
+          '• nothing sold, shared or used for ads; the data stays as files on the bot’s host\n\n' +
+          'Removing the bot (or asking the operator) deletes that server’s files. Run `V@servers` as the operator to ' +
+          'see every server that has added it.',
+      )
+      .setColor(this.helpColor())
+      .setFooter({
+        text: url ? `${url} · updated 2026-11-02` : 'Policy: /privacy on the bot host · updated 2026-11-02',
+      });
+  }
+
+  /**
    * Autoplay watchdog. Every refill path is event-driven (track end, queue end),
    * so once the wave dead-ends there is nothing left to retrigger it: the queue
    * drains, the last track finishes and the channel just goes quiet. This timer
@@ -11693,7 +11875,7 @@ export class DiscordBot {
       }
       const active = !this.videoCardsOff.has(gid);
       return active
-        ? '🎬 **Video cards are ON** — I drop the official video for each new track in the now-playing channel. (`V@w videos off` to stop)'
+        ? '🎬 **Video cards are ON** — when the track has a real label/artist video I post it, one card at a time (the previous is replaced). (`V@w videos off` to stop)'
         : '🔇 **Video cards are OFF** — no more video posts on track changes.';
     }
 
@@ -12080,52 +12262,76 @@ export class DiscordBot {
   /**
    * Official-video pipeline for a new track: resolve the video once, hand the
    * id to the bridge (so /viz and the Activity can play it), then post the card
-   * unless the guild turned cards off. The lookup is independent of the card
-   * toggle — silencing the Discord post should not blank the visualizer.
+   * — only for a genuine release, and replacing the previous card so a channel
+   * never fills up with them. The lookup is independent of the card toggle:
+   * silencing the Discord post should not blank the visualizer.
    */
   private async maybeAttachVideo(s: Session, track: TrackInfo): Promise<void> {
     const gid = s.guildId;
     if (!gid) return;
-    const artists = (track.artists ?? []).filter(Boolean);
-    const key = track.uri || `${track.name} — ${artists.join(', ')}`;
-    let videoId = this.videoCardIds.get(key);
-    if (videoId === undefined) {
-      const hit = await findOfficialVideo(`${track.name} ${artists[0] ?? ''}`.trim()).catch(() => null);
-      videoId = hit ?? null;
-      this.videoCardIds.set(key, videoId);
-      if (this.videoCardIds.size > 400) {
-        const oldest = this.videoCardIds.keys().next().value;
-        if (oldest !== undefined) this.videoCardIds.delete(oldest);
-      }
-    }
-    if (!videoId) return;
-    // A late lookup must not paint the previous track's video over the new one.
-    if (s.queue.getCurrentTrack()?.uri !== track.uri) return;
-    this.bridge.setTrackVideo(track.uri, videoId);
-    if (this.videoCardsOff.has(gid)) return;
-    if (this.videoCardPosted.get(gid) === track.uri) return;
-    const channelId = this.miniNp.get(gid)?.channelId ?? this.lastTextChannel.get(gid);
-    if (!channelId) return;
-    const channel = this.client.channels.cache.get(channelId);
-    if (!channel || !channel.isTextBased() || !('send' in channel)) return;
-    const lore = this.ewTrackLore.get(track.uri);
-    const intro = lore
-      ? `${track.name} — ${lore}`
-      : `${track.name}${artists.length ? ` — ${artists.slice(0, 2).join(' & ')}` : ''}`;
-    const embed = new EmbedBuilder()
-      .setColor(this.helpColor())
-      .setAuthor({ name: 'OFFICIAL VIDEO' })
-      .setTitle(`${track.name}${artists.length ? ` — ${artists.slice(0, 2).join(' & ')}` : ''}`)
-      .setURL(`https://www.youtube.com/watch?v=${videoId}`)
-      .setImage(`https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`)
-      .setDescription(intro.slice(0, 300))
-      .setFooter({ text: 'V@w videos off silences these cards' });
+    // The lookup takes seconds; two triggers for the same track used to both
+    // get past the "already posted" check and post twice.
+    const dedupe = `${gid}:${track.uri}`;
+    if (this.videoCardPosted.get(gid) === track.uri || this.videoCardInFlight.has(dedupe)) return;
+    this.videoCardInFlight.add(dedupe);
     try {
-      await (channel as { send: (o: unknown) => Promise<unknown> }).send({ embeds: [embed] });
-      this.videoCardPosted.set(gid, track.uri);
-      console.log(`[video-card] ${track.name} → ${videoId}`);
-    } catch {
-      /* missing send permission is not worth a warning per track */
+      const artists = (track.artists ?? []).filter(Boolean);
+      const key = track.uri || `${track.name} — ${artists.join(', ')}`;
+      let match = this.videoCardIds.get(key);
+      if (match === undefined) {
+        match = await findTrackVideo(track.name, artists).catch(() => null);
+        this.videoCardIds.set(key, match);
+        if (this.videoCardIds.size > 400) {
+          const oldest = this.videoCardIds.keys().next().value;
+          if (oldest !== undefined) this.videoCardIds.delete(oldest);
+        }
+      }
+      if (!match) return;
+      // A late lookup must not paint the previous track's video over the new one.
+      if (s.queue.getCurrentTrack()?.uri !== track.uri) return;
+      this.bridge.setTrackVideo(track.uri, match.id, match.official);
+      // Chat gets the real thing only. A lyric upload or a background loop is
+      // still fine on the visualizer, but it is not worth a post.
+      if (!match.official) return;
+      if (this.videoCardsOff.has(gid)) return;
+      const channelId = this.miniNp.get(gid)?.channelId ?? this.lastTextChannel.get(gid);
+      if (!channelId) return;
+      const channel = this.client.channels.cache.get(channelId);
+      if (!channel || !channel.isTextBased() || !('send' in channel)) return;
+      // One card per guild: drop the previous one first so a long set leaves a
+      // single video in the channel instead of a wall of thumbnails.
+      const previous = this.videoCardMessage.get(gid);
+      if (previous) {
+        this.videoCardMessage.delete(gid);
+        if (previous.channelId === channelId) {
+          const old = await channel.messages.fetch(previous.messageId).catch(() => null);
+          await old?.delete().catch(() => {});
+        }
+      }
+      const lore = this.ewTrackLore.get(track.uri);
+      const intro = lore
+        ? `${track.name} — ${lore}`
+        : `${track.name}${artists.length ? ` — ${artists.slice(0, 2).join(' & ')}` : ''}`;
+      const embed = new EmbedBuilder()
+        .setColor(this.helpColor())
+        .setAuthor({ name: 'OFFICIAL VIDEO' })
+        .setTitle(`${track.name}${artists.length ? ` — ${artists.slice(0, 2).join(' & ')}` : ''}`)
+        .setURL(`https://www.youtube.com/watch?v=${match.id}`)
+        .setImage(`https://i.ytimg.com/vi/${match.id}/hqdefault.jpg`)
+        .setDescription(intro.slice(0, 300))
+        .setFooter({ text: 'V@w videos off hides these cards' });
+      try {
+        const sent = (await (channel as { send: (o: unknown) => Promise<unknown> }).send({ embeds: [embed] })) as {
+          id?: string;
+        };
+        this.videoCardPosted.set(gid, track.uri);
+        if (sent?.id) this.videoCardMessage.set(gid, { channelId, messageId: sent.id });
+        console.log(`[video-card] ${track.name} → ${match.id}`);
+      } catch {
+        /* missing send permission is not worth a warning per track */
+      }
+    } finally {
+      this.videoCardInFlight.delete(dedupe);
     }
   }
 
@@ -12796,6 +13002,10 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/key show` · `/key rotate` — reveal or replace the master key',
       '`/invite` `V@invite` — add the bot to a server',
       '',
+      '**🔒 About the bot**',
+      '`/privacy` `V@privacy` — what it stores, and how to remove it',
+      '`V@servers` — operator: every server that has added it',
+      '',
       '**🔧 Maintenance**',
       '`/sleep <30m|1h>` `V@sleep` — sleep timer',
       '`/player` `V@player` — desktop player window (admin)',
@@ -12945,29 +13155,80 @@ export function countBulkItems(raw: string): number {
 }
 
 /**
- * Best guess at the official video for a track: ask YouTube for the query and
- * prefer a hit whose title actually contains the track name. Returns the bare
- * video id, or null when nothing sensible comes back.
+ * Official-video lookup. Returns the best candidate plus whether its channel is
+ * a genuine outlet for the artist, or null when nothing is close enough.
+ *
+ * "Official" here means what Spotify means by it: the label's or the artist's
+ * own upload. On YouTube that is one of
+ *
+ *   - `<Artist> - Topic`  — YouTube Music's auto-generated licensed channel
+ *   - `<Artist>VEVO`      — the label's VEVO channel
+ *   - the artist's own channel, named after them (`Sublime`, `Sublime Official`)
+ *
+ * Fan lyric uploads, "background" loops and 8D re-edits are not official even
+ * when they are the top result, which is how a card ends up claiming a video
+ * nobody released.
  */
-async function findOfficialVideo(query: string): Promise<string | null> {
-  if (!query) return null;
-  const hits = await searchYoutube(query, 5);
-  if (!hits.length) return null;
-  const want = query
+export function isOfficialMusicChannel(channel: string, artists: string[]): boolean {
+  const ch = normName(channel);
+  if (!ch) return false;
+  for (const a of artists) {
+    const ar = normName(a);
+    if (!ar) continue;
+    if (ch === ar) return true;
+    if (ch === `${ar} topic`) return true;
+    if (ch === `${ar}vevo`) return true;
+    if (ch === `${ar} official`) return true;
+    if (ch === `${ar} music`) return true;
+    if (ch === `${ar} official music`) return true;
+  }
+  return false;
+}
+
+/** Lowercase, "&" → "and", punctuation → spaces. Shared by channel + title matching. */
+function normName(s: string): string {
+  return s
     .toLowerCase()
-    .replace(/[^a-z0-9 ]/g, ' ')
-    .replace(/\s+/g, ' ')
+    .replace(/&/g, 'and')
+    .replace(/[^a-z0-9]+/g, ' ')
     .trim();
-  const wants = want.split(' ').filter((w) => w.length > 2);
+}
+
+/** Titles that are never the release: karaoke, loops, re-uploads with a gimmick. */
+const NOT_THE_RELEASE =
+  /\b(cover|karaoke|instrumental|reaction|nightcore|slowed|reverb|8d|mashup|medley|parody|tutorial|lesson|1 hour|one hour|10 hours|extended mix|loop)\b/i;
+
+export interface VideoMatch {
+  id: string;
+  /** False for a fan upload or a background loop — never posted as a card. */
+  official: boolean;
+}
+
+async function findTrackVideo(name: string, artists: string[]): Promise<VideoMatch | null> {
+  const query = `${name} ${artists[0] ?? ''}`.trim();
+  if (!query) return null;
+  const hits = await searchYoutube(query, 8);
+  if (!hits.length) return null;
+  const wants = normName(name)
+    .split(' ')
+    .filter((w) => w.length > 2);
   const score = (title: string): number => {
-    const t = title.toLowerCase();
+    const t = normName(title);
     return wants.reduce((n, w) => (t.includes(w) ? n + 1 : n), 0);
   };
-  const ranked = [...hits].sort((a, b) => score(b.name) - score(a.name));
+  const ranked = hits
+    .filter((h) => !NOT_THE_RELEASE.test(h.name))
+    .map((h) => ({
+      h,
+      official: isOfficialMusicChannel(h.artists?.[0] ?? '', artists),
+      s: score(h.name),
+    }))
+    .sort((a, b) => Number(b.official) - Number(a.official) || b.s - a.s);
   const best = ranked[0];
-  if (score(best.name) === 0) return null;
-  const id = /youtube:video:([A-Za-z0-9_-]{6,})/.exec(best.uri)?.[1];
-  return id ?? null;
+  // Nothing that even shares a word with the title is a different song.
+  if (!best || (wants.length > 0 && best.s === 0)) return null;
+  const id = /youtube:video:([A-Za-z0-9_-]{6,})/.exec(best.h.uri)?.[1];
+  return id ? { id, official: best.official } : null;
 }
 
 async function resolvePlayInput(query: string): Promise<ResolvedTrack[]> {

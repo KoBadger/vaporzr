@@ -2713,6 +2713,8 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
   function showVideo(st){
     if(!videoPanel||!videoEl)return;
     var id=st&&st.track&&st.videoId;
+    var tag=document.getElementById('video-tag');
+    if(tag)tag.textContent=st&&st.videoOfficial?'OFFICIAL VIDEO':'VIDEO';
     if(!id||!st.playing){
       videoPanel.classList.add('hidden');videoNow.id=null;
       if(videoNow.timer)clearTimeout(videoNow.timer);

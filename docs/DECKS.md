@@ -316,7 +316,20 @@ volume, served with Range support, pruned to the last 12 tracks). That is why
 the panel works in the Activity as well as in a browser.
 
 The same lookup powers the **video card** the bot posts in the now-playing
-channel on every track change — text plus thumbnail, no voice unless
-`V@w vj on` is set. `V@w videos off` stops the cards; the visualizer panel still
-follows whatever the bridge reports (silencing the post does not blank the
-picture).
+channel - text plus thumbnail, no voice unless `V@w vj on` is set. Two rules
+keep the channel readable:
+
+- **Only real releases get a card.** A hit is accepted only when its channel is
+  the artist's own, a `<Artist> - Topic` channel (YouTube Music's licensed auto
+  channel) or `<Artist>VEVO`. A fan lyric upload or a background loop is never
+  announced as official - it may still fill the visualizer panel, which labels
+  itself `VIDEO` rather than `OFFICIAL VIDEO` in that case. Titles containing
+  "cover", "nightcore", "slowed", "1 hour", "loop" and friends are skipped
+  outright.
+- **One card at a time.** Posting a new card deletes the previous one (same
+  channel), so a long set leaves a single video rather than a wall of them. The
+  bot also refuses to post twice for the same track, even when two track-start
+  signals race the lookup.
+
+`V@w videos off` stops the cards; the visualizer panel still follows whatever
+the bridge reports (silencing the post does not blank the picture).
