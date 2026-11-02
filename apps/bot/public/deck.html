@@ -30,7 +30,7 @@
        * media player + mixer pair: a display/waveform shelf, a jog wheel with a
        * pitch fader beside it, two rows of performance pads, and a centre mixer
        * strip with filter, crossfader and FX pads. Every hook the deck
-       * controller uses (data-role / data-pad / data-band / ids) is kept exactly
+       * controller uses (data-role / data-pad / data-knob / ids) is kept exactly
        * as before so behaviour is unchanged.
        */
       :root {
@@ -961,22 +961,101 @@
         border: 1px solid var(--line-soft);
         background: linear-gradient(#0d0e1d, #090a16);
       }
-      .eq {
+      .eq-knobs {
         display: grid;
-        grid-template-columns: 34px 1fr 34px;
-        gap: 4px 8px;
-        align-items: center;
-        font-size: 10px;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 6px;
       }
-      .eq label {
+      /* Rotary channel knobs. DJ muscle memory: drag up/down (shift = fine),
+         wheel, arrow keys, double-click to reset. The arc fills from the end of
+         its travel and a tick marks 12 o'clock, which is 0 dB for the three
+         bands — the centre detent every mixer has. */
+      .knob {
+        display: grid;
+        justify-items: center;
+        gap: 3px;
+        border: 0;
+        padding: 0;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        cursor: ns-resize;
+        touch-action: none;
+        border-radius: 8px;
+      }
+      .knob:focus-visible {
+        outline: 1px solid var(--deck);
+        outline-offset: 1px;
+      }
+      .knob-dial {
+        position: relative;
+        width: 38px;
+        height: 38px;
+      }
+      .knob-dial svg {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        overflow: visible;
+      }
+      .knob-track {
+        fill: none;
+        stroke: #1d1f38;
+        stroke-width: 3.5;
+        stroke-linecap: round;
+      }
+      .knob-fill {
+        fill: none;
+        stroke: var(--deck);
+        stroke-width: 3.5;
+        stroke-linecap: round;
+      }
+      .knob-dial::before {
+        content: '';
+        position: absolute;
+        left: 50%;
+        top: -2px;
+        width: 1px;
+        height: 4px;
+        margin-left: -0.5px;
+        background: #3a3f66;
+      }
+      .knob-cap {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 24px;
+        height: 24px;
+        margin: -12px 0 0 -12px;
+        border-radius: 50%;
+        border: 1px solid #2c2f52;
+        background: radial-gradient(circle at 35% 30%, #272b4d, #0e1020 72%);
+        box-shadow:
+          inset 0 1px 2px rgba(255, 255, 255, 0.08),
+          0 2px 6px rgba(0, 0, 0, 0.55);
+      }
+      .knob-cap::after {
+        content: '';
+        position: absolute;
+        left: 50%;
+        top: 3px;
+        width: 2px;
+        height: 8px;
+        margin-left: -1px;
+        border-radius: 2px;
+        background: var(--deck);
+        box-shadow: 0 0 6px var(--deck);
+      }
+      .knob-name {
+        font: 700 8px/1 inherit;
+        letter-spacing: 0.16em;
         color: var(--dim);
-        font: 700 9px/1 inherit;
-        letter-spacing: 0.18em;
       }
-      .eq output {
-        text-align: right;
-        font: 700 10px/1 var(--mono);
+      .knob output {
+        font: 700 9px/1 var(--mono);
         color: #aebaff;
+        min-height: 9px;
       }
       .kill-row {
         display: grid;
@@ -2296,19 +2375,87 @@
         </div>
 
         <div class="channel pro-only">
-          <div class="eq" data-role="eq">
-            <label>LOW</label>
-            <input type="range" data-band="low" min="-40" max="6" step="1" value="0" aria-label="Deck A low" />
-            <output data-out="low">0</output>
-            <label>MID</label>
-            <input type="range" data-band="mid" min="-40" max="6" step="1" value="0" aria-label="Deck A mid" />
-            <output data-out="mid">0</output>
-            <label>HIGH</label>
-            <input type="range" data-band="high" min="-40" max="6" step="1" value="0" aria-label="Deck A high" />
-            <output data-out="high">0</output>
-            <label>TRIM</label>
-            <input type="range" data-role="gain" min="0" max="100" step="1" value="100" aria-label="Deck A trim" />
-            <output data-out="gain">100</output>
+          <div class="eq-knobs" data-role="eq">
+            <div
+              class="knob"
+              data-knob="low"
+              role="slider"
+              tabindex="0"
+              aria-label="Deck A low"
+              aria-valuemin="-40"
+              aria-valuemax="6"
+              aria-valuenow="0"
+            >
+              <div class="knob-dial">
+                <svg viewBox="0 0 44 44" aria-hidden="true">
+                  <path class="knob-track" d="M11.39 11.39 A15 15 0 1 1 11.39 33.61" />
+                  <path class="knob-fill" d="" />
+                </svg>
+                <span class="knob-cap"></span>
+              </div>
+              <span class="knob-name">LOW</span>
+              <output data-out="low">0</output>
+            </div>
+            <div
+              class="knob"
+              data-knob="mid"
+              role="slider"
+              tabindex="0"
+              aria-label="Deck A mid"
+              aria-valuemin="-40"
+              aria-valuemax="6"
+              aria-valuenow="0"
+            >
+              <div class="knob-dial">
+                <svg viewBox="0 0 44 44" aria-hidden="true">
+                  <path class="knob-track" d="M11.39 11.39 A15 15 0 1 1 11.39 33.61" />
+                  <path class="knob-fill" d="" />
+                </svg>
+                <span class="knob-cap"></span>
+              </div>
+              <span class="knob-name">MID</span>
+              <output data-out="mid">0</output>
+            </div>
+            <div
+              class="knob"
+              data-knob="high"
+              role="slider"
+              tabindex="0"
+              aria-label="Deck A high"
+              aria-valuemin="-40"
+              aria-valuemax="6"
+              aria-valuenow="0"
+            >
+              <div class="knob-dial">
+                <svg viewBox="0 0 44 44" aria-hidden="true">
+                  <path class="knob-track" d="M11.39 11.39 A15 15 0 1 1 11.39 33.61" />
+                  <path class="knob-fill" d="" />
+                </svg>
+                <span class="knob-cap"></span>
+              </div>
+              <span class="knob-name">HIGH</span>
+              <output data-out="high">0</output>
+            </div>
+            <div
+              class="knob"
+              data-knob="trim"
+              role="slider"
+              tabindex="0"
+              aria-label="Deck A trim"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow="100"
+            >
+              <div class="knob-dial">
+                <svg viewBox="0 0 44 44" aria-hidden="true">
+                  <path class="knob-track" d="M11.39 11.39 A15 15 0 1 1 11.39 33.61" />
+                  <path class="knob-fill" d="" />
+                </svg>
+                <span class="knob-cap"></span>
+              </div>
+              <span class="knob-name">TRIM</span>
+              <output data-out="trim">100</output>
+            </div>
           </div>
           <div class="kill-row">
             <button data-kill="low">KILL LOW</button>
@@ -2568,19 +2715,87 @@
         </div>
 
         <div class="channel pro-only">
-          <div class="eq" data-role="eq">
-            <label>LOW</label>
-            <input type="range" data-band="low" min="-40" max="6" step="1" value="0" aria-label="Deck B low" />
-            <output data-out="low">0</output>
-            <label>MID</label>
-            <input type="range" data-band="mid" min="-40" max="6" step="1" value="0" aria-label="Deck B mid" />
-            <output data-out="mid">0</output>
-            <label>HIGH</label>
-            <input type="range" data-band="high" min="-40" max="6" step="1" value="0" aria-label="Deck B high" />
-            <output data-out="high">0</output>
-            <label>TRIM</label>
-            <input type="range" data-role="gain" min="0" max="100" step="1" value="100" aria-label="Deck B trim" />
-            <output data-out="gain">100</output>
+          <div class="eq-knobs" data-role="eq">
+            <div
+              class="knob"
+              data-knob="low"
+              role="slider"
+              tabindex="0"
+              aria-label="Deck B low"
+              aria-valuemin="-40"
+              aria-valuemax="6"
+              aria-valuenow="0"
+            >
+              <div class="knob-dial">
+                <svg viewBox="0 0 44 44" aria-hidden="true">
+                  <path class="knob-track" d="M11.39 11.39 A15 15 0 1 1 11.39 33.61" />
+                  <path class="knob-fill" d="" />
+                </svg>
+                <span class="knob-cap"></span>
+              </div>
+              <span class="knob-name">LOW</span>
+              <output data-out="low">0</output>
+            </div>
+            <div
+              class="knob"
+              data-knob="mid"
+              role="slider"
+              tabindex="0"
+              aria-label="Deck B mid"
+              aria-valuemin="-40"
+              aria-valuemax="6"
+              aria-valuenow="0"
+            >
+              <div class="knob-dial">
+                <svg viewBox="0 0 44 44" aria-hidden="true">
+                  <path class="knob-track" d="M11.39 11.39 A15 15 0 1 1 11.39 33.61" />
+                  <path class="knob-fill" d="" />
+                </svg>
+                <span class="knob-cap"></span>
+              </div>
+              <span class="knob-name">MID</span>
+              <output data-out="mid">0</output>
+            </div>
+            <div
+              class="knob"
+              data-knob="high"
+              role="slider"
+              tabindex="0"
+              aria-label="Deck B high"
+              aria-valuemin="-40"
+              aria-valuemax="6"
+              aria-valuenow="0"
+            >
+              <div class="knob-dial">
+                <svg viewBox="0 0 44 44" aria-hidden="true">
+                  <path class="knob-track" d="M11.39 11.39 A15 15 0 1 1 11.39 33.61" />
+                  <path class="knob-fill" d="" />
+                </svg>
+                <span class="knob-cap"></span>
+              </div>
+              <span class="knob-name">HIGH</span>
+              <output data-out="high">0</output>
+            </div>
+            <div
+              class="knob"
+              data-knob="trim"
+              role="slider"
+              tabindex="0"
+              aria-label="Deck B trim"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow="100"
+            >
+              <div class="knob-dial">
+                <svg viewBox="0 0 44 44" aria-hidden="true">
+                  <path class="knob-track" d="M11.39 11.39 A15 15 0 1 1 11.39 33.61" />
+                  <path class="knob-fill" d="" />
+                </svg>
+                <span class="knob-cap"></span>
+              </div>
+              <span class="knob-name">TRIM</span>
+              <output data-out="trim">100</output>
+            </div>
           </div>
           <div class="kill-row">
             <button data-kill="low">KILL LOW</button>
@@ -2902,6 +3117,145 @@
           });
         }
 
+        /* ---------- rotary knobs ----------
+           DJ-style channel EQ: 12 o'clock is 0 dB, and the travel is split so the
+           left half is the cut (-40..0) and the right half the boost (0..+6).
+           That puts the centre detent where a mixer puts it, instead of burying
+           0 dB at 87% of a linear slider. TRIM is a plain 0..100 knob. */
+        var KNOB_R = 15;
+        /* The arc grows out of the 12 o'clock detent: cutting fills the left
+           half, boosting the right, neutral is an empty ring. That reads as
+           "flat" at a glance instead of "half a circle" meaning nothing. TRIM
+           fills from its minimum, since it has no centre. */
+        function knobArc(kind, pct) {
+          var startPct = kind === 'trim' ? 0 : 0.5;
+          if (Math.abs(pct - startPct) < 0.004) return '';
+          var a = -135 + 270 * Math.min(startPct, pct);
+          var b = -135 + 270 * Math.max(startPct, pct);
+          var ra = (a * Math.PI) / 180;
+          var rb = (b * Math.PI) / 180;
+          var x0 = 22 + KNOB_R * Math.cos(ra);
+          var y0 = 22 + KNOB_R * Math.sin(ra);
+          var x1 = 22 + KNOB_R * Math.cos(rb);
+          var y1 = 22 + KNOB_R * Math.sin(rb);
+          var large = b - a > 180 ? 1 : 0;
+          return (
+            'M' +
+            x0.toFixed(2) +
+            ' ' +
+            y0.toFixed(2) +
+            ' A' +
+            KNOB_R +
+            ' ' +
+            KNOB_R +
+            ' 0 ' +
+            large +
+            ' 1 ' +
+            x1.toFixed(2) +
+            ' ' +
+            y1.toFixed(2)
+          );
+        }
+        function knobPct(kind, value) {
+          if (kind === 'trim') return Math.max(0, Math.min(1, value / 100));
+          var frac = value >= 0 ? value / 6 : value / 40;
+          return Math.max(0, Math.min(1, 0.5 + frac / 2));
+        }
+        function knobValue(kind, pct) {
+          var p = Math.max(0, Math.min(1, pct));
+          if (kind === 'trim') return Math.round(p * 100);
+          var frac = (p - 0.5) * 2;
+          return Math.round(frac >= 0 ? frac * 6 : frac * 40);
+        }
+        function paintKnob(knob, kind, value) {
+          var pct = knobPct(kind, value);
+          var fill = el('.knob-fill', knob);
+          if (fill) fill.setAttribute('d', knobArc(kind, pct));
+          var cap = el('.knob-cap', knob);
+          if (cap) cap.style.transform = 'rotate(' + (-135 + 270 * pct) + 'deg)';
+          var out = el('output', knob);
+          var text = kind === 'trim' ? String(value) : value <= -39.5 ? 'KILL' : (value > 0 ? '+' : '') + value;
+          if (out) out.textContent = text;
+          knob.setAttribute('aria-valuenow', String(value));
+          knob.setAttribute('aria-valuetext', kind === 'trim' ? value + '%' : value <= -39.5 ? 'killed' : text + ' dB');
+        }
+        /* Drag up/down (shift = fine), wheel, arrows, double-click = detent, so
+           the knob answers to a mouse, a trackpad, a touchscreen and a keyboard
+           the way the sliders did. */
+        function bindKnob(knob, kind, commit) {
+          var value = kind === 'trim' ? 100 : 0;
+          var drag = null;
+          function apply(next) {
+            var v =
+              kind === 'trim'
+                ? Math.max(0, Math.min(100, Math.round(next)))
+                : Math.max(-40, Math.min(6, Math.round(next)));
+            if (v === value) return;
+            value = v;
+            paintKnob(knob, kind, value);
+            commit(value, false);
+          }
+          knob.addEventListener('pointerdown', function (e) {
+            if (e.button != null && e.button !== 0) return;
+            e.preventDefault();
+            try {
+              knob.setPointerCapture(e.pointerId);
+            } catch (err) {
+              /* older browsers: the drag still works until the pointer leaves */
+            }
+            drag = { y: e.clientY, pct: knobPct(kind, value) };
+            knob.setAttribute('data-dragging', '');
+          });
+          knob.addEventListener('pointermove', function (e) {
+            if (!drag) return;
+            var per = e.shiftKey ? 600 : 150; // px for the full sweep
+            apply(knobValue(kind, drag.pct + (drag.y - e.clientY) / per));
+          });
+          function end() {
+            if (!drag) return;
+            drag = null;
+            knob.removeAttribute('data-dragging');
+            commit(value, true);
+          }
+          knob.addEventListener('pointerup', end);
+          knob.addEventListener('pointercancel', end);
+          knob.addEventListener('lostpointercapture', end);
+          knob.addEventListener('dblclick', function () {
+            var home = kind === 'trim' ? 100 : 0;
+            if (home !== value) {
+              value = home;
+              paintKnob(knob, kind, value);
+            }
+            commit(value, true);
+          });
+          knob.addEventListener(
+            'wheel',
+            function (e) {
+              e.preventDefault();
+              var step = kind === 'trim' ? (e.shiftKey ? 1 : 5) : 1;
+              apply(value + (e.deltaY < 0 ? step : -step));
+              commit(value, true);
+            },
+            { passive: false },
+          );
+          knob.addEventListener('keydown', function (e) {
+            var step = kind === 'trim' ? (e.shiftKey ? 1 : 5) : 1;
+            if (e.key === 'ArrowUp' || e.key === 'ArrowRight') apply(value + step);
+            else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') apply(value - step);
+            else if (e.key === 'Home') {
+              value = kind === 'trim' ? 0 : -40;
+              paintKnob(knob, kind, value);
+              commit(value, true);
+            } else if (e.key === 'End') {
+              value = kind === 'trim' ? 100 : 6;
+              paintKnob(knob, kind, value);
+              commit(value, true);
+            } else return;
+            e.preventDefault();
+          });
+          paintKnob(knob, kind, value);
+        }
+
         /** Draw the decoded waveform with cue markers, the loop region and the
          *  playhead. Redrawn on the 250 ms repaint, which is cheap enough at
          *  ~600 buckets per deck. */
@@ -3049,15 +3403,12 @@
                 ? '-' + fmt(Math.max(0, slot.durationMs - pos)) + ' left'
                 : '— left';
             }
-            all('[data-band]', root).forEach(function (input) {
-              var band = input.getAttribute('data-band');
-              var v = Math.round(slot.eq[band]);
-              if (document.activeElement !== input) input.value = v;
-              el('[data-out="' + band + '"]', root).textContent = v <= -39.5 ? 'KILL' : (v > 0 ? '+' : '') + v;
+            all('[data-knob]', root).forEach(function (knob) {
+              if (knob.hasAttribute('data-dragging')) return;
+              var role = knob.getAttribute('data-knob');
+              if (role === 'trim') paintKnob(knob, 'trim', Math.round(slot.gain * 100));
+              else paintKnob(knob, 'eq', Math.round(slot.eq[role]));
             });
-            var gain = el('[data-role="gain"]', root);
-            if (document.activeElement !== gain) gain.value = Math.round(slot.gain * 100);
-            el('[data-out="gain"]', root).textContent = Math.round(slot.gain * 100);
             var tempo = el('[data-role="tempo"]', root);
             if (document.activeElement !== tempo) tempo.value = (slot.tempo * 100).toFixed(1);
             el('[data-out="tempo"]', root).textContent = (slot.tempo * 100).toFixed(1);
@@ -3968,26 +4319,22 @@
               jogEl.addEventListener('pointerup', endJog);
               jogEl.addEventListener('pointercancel', endJog);
             }
-            all('[data-band]', root).forEach(function (input) {
-              var band = input.getAttribute('data-band');
-              var key = id + ':eq:' + band;
-              input.addEventListener('input', function () {
-                el('[data-out="' + band + '"]', root).textContent = input.value;
-                controlThrottled(key, 'eq', { deck: id, band: band, db: Number(input.value) });
+            all('[data-knob]', root).forEach(function (knob) {
+              var role = knob.getAttribute('data-knob');
+              var trim = role === 'trim';
+              var key = id + ':' + (trim ? 'gain' : 'eq:' + role);
+              bindKnob(knob, trim ? 'trim' : 'eq', function (value, immediate) {
+                var action = trim ? 'gain' : 'eq';
+                var payload = trim ? { deck: id, value: value / 100 } : { deck: id, band: role, db: value };
+                if (immediate) control(action, payload);
+                else controlThrottled(key, action, payload);
               });
-              flushOnRelease(input, key);
             });
             all('[data-kill]', root).forEach(function (btn) {
               btn.onclick = function () {
                 control('kill', { deck: id, band: btn.getAttribute('data-kill') });
               };
             });
-            var gainEl = el('[data-role="gain"]', root);
-            gainEl.addEventListener('input', function (e) {
-              el('[data-out="gain"]', root).textContent = e.target.value;
-              controlThrottled(id + ':gain', 'gain', { deck: id, value: Number(e.target.value) / 100 });
-            });
-            flushOnRelease(gainEl, id + ':gain');
             var tempoEl = el('[data-role="tempo"]', root);
             tempoEl.addEventListener('input', function (e) {
               var v = Number(e.target.value);
@@ -4255,7 +4602,11 @@
                   var bands = ['low', 'mid', 'high'];
                   var mdeck = cc < 7 ? 'a' : 'b';
                   var band = bands[(cc - 4) % 3];
-                  controlThrottled('midi:' + mdeck + band, 'eq', { deck: mdeck, band: band, db: -40 + v * 46 });
+                  // Same law as the on-screen knobs: centre (CC 64) is 0 dB,
+                  // the left half cuts to -40, the right half boosts to +6.
+                  var efrac = v * 2 - 1;
+                  var edb = Math.round(efrac >= 0 ? efrac * 6 : efrac * 40);
+                  controlThrottled('midi:' + mdeck + band, 'eq', { deck: mdeck, band: band, db: edb });
                 } else if (cc === 10 || cc === 11) {
                   var fdeck = cc === 10 ? 'a' : 'b';
                   controlThrottled('midi:filter:' + fdeck, 'filter', { deck: fdeck, value: v });
