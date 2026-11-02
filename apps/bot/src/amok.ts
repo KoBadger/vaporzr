@@ -438,14 +438,19 @@ async function maybeExtractUserFact(
 
 /** Clean markdown/emoji from a Weasel line before sending it to Cloud TTS. */
 export function cleanWeaselSpeechText(text: string): string {
-  return text
+  const clean = text
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/[*_`~>#]/g, '')
     .replace(/https?:\/\/\S+/g, '')
-    .replace(/[^\p{L}\p{N} .,!?'’\-:&()]/gu, ' ')
+    .replace(/[^\p{L}\p{N} .,!?''\-:&()]/gu, ' ')
     .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 320);
+    .trim();
+  if (clean.length <= 320) return clean;
+  // Cut at a sentence boundary, not mid-word: a hard slice made long replies
+  // end on "and then we" and the clone read it exactly like that.
+  const head = clean.slice(0, 320);
+  const stop = Math.max(head.lastIndexOf('.'), head.lastIndexOf('!'), head.lastIndexOf('?'));
+  return (stop > 160 ? head.slice(0, stop + 1) : head).trim();
 }
 
 /**
@@ -816,24 +821,37 @@ async function replicateCreate(
   exaggeration: number,
   cfg: number,
 ): Promise<RepPrediction | null> {
-  try {
-    const res = await fetch('https://api.replicate.com/v1/models/resemble-ai/chatterbox/predictions', {
+  const body = JSON.stringify({
+    input: {
+      prompt,
+      audio_prompt: audioPrompt,
+      exaggeration: Number.isFinite(exaggeration) ? exaggeration : 0.35,
+      cfg_weight: Number.isFinite(cfg) ? cfg : 0.3,
+    },
+  });
+  const send = async (): Promise<Response> =>
+    await fetch('https://api.replicate.com/v1/models/resemble-ai/chatterbox/predictions', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        input: {
-          prompt,
-          audio_prompt: audioPrompt,
-          exaggeration: Number.isFinite(exaggeration) ? exaggeration : 0.35,
-          cfg_weight: Number.isFinite(cfg) ? cfg : 0.3,
-        },
-      }),
+      body,
       signal: AbortSignal.timeout(20_000),
     });
+  try {
+    let res = await send();
+    if (res.status === 429) {
+      // Low-credit accounts are limited to a burst of 1 (≈6/min). Wait out the
+      // window once instead of dropping the whole line to the fallback voice.
+      const text = await res.text();
+      const retry = Number(/(?:retry_after|"retry_after":)\s*"?(\d+)/.exec(text)?.[1] ?? 0);
+      const waitMs = Math.min(15_000, (retry > 0 ? retry : 8) * 1000);
+      console.log(`[weasel-voice] replicate throttled — retrying in ${Math.round(waitMs / 1000)}s`);
+      await new Promise((r) => setTimeout(r, waitMs));
+      res = await send();
+    }
     const text = await res.text();
     if (!res.ok) {
-      // 402 = out of credit, 401 = bad token, 422 = schema change. All of them
-      // used to be invisible, so "the voice is wrong" looked like a bad clone.
+      // 402 = out of credit, 401 = bad token, 422 = schema change. All used to be
+      // invisible, so "the voice is wrong" looked like a bad clone.
       console.warn(`[weasel-voice] replicate create ${res.status}: ${text.slice(0, 200)}`);
       return null;
     }
@@ -907,6 +925,23 @@ function armKeepWarm(): void {
 }
 
 /**
+ * The text sent to Chatterbox: whole sentences up to ~320 characters. Long
+ * drops get cut at a sentence boundary rather than mid-clause; the model keeps
+ * its cadence and a single request stays inside the low-credit rate limit.
+ */
+export function clonePrompt(text: string, max = 320): string {
+  const chunks = splitWeaselSpeech(text);
+  if (!chunks.length) return '';
+  let out = '';
+  for (const chunk of chunks) {
+    const next = out ? `${out} ${chunk}` : chunk;
+    if (out && next.length > max) break;
+    out = next;
+  }
+  return out || chunks[0];
+}
+
+/**
  * Synthesize speech using Zero-Shot Voice Cloning (`resemble-ai/chatterbox` on
  * Replicate) trained on `/app/data/pauly-voice-ref.wav` so it sounds like
  * Pauly Shore's real voice.
@@ -921,45 +956,38 @@ async function synthClonedPaulyVoice(text: string): Promise<{ pcm: Buffer; durat
 
   const exaggeration = Number(process.env.AMOK_VOICE_EXAGGERATION ?? 0.35);
   const cfg = Number(process.env.AMOK_VOICE_CFG ?? 0.3);
-  // Four sentences is a full VJ drop; more than that is not worth the wait.
-  const chunks = splitWeaselSpeech(text).slice(0, 4);
-  if (!chunks.length) return null;
+  // ONE prediction per drop. Replicate's low-credit tier allows a burst of 1
+  // (≈6/min), so firing a request per sentence meant most were throttled and
+  // the whole line fell through to the generic fallback voice. Whole sentences
+  // up to ~320 chars keep the cadence without that risk.
+  const prompt = clonePrompt(text);
+  if (!prompt) return null;
 
   // A cold model spends 30s+ loading, which is why `Prefer: wait=15` used to
-  // return "processing" and every single drop fell through to the Google voice.
-  // Submit up front and poll, with a budget that knows whether the worker is
-  // warm from a recent call.
+  // return "processing" and every drop fell through to the Google voice.
+  // Submit, then poll, with a budget that knows whether the worker is warm.
   const warm = Date.now() < voiceWarmUntil;
-  const deadline = Date.now() + (warm ? 12_000 : 40_000);
+  const deadline = Date.now() + (warm ? 15_000 : 45_000);
 
-  const created = await Promise.all(
-    chunks.map((chunk) => replicateCreate(repToken, chunk, audioPrompt, exaggeration, cfg)),
-  );
-  const urls = await Promise.all(created.map((p) => (p ? replicateResolve(repToken, p, deadline) : null)));
-  const audioUrls = urls.filter((u): u is string => !!u);
-  if (audioUrls.length === 0) return null;
+  const created = await replicateCreate(repToken, prompt, audioPrompt, exaggeration, cfg);
+  if (!created) return null;
+  const url = await replicateResolve(repToken, created, deadline);
+  if (!url) return null;
 
-  const clips = await Promise.all(
-    audioUrls.map(async (url) => {
-      try {
-        const wavRes = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-        if (!wavRes.ok) return null;
-        const clip = await decodeAudioToStereo48k(Buffer.from(await wavRes.arrayBuffer()));
-        return clip?.pcm ?? null;
-      } catch {
-        return null;
-      }
-    }),
-  );
-  const got = clips.filter((c): c is Buffer => !!c);
-  if (got.length === 0) return null;
-  // A single failed sentence mid-line would read as a jump cut; only use the
-  // take when most of the line made it through.
-  if (got.length < Math.ceil(chunks.length * 0.6)) return null;
+  let clip: Buffer | null = null;
+  try {
+    const wavRes = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    if (wavRes.ok) {
+      const decoded = await decodeAudioToStereo48k(Buffer.from(await wavRes.arrayBuffer()));
+      clip = decoded?.pcm ?? null;
+    }
+  } catch {
+    clip = null;
+  }
+  if (!clip) return null;
   voiceWarmUntil = Date.now() + 6 * 60_000;
   scheduleKeepWarm();
-  const pcm = Buffer.concat(got.flatMap((c, i) => (i === 0 ? [c] : [silenceStereo48k(80), c])));
-  const softened = softenWeaselPcm(pcm);
+  const softened = softenWeaselPcm(clip);
   return { pcm: softened, durationMs: Math.round((softened.length / (48_000 * 4)) * 1000) };
 }
 

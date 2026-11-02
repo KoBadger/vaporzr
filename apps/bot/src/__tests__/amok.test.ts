@@ -19,6 +19,7 @@ import {
   buildWeaselSsml,
   cleanVoiceReference,
   cleanWeaselSpeechText,
+  clonePrompt,
   extractAmokReply,
   getWeaselMemorySummary,
   monoWavToStereoPcm,
@@ -143,6 +144,16 @@ describe('Amok ("The Weasel") Discord integration', () => {
     expect(clip!.pcm.readInt16LE(2)).toBe(1000);
     expect(clip!.pcm.readInt16LE(4)).toBe(-1000);
     expect(clip!.pcm.readInt16LE(6)).toBe(-1000);
+  });
+
+  it('builds one clone prompt of whole sentences', () => {
+    expect(clonePrompt('Hey buuuddy! Keep it short.')).toBe('Hey buuuddy! Keep it short.');
+    const long = Array.from({ length: 12 }, (_, i) => `Sentence number ${i} is here.`).join(' ');
+    const prompt = clonePrompt(long);
+    expect(prompt.length).toBeLessThanOrEqual(320);
+    // Cut at a sentence boundary, never mid-clause.
+    expect(prompt.endsWith('.')).toBe(true);
+    expect(clonePrompt('')).toBe('');
   });
 
   it('cleans a voice reference: trims silence and normalises the peak', () => {
