@@ -971,7 +971,14 @@ async function synthClonedPaulyVoice(text: string): Promise<{ pcm: Buffer; durat
 
   const created = await replicateCreate(repToken, prompt, audioPrompt, exaggeration, cfg);
   if (!created) return null;
-  const url = await replicateResolve(repToken, created, deadline);
+  let url = await replicateResolve(repToken, created, deadline);
+  if (!url) {
+    // A `failed` prediction is usually a recycled/broken worker (the classic is
+    // "CUDA error: device-side assert triggered"), not bad input — one fresh
+    // prediction normally lands on a healthy one.
+    const retry = await replicateCreate(repToken, prompt, audioPrompt, exaggeration, cfg);
+    if (retry) url = await replicateResolve(repToken, retry, Date.now() + 20_000);
+  }
   if (!url) return null;
 
   let clip: Buffer | null = null;

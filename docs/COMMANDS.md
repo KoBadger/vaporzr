@@ -128,6 +128,13 @@ to him without the prefix.
 | `V@w memory` · `remember <fact>` | View or teach the persistent listener/room memory. |
 | `/vibe [mood]` · `V@vibe` | Mood / time-of-day / weather auto-DJ. |
 
+The cloned voice is conditioned on `data/pauly-voice-ref.wav` — 10–13 s of
+clean, solo speech at 24 kHz mono. It is silence-trimmed and peak-normalised on
+load, so a rough recording still works, but room noise and interviewers leak
+into the clone: prefer one voice, close-mic, no music. Point
+`AMOK_VOICE_REF_PATH` at another file to swap it, or `AMOK_VOICE_REF_RAW=1` to
+skip the cleanup. `V@w say` drops the current take on the voice channel.
+
 ## 🎨 Visuals
 
 | Slash | Prefix | What it does |
