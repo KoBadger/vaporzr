@@ -206,6 +206,9 @@ export const emptyState = (): PlaybackState => ({
   volume: 50,
   shuffle: false,
   repeat: false,
+  // Loudness match is the house standard: Spotify and YouTube arrive at very
+  // different levels, and a queue that jumps 8 dB between tracks sounds broken.
+  loudnorm: true,
   updatedAt: 0,
 });
 

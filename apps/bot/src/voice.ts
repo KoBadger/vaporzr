@@ -545,17 +545,18 @@ export class VoiceManager implements AudioTransport {
         }
       } else if (this.ffmpeg) {
         // Server-side stream: silence is normal between tracks; don't warn.
-      } else if (this.expectingPcm && Date.now() - this.lastChunkAt > (this.everGotPcm ? 15_000 : 8_000)) {
+      } else if (this.expectingPcm && Date.now() - this.lastChunkAt > (this.everGotPcm ? 10_000 : 8_000)) {
         // The Spotify FIFO feed has no ffmpeg onEnd and briefly runs dry at
         // track boundaries; a short gap is normal once audio has started, so a
-        // track that HAS played waits for a sustained ~30s outage (2 warnings)
-        // before re-issuing — that lets the end-of-track advance win instead of
-        // being pre-empted by a re-seek.
+        // track that HAS played waits for a sustained outage (2 warnings) before
+        // re-issuing — that lets the end-of-track advance win instead of being
+        // pre-empted by a re-seek. 10s per warning (not 15s) keeps the worst
+        // case under ~20s: a stalled feed used to mean a full minute of silence.
         //
         // A track that has produced NOTHING has not started at all (dead
         // librespot session, unregistered device). Waiting 30s there is just 30s
         // of silence in the room, so a single 8s window triggers recovery.
-        const windowMs = this.everGotPcm ? 15_000 : 8_000;
+        const windowMs = this.everGotPcm ? 10_000 : 8_000;
         console.warn(
           `[voice] WARNING: expected audio but no chunks received in ${windowMs / 1000}s — stream may be stalled`,
         );
@@ -585,6 +586,17 @@ export class VoiceManager implements AudioTransport {
       // applies until the first chunk lands.
       this.everGotPcm = false;
     }
+    this.stallWarnings = 0;
+  }
+
+  /**
+   * Treat the feed as brand new again. Called before a stall re-issue: the
+   * previous take already proved the session was sick, so this one gets the
+   * short (8s, single-warning) window instead of another full 20s of silence.
+   */
+  expectFirstChunkSoon(): void {
+    this.lastChunkAt = Date.now();
+    this.everGotPcm = false;
     this.stallWarnings = 0;
   }
 

@@ -17,6 +17,7 @@ vi.hoisted(() => {
 import {
   amokSessionId,
   buildWeaselSsml,
+  cleanVoiceReference,
   cleanWeaselSpeechText,
   extractAmokReply,
   getWeaselMemorySummary,
@@ -28,6 +29,7 @@ import {
   rememberWeaselFact,
   resetAmokSession,
   shouldGroundOnWeb,
+  softenWeaselPcm,
   splitWeaselSpeech,
 } from '../amok.js';
 import { V_ALIASES, V_DISPATCH_ALIASES } from '../aliases.js';
@@ -141,6 +143,45 @@ describe('Amok ("The Weasel") Discord integration', () => {
     expect(clip!.pcm.readInt16LE(2)).toBe(1000);
     expect(clip!.pcm.readInt16LE(4)).toBe(-1000);
     expect(clip!.pcm.readInt16LE(6)).toBe(-1000);
+  });
+
+  it('cleans a voice reference: trims silence and normalises the peak', () => {
+    // 2 s of 48 kHz mono: 0.5 s silence, 1 s of "speech", 0.5 s silence.
+    const frames = 48_000 * 2;
+    const pcm = Buffer.alloc(frames * 2);
+    for (let i = 48_000 * 0.5; i < 48_000 * 1.5; i++) {
+      const v = Math.round(Math.sin((2 * Math.PI * 180 * i) / 48_000) * 8000);
+      pcm.writeInt16LE(v, i * 2);
+    }
+    const out = cleanVoiceReference(pcmMono48kToWav(pcm));
+    expect(out).not.toBeNull();
+    // Lead-in and tail are gone: roughly one second of speech survives.
+    expect(out!.durationMs).toBeGreaterThan(850);
+    expect(out!.durationMs).toBeLessThan(1200);
+    // Peak normalised upward (the source peaks at ~0.24).
+    let peak = 0;
+    for (let i = 0; i < Math.floor(out!.wav.length - 44) / 2; i++) {
+      peak = Math.max(peak, Math.abs(out!.wav.readInt16LE(44 + i * 2)));
+    }
+    expect(peak).toBeGreaterThan(20_000);
+    expect(cleanVoiceReference(Buffer.from('not a wav'))).toBeNull();
+  });
+
+  it('softens cloned PCM without changing its length', () => {
+    const frames = 48_000;
+    const pcm = Buffer.alloc(frames * 4);
+    for (let i = 0; i < frames; i++) {
+      const v = Math.round(Math.sin((2 * Math.PI * 220 * i) / 48_000) * 30_000);
+      pcm.writeInt16LE(v, i * 4);
+      pcm.writeInt16LE(v, i * 4 + 2);
+    }
+    const soft = softenWeaselPcm(pcm);
+    expect(soft.length).toBe(pcm.length);
+    let peak = 0;
+    for (let i = 0; i < frames; i++) peak = Math.max(peak, Math.abs(soft.readInt16LE(i * 4)));
+    // Trimmed to about -3 dBFS instead of riding at full scale.
+    expect(peak).toBeLessThanOrEqual(Math.round(0.72 * 32767));
+    expect(peak).toBeGreaterThan(10_000);
   });
 
   it('stores and summarizes long-term user and server memory', () => {

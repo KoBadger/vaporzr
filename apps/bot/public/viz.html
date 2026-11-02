@@ -87,16 +87,20 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
 #overlay.hidden{opacity:0;pointer-events:none}
 #track-row{display:flex;align-items:center;gap:14px}
 
-/* Official video panel: muted, synced to the track position, hidden when idle. */
-#video-panel{position:fixed;right:18px;bottom:18px;width:min(30vw,420px);aspect-ratio:16/9;z-index:9;
+/* Official video panel: muted, synced to the track position. It lives in the
+   empty upper-left lane — bottom-right collided with the MilkDrop hint, and
+   bottom-left with the live-decks strip. */
+#video-panel{position:fixed;left:20px;top:calc(var(--vz-top) + 168px);width:min(26vw,360px);aspect-ratio:16/9;z-index:11;
   border-radius:12px;overflow:hidden;border:1px solid rgba(140,160,255,.25);background:#000;
   box-shadow:0 18px 40px rgba(0,0,0,.55);transition:opacity .3s}
 #video-panel.hidden{opacity:0;pointer-events:none}
-#video-panel iframe{width:100%;height:100%;border:0;display:block}
+#video-panel video{width:100%;height:100%;border:0;display:block;object-fit:cover;background:#000}
 #video-tag{position:absolute;left:8px;top:8px;padding:3px 6px;border-radius:4px;
   font:700 8px/1 ui-monospace,monospace;letter-spacing:.16em;color:#cfe0ff;background:rgba(4,6,16,.7)}
+#video-panel.loading #video-tag{opacity:.55}
 body.mini #video-panel{display:none}
-@media (max-width:720px){#video-panel{width:min(46vw,300px);right:10px;bottom:104px}}
+/* Phones have no spare lane: the Activity is already stacked. */
+@media (max-width:720px){#video-panel{display:none}}
 #art{width:56px;height:56px;border-radius:8px;background:#1e293b;object-fit:cover;flex-shrink:0;
   box-shadow:0 4px 20px rgba(0,0,0,.4)}
 #title{font-weight:700;font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -487,12 +491,7 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
 </div>
 
 <div id="video-panel" class="hidden" aria-hidden="true">
-  <iframe
-    id="video-frame"
-    title="Official video"
-    allow="autoplay; encrypted-media; picture-in-picture"
-    referrerpolicy="strict-origin-when-cross-origin"
-  ></iframe>
+  <video id="video-el" muted playsinline preload="metadata"></video>
   <div id="video-tag">OFFICIAL VIDEO</div>
 </div>
 
@@ -2673,22 +2672,65 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
     showVideo(st);
   }
 
-  /* Official video: a muted YouTube embed parked in the corner, started at the
-     track position and reloaded when it drifts past 2.5 s (seeks, skips, pauses). */
+  /* Official video: a muted, same-origin MP4 from the bot, started at the track
+     position and nudged when audio/video drift past 2.5 s. It is not a YouTube
+     iframe: official videos usually refuse embedding, and the Activity CSP
+     blocks youtube.com outright. The bot downloads in the background, so the
+     panel shows the video's own thumbnail until the file is ready. */
   var videoPanel=document.getElementById('video-panel');
-  var videoFrame=document.getElementById('video-frame');
-  var videoNow={id:null,startedAt:0,offset:0};
+  var videoEl=document.getElementById('video-el');
+  var videoNow={id:null,src:'',startedAt:0,offset:0,timer:null};
+  var VIDEO_WAIT_TRIES=120;
+  function beginVideo(id,target){
+    if(videoNow.timer)clearTimeout(videoNow.timer);
+    var tries=0;
+    function poll(){
+      if(videoNow.id!==id)return;
+      fetch('/api/video/'+encodeURIComponent(id)+'?check=1',{credentials:'same-origin'})
+        .then(function(r){return r.json()})
+        .then(function(d){
+          if(videoNow.id!==id)return;
+          if(d&&d.status==='ready'){
+            videoNow.src='/api/video/'+encodeURIComponent(id);
+            videoNow.startedAt=Date.now();videoNow.offset=target;
+            videoEl.src=videoNow.src;
+            try{videoEl.currentTime=target}catch(e){}
+            videoPanel.classList.remove('loading');
+            var p=videoEl.play();if(p&&p.catch)p.catch(function(){});
+            return;
+          }
+          if(d&&d.status==='failed'){videoPanel.classList.add('hidden');return}
+          if(++tries>VIDEO_WAIT_TRIES)return;
+          videoNow.timer=setTimeout(poll,2000);
+        })
+        .catch(function(){
+          if(++tries>VIDEO_WAIT_TRIES)return;
+          videoNow.timer=setTimeout(poll,3000);
+        });
+    }
+    poll();
+  }
   function showVideo(st){
-    if(!videoPanel||!videoFrame)return;
+    if(!videoPanel||!videoEl)return;
     var id=st&&st.track&&st.videoId;
-    if(!id||!st.playing){videoPanel.classList.add('hidden');videoNow.id=null;return}
+    if(!id||!st.playing){
+      videoPanel.classList.add('hidden');videoNow.id=null;
+      if(videoNow.timer)clearTimeout(videoNow.timer);
+      try{videoEl.pause()}catch(e){}
+      return;
+    }
     var target=Math.max(0,(st.positionMs||0)/1000);
-    var clock=videoNow.startedAt?(Date.now()-videoNow.startedAt)/1000+videoNow.offset:0;
-    var drift=videoNow.id===id?Math.abs(clock-target):999;
-    if(videoNow.id!==id||drift>2.5){
-      videoFrame.src='https://www.youtube-nocookie.com/embed/'+encodeURIComponent(id)+
-        '?autoplay=1&mute=1&controls=0&modestbranding=1&playsinline=1&rel=0&start='+Math.floor(target);
-      videoNow={id:id,startedAt:Date.now(),offset:Math.floor(target)};
+    if(videoNow.id!==id){
+      videoNow={id:id,src:'',startedAt:0,offset:0,timer:null};
+      videoEl.removeAttribute('src');
+      try{videoEl.load()}catch(e){}
+      videoEl.poster='https://i.ytimg.com/vi/'+encodeURIComponent(id)+'/hqdefault.jpg';
+      videoPanel.classList.add('loading');
+      beginVideo(id,target);
+    }else if(videoNow.src){
+      var clock=videoNow.startedAt?(Date.now()-videoNow.startedAt)/1000+videoNow.offset:0;
+      if(Math.abs(clock-target)>2.5){try{videoEl.currentTime=target}catch(e){};videoNow.startedAt=Date.now();videoNow.offset=target}
+      if(videoEl.paused){var q=videoEl.play();if(q&&q.catch)q.catch(function(){});}
     }
     videoPanel.classList.remove('hidden');
   }

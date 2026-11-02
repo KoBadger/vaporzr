@@ -156,7 +156,7 @@ export class PlaybackController {
   /** Session EQ preset ('flat' adds nothing). */
   private eqPreset = 'flat';
   /** True when loudness normalization (loudnorm, -14 LUFS) is active. */
-  private loudnormOn = false;
+  private loudnormOn = true;
   /** Ambient intermission (queue-end): a quiet curated lo-fi track, looping. */
   private ambientActive = false;
   private ambientQueryIdx = 0;
@@ -276,6 +276,28 @@ export class PlaybackController {
       }
     }, 4000);
     this.cacheSaveTimer!.unref?.();
+  }
+
+  /**
+   * Warm the YouTube match for a Spotify track in the background. Called when a
+   * feed stalls, so the fallback that usually follows has its stream URL ready
+   * instead of spending another ~7s resolving against YouTube's anti-bot wall.
+   */
+  private prefetchYoutubeMatch(current: TrackInfo): void {
+    if (this.streamCache.has(current.uri)) return;
+    const query = `${current.name} ${(current.artists ?? []).join(' ')}`.trim();
+    if (!query) return;
+    void searchAndResolveYoutube(query, {
+      name: current.name,
+      artists: current.artists,
+      durationMs: current.durationMs,
+    })
+      .then((video) => {
+        if (video?.streamUrl) this.cacheSet(current.uri, video);
+      })
+      .catch(() => {
+        /* the fallback will try again if it ever needs to */
+      });
   }
 
   /** Set a cache entry and schedule its persistence. */
@@ -1589,6 +1611,12 @@ export class PlaybackController {
           this.stallResumeUri = playing.uri;
           console.warn(`[playback] Spotify feed stalled — re-issuing "${playing.name}" @ ${Math.round(pos / 1000)}s`);
           this.sendVisualizer({ type: 'cmd', command: 'stop' });
+          // The session just failed once: give the retry the short watchdog so a
+          // dead device falls through to YouTube in seconds, not another 20s.
+          this.voice.expectFirstChunkSoon?.();
+          // Resolve the YouTube match in parallel with the retry: by the time the
+          // retry fails (or the next stall lands) the URL is warm.
+          this.prefetchYoutubeMatch(playing);
           void this.play().catch((err) => {
             console.warn(`[playback] stall re-issue failed: ${err instanceof Error ? err.message : err}`);
           });
@@ -1659,7 +1687,9 @@ export class PlaybackController {
   /** Toggle loudness normalization (-14 LUFS to match Spotify's level). */
   setLoudnorm(on: boolean): void {
     this.loudnormOn = on;
-    this.queue.setState({ loudnorm: on ? true : undefined });
+    // Persist the explicit boolean: a dropped key would read back as "never
+    // set" and the on-by-default rule would quietly undo `V@norm off`.
+    this.queue.setState({ loudnorm: on });
     this.applyAudioFx();
     this.restartCurrent();
   }
@@ -2158,7 +2188,8 @@ export class PlaybackController {
     if (typeof state.speed === 'number' && state.speed > 0) this.speedFactor = state.speed;
     if (typeof state.bassBoost === 'number' && state.bassBoost > 0) this.bassBoostDb = state.bassBoost;
     if (state.eq && isEqPreset(state.eq)) this.eqPreset = state.eq;
-    this.loudnormOn = state.loudnorm === true;
+    // On unless a saved session explicitly turned it off.
+    this.loudnormOn = state.loudnorm !== false;
     this.applyAudioFx();
   }
 

@@ -41,6 +41,12 @@ export interface AudioTransport {
   feedPcm(data: Buffer): boolean;
   setStreamDrain(cb: (() => void) | null): void;
   setExpectingPcm(expected: boolean): void;
+  /**
+   * Re-arm the stall watchdog as if the feed were brand new, so a retry after a
+   * stall gets the short detection window instead of another full outage wait.
+   * Optional: transports without a watchdog (web PCM fan-out) can omit it.
+   */
+  expectFirstChunkSoon?(): void;
 
   // ---- effects / mixing ----
   setAudioFx(fx: string): void;

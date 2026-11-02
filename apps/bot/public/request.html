@@ -123,6 +123,26 @@
         background: #080c1c;
         box-shadow: 0 18px 38px rgba(0, 0, 0, 0.6);
         text-align: left;
+        /* Dark, thin scrollbar — the native light one was a bright stripe. */
+        scrollbar-width: thin;
+        scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
+        overscroll-behavior: contain;
+      }
+      .song-suggest::-webkit-scrollbar {
+        width: 8px;
+      }
+      .song-suggest::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      .song-suggest::-webkit-scrollbar-thumb {
+        background: rgba(148, 163, 184, 0.28);
+        border-radius: 8px;
+        border: 2px solid transparent;
+        background-clip: content-box;
+      }
+      .song-suggest::-webkit-scrollbar-thumb:hover {
+        background: rgba(148, 163, 184, 0.5);
+        background-clip: content-box;
       }
       .song-suggest[hidden] {
         display: none;
