@@ -558,7 +558,7 @@ export class DeckController {
     layout.pads = this.sampleDefaults();
     this.saveLayout();
     const filled = layout.pads.filter(Boolean).length;
-    return { ok: true, message: `Pads reset to the starter kit (${filled}/8).` };
+    return { ok: true, message: `Pads reset to the first eight in the library (${filled}/8).` };
   }
 
   /**

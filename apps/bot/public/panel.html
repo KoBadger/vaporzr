@@ -4262,6 +4262,7 @@
             // handler decides between queue and play.
             if (active >= 0) {
               e.preventDefault();
+              e.stopImmediatePropagation();
               choose(active);
             }
           } else if (e.key === 'Escape') {
