@@ -101,6 +101,8 @@ export class Bridge {
   private panels = new Set<Client>();
   private visualizers = new Set<Client>();
   private lastState: PlaybackState = emptyState();
+  /** Track uri → official video id, mirrored into every state broadcast. */
+  private trackVideo: { uri: string | null; id: string | null } = { uri: null, id: null };
   private lastQueue: QueueSnapshot = { tracks: [], currentIndex: -1 };
   private theme: VaporzrTheme = DEFAULT_THEME;
   private sensitivity = 1.0;
@@ -380,9 +382,10 @@ export class Bridge {
         }
       };
       const onStateChanged = (state: PlaybackState): void => {
-        this.broadcastPanels({ type: 'state:update', state, guildId: gid }, gid);
+        const enriched = this.withVideo(state);
+        this.broadcastPanels({ type: 'state:update', state: enriched, guildId: gid }, gid);
         this.pushLyrics(gid, state);
-        if (gid === this.sessions.guildId) this.broadcastVisualizers({ type: 'state:update', state });
+        if (gid === this.sessions.guildId) this.broadcastVisualizers({ type: 'state:update', state: enriched });
       };
       q.subscribe({ onQueueChanged, onStateChanged });
       s.voice.setOnVoiceChange((joined, channelId) => {
@@ -1390,6 +1393,27 @@ export class Bridge {
     this.broadcastPanels({ type: 'panel:notice', level, text });
   }
 
+  /**
+   * Remember the official video for the current track and push it out at once —
+   * the lookup lands a beat after the state broadcast, so without this the
+   * visualizer would only pick the video up on the next track.
+   */
+  setTrackVideo(uri: string, id: string | null): void {
+    if (!uri) return;
+    this.trackVideo = { uri, id: id || null };
+    if (this.lastState.track?.uri !== uri) return;
+    const enriched = this.withVideo(this.lastState);
+    this.broadcastVisualizers({ type: 'state:update', state: enriched });
+    const gid = this.sessions.guildId;
+    if (gid) this.broadcastPanels({ type: 'state:update', state: enriched, guildId: gid }, gid);
+  }
+
+  /** Attach the video id when the state is describing the cached track. */
+  private withVideo(state: PlaybackState): PlaybackState {
+    const id = state.track?.uri && this.trackVideo.uri === state.track.uri ? this.trackVideo.id : null;
+    return id ? { ...state, videoId: id } : state;
+  }
+
   /** Push live-deck state to every control surface (panels filter by guild). */
   broadcastDeck(state: DeckMixerState, guildId?: string): void {
     const msg = { type: 'deck:state' as const, state, guildId };
@@ -1693,7 +1717,7 @@ export class Bridge {
     const ew = s.endlessWave;
     const out: OutboundMessage = {
       type: 'snapshot',
-      state,
+      state: this.withVideo(state),
       queue,
       voice: {
         joined: s.voice.isJoined(),

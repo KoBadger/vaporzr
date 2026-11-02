@@ -28,6 +28,7 @@ import {
   rememberWeaselFact,
   resetAmokSession,
   shouldGroundOnWeb,
+  splitWeaselSpeech,
 } from '../amok.js';
 import { V_ALIASES, V_DISPATCH_ALIASES } from '../aliases.js';
 
@@ -105,6 +106,16 @@ describe('Amok ("The Weasel") Discord integration', () => {
     ]);
   });
 
+  it('splits a line into speakable sentences so clones never truncate', () => {
+    const chunks = splitWeaselSpeech(
+      'Sup buuuddy! This is the Weasel, coming at you live. We got a long one here — really long, with a clause that keeps going and going and going past the limit so the splitter has to break it somewhere sensible.',
+    );
+    expect(chunks.length).toBeGreaterThan(2);
+    expect(chunks[0]).toBe('Sup buuuddy!');
+    expect(chunks.every((c) => c.length <= 190)).toBe(true);
+    expect(chunks.join(' ')).toContain('sensible');
+  });
+
   it('detects queries that should use live Google Search grounding', () => {
     expect(shouldGroundOnWeb('what is the weather in LA today?')).toBe(true);
     expect(shouldGroundOnWeb('who won the game last night?')).toBe(true);
@@ -115,8 +126,8 @@ describe('Amok ("The Weasel") Discord integration', () => {
   it('shapes surfer SSML prosody and converts 48 kHz mono WAV/PCM buffers', () => {
     expect(cleanWeaselSpeechText('Hey **buuuddy**! `wheeze` https://example.com')).toBe('Hey buuuddy! wheeze');
     const ssml = buildWeaselSsml('Hey buuuddy! Keep wheezin the ju-uice!');
-    expect(ssml).toContain('<prosody rate="70%" pitch="+2.5st">buuuddy</prosody>');
-    expect(ssml).toContain('<prosody rate="70%" pitch="+2.5st">ju-uice</prosody>');
+    expect(ssml).toContain('<prosody rate="84%" pitch="+0.6st">buuuddy</prosody>');
+    expect(ssml).toContain('<prosody rate="84%" pitch="+0.6st">ju-uice</prosody>');
 
     const pcm = Buffer.alloc(4);
     pcm.writeInt16LE(1000, 0);

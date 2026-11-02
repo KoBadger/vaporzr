@@ -850,6 +850,12 @@ export class DiscordBot {
   private lastHypeAt = new Map<string, number>();
   /** guildId -> Weasel Auto-VJ spoken track intros enabled (`v@w vj on`). */
   private weaselVjGuilds = new Set<string>();
+  /** guildId -> `V@w videos off`: stop posting the official-video card. */
+  private videoCardsOff = new Set<string>();
+  /** track uri -> YouTube id (null = searched, nothing found). */
+  private videoCardIds = new Map<string, string | null>();
+  /** guildId -> track uri the last video card represented (dedupe). */
+  private videoCardPosted = new Map<string, string>();
   /** guildId -> Weasel live voice-channel ear enabled (`v@w listen on`). */
   private weaselListenGuilds = new Set<string>();
   private weaselListenBusy = new Set<string>();
@@ -11609,6 +11615,23 @@ export class DiscordBot {
     const trimmed = rawPrompt.trim();
     const gid = opts.guildId ?? '';
 
+    // 0. `v@w videos [on|off]` — official-video card on track changes (on by default)
+    const videosMatch = /^videos?(?:\s+(on|off|toggle|status))?$/i.exec(trimmed);
+    if (videosMatch) {
+      if (!gid) return 'Must be used inside a server.';
+      const mode = (videosMatch[1] ?? 'toggle').toLowerCase();
+      if (mode === 'on') this.videoCardsOff.delete(gid);
+      else if (mode === 'off') this.videoCardsOff.add(gid);
+      else if (mode === 'toggle') {
+        if (this.videoCardsOff.has(gid)) this.videoCardsOff.delete(gid);
+        else this.videoCardsOff.add(gid);
+      }
+      const active = !this.videoCardsOff.has(gid);
+      return active
+        ? '🎬 **Video cards are ON** — I drop the official video for each new track in the now-playing channel. (`V@w videos off` to stop)'
+        : '🔇 **Video cards are OFF** — no more video posts on track changes.';
+    }
+
     // 1. `v@w vj [on|off]` — toggle automatic spoken Weasel VJ intros on track changes
     const vjMatch = /^vj(?:\s+(on|off|toggle|status))?$/i.exec(trimmed);
     if (vjMatch) {
@@ -11870,7 +11893,15 @@ export class DiscordBot {
         targets.length > 0
           ? `Roast/Rate these specific targets BY NAME and go HARD: ${targets.join(', ')}. Use their music taste, queued songs, username, and anything you remember about them.`
           : `Roast and rate the current music queue, DJs, and channel vibe by name.`;
-      effectivePrompt = `${targetPhrase} ${arg && targets.length > 0 ? `Extra roast direction: ${arg}.` : ''} Lay down the burns like a 90s MTV Spring Break Roast — witty, sharp, specific, savage but never slurs/bigotry/threats/real-appearance. 1-3 punchy sentences max.`;
+      // The house vibe is a late-night NSFW party: when the command comes from
+      // an age-gated channel, let the Weasel talk like the room does. The hard
+      // lines (slurs, hate, threats, real appearance) stay off everywhere.
+      const chan = opts.channelId ? this.client.channels.cache.get(opts.channelId) : null;
+      const spicy = Boolean(chan && 'nsfw' in chan && (chan as { nsfw?: boolean }).nsfw);
+      const tone = spicy
+        ? 'This is an NSFW channel: crude, sexually explicit innuendo, swearing, drugs and 90s party filth are all fair game. Sound like a wasted 3 a.m. Vegas afterparty host.'
+        : 'Rude and punchy is good (swearing is fine); keep sexual content out unless this were an NSFW channel.';
+      effectivePrompt = `${targetPhrase} ${arg && targets.length > 0 ? `Extra roast direction: ${arg}.` : ''} Lay down the burns like a 90s MTV Spring Break Roast — witty, sharp, specific, savage. ${tone} Never slurs, bigotry, threats, or digs at real appearance. 1-3 punchy sentences max.`;
     }
 
     const result = await askAmokRich(effectivePrompt, {
@@ -11975,11 +12006,61 @@ export class DiscordBot {
   }
 
   /**
+   * Default presentation: post the official video card in the now-playing
+   * channel when a track starts. No voice unless Auto-VJ is on — the card
+   * carries the optional Weasel one-liner as text.
+   */
+  private async maybePostVideoCard(s: Session, track: TrackInfo): Promise<void> {
+    const gid = s.guildId;
+    if (!gid || this.videoCardsOff.has(gid)) return;
+    if (this.videoCardPosted.get(gid) === track.uri) return;
+    const channelId = this.miniNp.get(gid)?.channelId ?? this.lastTextChannel.get(gid);
+    if (!channelId) return;
+    const artists = (track.artists ?? []).filter(Boolean);
+    const key = track.uri || `${track.name} — ${artists.join(', ')}`;
+    let videoId = this.videoCardIds.get(key);
+    if (videoId === undefined) {
+      const hit = await findOfficialVideo(`${track.name} ${artists[0] ?? ''}`.trim()).catch(() => null);
+      videoId = hit ?? null;
+      this.videoCardIds.set(key, videoId);
+      if (this.videoCardIds.size > 400) {
+        const oldest = this.videoCardIds.keys().next().value;
+        if (oldest !== undefined) this.videoCardIds.delete(oldest);
+      }
+    }
+    if (!videoId) return;
+    this.bridge.setTrackVideo(track.uri, videoId);
+    if (s.queue.getCurrentTrack()?.uri !== track.uri) return;
+    const channel = this.client.channels.cache.get(channelId);
+    if (!channel || !channel.isTextBased() || !('send' in channel)) return;
+    const lore = this.ewTrackLore.get(track.uri);
+    const intro = lore
+      ? `${track.name} — ${lore}`
+      : `${track.name}${artists.length ? ` — ${artists.slice(0, 2).join(' & ')}` : ''}`;
+    const embed = new EmbedBuilder()
+      .setColor(this.helpColor())
+      .setAuthor({ name: 'OFFICIAL VIDEO' })
+      .setTitle(`${track.name}${artists.length ? ` — ${artists.slice(0, 2).join(' & ')}` : ''}`)
+      .setURL(`https://www.youtube.com/watch?v=${videoId}`)
+      .setImage(`https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`)
+      .setDescription(intro.slice(0, 300))
+      .setFooter({ text: 'V@w videos off silences these cards' });
+    try {
+      await (channel as { send: (o: unknown) => Promise<unknown> }).send({ embeds: [embed] });
+      this.videoCardPosted.set(gid, track.uri);
+      console.log(`[video-card] ${track.name} → ${videoId}`);
+    } catch {
+      /* missing send permission is not worth a warning per track */
+    }
+  }
+
+  /**
    * Optional TTS DJ: speak a short "now playing" line when a new track starts.
    * Strictly opt-in per guild (`/tts on` or `V@w vj on`), deduped per track.
    * The music ducks under the clip, then releases.
    */
   private maybeAnnounceTts(s: Session, track: TrackInfo): void {
+    void this.maybePostVideoCard(s, track);
     if (this.weaselVjGuilds.has(s.guildId)) {
       if (this.ttsAnnounced.get(s.guildId) === track.uri) return;
       this.ttsAnnounced.set(s.guildId, track.uri);
@@ -12434,7 +12515,8 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`V@w breakdown [song]` · `V@w lore` · `V@w sample` — Deep Track Intelligence: samples, producer lore, sonic DNA & cousin tracks',
       '`V@w roast [@user|target]` · `V@w rate` — savage 90s MTV Spring Break roast of the queue, a tagged user, or any named target',
       '`V@w say [topic]` · `V@w speak` · `V@w mic` — hop on the voice-channel mic with a Pauly Shore voice drop',
-      '`V@w vj on|off` — Auto-VJ: spoken track intros & sample/producer notes on track changes',
+      '`V@w vj on|off` — Auto-VJ: spoken track intros & sample/producer notes on track changes (voice is opt-in)',
+      '`V@w videos on|off` — official-video cards on track changes (on by default, text only; the Weasel intro rides along as text)',
       '`V@w listen on|off` — Voice Ears: talk out loud in VC (*"Hey Weasel, play…"* ) and he answers on the mic',
       '`V@w memory` · `V@w remember <fact>` — view or teach persistent listener & room taste memory',
       '`/vibe [mood]` · `V@vibe` — mood / time-of-day / weather auto-DJ (e.g. `V@vibe chill like Bonobo`, `V@vibe hype workout 5`)',
@@ -12697,6 +12779,32 @@ export function countBulkItems(raw: string): number {
     .split(/[\n;|]+/)
     .map((x) => x.trim())
     .filter(Boolean).length;
+}
+
+/**
+ * Best guess at the official video for a track: ask YouTube for the query and
+ * prefer a hit whose title actually contains the track name. Returns the bare
+ * video id, or null when nothing sensible comes back.
+ */
+async function findOfficialVideo(query: string): Promise<string | null> {
+  if (!query) return null;
+  const hits = await searchYoutube(query, 5);
+  if (!hits.length) return null;
+  const want = query
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const wants = want.split(' ').filter((w) => w.length > 2);
+  const score = (title: string): number => {
+    const t = title.toLowerCase();
+    return wants.reduce((n, w) => (t.includes(w) ? n + 1 : n), 0);
+  };
+  const ranked = [...hits].sort((a, b) => score(b.name) - score(a.name));
+  const best = ranked[0];
+  if (score(best.name) === 0) return null;
+  const id = /youtube:video:([A-Za-z0-9_-]{6,})/.exec(best.uri)?.[1];
+  return id ?? null;
 }
 
 async function resolvePlayInput(query: string): Promise<ResolvedTrack[]> {

@@ -457,11 +457,13 @@ export function buildWeaselSsml(text: string): string {
   const clean = cleanWeaselSpeechText(text);
   const escaped = clean.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+  // Subtle only: a small drawl on the catchphrases reads as a person doing a
+  // voice, where the old +2.5 semitones / 70% rate read as a cartoon.
   const shaped = escaped.replace(
     /\b(bu+ddy|ju+-?u*ice|cha+a*|du+de|so+o+|broham|wheezin'?|myagi|crusty|grindage|cheeza|mahi-mahi|ow-oww+)\b/gi,
-    '<prosody rate="70%" pitch="+2.5st">$1</prosody>',
+    '<prosody rate="84%" pitch="+0.6st">$1</prosody>',
   );
-  return `<speak><prosody rate="95%" pitch="+0.8st">${shaped}</prosody></speak>`;
+  return `<speak><prosody rate="100%" pitch="0st">${shaped}</prosody></speak>`;
 }
 
 /** Convert a 48 kHz 16-bit mono WAV buffer into 48 kHz 16-bit stereo Int16 PCM. */
@@ -561,81 +563,159 @@ function decodeAudioToStereo48k(audioBytes: Buffer): Promise<{ pcm: Buffer; dura
 }
 
 /**
- * Synthesize speech using Zero-Shot Voice Cloning (`resemble-ai/chatterbox` on Replicate)
- * trained on `/app/data/pauly-voice-ref.wav` so it sounds like Pauly Shore's real voice.
+ * Sentence-aware splitter for the clone: Chatterbox's prosody degrades on long
+ * paragraphs, so speak one sentence (or clause) at a time and glue the clips.
  */
-async function synthClonedPaulyVoice(cleanText: string): Promise<{ pcm: Buffer; durationMs: number } | null> {
+export function splitWeaselSpeech(text: string, max = 190): string[] {
+  const clean = cleanWeaselSpeechText(text);
+  if (!clean) return [];
+  const sentences = clean.match(/[^.!?]+[.!?]*/g) ?? [clean];
+  const out: string[] = [];
+  for (const raw of sentences) {
+    let s = raw.trim();
+    while (s.length > max) {
+      const cut = s.lastIndexOf(' ', max);
+      const at = cut > max * 0.5 ? cut : max;
+      out.push(s.slice(0, at).trim());
+      s = s.slice(at).trim();
+    }
+    if (s) out.push(s);
+  }
+  return out.filter(Boolean);
+}
+
+/** Small silent gap between sentence clips so speech has natural phrasing. */
+function silenceStereo48k(ms: number): Buffer {
+  return Buffer.alloc(Math.round((48_000 * 4 * ms) / 1000));
+}
+
+/**
+ * Synthesize speech using Zero-Shot Voice Cloning (`resemble-ai/chatterbox` on
+ * Replicate) trained on `/app/data/pauly-voice-ref.wav` so it sounds like
+ * Pauly Shore's real voice.
+ *
+ * One request per sentence, not per paragraph: the model keeps its cadence and
+ * never has to truncate text, which is what made long lines drone.
+ */
+async function synthClonedPaulyVoice(text: string): Promise<{ pcm: Buffer; durationMs: number } | null> {
   const repToken = (process.env.REPLICATE_API_TOKEN ?? '').trim();
   const audioPrompt = (process.env.AMOK_VOICE_SAMPLE_URL ?? '').trim() || getPaulyVoiceRefDataUri();
   if (!repToken || !audioPrompt) return null;
 
-  try {
-    const res = await fetch('https://api.replicate.com/v1/models/resemble-ai/chatterbox/predictions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${repToken}`,
-        'Content-Type': 'application/json',
-        Prefer: 'wait=20',
-      },
-      body: JSON.stringify({
-        input: {
-          prompt: cleanText.slice(0, 240),
-          audio_prompt: audioPrompt,
-          exaggeration: 0.65,
-          cfg_weight: 0.45,
+  const exaggeration = Number(process.env.AMOK_VOICE_EXAGGERATION ?? 0.4);
+  const cfg = Number(process.env.AMOK_VOICE_CFG ?? 0.5);
+  const chunks = splitWeaselSpeech(text);
+  if (!chunks.length) return null;
+
+  const clips: Array<Buffer | null> = new Array(chunks.length).fill(null);
+  const deadline = Date.now() + 20_000;
+  const synthOne = async (chunk: string): Promise<Buffer | null> => {
+    try {
+      const res = await fetch('https://api.replicate.com/v1/models/resemble-ai/chatterbox/predictions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${repToken}`,
+          'Content-Type': 'application/json',
+          Prefer: 'wait=15',
         },
-      }),
-      signal: AbortSignal.timeout(22_000),
+        body: JSON.stringify({
+          input: {
+            prompt: chunk,
+            audio_prompt: audioPrompt,
+            exaggeration: Number.isFinite(exaggeration) ? exaggeration : 0.4,
+            cfg_weight: Number.isFinite(cfg) ? cfg : 0.5,
+          },
+        }),
+        signal: AbortSignal.timeout(16_000),
+      });
+      if (!res.ok) return null;
+      const data = (await res.json()) as { output?: string };
+      if (!data.output || typeof data.output !== 'string') return null;
+      const wavRes = await fetch(data.output, { signal: AbortSignal.timeout(10_000) });
+      if (!wavRes.ok) return null;
+      const clip = await decodeAudioToStereo48k(Buffer.from(await wavRes.arrayBuffer()));
+      return clip?.pcm ?? null;
+    } catch {
+      return null;
+    }
+  };
+  // Two at a time: a three-sentence drop lands in ~4 s instead of ~9 s, and the
+  // clips are re-joined in sentence order either way.
+  for (let i = 0; i < chunks.length && Date.now() < deadline; i += 2) {
+    const batch = chunks.slice(i, i + 2);
+    const done = await Promise.all(batch.map((c) => synthOne(c)));
+    done.forEach((clip, j) => {
+      clips[i + j] = clip;
     });
-    if (!res.ok) return null;
-    const data = (await res.json()) as { output?: string };
-    if (!data.output || typeof data.output !== 'string') return null;
-    const wavRes = await fetch(data.output, { signal: AbortSignal.timeout(10_000) });
-    if (!wavRes.ok) return null;
-    const wavBuf = Buffer.from(await wavRes.arrayBuffer());
-    return await decodeAudioToStereo48k(wavBuf);
-  } catch {
-    return null;
   }
+  const got = clips.filter((c): c is Buffer => !!c);
+  if (got.length === 0) return null;
+  // A single failed sentence mid-line would read as a jump cut; only use the
+  // take when most of the line made it through.
+  if (got.length < Math.ceil(chunks.length * 0.6)) return null;
+  const pcm = Buffer.concat(got.flatMap((c, i) => (i === 0 ? [c] : [silenceStereo48k(80), c])));
+  return { pcm, durationMs: Math.round((pcm.length / (48_000 * 4)) * 1000) };
 }
 
 /**
  * Synthesize spoken Weasel audio:
- * 1. Primary: Zero-Shot Voice Cloning (`resemble-ai/chatterbox`) using Pauly Shore's
- *    real voice reference (`/app/data/pauly-voice-ref.wav`).
- * 2. Fallback: Google Cloud TTS (`en-US-Casual-K`) with SSML surfer prosody shaping.
+ * 1. Primary: Zero-Shot Voice Cloning (`resemble-ai/chatterbox`) using Pauly
+ *    Shore's real voice reference (`/app/data/pauly-voice-ref.wav`).
+ * 2. Fallback: Google Cloud TTS (Chirp3 HD by default) with light SSML shaping.
  */
 export async function synthWeaselVoice(text: string): Promise<{ pcm: Buffer; durationMs: number } | null> {
   const clean = cleanWeaselSpeechText(text);
   if (!clean) return null;
 
+  const started = Date.now();
   const cloned = await synthClonedPaulyVoice(clean);
-  if (cloned) return cloned;
+  if (cloned) {
+    console.log(
+      `[weasel-voice] chatterbox · ${Math.round(cloned.durationMs / 100) / 10}s clip · ${Date.now() - started}ms`,
+    );
+    return cloned;
+  }
 
   const projectId = (process.env.AMOK_PROJECT_ID ?? DEFAULT_PROJECT_ID).trim();
-  const voiceName = (process.env.AMOK_TTS_VOICE ?? DEFAULT_TTS_VOICE).trim();
+  const configured = (process.env.AMOK_TTS_VOICE ?? '').trim();
+  // Chirp3 HD reads far more naturally than the Casual voice; fall back to the
+  // old one if the project does not expose the new family.
+  const voices = configured ? [configured] : ['en-US-Chirp3-HD-Charon', DEFAULT_TTS_VOICE];
   const { token, quotaProject } = await getAccessToken(projectId);
   const ssml = buildWeaselSsml(clean);
 
-  const res = await fetch('https://texttospeech.googleapis.com/v1/text:synthesize', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'x-goog-user-project': quotaProject,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      input: { ssml },
-      voice: { languageCode: 'en-US', name: voiceName },
-      audioConfig: { audioEncoding: 'LINEAR16', sampleRateHertz: 48000 },
-    }),
-    signal: AbortSignal.timeout(12_000),
-  });
-  if (!res.ok) return null;
-  const data = (await res.json()) as { audioContent?: string };
-  if (!data.audioContent) return null;
-  const wav = Buffer.from(data.audioContent, 'base64');
-  return monoWavToStereoPcm(wav);
+  for (const voiceName of voices) {
+    try {
+      const res = await fetch('https://texttospeech.googleapis.com/v1/text:synthesize', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'x-goog-user-project': quotaProject,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          input: { ssml },
+          voice: { languageCode: 'en-US', name: voiceName },
+          audioConfig: { audioEncoding: 'LINEAR16', sampleRateHertz: 48000 },
+        }),
+        signal: AbortSignal.timeout(12_000),
+      });
+      if (!res.ok) continue;
+      const data = (await res.json()) as { audioContent?: string };
+      if (!data.audioContent) continue;
+      const out = monoWavToStereoPcm(Buffer.from(data.audioContent, 'base64'));
+      if (out) {
+        console.log(
+          `[weasel-voice] google ${voiceName} · ${Math.round(out.durationMs / 100) / 10}s clip · ${Date.now() - started}ms`,
+        );
+        return out;
+      }
+    } catch {
+      /* try the next voice */
+    }
+  }
+  console.warn('[weasel-voice] no engine produced audio');
+  return null;
 }
 
 /**
