@@ -107,6 +107,26 @@ in the bot's voice channel (unless vote-skip was turned off).
 | `/lyrics [query]` | `V@lyr` | Lyrics for the current or searched song. |
 | `/karaoke` | `V@k` | Live karaoke highlight mode. |
 
+## 🦦 Weasel & AI
+
+`V@w` (`V@weasel`, `V@amok`, `V@pauly`) is the 90s MTV VJ: web-grounded chat,
+room awareness, AI DJ'ing and voice drops. Reply to any of his messages to talk
+to him without the prefix.
+
+| Command | What it does |
+|---|---|
+| `V@w <message>` / `/weasel <message>` | Chat with The Weasel (room-aware, web-grounded). |
+| `V@w play <vibe or request>` | AI Auto-DJ: resolve and queue tracks for any vibe or prompt. |
+| `V@w wave <vibe\|arc>` · `arc` · `steer` | Deep-DNA Endless Wave: harmonic set architect (`off` clears). |
+| `V@w breakdown [song]` · `lore` · `sample` | Track intelligence: samples, producer lore, sonic DNA, cousin tracks. |
+| `V@w roast [@user\|target]` · `rate` | 90s MTV roast. Crude and explicit in NSFW channels; still no slurs/hate/threats. |
+| `V@w say [topic]` · `speak` · `mic` | Voice-channel drop in the cloned voice. |
+| `V@w vj on\|off` | Auto-VJ: spoken intros and sample notes on track changes (voice is opt-in). |
+| `V@w videos on\|off` | Official-video card on track changes (on by default, text only). |
+| `V@w listen on\|off` | Voice Ears: say "Hey Weasel, play…" in the channel and he answers. |
+| `V@w memory` · `remember <fact>` | View or teach the persistent listener/room memory. |
+| `/vibe [mood]` · `V@vibe` | Mood / time-of-day / weather auto-DJ. |
+
 ## 🎨 Visuals
 
 | Slash | Prefix | What it does |
