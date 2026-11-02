@@ -11606,12 +11606,11 @@ export class DiscordBot {
         return;
       }
       console.log(`[weasel] ears: heard "${truncate(transcript, 160)}"`);
-      // Respond when the speaker addresses The Weasel or gives a clear DJ voice request
-      const addressed =
-        /\b(weasel|pauly|amok|bu+ddy|broham|hey dj|yo dj)\b/i.test(transcript) ||
-        /^(?:hey|yo|okay|ok)?\s*(?:play|queue|put on|throw on|skip|what song|who sings|roast)\b/i.test(
-          transcript.trim(),
-        );
+      // The transcriber writes "Weasel" as Wizel / Weezel / Wisel depending on
+      // the room, so matching the literal word rejected real requests. Address
+      // detection is fuzzy and the command is stripped of its vocative before
+      // dispatch ("Yo, Wizel, play some Sublime" → "play some Sublime").
+      const { addressed, command } = parseVoiceUtterance(transcript);
       if (!addressed) {
         console.log('[weasel] ears: ignored — not addressed to him (say "Hey Weasel, ...")');
         return;
@@ -11622,7 +11621,7 @@ export class DiscordBot {
       const username = member?.user.username ?? 'broham';
       const channelId = this.lastTextChannel.get(gid) ?? guild?.systemChannelId ?? null;
 
-      const reply = await this.handleWeaselRequest(s, transcript, {
+      const reply = await this.handleWeaselRequest(s, command, {
         scopeId: gid,
         guildId: gid,
         channelId,
@@ -12520,6 +12519,48 @@ export async function resolveDirectMediaUrl(url: string): Promise<ResolvedTrack>
 }
 
 /** Categorized command reference powering the interactive `/help` / `V@help`. */
+/** Spellings the speech-to-text model produces for "Weasel" in a noisy room. */
+const WEASEL_NAME_RE =
+  /\b(?:w[aeiy]+[sz]+[aei]?l+[ei]?|wee\s?z(?:el|le)|paul(?:y|ie|ey|e)|amok|broham|bubba|bu+ddy)\b/i;
+
+/** Filler that opens a spoken sentence ("yo,", "okay so", "uh,"). */
+const VOICE_FILLER_RE = /^(?:hey|hi|yo|ok|okay|so|um|uh|alright|listen|ay)[,.!?\s]+/i;
+
+/** A vocative aimed at the bot, with whatever the ASR made of his name. */
+const VOICE_VOCATIVE_RE =
+  /^(?:the\s+)?(?:w[aeiy]+[sz]+[aei]?l+[ei]?|paul(?:y|ie|ey|e)|amok|broham|bubba|buddy)[a-z]*\b[,!?.\s]*/i;
+
+/** A bare imperative is enough — the room only gets one utterance at a time. */
+const VOICE_COMMAND_RE =
+  /^(?:play|queue|put on|throw on|skip|pause|resume|stop|what song|who sings|roast|rate|turn (?:it )?up|louder)\b/i;
+
+/** The transcriber narrating its own job is not a person talking. */
+const ASR_HALLUCINATION_RE = /^(?:transcrib|thanks for watching|please subscribe|subtitles by|caption)/i;
+
+/**
+ * Decide whether a captured utterance was aimed at The Weasel, and return the
+ * command with the vocative stripped. `"Yo, Wizel, play some Sublime"` used to
+ * be dropped: the name check wanted the literal "weasel" and the imperative
+ * check wanted "play" at the very start.
+ */
+export function parseVoiceUtterance(raw: string): { addressed: boolean; command: string } {
+  const text = String(raw ?? '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text || ASR_HALLUCINATION_RE.test(text)) return { addressed: false, command: '' };
+
+  let command = text;
+  for (let i = 0; i < 3; i++) {
+    const next = command.replace(VOICE_FILLER_RE, '');
+    if (next === command) break;
+    command = next;
+  }
+  command = command.replace(VOICE_VOCATIVE_RE, '').trim();
+
+  const addressed = WEASEL_NAME_RE.test(text) || VOICE_COMMAND_RE.test(command);
+  return { addressed, command: command || text };
+}
+
 const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: string; lines: string[] }> = [
   {
     id: 'playback',
