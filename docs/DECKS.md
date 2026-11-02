@@ -50,8 +50,8 @@ Each deck card has, top to bottom:
 | Seek bar | Same as the waveform, finer target |
 | Load | Resolve + download + cue |
 | Play / Cue | Transport, or reset to 0:00 |
-| Low / Mid / High + Kill | 3-band EQ, −40 dB … +6 dB; kill buttons slam a band out |
-| Trim | Per-deck gain |
+| Low / Mid / High + Kill | 3-band EQ as **rotary knobs** on the channel strip, −40 dB … +6 dB. 12 o'clock is 0 dB; the arc grows left for a cut and right for a boost, so a flat channel is an empty ring. Drag up/down (hold Shift for fine), scroll, arrow keys, double-click to snap back to 0. Kill buttons slam a band out |
+| Trim | Per-deck gain, same knob, 0–100 % |
 | Tempo (vertical fader) | atempo, pitch preserved (92–108 %) |
 | Nudge ±25 ms | Manual phase correction |
 | Platter mode | **VINYL** drags the track under the needle; **CDJ** turns a drag into ±ms nudges while it plays. `BAR n.n` under it is the bar at the playhead |
@@ -249,7 +249,7 @@ Any class-compliant controller is mapped without configuration:
 | --- | --- |
 | CC 1 | Crossfader |
 | CC 2 / 3 | Trim A / B |
-| CC 4-9 | EQ low/mid/high, A then B |
+| CC 4-9 | EQ low/mid/high, A then B — same law as the knobs, so CC 64 is 0 dB |
 | CC 10 / 11 | Filter A / B |
 | Notes 36-43 | FX pads (`q w e r t y u i`) |
 | Notes 48-55 | Hot cues 1-8 on deck A |
