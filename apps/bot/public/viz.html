@@ -86,6 +86,17 @@ body.calm #bc{filter:brightness(.75) saturate(.85)}
   background:linear-gradient(transparent,rgba(5,6,15,.9));transition:opacity .4s}
 #overlay.hidden{opacity:0;pointer-events:none}
 #track-row{display:flex;align-items:center;gap:14px}
+
+/* Official video panel: muted, synced to the track position, hidden when idle. */
+#video-panel{position:fixed;right:18px;bottom:18px;width:min(30vw,420px);aspect-ratio:16/9;z-index:9;
+  border-radius:12px;overflow:hidden;border:1px solid rgba(140,160,255,.25);background:#000;
+  box-shadow:0 18px 40px rgba(0,0,0,.55);transition:opacity .3s}
+#video-panel.hidden{opacity:0;pointer-events:none}
+#video-panel iframe{width:100%;height:100%;border:0;display:block}
+#video-tag{position:absolute;left:8px;top:8px;padding:3px 6px;border-radius:4px;
+  font:700 8px/1 ui-monospace,monospace;letter-spacing:.16em;color:#cfe0ff;background:rgba(4,6,16,.7)}
+body.mini #video-panel{display:none}
+@media (max-width:720px){#video-panel{width:min(46vw,300px);right:10px;bottom:104px}}
 #art{width:56px;height:56px;border-radius:8px;background:#1e293b;object-fit:cover;flex-shrink:0;
   box-shadow:0 4px 20px rgba(0,0,0,.4)}
 #title{font-weight:700;font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -473,6 +484,16 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
       <div id="next" class="hidden"></div>
     </div>
   </div>
+</div>
+
+<div id="video-panel" class="hidden" aria-hidden="true">
+  <iframe
+    id="video-frame"
+    title="Official video"
+    allow="autoplay; encrypted-media; picture-in-picture"
+    referrerpolicy="strict-origin-when-cross-origin"
+  ></iframe>
+  <div id="video-tag">OFFICIAL VIDEO</div>
 </div>
 
 <script src="/vendor/butterchurn.min.js"></script>
@@ -2649,6 +2670,27 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
       overlay.className='hidden';
       synthTrack=null;
     }
+    showVideo(st);
+  }
+
+  /* Official video: a muted YouTube embed parked in the corner, started at the
+     track position and reloaded when it drifts past 2.5 s (seeks, skips, pauses). */
+  var videoPanel=document.getElementById('video-panel');
+  var videoFrame=document.getElementById('video-frame');
+  var videoNow={id:null,startedAt:0,offset:0};
+  function showVideo(st){
+    if(!videoPanel||!videoFrame)return;
+    var id=st&&st.track&&st.videoId;
+    if(!id||!st.playing){videoPanel.classList.add('hidden');videoNow.id=null;return}
+    var target=Math.max(0,(st.positionMs||0)/1000);
+    var clock=videoNow.startedAt?(Date.now()-videoNow.startedAt)/1000+videoNow.offset:0;
+    var drift=videoNow.id===id?Math.abs(clock-target):999;
+    if(videoNow.id!==id||drift>2.5){
+      videoFrame.src='https://www.youtube-nocookie.com/embed/'+encodeURIComponent(id)+
+        '?autoplay=1&mute=1&controls=0&modestbranding=1&playsinline=1&rel=0&start='+Math.floor(target);
+      videoNow={id:id,startedAt:Date.now(),offset:Math.floor(target)};
+    }
+    videoPanel.classList.remove('hidden');
   }
   /**
    * The "up next" infographic line under the LIVE badge. The bridge broadcasts

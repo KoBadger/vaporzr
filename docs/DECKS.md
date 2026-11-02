@@ -299,3 +299,15 @@ crossfader and an **ON AIR** pill, blended over the visuals.
   which carries a rotating control invite), the strip also gets A play, CUE,
   SYNC, CUE B, B play and a draggable crossfader.
 - On phones the strip stacks and drops the blur for performance.
+
+### Official video panel
+
+When the bot knows the official video for the track (it looks it up once per
+track and caches the id), /viz and the Activity show a **muted video panel** in
+the bottom-right corner: it starts at the track's position and reloads itself
+when the audio and the video drift past 2.5 s, so skips and seeks stay aligned.
+It hides while nothing is playing (or when a pause is reported) and collapses in
+the mini layout. The same lookup powers the **video card** the bot posts in the
+now-playing channel on every track change — text plus thumbnail, no voice unless
+`V@w vj on` is set. `V@w videos off` stops the cards; the visualizer panel still
+follows whatever the bridge reports.

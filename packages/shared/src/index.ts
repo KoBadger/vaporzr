@@ -42,6 +42,8 @@ export interface PlaybackState {
   volume: number;
   shuffle: boolean;
   repeat: boolean;
+  /** Official video id for this track, when the bot found one (video card/panel). */
+  videoId?: string | null;
   /** Session tempo factor (1 = normal; 1.25 = Nightcore; 0.85 = slowed). */
   speed?: number;
   /** Bass-boost gain in dB (0 = off). */
