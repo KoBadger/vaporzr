@@ -47,7 +47,7 @@
   </head>
   <body>
     <h1>Privacy Policy</h1>
-    <p class="muted">Last updated: August 19, 2026</p>
+    <p class="muted">Last updated: November 2, 2026</p>
 
     <p>
       Vaporzr ("the Bot") is a Discord music bot. This Privacy Policy explains what data the Bot processes, how it is
@@ -72,6 +72,12 @@
       <li>
         <strong>Queue data</strong> — Track names, artists, and playback state are stored locally per guild to survive
         restarts.
+      </li>
+      <li>
+        <strong>Server registry</strong> — When the bot joins a server, the operator keeps one small record of it:
+        server id and name, owner id, member count, the date it was added and, if it is later removed, the date it left.
+        This exists solely so the operator can see which servers use the bot and who to contact. It is the only
+        server-level metadata retained and it is deleted on request.
       </li>
     </ul>
 
@@ -111,6 +117,13 @@
     <p>
       Queue data is retained until the queue is cleared or the Bot's data directory is manually deleted. Spotify tokens
       are retained until unlinked. No data is retained indefinitely by design.
+    </p>
+
+    <h2>Removing the Bot / Your Data</h2>
+    <p>
+      Removing the bot from a server stops all processing for it. To have that server's stored record and files deleted,
+      ask the operator — the server id is all that is needed to find them. Anyone can check what is stored with
+      <code>/privacy</code>; the operator lists every server that has added the bot with <code>V@servers</code>.
     </p>
 
     <h2>Children's Privacy</h2>

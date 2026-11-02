@@ -102,7 +102,11 @@ export class Bridge {
   private visualizers = new Set<Client>();
   private lastState: PlaybackState = emptyState();
   /** Track uri → official video id, mirrored into every state broadcast. */
-  private trackVideo: { uri: string | null; id: string | null } = { uri: null, id: null };
+  private trackVideo: { uri: string | null; id: string | null; official: boolean } = {
+    uri: null,
+    id: null,
+    official: false,
+  };
   private lastQueue: QueueSnapshot = { tracks: [], currentIndex: -1 };
   private theme: VaporzrTheme = DEFAULT_THEME;
   private sensitivity = 1.0;
@@ -1398,9 +1402,9 @@ export class Bridge {
    * the lookup lands a beat after the state broadcast, so without this the
    * visualizer would only pick the video up on the next track.
    */
-  setTrackVideo(uri: string, id: string | null): void {
+  setTrackVideo(uri: string, id: string | null, official = false): void {
     if (!uri) return;
-    this.trackVideo = { uri, id: id || null };
+    this.trackVideo = { uri, id: id || null, official: official && !!id };
     if (this.lastState.track?.uri !== uri) return;
     const enriched = this.withVideo(this.lastState);
     this.broadcastVisualizers({ type: 'state:update', state: enriched });
@@ -1410,8 +1414,10 @@ export class Bridge {
 
   /** Attach the video id when the state is describing the cached track. */
   private withVideo(state: PlaybackState): PlaybackState {
-    const id = state.track?.uri && this.trackVideo.uri === state.track.uri ? this.trackVideo.id : null;
-    return id ? { ...state, videoId: id } : state;
+    const same = !!state.track?.uri && this.trackVideo.uri === state.track.uri;
+    const id = same ? this.trackVideo.id : null;
+    if (!id) return state;
+    return { ...state, videoId: id, videoOfficial: same ? this.trackVideo.official : false };
   }
 
   /** Push live-deck state to every control surface (panels filter by guild). */
