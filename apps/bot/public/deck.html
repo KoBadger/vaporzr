@@ -2007,48 +2007,42 @@
         color: var(--dim-2);
       }
 
-      /* ---------- mix headroom ---------- */
-      .headroom {
-        display: grid;
-        gap: 4px;
-        padding-top: 6px;
-      }
-      .hr-legend {
+      /* ---------- mix level readout ----------
+         A meter made of two full-width bars directly under the crossfader read
+         as a second crossfader - it was literally the same numbers drawn again.
+         Text on one line cannot be mistaken for a fader. */
+      .mix-readout {
         display: flex;
-        justify-content: space-between;
-        font: 700 7.5px/1 inherit;
-        letter-spacing: 0.18em;
+        align-items: center;
+        gap: 8px;
+        margin-top: 2px;
+        font: 700 8.5px/1 var(--mono);
+        letter-spacing: 0.12em;
         color: var(--dim-2);
-        text-transform: uppercase;
       }
-      .hr-bars {
-        display: grid;
-        gap: 4px;
+      .mix-readout .mr-label {
+        font-size: 7.5px;
+        letter-spacing: 0.18em;
       }
-      .hr-bar {
-        height: 5px;
-        border-radius: 2px;
-        background: #161b2e;
-        overflow: hidden;
+      #mix-sum {
+        color: #7ff0c4;
       }
-      .hr-bar i {
-        display: block;
-        height: 100%;
-        width: 0;
-        border-radius: 2px;
-        background: linear-gradient(90deg, #17c48c, #7ff0c4);
-        transition: width 0.16s linear;
+      #mix-sum.hot {
+        color: var(--amber);
       }
-      .hr-bar i.b {
-        background: linear-gradient(90deg, #8b5cf6, #e0d3ff);
+      #mix-sum.clip {
+        color: var(--red);
       }
       #hr-clip {
+        margin-left: auto;
         font: 800 8px/1 var(--mono);
         letter-spacing: 0.14em;
         color: var(--dim-2);
+        opacity: 0.55;
       }
       #hr-clip.on {
         color: #fff;
+        opacity: 1;
         text-shadow: 0 0 8px var(--red);
       }
 
@@ -2597,12 +2591,10 @@
             <span>B</span>
           </div>
           <input id="xfade" type="range" min="0" max="100" step="1" value="50" aria-label="Crossfader" />
-          <div class="headroom">
-            <div class="hr-legend"><span>MIX HEADROOM</span><span id="hr-clip">CLIP</span></div>
-            <div class="hr-bars">
-              <div class="hr-bar"><i id="hr-a"></i></div>
-              <div class="hr-bar"><i class="b" id="hr-b"></i></div>
-            </div>
+          <div class="mix-readout">
+            <span class="mr-label">MIX SUM</span>
+            <span id="mix-sum">−∞ dB</span>
+            <span id="hr-clip">CLIP</span>
           </div>
         </div>
 
@@ -3167,6 +3159,29 @@
           var frac = (p - 0.5) * 2;
           return Math.round(frac >= 0 ? frac * 6 : frac * 40);
         }
+        /* Filled in by the sample-library setup so the state painter can refresh
+           the pads; see the note next to the assignment. */
+        var renderPadsFromState = null;
+        /* Camelot distance between two keys: 'harmonic' (same or neighbour),
+           'energy' (relative/pop) or 'clash'. Lives out here because both paint
+           paths use it; it used to sit inside a sibling scope, which threw
+           "camelotCompat is not defined" on every repaint and killed everything
+           after the key badges - including the mix meter. */
+        function camelotCompat(a, b) {
+          if (!a || !b) return null;
+          var ra = /^(\d+)([AB])$/.exec(a);
+          var rb = /^(\d+)([AB])$/.exec(b);
+          if (!ra || !rb) return null;
+          var na = Number(ra[1]);
+          var nb = Number(rb[1]);
+          var d = Math.abs(na - nb);
+          if (d > 6) d = 12 - d;
+          if (na === nb && ra[2] === rb[2]) return 'harmonic';
+          if (ra[2] === rb[2] && d === 1) return 'harmonic';
+          if (na === nb) return 'energy';
+          if (d <= 2) return 'energy';
+          return 'clash';
+        }
         function paintKnob(knob, kind, value) {
           var pct = knobPct(kind, value);
           var fill = el('.knob-fill', knob);
@@ -3445,9 +3460,9 @@
           // Sample bank pads come from the server's samples.json layout (8 slots).
           var samples = (state.a && state.a.samples) || [];
           var key = samples.join('|');
-          if (key !== lastSamplesKey) {
+          if (key !== lastSamplesKey && renderPadsFromState) {
             lastSamplesKey = key;
-            renderSamplePads(samples);
+            renderPadsFromState(samples);
           }
           // Thumb dock (phones): keep its transport LEDs and fader in step with
           // the deck cards it duplicates.
@@ -3537,15 +3552,19 @@
             el('#key-b').classList.add(compat);
           }
 
-          // Mix headroom: what each side contributes after the crossfader, so a
-          // hot trim shows up before the voice stream clips.
+          // Mix sum: what both sides contribute after the crossfader, in dB.
+          // Text instead of a bar - the same numbers drawn as two horizontal
+          // tracks under the crossfader looked like a second crossfader.
           var xfadeAmt = state.crossfader;
           var mixA = Math.max(0, state.a.gain) * (1 - xfadeAmt) * (state.a.playing ? 1 : 0.6);
           var mixB = Math.max(0, state.b.gain) * xfadeAmt * (state.b.playing ? 1 : 0.6);
-          el('#hr-a').style.width = Math.min(100, Math.round(mixA * 86)) + '%';
-          el('#hr-b').style.width = Math.min(100, Math.round(mixB * 86)) + '%';
-          var clip = el('#hr-clip');
-          clip.classList.toggle('on', mixA + mixB > 0.98);
+          var mixSum = mixA + mixB;
+          var sumEl = el('#mix-sum');
+          var sumDb = mixSum > 0.0005 ? 20 * Math.log10(mixSum) : -60;
+          sumEl.textContent = sumDb <= -60 ? '−∞ dB' : (sumDb >= 0 ? '+' : '−') + Math.abs(sumDb).toFixed(1) + ' dB';
+          sumEl.classList.toggle('clip', mixSum > 0.98);
+          sumEl.classList.toggle('hot', mixSum <= 0.98 && mixSum > 0.7);
+          el('#hr-clip').classList.toggle('on', mixSum > 0.98);
 
           // Capture buttons grey out when the source deck has nothing loaded.
           all('[data-capture]').forEach(function (btn) {
@@ -3736,6 +3755,11 @@
             }
             el('#samples-count').textContent = filled + '/8';
           }
+          // The deck-state painter lives outside this DOMContentLoaded scope, so
+          // it gets the pad renderer through a bridge. Calling it directly threw
+          // "renderSamplePads is not defined" the first time a state push carried
+          // a new pad layout - which also skipped the rest of that paint pass.
+          renderPadsFromState = renderSamplePads;
           function loadSampleBank() {
             fetch('/api/deck/samples', { credentials: 'same-origin' })
               .then(function (r) {
@@ -3762,21 +3786,6 @@
                 }
               })
               .catch(function () {});
-          }
-          function camelotCompat(a, b) {
-            if (!a || !b) return null;
-            var ra = /^(\d+)([AB])$/.exec(a);
-            var rb = /^(\d+)([AB])$/.exec(b);
-            if (!ra || !rb) return null;
-            var na = Number(ra[1]);
-            var nb = Number(rb[1]);
-            var d = Math.abs(na - nb);
-            if (d > 6) d = 12 - d;
-            if (na === nb && ra[2] === rb[2]) return 'harmonic';
-            if (ra[2] === rb[2] && d === 1) return 'harmonic';
-            if (na === nb) return 'energy';
-            if (d <= 2) return 'energy';
-            return 'clash';
           }
           function sampleOp(op) {
             fetch('/api/deck/samples?op=' + op, { method: 'POST', credentials: 'same-origin' })

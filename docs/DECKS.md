@@ -116,11 +116,13 @@ don't end up with eight kicks. `RESET` puts the starter eight back.
 
 **Keys and headroom.** The mixer header shows each deck's Camelot key
 (`8A`, `9A`, …), tinted green when the pair is harmonic, amber for an energy
-lift and red for a clash. Under the crossfader, `MIX HEADROOM` shows what each
-side contributes after the fader — when the two add past full scale the `CLIP`
-lamp lights, which is the cue to pull a trim back. `SYNC / MATCH` also draws a
-**drift ring**: the arc grows with the phase error the lock is correcting, and
-the number inside is milliseconds.
+lift and red for a clash. Under the crossfader a one-line `MIX SUM` readout shows
+both sides after the fader in dB — green with room to spare, amber inside 3 dB,
+red past full scale, where the `CLIP` lamp lights and the fix is to pull a trim
+back. It is deliberately text, not a bar: two horizontal bars under the fader
+read as a second crossfader. `SYNC / MATCH` also draws a **drift ring**: the arc
+grows with the phase error the lock is correcting, and the number inside is
+milliseconds.
 
 **Capture.** `CAPTURE CUE → A` / `→ B` under the hot cues copies this deck's
 playhead onto the other deck's first free cue pad — the fast way to line up a
