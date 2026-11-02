@@ -185,7 +185,7 @@ function stageCookieCopy(): string | null {
   }
 }
 
-function ytDlpOnce(args: string[], proxy = '', skipCookies = false): Promise<string> {
+function ytDlpOnce(args: string[], proxy = '', skipCookies = false, timeoutMs = 20_000): Promise<string> {
   return new Promise((resolve, reject) => {
     const noProxyEnv = Object.fromEntries(
       Object.entries(process.env).filter(([k]) => !k.toLowerCase().endsWith('_proxy')),
@@ -206,7 +206,7 @@ function ytDlpOnce(args: string[], proxy = '', skipCookies = false): Promise<str
     execFile(
       config.ytDlpPath,
       [...flags, ...args],
-      { windowsHide: true, timeout: 20_000, maxBuffer: 4 * 1024 * 1024, env: noProxyEnv },
+      { windowsHide: true, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, env: noProxyEnv },
       (err, stdout, stderr) => {
         if (cookieCopy) {
           try {
@@ -239,6 +239,37 @@ function ytDlpOnce(args: string[], proxy = '', skipCookies = false): Promise<str
  *  knowing which is what makes it actionable. */
 export function isBotWall(msg: string): boolean {
   return /Sign in to confirm|not a bot/i.test(msg) || msg === YOUTUBE_BUSY_TEXT;
+}
+
+/**
+ * Download a progressive MP4 for a video id through the same route chain as
+ * playback (cookies, PO tokens, direct → alt warp → metered fallback). Used by
+ * the bot's `/api/video` proxy so the visualizer and the Discord Activity can
+ * show the official video without an iframe: a large share of official music
+ * videos refuse embedding, and the Activity's CSP blocks youtube.com entirely.
+ *
+ * Progressive formats only (`best[height<=N]`): a separate video+audio pair
+ * would need muxing after the fact, which doubles the CPU for no visible gain —
+ * the client mutes the element, so the bundled audio track is harmless.
+ */
+export async function downloadYoutubeVideo(videoId: string, outPath: string, maxHeight = 360): Promise<boolean> {
+  const format = `best[height<=${maxHeight}][ext=mp4]/best[height<=${maxHeight}]/best`;
+  try {
+    await runYtDlp(
+      ['-f', format, '--no-progress', '--no-part', '-o', outPath, `https://www.youtube.com/watch?v=${videoId}`],
+      1,
+      undefined,
+      120_000,
+    );
+  } catch (err) {
+    console.warn(`[youtube] video download ${videoId} failed: ${err instanceof Error ? err.message : err}`);
+    return false;
+  }
+  try {
+    return fs.statSync(outPath).size > 1024;
+  } catch {
+    return false;
+  }
 }
 
 /** A proxy-side failure (dead credentials, unreachable tunnel, 407). */
@@ -447,7 +478,7 @@ export function shouldRetryYtDlp(
  *  URL = that hop only (no fallback, no direct — otherwise a dead hop would be
  *  masked by a route that happens to work). Undefined = the normal chain:
  *  direct first, then every configured proxy hop in trial order. */
-async function runYtDlp(args: string[], retries = 2, route?: string): Promise<string> {
+async function runYtDlp(args: string[], retries = 2, route?: string, timeoutMs = 20_000): Promise<string> {
   let lastErr: unknown;
 
   /** Retry a single network path (`proxy` = '' is a direct connection). */
@@ -457,7 +488,7 @@ async function runYtDlp(args: string[], retries = 2, route?: string): Promise<st
       try {
         // On a rotating residential fallback retry, drop the cookie jar so a
         // flagged/invalidated session cookie doesn't poison the clean exit IP.
-        return await ytDlpOnce(args, curProxy, rotating && attempt > 0);
+        return await ytDlpOnce(args, curProxy, rotating && attempt > 0, timeoutMs);
       } catch (err) {
         lastErr = err;
         const msg = err instanceof Error ? err.message : String(err);

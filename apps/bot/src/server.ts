@@ -19,6 +19,7 @@ import { SessionManager } from './session.js';
 import { PermissionsManager } from './permissions.js';
 import { vizTunnel } from './tunnel.js';
 import { secretEquals, keyFromCookieHeader } from './secretCompare.js';
+import { handleVideoProxy } from './videoProxy.js';
 import {
   SESSION_COOKIE,
   INVITE_TTL_MS,
@@ -388,7 +389,6 @@ function htmlSecurityHeaders(res: http.ServerResponse, activity = false): void {
     "default-src 'self'; img-src 'self' data: blob: https:; media-src 'self' blob:; " +
       "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
       "connect-src 'self' ws: wss:; font-src 'self' data: https://fonts.gstatic.com; " +
-      'frame-src https://www.youtube-nocookie.com https://www.youtube.com; ' +
       "base-uri 'none'; form-action 'self'; " +
       frame,
   );
@@ -1163,6 +1163,12 @@ async function handleRoute(
       }
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify(pair.invite ? { status: 'approved', invite: pair.invite } : { status: 'pending' }));
+      return;
+    }
+
+    // Official-video proxy: downloads on demand, then serves a seekable MP4.
+    if (url.pathname.startsWith('/api/video/')) {
+      handleVideoProxy(req, res, decodeURIComponent(url.pathname.slice('/api/video/'.length)), url);
       return;
     }
 

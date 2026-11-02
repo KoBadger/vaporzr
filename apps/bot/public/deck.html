@@ -3395,6 +3395,20 @@
                 sampleBank = d;
                 renderSampleLib();
                 renderSampleSetups();
+                // Opening the page before loading a track used to leave the pads
+                // blank even though the library was there. Show the saved/banked
+                // pads until the deck state supplies its own.
+                var deckSamples = (state && state.a && state.a.samples) || [];
+                var hasDeck = deckSamples.some(function (n) {
+                  return !!n;
+                });
+                if (!hasDeck && d.pads && d.pads.length) {
+                  renderSamplePads(
+                    d.pads.map(function (f) {
+                      return f ? f.replace(/^.*[\\/]/, '').replace(/\.[^.]+$/, '') : '';
+                    }),
+                  );
+                }
               })
               .catch(function () {});
           }

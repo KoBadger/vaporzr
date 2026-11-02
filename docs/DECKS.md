@@ -304,10 +304,19 @@ crossfader and an **ON AIR** pill, blended over the visuals.
 
 When the bot knows the official video for the track (it looks it up once per
 track and caches the id), /viz and the Activity show a **muted video panel** in
-the bottom-right corner: it starts at the track's position and reloads itself
-when the audio and the video drift past 2.5 s, so skips and seeks stay aligned.
-It hides while nothing is playing (or when a pause is reported) and collapses in
-the mini layout. The same lookup powers the **video card** the bot posts in the
-now-playing channel on every track change — text plus thumbnail, no voice unless
+the empty upper-left lane: it starts at the track's position and seeks itself
+when the audio and the video drift past 2.5 s. It hides while nothing is
+playing (or when a pause is reported) and is off on phones, where the layout has
+no spare lane.
+
+The video is **not a YouTube iframe**. Official music videos very often refuse
+embedding, and the Discord Activity CSP blocks youtube.com outright, so the bot
+streams a 360p MP4 through its own `/api/video/<id>` route (cached on the data
+volume, served with Range support, pruned to the last 12 tracks). That is why
+the panel works in the Activity as well as in a browser.
+
+The same lookup powers the **video card** the bot posts in the now-playing
+channel on every track change — text plus thumbnail, no voice unless
 `V@w vj on` is set. `V@w videos off` stops the cards; the visualizer panel still
-follows whatever the bridge reports.
+follows whatever the bridge reports (silencing the post does not blank the
+picture).

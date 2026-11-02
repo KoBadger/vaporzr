@@ -81,6 +81,7 @@ Names autocomplete. Up to 25 playlists/server, 200 tracks each.
 |---|---|---|
 | `/speed <mode>` | `V@speed` | `nightcore`, `slowed`, `normal`. |
 | `/bassboost <5\|8\|10>` | `V@bass` | Bass boost in dB. |
+| `/norm <on\|off>` | `V@norm` | Loudness match (-14 LUFS). **On by default** so Spotify and YouTube sit at the same level. |
 | `/mashup <a> <b>` | `V@mashup <a> \| <b>` | Render a tempo/key-matched blend of two songs (downloadable MP3) + 5 similar tracks. |
 | `/mashupgame` | `V@mg` | Game: auto-pick two queued songs, render a stem mashup (2 variants), and post a vote. |
 | `/mashups` | `V@mh` | List past mashups + winners. |
@@ -119,7 +120,7 @@ to him without the prefix.
 | `V@w play <vibe or request>` | AI Auto-DJ: resolve and queue tracks for any vibe or prompt. |
 | `V@w wave <vibe\|arc>` · `arc` · `steer` | Deep-DNA Endless Wave: harmonic set architect (`off` clears). |
 | `V@w breakdown [song]` · `lore` · `sample` | Track intelligence: samples, producer lore, sonic DNA, cousin tracks. |
-| `V@w roast [@user\|target]` · `rate` | 90s MTV roast. Crude and explicit in NSFW channels; still no slurs/hate/threats. |
+| `V@w roast [@user\|target]` · `rate` | 90s MTV roast. PG-13 ceiling on normal channels; untethered uncensored in NSFW channels (floor: no hate at a protected group, no threats, nothing sexual involving minors). |
 | `V@w say [topic]` · `speak` · `mic` | Voice-channel drop in the cloned voice. |
 | `V@w vj on\|off` | Auto-VJ: spoken intros and sample notes on track changes (voice is opt-in). |
 | `V@w videos on\|off` | Official-video card on track changes (on by default, text only). |

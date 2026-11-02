@@ -504,13 +504,147 @@ export function pcmMono48kToWav(pcm: Buffer): Buffer {
 
 let cachedPaulyRefDataUri: string | null | undefined;
 
+interface PcmWav {
+  sampleRate: number;
+  channels: number;
+  data: Buffer;
+}
+
+/** Minimal 16-bit PCM WAV reader. Returns null for anything else (compressed). */
+function readPcmWav(buf: Buffer): PcmWav | null {
+  if (buf.length < 44 || buf.toString('ascii', 0, 4) !== 'RIFF') return null;
+  let off = 12;
+  let sampleRate = 0;
+  let channels = 0;
+  let bits = 0;
+  let data: Buffer | null = null;
+  while (off + 8 <= buf.length) {
+    const id = buf.toString('ascii', off, off + 4);
+    const len = buf.readUInt32LE(off + 4);
+    if (id === 'fmt ' && off + 24 <= buf.length) {
+      channels = buf.readUInt16LE(off + 10);
+      sampleRate = buf.readUInt32LE(off + 12);
+      bits = buf.readUInt16LE(off + 22);
+    } else if (id === 'data') {
+      data = buf.subarray(off + 8, Math.min(buf.length, off + 8 + len));
+    }
+    off += 8 + len + (len & 1);
+  }
+  if (!data || bits !== 16 || !sampleRate || !channels) return null;
+  return { sampleRate, channels, data };
+}
+
+/** Wrap 16-bit PCM in a RIFF header. */
+function writePcmWav({ sampleRate, channels, data }: PcmWav): Buffer {
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0, 'ascii');
+  header.writeUInt32LE(36 + data.length, 4);
+  header.write('WAVE', 8, 'ascii');
+  header.write('fmt ', 12, 'ascii');
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(channels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(sampleRate * channels * 2, 28);
+  header.writeUInt16LE(channels * 2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write('data', 36, 'ascii');
+  header.writeUInt32LE(data.length, 40);
+  return Buffer.concat([header, data]);
+}
+
+/**
+ * Make a voice reference behave. Chatterbox conditions on whatever it is given,
+ * so a clip with a long lead-in, dead air between sentences and a quiet take
+ * teaches it the wrong rhythm — and the identity drifts toward the model's own
+ * default speaker. This trims silence, closes long pauses, normalises the peak
+ * and caps the length, which is the closest thing to "retraining" a zero-shot
+ * clone without a fine-tune.
+ */
+export function cleanVoiceReference(buf: Buffer): { wav: Buffer; durationMs: number; trimmed: boolean } | null {
+  const wav = readPcmWav(buf);
+  if (!wav) return null;
+  const { sampleRate, channels, data } = wav;
+  const frames = Math.floor(data.length / (channels * 2));
+  if (frames <= 0) return null;
+  const frameMs = 20;
+  const win = Math.max(1, Math.round((sampleRate * frameMs) / 1000));
+  const rms: number[] = [];
+  for (let f = 0; f * win < frames; f++) {
+    let sum = 0;
+    const from = f * win;
+    const to = Math.min(frames, from + win);
+    for (let i = from; i < to; i++) {
+      const v = data.readInt16LE(i * channels * 2) / 32768;
+      sum += v * v;
+    }
+    rms.push(Math.sqrt(sum / Math.max(1, to - from)));
+  }
+  const peakRms = Math.max(...rms);
+  if (!Number.isFinite(peakRms) || peakRms < 0.004) return null;
+  const floor = peakRms * 0.12;
+  // Keep everything from the first to the last speech frame, then collapse any
+  // internal silence longer than ~180 ms so the model hears continuous delivery
+  // instead of gaps it might learn to reproduce.
+  const first = rms.findIndex((v) => v > floor);
+  let last = rms.length - 1;
+  while (last > first && rms[last] <= floor) last--;
+  const keepGap = Math.round(180 / frameMs);
+  const pieces: Buffer[] = [];
+  let gap = 0;
+  for (let f = first; f <= last; f++) {
+    if (rms[f] <= floor) {
+      gap++;
+      continue;
+    }
+    if (gap > 0) {
+      const keep = Math.min(gap, keepGap);
+      pieces.push(Buffer.alloc(keep * win * channels * 2));
+      gap = 0;
+    }
+    const from = f * win;
+    const to = Math.min(frames, from + win);
+    pieces.push(data.subarray(from * channels * 2, to * channels * 2));
+  }
+  if (pieces.length === 0) return null;
+  const joined = Buffer.concat(pieces);
+  // Cap at 14 s: long references make Chatterbox wander.
+  const maxFrames = Math.min(Math.floor(joined.length / (channels * 2)), sampleRate * 14);
+  const clipped = joined.subarray(0, maxFrames * channels * 2);
+  // Peak-normalise to -1.5 dBFS.
+  let peak = 0;
+  for (let i = 0; i < Math.floor(clipped.length / 2); i++) {
+    const v = Math.abs(clipped.readInt16LE(i * 2));
+    if (v > peak) peak = v;
+  }
+  const gain = peak > 0 ? Math.min(4, (32768 * 0.84) / peak) : 1;
+  const out = Buffer.allocUnsafe(clipped.length);
+  for (let i = 0; i < Math.floor(clipped.length / 2); i++) {
+    const v = Math.max(-32768, Math.min(32767, Math.round(clipped.readInt16LE(i * 2) * gain)));
+    out.writeInt16LE(v, i * 2);
+  }
+  return {
+    wav: writePcmWav({ sampleRate, channels, data: out }),
+    durationMs: Math.round((out.length / (channels * 2 * sampleRate)) * 1000),
+    trimmed: true,
+  };
+}
+
 function getPaulyVoiceRefDataUri(): string | null {
   if (cachedPaulyRefDataUri !== undefined) return cachedPaulyRefDataUri;
   const refPath = process.env.AMOK_VOICE_REF_PATH || path.join(config.dataDir, 'pauly-voice-ref.wav');
   try {
     if (fs.existsSync(refPath)) {
-      const b64 = fs.readFileSync(refPath).toString('base64');
-      cachedPaulyRefDataUri = `data:audio/wav;base64,${b64}`;
+      const raw = fs.readFileSync(refPath);
+      // Condition on a trimmed, normalised take rather than the raw file: see
+      // cleanVoiceReference for why the difference matters to a zero-shot clone.
+      const clean = process.env.AMOK_VOICE_REF_RAW ? null : cleanVoiceReference(raw);
+      const use = clean?.wav ?? raw;
+      console.log(
+        `[weasel-voice] reference ${path.basename(refPath)} · ${Math.round((clean?.durationMs ?? 0) / 100) / 10}s` +
+          `${clean ? ' (silence-trimmed, peak-normalised)' : ''}`,
+      );
+      cachedPaulyRefDataUri = `data:audio/wav;base64,${use.toString('base64')}`;
       return cachedPaulyRefDataUri;
     }
   } catch {
@@ -590,6 +724,189 @@ function silenceStereo48k(ms: number): Buffer {
 }
 
 /**
+ * "Softer presence" for the cloned voice.
+ *
+ * Chatterbox lands hot and brittle: full-band energy, spiky consonants and a
+ * level that sits on top of the music instead of in it. That reads as uncanny
+ * even when the timbre is right. This is a light broadcast chain — rumble
+ * filter, gentle top-end roll-off, slow 3:1 compression, peak trim — so the
+ * character stays but the delivery stops sounding shouted.
+ */
+export function softenWeaselPcm(pcm: Buffer): Buffer {
+  const frames = Math.floor(pcm.length / 4);
+  if (frames <= 0) return pcm;
+  const sr = 48_000;
+  const hpA = Math.exp((-2 * Math.PI * 90) / sr);
+  const lpA = Math.exp((-2 * Math.PI * 6200) / sr);
+  const att = Math.exp(-1 / (0.01 * sr));
+  const rel = Math.exp(-1 / (0.2 * sr));
+  const buf = new Float32Array(frames * 2);
+  let hpL = 0;
+  let hpR = 0;
+  let prevL = 0;
+  let prevR = 0;
+  let lpL = 0;
+  let lpR = 0;
+  let env = 0;
+  const threshold = 0.16;
+  const ratio = 3;
+  let peak = 0;
+  for (let i = 0; i < frames; i++) {
+    const l = pcm.readInt16LE(i * 4) / 32768;
+    const r = pcm.readInt16LE(i * 4 + 2) / 32768;
+    hpL = hpA * (hpL + l - prevL);
+    hpR = hpA * (hpR + r - prevR);
+    prevL = l;
+    prevR = r;
+    lpL = lpA * lpL + (1 - lpA) * hpL;
+    lpR = lpA * lpR + (1 - lpA) * hpR;
+    // Keep most of the body, shave the top that makes sibilance sting.
+    let ol = hpL * 0.58 + lpL * 0.42;
+    let or = hpR * 0.58 + lpR * 0.42;
+    const mag = Math.max(Math.abs(ol), Math.abs(or));
+    const coeff = mag > env ? att : rel;
+    env = coeff * env + (1 - coeff) * mag;
+    const gain = env > threshold ? (threshold + (env - threshold) / ratio) / env : 1;
+    ol = Math.tanh(ol * gain * 1.1) / Math.tanh(1.1);
+    or = Math.tanh(or * gain * 1.1) / Math.tanh(1.1);
+    buf[i * 2] = ol;
+    buf[i * 2 + 1] = or;
+    const p = Math.max(Math.abs(ol), Math.abs(or));
+    if (p > peak) peak = p;
+  }
+  // Sit at about -3 dBFS: loud enough to be clear, not a jump-scare.
+  const norm = peak > 0.0001 ? 0.7 / peak : 1;
+  const out = Buffer.allocUnsafe(frames * 4);
+  for (let i = 0; i < frames; i++) {
+    const l = Math.max(-32768, Math.min(32767, Math.round(buf[i * 2] * norm * 32767)));
+    const r = Math.max(-32768, Math.min(32767, Math.round(buf[i * 2 + 1] * norm * 32767)));
+    out.writeInt16LE(l, i * 4);
+    out.writeInt16LE(r, i * 4 + 2);
+  }
+  return out;
+}
+
+/**
+ * When the Replicate worker was last warm. The model scales to zero after a few
+ * idle minutes, and a cold start is ~30-40s; knowing this lets a warm call use
+ * a short budget (and a cold one wait long enough to actually succeed) instead
+ * of silently dropping the clone for the generic fallback voice.
+ */
+let voiceWarmUntil = 0;
+
+interface RepPrediction {
+  id?: string;
+  status?: string;
+  output?: unknown;
+  error?: string;
+  detail?: string;
+}
+
+function predictionOutput(p: RepPrediction): string | null {
+  const out = p.output;
+  if (typeof out === 'string') return out;
+  if (Array.isArray(out) && typeof out[0] === 'string') return out[0];
+  return null;
+}
+
+async function replicateCreate(
+  token: string,
+  prompt: string,
+  audioPrompt: string,
+  exaggeration: number,
+  cfg: number,
+): Promise<RepPrediction | null> {
+  try {
+    const res = await fetch('https://api.replicate.com/v1/models/resemble-ai/chatterbox/predictions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        input: {
+          prompt,
+          audio_prompt: audioPrompt,
+          exaggeration: Number.isFinite(exaggeration) ? exaggeration : 0.35,
+          cfg_weight: Number.isFinite(cfg) ? cfg : 0.3,
+        },
+      }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      // 402 = out of credit, 401 = bad token, 422 = schema change. All of them
+      // used to be invisible, so "the voice is wrong" looked like a bad clone.
+      console.warn(`[weasel-voice] replicate create ${res.status}: ${text.slice(0, 200)}`);
+      return null;
+    }
+    return JSON.parse(text) as RepPrediction;
+  } catch (err) {
+    console.warn(`[weasel-voice] replicate create failed: ${err instanceof Error ? err.message : err}`);
+    return null;
+  }
+}
+
+/** Wait for a prediction that the create call returned as starting/processing. */
+async function replicateResolve(token: string, created: RepPrediction, deadline: number): Promise<string | null> {
+  const immediate = predictionOutput(created);
+  if (immediate) return immediate;
+  const id = created.id;
+  if (!id) return null;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 700));
+    try {
+      const res = await fetch(`https://api.replicate.com/v1/predictions/${encodeURIComponent(id)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) continue;
+      const data = (await res.json()) as RepPrediction;
+      if (data.status === 'succeeded') return predictionOutput(data);
+      if (data.status === 'failed' || data.status === 'canceled') {
+        console.warn(`[weasel-voice] replicate ${data.status}: ${String(data.error ?? '').slice(0, 160)}`);
+        return null;
+      }
+    } catch {
+      /* transient poll failure — keep waiting until the deadline */
+    }
+  }
+  console.warn('[weasel-voice] replicate prediction timed out');
+  return null;
+}
+
+/**
+ * Chatterbox scales to zero after a few idle minutes, and a cold start costs
+ * ~30-40s. After a real voice drop we keep the worker warm for a while so the
+ * next line in the same conversation is back in ~5s. Stops on its own after a
+ * few refreshes (or immediately with AMOK_VOICE_KEEPWARM=0).
+ */
+let keepWarmTimer: NodeJS.Timeout | null = null;
+let keepWarmLeft = 0;
+
+function scheduleKeepWarm(): void {
+  if ((process.env.AMOK_VOICE_KEEPWARM ?? '1').trim() === '0') return;
+  keepWarmLeft = 4;
+  armKeepWarm();
+}
+
+function armKeepWarm(): void {
+  if (keepWarmLeft <= 0 || keepWarmTimer) return;
+  keepWarmTimer = setTimeout(() => {
+    keepWarmTimer = null;
+    void (async () => {
+      const token = (process.env.REPLICATE_API_TOKEN ?? '').trim();
+      const ref = (process.env.AMOK_VOICE_SAMPLE_URL ?? '').trim() || getPaulyVoiceRefDataUri();
+      if (!token || !ref) return;
+      const pred = await replicateCreate(token, 'Hey buddy.', ref, 0.35, 0.3);
+      const url = pred ? await replicateResolve(token, pred, Date.now() + 45_000) : null;
+      if (!url) return;
+      voiceWarmUntil = Date.now() + 6 * 60_000;
+      keepWarmLeft--;
+      armKeepWarm();
+    })();
+  }, 3.5 * 60_000);
+  keepWarmTimer.unref?.();
+}
+
+/**
  * Synthesize speech using Zero-Shot Voice Cloning (`resemble-ai/chatterbox` on
  * Replicate) trained on `/app/data/pauly-voice-ref.wav` so it sounds like
  * Pauly Shore's real voice.
@@ -602,59 +919,48 @@ async function synthClonedPaulyVoice(text: string): Promise<{ pcm: Buffer; durat
   const audioPrompt = (process.env.AMOK_VOICE_SAMPLE_URL ?? '').trim() || getPaulyVoiceRefDataUri();
   if (!repToken || !audioPrompt) return null;
 
-  const exaggeration = Number(process.env.AMOK_VOICE_EXAGGERATION ?? 0.4);
-  const cfg = Number(process.env.AMOK_VOICE_CFG ?? 0.5);
-  const chunks = splitWeaselSpeech(text);
+  const exaggeration = Number(process.env.AMOK_VOICE_EXAGGERATION ?? 0.35);
+  const cfg = Number(process.env.AMOK_VOICE_CFG ?? 0.3);
+  // Four sentences is a full VJ drop; more than that is not worth the wait.
+  const chunks = splitWeaselSpeech(text).slice(0, 4);
   if (!chunks.length) return null;
 
-  const clips: Array<Buffer | null> = new Array(chunks.length).fill(null);
-  const deadline = Date.now() + 20_000;
-  const synthOne = async (chunk: string): Promise<Buffer | null> => {
-    try {
-      const res = await fetch('https://api.replicate.com/v1/models/resemble-ai/chatterbox/predictions', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${repToken}`,
-          'Content-Type': 'application/json',
-          Prefer: 'wait=15',
-        },
-        body: JSON.stringify({
-          input: {
-            prompt: chunk,
-            audio_prompt: audioPrompt,
-            exaggeration: Number.isFinite(exaggeration) ? exaggeration : 0.4,
-            cfg_weight: Number.isFinite(cfg) ? cfg : 0.5,
-          },
-        }),
-        signal: AbortSignal.timeout(16_000),
-      });
-      if (!res.ok) return null;
-      const data = (await res.json()) as { output?: string };
-      if (!data.output || typeof data.output !== 'string') return null;
-      const wavRes = await fetch(data.output, { signal: AbortSignal.timeout(10_000) });
-      if (!wavRes.ok) return null;
-      const clip = await decodeAudioToStereo48k(Buffer.from(await wavRes.arrayBuffer()));
-      return clip?.pcm ?? null;
-    } catch {
-      return null;
-    }
-  };
-  // Two at a time: a three-sentence drop lands in ~4 s instead of ~9 s, and the
-  // clips are re-joined in sentence order either way.
-  for (let i = 0; i < chunks.length && Date.now() < deadline; i += 2) {
-    const batch = chunks.slice(i, i + 2);
-    const done = await Promise.all(batch.map((c) => synthOne(c)));
-    done.forEach((clip, j) => {
-      clips[i + j] = clip;
-    });
-  }
+  // A cold model spends 30s+ loading, which is why `Prefer: wait=15` used to
+  // return "processing" and every single drop fell through to the Google voice.
+  // Submit up front and poll, with a budget that knows whether the worker is
+  // warm from a recent call.
+  const warm = Date.now() < voiceWarmUntil;
+  const deadline = Date.now() + (warm ? 12_000 : 40_000);
+
+  const created = await Promise.all(
+    chunks.map((chunk) => replicateCreate(repToken, chunk, audioPrompt, exaggeration, cfg)),
+  );
+  const urls = await Promise.all(created.map((p) => (p ? replicateResolve(repToken, p, deadline) : null)));
+  const audioUrls = urls.filter((u): u is string => !!u);
+  if (audioUrls.length === 0) return null;
+
+  const clips = await Promise.all(
+    audioUrls.map(async (url) => {
+      try {
+        const wavRes = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+        if (!wavRes.ok) return null;
+        const clip = await decodeAudioToStereo48k(Buffer.from(await wavRes.arrayBuffer()));
+        return clip?.pcm ?? null;
+      } catch {
+        return null;
+      }
+    }),
+  );
   const got = clips.filter((c): c is Buffer => !!c);
   if (got.length === 0) return null;
   // A single failed sentence mid-line would read as a jump cut; only use the
   // take when most of the line made it through.
   if (got.length < Math.ceil(chunks.length * 0.6)) return null;
+  voiceWarmUntil = Date.now() + 6 * 60_000;
+  scheduleKeepWarm();
   const pcm = Buffer.concat(got.flatMap((c, i) => (i === 0 ? [c] : [silenceStereo48k(80), c])));
-  return { pcm, durationMs: Math.round((pcm.length / (48_000 * 4)) * 1000) };
+  const softened = softenWeaselPcm(pcm);
+  return { pcm: softened, durationMs: Math.round((softened.length / (48_000 * 4)) * 1000) };
 }
 
 /**
@@ -678,9 +984,9 @@ export async function synthWeaselVoice(text: string): Promise<{ pcm: Buffer; dur
 
   const projectId = (process.env.AMOK_PROJECT_ID ?? DEFAULT_PROJECT_ID).trim();
   const configured = (process.env.AMOK_TTS_VOICE ?? '').trim();
-  // Chirp3 HD reads far more naturally than the Casual voice; fall back to the
-  // old one if the project does not expose the new family.
-  const voices = configured ? [configured] : ['en-US-Chirp3-HD-Charon', DEFAULT_TTS_VOICE];
+  // Chirp3 HD reads far more naturally than the Casual voice; Puck is the
+  // upbeat one (closest to a VJ), Charon the deep safety net.
+  const voices = configured ? [configured] : ['en-US-Chirp3-HD-Puck', 'en-US-Chirp3-HD-Charon', DEFAULT_TTS_VOICE];
   const { token, quotaProject } = await getAccessToken(projectId);
   const ssml = buildWeaselSsml(clean);
 
@@ -705,10 +1011,11 @@ export async function synthWeaselVoice(text: string): Promise<{ pcm: Buffer; dur
       if (!data.audioContent) continue;
       const out = monoWavToStereoPcm(Buffer.from(data.audioContent, 'base64'));
       if (out) {
+        const pcm = softenWeaselPcm(out.pcm);
         console.log(
-          `[weasel-voice] google ${voiceName} · ${Math.round(out.durationMs / 100) / 10}s clip · ${Date.now() - started}ms`,
+          `[weasel-voice] google ${voiceName} · ${Math.round(pcm.length / 192000) / 10}s clip · ${Date.now() - started}ms`,
         );
-        return out;
+        return { pcm, durationMs: Math.round((pcm.length / (48_000 * 4)) * 1000) };
       }
     } catch {
       /* try the next voice */

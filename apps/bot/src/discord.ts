@@ -1109,15 +1109,25 @@ export class DiscordBot {
       }
     };
     // The deck page's library panel: categories, the eight pads and saved setups.
-    // Layout lives once per data dir, so any guild's controller can answer.
+    // Layout lives once per data dir, so any guild's controller can answer. The
+    // page opens the library BEFORE a track is loaded, so fall back to a
+    // controller for the primary guild instead of refusing to list anything.
     bridge.onSampleBank = (action, name) => {
-      const controller = this.deckControllers.values().next().value;
-      if (!controller) return { ok: false, message: 'Load a deck first — the bank follows the decks.' };
+      const controller = this.deckControllers.values().next().value ?? this.sampleBankController();
       const payload = () => ({
-        library: controller.sampleLibrary(),
-        pads: controller.samplePads(),
-        setups: controller.sampleSetups(),
+        library: controller ? controller.sampleLibrary() : [],
+        pads: controller ? controller.samplePads() : [],
+        setups: controller ? controller.sampleSetups() : [],
       });
+      if (!controller) {
+        return {
+          ok: true,
+          library: [],
+          pads: Array.from({ length: 8 }, () => null),
+          setups: [],
+          message: 'No server has played anything yet — the bank fills on first use.',
+        };
+      }
       if (action === 'list') return { ok: true, ...payload() };
       const result =
         action === 'reset'
@@ -1305,6 +1315,16 @@ export class DiscordBot {
   /** Resolve the isolated playback session for a guild (DMs share one session). */
   private sessionFor(guildId: string | null | undefined): Session {
     return this.sessions.get(guildId ?? '__dm__');
+  }
+
+  /**
+   * A controller for the sample bank when the deck page opens before anything
+   * has been loaded. Sessions are file-backed per guild, so borrowing the
+   * primary guild's controller is free and it is reused when a deck starts.
+   */
+  private sampleBankController(): DeckController | null {
+    const gid = this.bridge.getPrimaryGuildId() ?? this.client.guilds.cache.firstKey();
+    return gid ? this.deckFor(gid) : null;
   }
 
   /** Live decks for a guild — one mixer per guild, sharing its voice link. */
@@ -5394,7 +5414,7 @@ export class DiscordBot {
           const cat = args ? this.helpCategoryEmbed(args) : null;
           if (args && !cat) {
             await message.reply(
-              `Unknown category \`${args}\`. Try: ${HELP_CATEGORIES.map((c) => `\`${c.id}\``).join(', ')}, \`all\`, or \`aliases\`.`,
+              `Nothing called \`${args}\` here. Try a category: ${HELP_CATEGORIES.map((c) => `\`${c.id}\``).join(', ')} — or \`V@help all\`.`,
             );
           } else if (cat) {
             await message.reply({ embeds: [cat], components: this.helpButtons() });
@@ -11180,19 +11200,30 @@ export class DiscordBot {
       ? `**Web** — ${web.join(' · ')}`
       : '**Web** — `/panel`, `/viz`, `/listen` open the secure links';
 
+    // Keep the first screen to one job: play something. Everything longer lives
+    // behind a category button, reachable by name or by keyword.
+    const startHere = [
+      '**Play something**',
+      '`/play` *song or link* — the only command you need to start',
+      '`/skip` · `/queue` · `/volume 60`',
+    ].join('\n');
+
     const embed = new EmbedBuilder()
       .setTitle('Vaporzr')
-      .setDescription(`*music · autoplay · weasel ai · visuals · games*\n\n${catLines}\n\n${webLine}`)
+      .setDescription(
+        `*music · autoplay · weasel ai · visuals · games*\n\n${startHere}\n\n` +
+          `**Browse**\n${catLines}\n\n${webLine}`,
+      )
       .setColor(this.helpColor())
       .addFields({
-        name: "✨ what's new",
+        name: '✨ what’s new',
         value:
-          "`/listen` — the bot's full-quality audio in a browser, with a sound-check panel\n" +
-          '`/diag` — now shows the **live** Opus bitrate, not just the target\n' +
-          '`V@w roast` — The Weasel roasts anyone · `V@w say` — Pauly Shore voice drops',
+          '`/listen` — the bot’s full-quality audio in a browser, with a sound-check panel\n' +
+          '`V@w roast` — the Weasel roasts anyone · `V@w say` — voice drops\n' +
+          '`V@norm` — loudness match is now **on by default**',
       })
       .setFooter({
-        text: 'V@help all — every command · V@help aliases — every shortcut · V@help <category> — jump',
+        text: 'V@help <category> — one section · V@help <command> — find it by name · V@help all — everything',
       });
     if (avatar) embed.setThumbnail(avatar);
     return embed;
@@ -11262,15 +11293,50 @@ export class DiscordBot {
     const q = id.trim().toLowerCase();
     const aliasId = q === 'ai' || q === 'w' || q === 'amok' || q === 'pauly' ? 'weasel' : q;
     const idx = HELP_CATEGORIES.findIndex((x) => x.id === aliasId || x.name.toLowerCase() === aliasId);
-    if (idx < 0) return null;
+    if (idx < 0) return this.helpSearchEmbed(q);
     const c = HELP_CATEGORIES[idx];
     return new EmbedBuilder()
       .setTitle(`${c.emoji}  ${c.name}`)
       .setDescription(`*${c.blurb}*\n\n${c.lines.join('\n')}`)
       .setColor(this.helpColor())
       .setFooter({
-        text: `${idx + 1}/${HELP_CATEGORIES.length} · V@help for the menu · V@help all for everything`,
+        text: `${idx + 1}/${HELP_CATEGORIES.length} · V@help for the menu · V@help <command> finds one command`,
       });
+  }
+
+  /**
+   * `V@help skip` — find a command by name instead of making someone read a
+   * whole category. Matching ignores the prefixes, so "skip", "/skip" and
+   * "V@s" all land on the same rows.
+   */
+  private helpSearchEmbed(query: string): EmbedBuilder | null {
+    const q = query
+      .replace(/^[/!]|^v@/i, '')
+      .trim()
+      .toLowerCase();
+    if (q.length < 2) return null;
+    const fields: Array<{ name: string; value: string }> = [];
+    let hits = 0;
+    for (const c of HELP_CATEGORIES) {
+      const rows = c.lines.filter((line) => line && line.toLowerCase().includes(q));
+      if (!rows.length) continue;
+      hits += rows.length;
+      fields.push({
+        name: `${c.emoji} ${c.name}`,
+        value: rows.slice(0, 6).join('\n'),
+      });
+      if (fields.length >= 5) break;
+    }
+    if (!fields.length) return null;
+    return new EmbedBuilder()
+      .setTitle(`🔎  ${query.trim()}`)
+      .setDescription(
+        `*${hits} match${hits === 1 ? '' : 'es'}* — commands that mention this. ` +
+          `Try \`V@help\` for the menu, or \`V@help all\` for the full list.`,
+      )
+      .setColor(this.helpColor())
+      .addFields(...fields)
+      .setFooter({ text: 'V@help <category> — that whole section' });
   }
 
   private statsEmbed(): EmbedBuilder {
@@ -11855,10 +11921,16 @@ export class DiscordBot {
           /* user might not be in voice */
         }
       }
-      const spoke = await this.speakWeaselInVoice(s, res.text);
-      return spoke
-        ? `🎙️ *On the mic in voice:*\n${res.text}`
-        : `${res.text}\n-# (Join a voice channel to hear me on the mic!)`;
+      // Reply first, speak second. Synthesis (especially a cold clone worker)
+      // takes seconds to tens of seconds; making the Discord reply wait on it
+      // is what made a simple `V@w say` feel like it "took a minute".
+      if (!s.voice.isJoined()) {
+        return `${res.text}\n-# (Join a voice channel to hear me on the mic!)`;
+      }
+      void this.speakWeaselInVoice(s, res.text).catch((err) => {
+        console.warn(`[weasel] voice drop failed: ${err instanceof Error ? err.message : err}`);
+      });
+      return `🎙️ *On the mic in voice:*\n${res.text}`;
     }
 
     // 7. `v@w roast [target]` / `v@w rate [target]` — savage 90s MTV Roast of any target
@@ -11894,14 +11966,15 @@ export class DiscordBot {
           ? `Roast/Rate these specific targets BY NAME and go HARD: ${targets.join(', ')}. Use their music taste, queued songs, username, and anything you remember about them.`
           : `Roast and rate the current music queue, DJs, and channel vibe by name.`;
       // The house vibe is a late-night NSFW party: when the command comes from
-      // an age-gated channel, let the Weasel talk like the room does. The hard
-      // lines (slurs, hate, threats, real appearance) stay off everywhere.
+      // an age-gated channel, let the Weasel talk like the room does. The floor
+      // is legal/safety only — no genuine hate at a protected group, no threats,
+      // nothing sexual involving minors — everything else is fair game.
       const chan = opts.channelId ? this.client.channels.cache.get(opts.channelId) : null;
       const spicy = Boolean(chan && 'nsfw' in chan && (chan as { nsfw?: boolean }).nsfw);
       const tone = spicy
-        ? 'This is an NSFW channel: crude, sexually explicit innuendo, swearing, drugs and 90s party filth are all fair game. Sound like a wasted 3 a.m. Vegas afterparty host.'
-        : 'Rude and punchy is good (swearing is fine); keep sexual content out unless this were an NSFW channel.';
-      effectivePrompt = `${targetPhrase} ${arg && targets.length > 0 ? `Extra roast direction: ${arg}.` : ''} Lay down the burns like a 90s MTV Spring Break Roast — witty, sharp, specific, savage. ${tone} Never slurs, bigotry, threats, or digs at real appearance. 1-3 punchy sentences max.`;
+        ? 'This is an NSFW, age-gated channel: go fully untethered, uncensored Pauly. Crude sex jokes, swearing, drugs, gross-out bits, and R-rated digs at looks, weight, voice, hair, taste — as long as the burn is clever, specific and actually hilarious. Sound like a wasted 3 a.m. Vegas afterparty host.'
+        : 'This channel is not age-gated, so keep a PG-13 ceiling you can still laugh at: mild "so out of touch he thinks that is a compliment" ignorance, light stereotype gags aimed at nobody in particular, mild swearing, and tasteful, clever digs at looks. The joke lands because it is witty, not because it is filthy.';
+      effectivePrompt = `${targetPhrase} ${arg && targets.length > 0 ? `Extra roast direction: ${arg}.` : ''} Lay down the burns like a 90s MTV Spring Break Roast — witty, sharp, specific, savage. ${tone} Hard floor everywhere: no genuine hate at a protected group, no threats of violence, nothing sexual involving minors. 1-3 punchy sentences max.`;
     }
 
     const result = await askAmokRich(effectivePrompt, {
@@ -12006,16 +12079,14 @@ export class DiscordBot {
   }
 
   /**
-   * Default presentation: post the official video card in the now-playing
-   * channel when a track starts. No voice unless Auto-VJ is on — the card
-   * carries the optional Weasel one-liner as text.
+   * Official-video pipeline for a new track: resolve the video once, hand the
+   * id to the bridge (so /viz and the Activity can play it), then post the card
+   * unless the guild turned cards off. The lookup is independent of the card
+   * toggle — silencing the Discord post should not blank the visualizer.
    */
-  private async maybePostVideoCard(s: Session, track: TrackInfo): Promise<void> {
+  private async maybeAttachVideo(s: Session, track: TrackInfo): Promise<void> {
     const gid = s.guildId;
-    if (!gid || this.videoCardsOff.has(gid)) return;
-    if (this.videoCardPosted.get(gid) === track.uri) return;
-    const channelId = this.miniNp.get(gid)?.channelId ?? this.lastTextChannel.get(gid);
-    if (!channelId) return;
+    if (!gid) return;
     const artists = (track.artists ?? []).filter(Boolean);
     const key = track.uri || `${track.name} — ${artists.join(', ')}`;
     let videoId = this.videoCardIds.get(key);
@@ -12029,8 +12100,13 @@ export class DiscordBot {
       }
     }
     if (!videoId) return;
-    this.bridge.setTrackVideo(track.uri, videoId);
+    // A late lookup must not paint the previous track's video over the new one.
     if (s.queue.getCurrentTrack()?.uri !== track.uri) return;
+    this.bridge.setTrackVideo(track.uri, videoId);
+    if (this.videoCardsOff.has(gid)) return;
+    if (this.videoCardPosted.get(gid) === track.uri) return;
+    const channelId = this.miniNp.get(gid)?.channelId ?? this.lastTextChannel.get(gid);
+    if (!channelId) return;
     const channel = this.client.channels.cache.get(channelId);
     if (!channel || !channel.isTextBased() || !('send' in channel)) return;
     const lore = this.ewTrackLore.get(track.uri);
@@ -12060,7 +12136,7 @@ export class DiscordBot {
    * The music ducks under the clip, then releases.
    */
   private maybeAnnounceTts(s: Session, track: TrackInfo): void {
-    void this.maybePostVideoCard(s, track);
+    void this.maybeAttachVideo(s, track);
     if (this.weaselVjGuilds.has(s.guildId)) {
       if (this.ttsAnnounced.get(s.guildId) === track.uri) return;
       this.ttsAnnounced.set(s.guildId, track.uri);
@@ -12451,20 +12527,24 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
     name: 'Playback',
     blurb: 'start, pause, skip and control the music',
     lines: [
-      '`/play <name|link>` · `V@p` — play a song (a text search opens a picker)',
-      '`/insert <name|link>` · `V@i` — play next',
-      '`/yt <link|search>` — play from YouTube',
-      '`/play` · `V@p` — queue a track (name/link) or play an attached file',
-      '`/pause` · `V@pau` — pause',
-      '`/resume` · `V@r` — resume',
-      '`/toggle` · `V@t` — pause/resume',
-      '`/skip` · `V@s` — skip (non-DJs start a vote)',
-      "`/nowplaying` · `V@np` — what's playing",
-      '`/follow` · `V@follow` — the now-playing strip follows the active channel by default; this pins it here (`off` turns it off)',
-      "`/similar [track]` · `V@similar` — find tracks that sound like what's playing (cosine.club)",
-      '`/volume <0-100>` · `V@v` — set the volume',
-      '`/clear` · `V@c` — stop and clear the queue',
-      '`/jump <lyric>` · `V@jump` — jump to a lyric line (e.g. "to the chorus")',
+      '**▶ Start**',
+      '`/play` `V@p` — song, link or attached file',
+      '`/insert` `V@i` — play next',
+      '`/yt` — play from YouTube (link or search)',
+      '',
+      '**⏯ Transport**',
+      '`/pause` `V@pau` — pause',
+      '`/resume` `V@r` — resume',
+      '`/toggle` `V@t` — pause or resume',
+      '`/skip` `V@s` — skip (non-DJs start a vote)',
+      '`/volume <0-100>` `V@v` — set the volume',
+      '`/clear` `V@c` — stop and clear the queue',
+      '',
+      '**🎧 Now playing**',
+      '`/nowplaying` `V@np` — what is playing',
+      '`/follow` `V@follow` — pin the now-playing strip here (`off` unpins)',
+      '`/jump <lyric>` `V@jump` — jump to a lyric line',
+      '`/similar [track]` `V@similar` — find similar tracks',
     ],
   },
   {
@@ -12473,17 +12553,22 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
     name: 'Queue',
     blurb: "view and rearrange what's coming up",
     lines: [
-      '`/queue` · `V@q` — view the queue (paged)',
-      '`/shuffle` · `V@sh` — shuffle the queue',
-      '`V@shuffle smart` · `arc` · `key` — smart shuffle: order the upcoming tracks by vibe (flow), a set curve, or harmonic key',
-      '`/remove <#>` · `V@rem <#>` — remove a queued track',
-      '`V@undo` — put back the tracks from the last removal or clear',
-      '`V@oops` — fix your most recent pick: pick another recording, retype it, or confirm it',
-      '`V@qa` · `V@qadjust` — interactive queue editor: pick a track, then move / remove / play it now',
-      '`/dedupe` · `V@dd` — remove duplicate upcoming tracks',
-      '`/bulk <tracks>` · `V@bulk` — queue a list at once: names, links and/or attached files, one per line or `;` (max 25)',
-      '`/skipto` · `V@skipto` — jump to a future track (drops the ones skipped; off by default)',
-      '`/skiptoggle on|off` · `V@skiptoggle` — allow /skipto here (mod)',
+      '**👀 View**',
+      '`/queue` `V@q` — the queue, paged',
+      '`V@undo` — restore the last removed or cleared tracks',
+      '`V@oops` — fix your most recent pick',
+      '',
+      '**↔ Arrange**',
+      '`/shuffle` `V@sh` — shuffle',
+      '`V@shuffle smart|arc|key` — order by vibe, set curve or key',
+      '`/remove <#>` `V@rem` — remove one track',
+      '`/dedupe` `V@dd` — drop duplicate tracks',
+      '`V@qa` — pick a track, then move / remove / play it now',
+      '',
+      '**＋ Add**',
+      '`/bulk <tracks>` `V@bulk` — queue a list at once (max 25)',
+      '`/skipto` `V@skipto` — jump ahead (off by default)',
+      '`/skiptoggle on|off` `V@skiptoggle` — allow /skipto (mod)',
     ],
   },
   {
@@ -12492,34 +12577,49 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
     name: 'Autoplay',
     blurb: 'keep the music going after the queue ends',
     lines: [
-      '`/autoplay` · `V@autoplay` (`V@ap`) — show the current mode',
-      '`/autoplay mode:off|basic|smart` — set the mode',
-      '  · **basic** — queue a related track (light & fast)',
-      '  · **smart** — Endless Wave: evolves with the vibe',
-      '`/autoplay now:true` — queue one more track right now',
-      '`/autoplay count:<1-10>` — how many tracks to buffer ahead',
-      '`/endwav on|off|status` · `V@ew` — Endless Wave shortcut',
-      '`/ambient on|off` · `V@ambient` — quiet lo-fi intermission when the queue empties',
-      '`/vibe [mood]` · `V@vibe` — auto-DJ for your mood / time of day / weather — or describe it: `V@vibe chill like Bonobo`, `V@vibe hype workout 5`',
+      '**🔁 Modes**',
+      '`/autoplay` `V@ap` — show the current mode',
+      '`/autoplay mode:off|basic|smart` — choose a mode',
+      '`/autoplay now:true` — queue one more track now',
+      '`/autoplay count:<1-10>` — how many to buffer ahead',
+      '',
+      '**🌊 Endless Wave**',
+      '`/endwav on|off|status` `V@ew` — Endless Wave',
+      '`/ambient on|off` `V@ambient` — lo-fi intermission',
+      '`/vibe [mood]` `V@vibe` — auto-DJ by mood, time or weather',
+      '',
+      '**What the modes do**',
+      '`basic` — one related track, light and fast',
+      '`smart` — Endless Wave: evolves with the room',
     ],
   },
   {
     id: 'weasel',
     emoji: '🦦',
     name: 'Weasel & AI',
-    blurb: '90s MTV VJ, AI auto-DJ, roasts, track lore and voice mic drops',
+    blurb: '90s MTV VJ, AI auto-DJ, roasts, lore and voice drops',
     lines: [
-      '`/weasel <message>` · `V@w <msg>` (`V@weasel`, `V@amok`, `V@pauly`) — chat with The Weasel (web-grounded, room-aware) or reply directly to any of his messages',
-      '`V@w play <vibe|request>` — AI Auto-DJ: picks & queues tracks matching any vibe, era, or prompt',
-      '`V@w wave <vibe|arc>` · `V@w arc` · `V@w steer` — AI Deep-DNA Endless Wave & Harmonic Set Architect (`off` clears)',
-      '`V@w breakdown [song]` · `V@w lore` · `V@w sample` — Deep Track Intelligence: samples, producer lore, sonic DNA & cousin tracks',
-      '`V@w roast [@user|target]` · `V@w rate` — savage 90s MTV Spring Break roast of the queue, a tagged user, or any named target',
-      '`V@w say [topic]` · `V@w speak` · `V@w mic` — hop on the voice-channel mic with a Pauly Shore voice drop',
-      '`V@w vj on|off` — Auto-VJ: spoken track intros & sample/producer notes on track changes (voice is opt-in)',
-      '`V@w videos on|off` — official-video cards on track changes (on by default, text only; the Weasel intro rides along as text)',
-      '`V@w listen on|off` — Voice Ears: talk out loud in VC (*"Hey Weasel, play…"* ) and he answers on the mic',
-      '`V@w memory` · `V@w remember <fact>` — view or teach persistent listener & room taste memory',
-      '`/vibe [mood]` · `V@vibe` — mood / time-of-day / weather auto-DJ (e.g. `V@vibe chill like Bonobo`, `V@vibe hype workout 5`)',
+      '**💬 Talk**',
+      '`/weasel <message>` `V@w` — chat with The Weasel',
+      'Reply to any of his messages — no prefix needed',
+      '',
+      '**🎛 AI DJ**',
+      '`V@w play <vibe>` — pick and queue tracks for any prompt',
+      '`V@w wave <vibe|arc>` — harmonic set architect (`off` clears)',
+      '`V@w breakdown` · `lore` · `sample` — samples, producer lore, DNA',
+      '`/vibe [mood]` `V@vibe` — mood / weather auto-DJ',
+      '',
+      '**🔥 Roast**',
+      '`V@w roast [@user|target]` — roast the queue, a user or any target',
+      '`V@w rate` — score the current track out of 10',
+      '      PG-13 by default · untethered in NSFW channels',
+      '',
+      '**🎙 Voice**',
+      '`V@w say [topic]` · `speak` · `mic` — cloned voice drop',
+      '`V@w vj on|off` — spoken intros on track changes (opt-in)',
+      '`V@w videos on|off` — official-video cards (on by default)',
+      '`V@w listen on|off` — Voice Ears: talk in VC and he answers',
+      '`V@w memory` · `remember <fact>` — room memory',
     ],
   },
   {
@@ -12528,9 +12628,10 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
     name: 'Voice',
     blurb: 'join, leave and manage the audio device',
     lines: [
-      '`/join` · `V@j` — pull me into your voice channel',
-      '`/leave` · `V@l` — leave and clear the queue',
-      '`/device list|select <name>` — manage the Spotify Connect device',
+      '`/join` `V@j` — pull me into your voice channel',
+      '`/leave` `V@l` — leave and clear the queue',
+      '`/device list` — Spotify Connect devices',
+      '`/device select <name>` — switch device',
     ],
   },
   {
@@ -12539,37 +12640,43 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
     name: 'Library',
     blurb: 'save and load your own playlists',
     lines: [
-      '`/playlist save <name>` · `V@save <name>` — save the current queue',
-      '`/playlist load <name>` · `V@load <name>` — load a saved playlist',
-      '`/playlist list` · `V@playlists` — list saved playlists',
-      '`/playlist delete <name>` · `V@del <name>` — delete a playlist',
+      '`/playlist save <name>` `V@save` — save the queue',
+      '`/playlist load <name>` `V@load` — load a playlist',
+      '`/playlist list` `V@playlists` — list them',
+      '`/playlist delete <name>` `V@del` — delete one',
     ],
   },
   {
     id: 'fx',
     emoji: '🎛️',
     name: 'FX & DJ',
-    blurb: 'sound effects, speed, bass and DJ controls',
+    blurb: 'sound, speed, bass and the live decks',
     lines: [
-      '`/speed <mode>` · `V@speed` — nightcore / slowed / normal',
-      '`/eq <preset>` · `V@eq` — EQ presets: bass / vocal / night / warm / lofi (flat = off)',
-      '`/norm <on|off>` · `V@norm` — loudness match: level every source to Spotify-standard volume',
-      '`/bassboost <5|8|10>` · `V@bass` — bass boost',
-      '`/config <settings>` · `V@config` — set several at once, e.g. `bass +3; crossfade 2; norm on; ew smart`',
-      '`/sfx <id>` · `V@sfx` — play a sound effect',
-      '`/dj` · `V@dj` — toggle the soundboard (mod)',
-      '`/djrole @role` · `V@djrole` — set the DJ role (mod) — DJs skip without a vote',
-      '`/voteskip on|off` · `V@vs` — require a majority vote to skip (off = anyone can skip)',
-      '`/duck [seconds]` · `V@duck` — manually lower the music so people can talk',
-      '`/duckmode off|auto|hosts` · `V@dmode` — auto-lower music while people talk (mod)',
-      '`/npchannel` · `V@npc` — pin the live now-playing strip to this channel (mod; `off` disables it)',
-      '`/hype on|off` · `V@hype` — auto-hype: drop a hit on strong beats',
-      '`/mix <a> <b>` · `V@mix <a> | <b>` — crossfade two tracks into one mix',
-      '`V@deck` (`V@dk`) — live two-deck mixer: `V@deck a <song>`, `b <song>`, `play`, `sync`, `cross 60`, `eq a low kill`, `stop`. Full faders + EQ on the web `/deck` page (mod)',
-      '`/mashup <a> <b>` · `V@mashup <a> | <b>` — render a tempo/key-matched blend (downloadable) + 5 similar tracks',
-      '`V@mashup list` · `V@mashup remove <n>` · `V@mashup edit <n> <a> | <b>` · `V@mashup move <n> <m>` · `V@mashup clear` — manage the mashup queue (up to 5 lined up while one renders)',
-      '`/mashupgame` · `V@mashupgame` (`V@mg`) — auto-pick two queued songs, render stem blends, vote for the best',
-      '`/mashups` · `V@mashups` (`V@mh`) — past mashups + winners',
+      '**🎚 Sound**',
+      '`/speed <mode>` `V@speed` — nightcore / slowed / normal',
+      '`/eq <preset>` `V@eq` — bass / vocal / night / warm / lofi',
+      '`/norm <on|off>` `V@norm` — loudness match (on by default)',
+      '`/bassboost <5|8|10>` `V@bass` — bass boost',
+      '`/config` `V@config` — several at once: `bass +3; norm off`',
+      '`/sfx <id>` `V@sfx` — sound effect',
+      '',
+      '**🎧 DJ**',
+      '`/dj` `V@dj` — soundboard on/off (mod)',
+      '`/djrole @role` `V@djrole` — DJs skip without a vote (mod)',
+      '`/voteskip on|off` `V@vs` — require a vote to skip',
+      '',
+      '**🗣 Talking over music**',
+      '`/duck [seconds]` `V@duck` — lower the music now',
+      '`/duckmode off|auto|hosts` `V@dmode` — auto-duck (mod)',
+      '`/npchannel` `V@npc` — pin the now-playing strip (mod)',
+      '`/hype on|off` `V@hype` — drop a hit on strong beats',
+      '',
+      '**🎛 Decks & mashups**',
+      '`V@deck` — live two-deck mixer (`a <song>`, `sync`, `cross`)',
+      '`/mix <a> <b>` `V@mix` — crossfade two tracks',
+      '`/mashup <a> <b>` `V@mashup` — tempo/key-matched blend',
+      '`V@mashup list` · `remove` · `edit` · `clear` — mashup queue',
+      '`/mashupgame` `V@mg` — vote on stem blends · `/mashups` `V@mh` — winners',
     ],
   },
   {
@@ -12578,13 +12685,19 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
     name: 'Games',
     blurb: 'bet against the bot, duel your friends, spin the roulette',
     lines: [
-      '`/games` · `V@games` — **how the games work (start here)**',
-      '`/stump [track]` · `V@stump` — bet a track fits the room: play through → you beat the bot; skipped → the bot wins',
-      '`V@stump board` — human-vs-bot scoreboard',
-      '`/duel [@user] [now]` · `V@duel` — DJ Duel: the bot scores both picks and predicts a winner, then the room decides (add `now` for an instant verdict)',
-      '`V@duel board` — duel leaderboard + how often the bot called the room right',
-      "`/roulette` · `V@roulette` — a rarely-played track from this server's own history, queued next: ⭐ Hall of Fame or 🚫 Ban",
-      '`/quiz` · `V@quiz` — guess-the-song lyric game · `/guess <answer>` · `V@guess`',
+      '`/games` `V@games` — **how the games work (start here)**',
+      '',
+      '**🎲 Stump the bot**',
+      '`/stump [track]` `V@stump` — bet the room likes it',
+      '`V@stump board` — human vs bot scoreboard',
+      '',
+      '**⚔ Duel**',
+      '`/duel [@user] [now]` `V@duel` — the bot scores both picks',
+      '`V@duel board` — leaderboard',
+      '',
+      '**🎰 Roulette & quiz**',
+      '`/roulette` `V@roulette` — a rarely-played track from history',
+      '`/quiz` `V@quiz` — guess the lyric · `/guess` `V@guess` — answer',
     ],
   },
   {
@@ -12593,9 +12706,9 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
     name: 'Lyrics',
     blurb: 'read along with the music',
     lines: [
-      '`/lyrics [query]` · `V@lyr` — lyrics for the current or searched song',
-      '`/karaoke` · `V@k` — live karaoke highlight mode (the panel also shows synced lyrics)',
-      '`/jump <lyric>` · `V@jump` — jump to a lyric line (e.g. "to the chorus")',
+      '`/lyrics [query]` `V@lyr` — lyrics for the current song',
+      '`/karaoke` `V@k` — live karaoke highlight mode',
+      '`/jump <lyric>` `V@jump` — jump to a lyric line',
     ],
   },
   {
@@ -12604,18 +12717,22 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
     name: 'Visuals',
     blurb: 'panels, themes and the MilkDrop visualizer',
     lines: [
-      '`/panel` · `V@pan` — post the control panel',
-      '`/jam` · `V@jam` · `V@share` — post the jam invite card (QR + link) so guests can request songs from their phones',
-      '`/viz` · `V@viz` — open the web visualizer (MilkDrop)',
-      'Discord Activity: the visualizer there also offers hi-fi audio - press Connect inside it, then approve the 6-character code in the panel key dialog',
-      "`/listen` — hi-fi listener: the bot's raw 48 kHz audio in a browser (full quality, ahead of Discord) with volume, buffer, mono and test-tone controls",
-      '`/theme` · `V@th` — pick a color mood',
+      '**🖥 Open something**',
+      '`/panel` `V@pan` — the in-channel control panel',
+      '`/viz` `V@viz` — web visualizer (MilkDrop)',
+      '`/listen` — hi-fi listener: raw 48 kHz audio in a browser',
+      '`/jam` `V@jam` — jam invite card (QR + link)',
+      '',
+      '**🎨 Looks**',
+      '`/theme` `V@th` — colour mood',
+      '`/mood on|off` `V@mood` — colours tinted by the track',
+      '`/sensitivity <0.5-1.5>` `V@sens` — beat reactivity',
+      '`/crossfade on|off|<s>` `V@xfade` — crossfade + tail fade',
+      '',
+      '**📸 Clips & cards**',
       '`/wave` — waveform snapshot · `/burst` — animated clip',
-      '`/screensaver` · `V@sc` — idle screensaver',
-      '`/sensitivity <0.5-1.5>` · `V@sens` — beat reactivity',
-      "`/mood on|off` · `V@mood` — now-playing colors tinted by the track's mood",
-      '`V@crossfade on|off|<seconds>` · `V@xfade` — crossfade + tail fade (0 = off, plays to the very end)',
-      '`/dna` · `V@dna` — Song DNA radar card · `/cover` · `V@cover` — queue album-art mosaic',
+      '`/dna` `V@dna` — song DNA radar · `/cover` `V@cover` — art mosaic',
+      '`/screensaver` `V@sc` — idle screensaver',
     ],
   },
   {
@@ -12624,21 +12741,26 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
     name: 'System',
     blurb: 'stats, diagnostics and admin tools',
     lines: [
-      '`/diag` · `V@diag` — diagnostics (gateway, voice, librespot, live Opus bitrate)',
-      '`/leaderboard` · `V@lb` — server listening stats (top DJs & artists)',
-      "`/wrapped [month]` · `V@wrapped` — this server's monthly Wrapped: hours, top tracks, artists, DJs",
+      '**📊 Information**',
+      '`/diag` `V@diag` — gateway, voice, librespot, bitrate',
       '`/stats` — bot statistics',
-      '`/sleep <30m|1h>` · `V@sleep` — sleep timer',
-      '`/help` · `V@help` — this menu',
-      '`/invite` · `V@invite` — add Vaporzr to a server',
-      '`/key give [view|control|request] [hours]` · `V@key give` — mint an access link: panel, watch/listen, or song requests only (owner)',
-      '`/key list` · `V@key list` — active devices + unused invites (owner)',
-      '`/key revoke <id|all>` · `V@key revoke` — cut off one device/invite, or everything (owner)',
-      '`/key show` · `V@key show` — reveal the master key · `/key rotate` — new key, kills all devices (owner)',
-      '`/perms` — command levels & roles (admin)',
-      '`/cookie-refresh` — re-export YouTube cookies from a browser (admin; only works where a browser exists)',
-      '`/cookie-upload` — upload a cookies.txt to refresh YouTube cookies (owner)',
-      '`/player` · `V@player` — desktop player window (admin)',
+      '`/leaderboard` `V@lb` — top DJs and artists',
+      '`/wrapped [month]` `V@wrapped` — this server’s month in review',
+      '`/perms` — command levels and roles (admin)',
+      '',
+      '**🔑 Access**',
+      '`/key give [view|control|request] [hours]` — mint a link (owner)',
+      '`/key list` — devices and unused invites (owner)',
+      '`/key revoke <id|all>` — cut off access (owner)',
+      '`/key show` · `/key rotate` — reveal or replace the master key',
+      '`/invite` `V@invite` — add the bot to a server',
+      '',
+      '**🔧 Maintenance**',
+      '`/sleep <30m|1h>` `V@sleep` — sleep timer',
+      '`/player` `V@player` — desktop player window (admin)',
+      '`/cookie-refresh` — re-export YouTube cookies (admin)',
+      '`/cookie-upload` — upload cookies.txt (owner)',
+      '`/help` `V@help` — this menu',
     ],
   },
 ];
