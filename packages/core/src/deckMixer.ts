@@ -215,6 +215,17 @@ export function crossfaderGains(x: number): { a: number; b: number } {
   return { a: Math.cos((c * Math.PI) / 2), b: Math.sin((c * Math.PI) / 2) };
 }
 
+/**
+ * Fader law for one deck. The crossfader owns the A/B pair; decks C and D are
+ * line channels at unity (their own trim still applies), which is how a
+ * four-channel DJ mixer routes a second bank.
+ */
+export function deckLaneGain(id: DeckId, crossfader: number): number {
+  if (id === 'c' || id === 'd') return 1;
+  const cross = crossfaderGains(crossfader);
+  return id === 'a' ? cross.a : cross.b;
+}
+
 /** Clamp a float mix to interleaved Int16, applying master gain. */
 export function floatToInt16(acc: Float32Array, out: Buffer, master: number): void {
   for (let i = 0; i < acc.length; i++) {
@@ -341,8 +352,8 @@ const emptySlot = (): DeckSlotState => ({
 });
 
 export class DeckMixer {
-  private a: SlotRuntime;
-  private b: SlotRuntime;
+  /** Four slots, two banks. C/D are line channels: they bypass the crossfader. */
+  private readonly slots: Record<DeckId, SlotRuntime>;
   private crossfader = 0.5;
   private masterGain = 1;
   /** Master limiter gain, chasing 1 from below on release. */
@@ -369,8 +380,12 @@ export class DeckMixer {
     this.acc = new Float32Array(this.framesPerTick * 2);
     this.out = Buffer.allocUnsafe(this.framesPerTick * 4);
     this.ffmpegPath = opts.ffmpegPath ?? config.ffmpegPath;
-    this.a = this.newSlot('a');
-    this.b = this.newSlot('b');
+    this.slots = {
+      a: this.newSlot('a'),
+      b: this.newSlot('b'),
+      c: this.newSlot('c'),
+      d: this.newSlot('d'),
+    };
   }
 
   private newSlot(id: DeckId): SlotRuntime {
@@ -398,7 +413,11 @@ export class DeckMixer {
   }
 
   private slot(id: DeckId): SlotRuntime {
-    return id === 'a' ? this.a : this.b;
+    return this.slots[id];
+  }
+
+  private allSlots(): SlotRuntime[] {
+    return [this.slots.a, this.slots.b, this.slots.c, this.slots.d];
   }
 
   state(): DeckMixerState {
@@ -410,11 +429,13 @@ export class DeckMixer {
       filter: { ...slot.state.filter },
     });
     return {
-      active: this.a.state.playing || this.b.state.playing || Boolean(this.a.state.source || this.b.state.source),
+      active: this.allSlots().some((s) => s.state.playing || Boolean(s.state.source)),
       crossfader: this.crossfader,
       masterGain: this.masterGain,
-      a: snap(this.a),
-      b: snap(this.b),
+      a: snap(this.slots.a),
+      b: snap(this.slots.b),
+      c: snap(this.slots.c),
+      d: snap(this.slots.d),
     };
   }
 
@@ -460,16 +481,16 @@ export class DeckMixer {
   }
 
   play(id?: DeckId): void {
-    for (const slot of id ? [this.slot(id)] : [this.a, this.b]) {
+    for (const slot of id ? [this.slot(id)] : this.allSlots()) {
       if (!slot.state.source || slot.state.ended) continue;
       slot.state.playing = true;
     }
-    if (this.a.state.playing || this.b.state.playing) this.startTick();
+    if (this.allSlots().some((s) => s.state.playing)) this.startTick();
     this.emit();
   }
 
   pause(id?: DeckId): void {
-    for (const slot of id ? [this.slot(id)] : [this.a, this.b]) {
+    for (const slot of id ? [this.slot(id)] : this.allSlots()) {
       slot.state.playing = false;
     }
     this.emit();
@@ -722,7 +743,7 @@ export class DeckMixer {
 
   /** Stop everything and release the decoders. */
   stopAll(): void {
-    for (const slot of [this.a, this.b]) {
+    for (const slot of this.allSlots()) {
       this.killDecoder(slot);
       slot.ring.clear();
       slot.state = emptySlot();
@@ -897,7 +918,7 @@ export class DeckMixer {
 
   private tick(): void {
     if (this.blocked) return;
-    const slots: SlotRuntime[] = [this.a, this.b];
+    const slots: SlotRuntime[] = this.allSlots();
     if (!slots.some((s) => s.state.playing)) {
       this.stopTick();
       return;
@@ -961,8 +982,9 @@ export class DeckMixer {
   /** Linear-interpolating resample of one deck frame into the mix accumulator.
    *  Returns the number of source frames consumed. */
   private renderSlot(slot: SlotRuntime, buf: Buffer, outFrames: number): number {
-    const cross = crossfaderGains(this.crossfader);
-    const target = (slot.id === 'a' ? cross.a : cross.b) * slot.state.gain;
+    // A/B ride the crossfader; C/D are line channels at unity (their own trim
+    // still applies), which is how a four-channel mixer behaves.
+    const target = deckLaneGain(slot.id, this.crossfader) * slot.state.gain;
     const inFrames = Math.floor(buf.length / 4);
     const acc = this.acc;
     const coefs = slot.coefs;

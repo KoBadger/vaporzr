@@ -191,6 +191,7 @@ server and the message gives you the path.
 ```
 V@deck                     status: both decks, BPM, cues, loop, lock drift, recording
 V@deck a <song|link>       load deck A          V@deck b <song|link>   load deck B
+V@deck c <song|link>       load deck C (line)   V@deck d <song|link>   load deck D (line)
 V@deck play | pause | stop
 V@deck sync                beat-match B → A
 V@deck lock                keep them locked (lock off to release)
@@ -220,6 +221,12 @@ V@deck rec | rec stop      record the set (posts track count + top artists)
 - **Sync is ±10 %.** Further apart and the refusal is deliberate; no chipmunk vocals.
 - **Beat grids are assumed to start at 0:00.** Right for most dance/pop, wrong for
   free-tempo intros — use **nudge** there.
+- **Four decks exist in the engine; the page shows two at a time.** Decks C and D
+  are live (load them with `V@deck c <song>`, `V@deck d <song>`) and mix as line
+  channels: the crossfader owns A/B, C and D play at their own trim so a second
+  bank stays audible however the fader is parked. The banked web surface is the
+  next step. Measured cost of four simultaneous MP3 decks on the 2-core VPS:
+  **0.10 CPU cores** total (2 decks: 0.08), so the mixer is not the constraint.
 - Discord voice is the ceiling: 48 kHz Opus at 64–256 kbps depending on boost tier.
 - Deck loads need YouTube to cooperate; if a load fails, try a different upload or
   a Spotify name instead of a link.

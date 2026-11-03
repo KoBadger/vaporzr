@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { deckPartner } from '@vaporzr/shared';
 import {
   DECK_EQ_MIN_DB,
   DeckMixer,
@@ -10,6 +11,7 @@ import {
   highPassCoefs,
   lowPassCoefs,
   crossfaderGains,
+  deckLaneGain,
   floatToInt16,
   highShelfCoefs,
   lowShelfCoefs,
@@ -86,6 +88,26 @@ describe('deck crossfader', () => {
     expect(crossfaderGains(-3)).toEqual({ a: 1, b: 0 });
     expect(crossfaderGains(9).b).toBeCloseTo(1, 6);
     expect(crossfaderGains(Number.NaN)).toEqual(crossfaderGains(0.5));
+  });
+
+  it('keeps the second bank (C/D) off the crossfader', () => {
+    // A and B fade against each other; C and D are line channels at unity, so a
+    // four-deck set does not silence the second bank when the fader is parked.
+    for (const x of [0, 0.5, 1]) {
+      expect(deckLaneGain('c', x)).toBe(1);
+      expect(deckLaneGain('d', x)).toBe(1);
+    }
+    expect(deckLaneGain('a', 0)).toBe(1);
+    expect(deckLaneGain('b', 0)).toBeCloseTo(0, 6);
+    expect(deckLaneGain('a', 1)).toBeCloseTo(0, 6);
+    expect(deckLaneGain('b', 1)).toBeCloseTo(1, 6);
+  });
+
+  it('pairs sync within a bank', () => {
+    expect(deckPartner('a')).toBe('b');
+    expect(deckPartner('b')).toBe('a');
+    expect(deckPartner('c')).toBe('d');
+    expect(deckPartner('d')).toBe('c');
   });
 });
 
@@ -224,6 +246,22 @@ describe('DeckMixer control surface', () => {
     expect(st.crossfader).toBe(0.5);
     expect(st.a.source).toBeNull();
     expect(st.a.playing).toBe(false);
+    // All four slots exist from boot, even though only A/B have a surface yet.
+    expect(st.c.source).toBeNull();
+    expect(st.d.source).toBeNull();
+    expect(st.c.gain).toBe(1);
+  });
+
+  it('addresses each deck independently, banks included', () => {
+    const m = mixer();
+    m.setGain('c', 0.4);
+    m.setEqBand('d', 'low', -20);
+    const st = m.state();
+    expect(st.c.gain).toBeCloseTo(0.4, 6);
+    expect(st.d.eq.low).toBeCloseTo(-20, 6);
+    // A stays untouched.
+    expect(st.a.gain).toBe(1);
+    expect(st.a.eq.low).toBe(0);
   });
 
   it('arms quantize and vinyl by default, and both are switchable', () => {

@@ -108,7 +108,15 @@ import { renderPanelIconPng, PANEL_ICON_FALLBACKS } from './panelIcons.js';
 import { jamJoinLinks, type Bridge } from './bridge.js';
 import { DeckController } from './decks.js';
 import { guildRegistry, noteGuildJoin, noteGuildLeave, noteGuildsSeen } from './guildRegistry.js';
-import type { DeckEq, DeckId, InboundMessage, PermissionLevel, TrackInfo, PlaybackState } from '@vaporzr/shared';
+import {
+  isDeckId,
+  type DeckEq,
+  type DeckId,
+  type InboundMessage,
+  type PermissionLevel,
+  type TrackInfo,
+  type PlaybackState,
+} from '@vaporzr/shared';
 import * as EW from '@vaporzr/core/endlesswave';
 import { playlistStore } from '@vaporzr/core/playlists';
 import { statsStore } from '@vaporzr/core/stats';
@@ -10227,7 +10235,7 @@ export class DiscordBot {
     const arg = rest.join(' ').trim();
     const st = decks.state();
     const deckArg = (arg.split(/\s+/)[0] ?? '').toLowerCase();
-    const isDeck = deckArg === 'a' || deckArg === 'b';
+    const isDeck = isDeckId(deckArg);
     const deck: DeckId = isDeck ? (deckArg as DeckId) : 'a';
     const value = isDeck ? arg.replace(/^\S+\s*/, '').trim() : arg;
 

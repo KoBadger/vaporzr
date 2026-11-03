@@ -15,6 +15,7 @@ import {
   type DeckSyncState,
 } from '@vaporzr/core/deckMixer';
 import { downloadToTempFile } from '@vaporzr/core/mediaDownload';
+import { deckPartner, isDeckId } from '@vaporzr/shared';
 import { writeJsonAtomicSync } from '@vaporzr/core/jsonFile';
 import type { ResolvedTrack } from '@vaporzr/core/spotify';
 import { probeDuration } from '@vaporzr/core/suno';
@@ -156,13 +157,13 @@ export class DeckController {
     const sync: DeckSyncState | null = this.lockMaster
       ? {
           master: this.lockMaster,
-          follower: this.lockMaster === 'a' ? 'b' : 'a',
+          follower: deckPartner(this.lockMaster),
           driftMs: this.driftMs,
         }
       : null;
     const base = this.mixer.state();
     const samples = this.samplePadNames();
-    for (const slot of [base.a, base.b]) slot.samples = samples;
+    for (const slot of [base.a, base.b, base.c, base.d]) slot.samples = samples;
     return { ...base, sync, record: { ...this.record } };
   }
 
@@ -345,7 +346,7 @@ export class DeckController {
    */
   sync(master: DeckId = 'a'): DeckActionResult {
     const st = this.mixer.state();
-    const follower: DeckId = master === 'a' ? 'b' : 'a';
+    const follower: DeckId = deckPartner(master);
     const m = st[master];
     const f = st[follower];
     const label = (id: DeckId): string => id.toUpperCase();
@@ -757,7 +758,7 @@ export class DeckController {
       return { ok: true, message: 'Beat-lock off.' };
     }
     const st = this.mixer.state();
-    const follower: DeckId = master === 'a' ? 'b' : 'a';
+    const follower: DeckId = deckPartner(master);
     if (!st[master].source || !st[follower].source) {
       return { ok: false, message: 'Load both decks before locking them together.' };
     }
@@ -784,7 +785,7 @@ export class DeckController {
   private servoTick(): void {
     const master = this.lockMaster;
     if (!master) return;
-    const follower: DeckId = master === 'a' ? 'b' : 'a';
+    const follower: DeckId = deckPartner(master);
     const st = this.mixer.state();
     const m = st[master];
     const f = st[follower];
