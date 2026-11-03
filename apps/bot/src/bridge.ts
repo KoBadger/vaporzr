@@ -42,6 +42,7 @@ import {
 } from './access.js';
 import { fetchLyrics } from '@vaporzr/core/lyrics';
 import { playlistStore } from '@vaporzr/core/playlists';
+import { codeFor } from './jamLinks.js';
 
 /** The jam page's guest URL: built from the LOW-privilege request key, not the
  *  share key — a jam link grants exactly "add a song" and nothing else.
@@ -62,6 +63,11 @@ export function jamJoinLinks(): { joinPath: string; joinUrl: string | undefined 
       jamInviteCache = { token: minted.token, expiresAt: minted.invite.expiresAt };
     }
     joinPath = `/jam?invite=${encodeURIComponent(jamInviteCache.token)}`;
+    // Short-link form when the code store is alive: /j/<code> is ~21 characters
+    // instead of ~70, so the QR on the posted card prints far larger — and the
+    // /j page itself unfurls a proper invite card wherever the link is pasted.
+    const jamCode = codeFor(jamInviteCache.token, jamInviteCache.expiresAt, now);
+    if (jamCode) joinPath = `/j/${jamCode}`;
   }
   return { joinPath, joinUrl: config.jamPublicBase ? config.jamPublicBase + joinPath : undefined };
 }
