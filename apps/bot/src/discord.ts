@@ -134,6 +134,7 @@ import { separateStemsReplicate, replicateStemsEnabled } from '@vaporzr/core/ste
 import { estimateTempo, beatAlignLagMs } from '@vaporzr/core/tempo';
 import { renderRadarGif, type RadarMetric } from '@vaporzr/core/images';
 import { parseVibe, vibeIsSteerable, type ParsedVibe } from '@vaporzr/core/vibe';
+import { editionBadge } from '@vaporzr/core/edition';
 import { buildJamInviteCard, type JamInviteInfo } from './jamInvite.js';
 import {
   askAmokRich,
@@ -5650,7 +5651,7 @@ export class DiscordBot {
     const embed = new EmbedBuilder()
       .setTitle('Added to queue')
       .setDescription(
-        `${srcEmoji(first.source)} **${first.name}** — ${truncate(first.artists.join(', '), 80)}` +
+        `${srcEmoji(first.source)} **${first.name}**${editionBadge(first.name) ? `  ${editionBadge(first.name)}` : ''} — ${truncate(first.artists.join(', '), 80)}` +
           (playbackFailed ? `\n⚠️ Couldn't start playback yet: ${playbackFailed}` : ''),
       )
       .setThumbnail(first.image ?? '')
@@ -5773,7 +5774,7 @@ export class DiscordBot {
     const embed = new EmbedBuilder()
       .setTitle('Inserted to play next')
       .setDescription(
-        `${srcEmoji(first.source)} **${first.name}** — ${first.artists.join(', ')}` +
+        `${srcEmoji(first.source)} **${first.name}**${editionBadge(first.name) ? `  ${editionBadge(first.name)}` : ''} — ${first.artists.join(', ')}` +
           (playbackFailed ? `\n⚠️ Couldn't start playback yet: ${playbackFailed}` : ''),
       )
       .setThumbnail(first.image ?? '')
@@ -6000,7 +6001,7 @@ export class DiscordBot {
     const embed = new EmbedBuilder()
       .setTitle('Inserted to play next')
       .setDescription(
-        `${srcEmoji(first.source)} **${first.name}** — ${truncate(first.artists.join(', '), 80)}` +
+        `${srcEmoji(first.source)} **${first.name}**${editionBadge(first.name) ? `  ${editionBadge(first.name)}` : ''} — ${truncate(first.artists.join(', '), 80)}` +
           (playbackFailed ? `\n⚠️ Couldn't start playback yet: ${playbackFailed}` : ''),
       )
       .setThumbnail(first.image ?? '')
@@ -6057,7 +6058,7 @@ export class DiscordBot {
     const embed = new EmbedBuilder()
       .setTitle('Added to queue')
       .setDescription(
-        `${srcEmoji(first.source)} **${first.name}** — ${truncate(first.artists.join(', '), 80)}` +
+        `${srcEmoji(first.source)} **${first.name}**${editionBadge(first.name) ? `  ${editionBadge(first.name)}` : ''} — ${truncate(first.artists.join(', '), 80)}` +
           (playbackFailed ? `\n⚠️ Couldn't start playback yet: ${playbackFailed}` : ''),
       )
       .setThumbnail(first.image ?? '')
@@ -7237,7 +7238,7 @@ export class DiscordBot {
     const embed = new EmbedBuilder()
       .setColor(this.themeColor())
       .setAuthor({ name: 'NOW PLAYING', iconURL: this.client.user?.displayAvatarURL({ extension: 'gif', size: 128 }) })
-      .setTitle(`${srcEmoji(t.source)} ${t.name}`)
+      .setTitle(`${srcEmoji(t.source)} ${t.name}${editionBadge(t.name) ? `  ${editionBadge(t.name)}` : ''}`)
       .setDescription(`${truncate((t.artists ?? []).join(', '), 80)}\n\n\`${bar}\`\n▶️ \`0:00 / ${fmtMs(dur)}\``)
       .setFooter({ text: action });
     if (t.image) embed.setThumbnail(t.image);
