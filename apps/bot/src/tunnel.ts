@@ -106,7 +106,12 @@ export const vizTunnel = {
   start(): void {
     // A configured static base URL (Tailscale Funnel / custom domain) makes the
     // ephemeral quick tunnel redundant — don't even spawn cloudflared.
-    if (config.staticBaseUrl) return;
+    if (config.staticBaseUrl) {
+      console.log(
+        `[tunnel] public origin ${config.staticBaseUrl.replace(/\/+$/, '')} (PUBLIC_BASE_URL; cloudflared not started)`,
+      );
+      return;
+    }
     if (stopped || child || !config.vizTunnel) return;
     launch();
   },
