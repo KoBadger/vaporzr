@@ -20,6 +20,7 @@ import { PermissionsManager } from './permissions.js';
 import { vizTunnel } from './tunnel.js';
 import { secretEquals, keyFromCookieHeader } from './secretCompare.js';
 import { handleVideoProxy } from './videoProxy.js';
+import { resolveJamCode } from './jamLinks.js';
 import {
   SESSION_COOKIE,
   INVITE_TTL_MS,
@@ -524,6 +525,36 @@ function hasRequestAccess(req: http.IncomingMessage, url: URL): boolean {
 }
 
 /** Page version of the request gate: exchanges an invite for a session cookie. */
+/** The tiny HTML a short jam link (/j/<code>) serves. Crawlers read the meta
+ *  tags and unfurl an invite card wherever the link is pasted; humans' browsers
+ *  jump straight to /jam with a script, and the meta refresh + noscript link
+ *  cover everyone else. Null target = the code is unknown or expired. */
+function jamHandoffHtml(target: string | null): string {
+  const esc = (s: string): string =>
+    s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  if (!target) {
+    return (
+      `<!doctype html><meta charset="utf-8"><title>Vaporzr</title>` +
+      `<meta name="viewport" content="width=device-width,initial-scale=1">` +
+      `<meta name="theme-color" content="#6a5cff">` +
+      `<body style="font-family:system-ui;background:#0b1026;color:#c9c4ff;display:grid;place-items:center;min-height:100vh">` +
+      `<p>This jam invite is no longer active — ask for a fresh one.</p></body>`
+    );
+  }
+  const jump = JSON.stringify(target).replace(/</g, '\\u003c');
+  return (
+    `<!doctype html><meta charset="utf-8"><title>Vaporzr — join the jam</title>` +
+    `<meta name="viewport" content="width=device-width,initial-scale=1">` +
+    `<meta name="theme-color" content="#6a5cff">` +
+    `<meta property="og:title" content="📼 You're invited to the jam">` +
+    `<meta property="og:description" content="Pick a song, add your name — it lands in everyone's queue. No app, no account.">` +
+    `<meta name="twitter:card" content="summary">` +
+    `<meta http-equiv="refresh" content="0;url=${esc(target)}">` +
+    `<script>location.replace(${jump});</script>` +
+    `<noscript><a href="${esc(target)}">Open the jam →</a></noscript>`
+  );
+}
+
 function grantRequestPage(req: http.IncomingMessage, url: URL, res: http.ServerResponse): boolean {
   const cookie = req.headers.cookie ?? '';
   const sess = resolveSession(tokenFromCookieHeader(cookie), Date.now(), {
@@ -1172,6 +1203,20 @@ async function handleRoute(
     // Official-video proxy: downloads on demand, then serves a seekable MP4.
     if (url.pathname.startsWith('/api/video/')) {
       handleVideoProxy(req, res, decodeURIComponent(url.pathname.slice('/api/video/'.length)), url);
+      return;
+    }
+
+    // Short jam links (/j/<CODE> from the QR cards): serve a tiny handoff page
+    // that instantly walks the browser to /jam with the invite. Public on
+    // purpose — the code IS the credential, so with no match there is nothing
+    // here but a friendly 404.
+    if (url.pathname.startsWith('/j/')) {
+      const token = resolveJamCode(url.pathname.slice(3));
+      res.writeHead(token ? 200 : 404, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-store',
+      });
+      res.end(jamHandoffHtml(token ? `/jam?invite=${encodeURIComponent(token)}` : null));
       return;
     }
 
