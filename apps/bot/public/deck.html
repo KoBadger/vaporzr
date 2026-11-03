@@ -399,6 +399,16 @@
       .deck.b {
         --deck: var(--b);
       }
+      /* Bank 2: same two accents, rotated so C/D are distinguishable at a
+         glance from the A/B pair they replace. */
+      .deck.c {
+        --deck: var(--a);
+        --deck-tint: #f59e0b;
+      }
+      .deck.d {
+        --deck: var(--b);
+        --deck-tint: #f59e0b;
+      }
       .deck::before {
         /* front-panel LED strip */
         content: '';
@@ -2263,6 +2273,10 @@
         </button>
         <button id="mode-pro" aria-pressed="true" title="Full CDJ layout">PRO</button>
       </div>
+      <div class="mode-switch pro-only" id="bank-switch" role="group" aria-label="Deck bank">
+        <button data-bank="0" class="on" title="Decks A and B">1·2</button>
+        <button data-bank="1" title="Decks C and D">3·4</button>
+      </div>
       <button class="fn help-btn" id="btn-help" title="How to mix (short guide)" aria-label="How to mix">?</button>
       <span class="spacer"></span>
       <button class="fn" id="btn-sync"><span class="led"></span>SYNC</button>
@@ -2922,11 +2936,69 @@
           return (v < 50 ? 'LPF ' : 'HPF ') + (hz >= 1000 ? (hz / 1000).toFixed(1) + 'k' : String(Math.round(hz)));
         }
 
+        /* ---- banks: the two cards show whichever pair is focused ---- */
+        // The engine has four decks; the page shows two at a time. `deckIds` is
+        // the focused pair, in card order, so every control below keeps working
+        // unchanged — it is just addressed at the ids the cards currently carry.
+        var deckIds = ['a', 'b'];
+        var bankIndex = 0;
+        function deckState(id) {
+          return (state && state[id]) || {};
+        }
+        function leftDeck() {
+          return deckState(deckIds[0]);
+        }
+        function rightDeck() {
+          return deckState(deckIds[1]);
+        }
+        /**
+         * Point the two cards at a bank. Runs BEFORE the deck controls are
+         * bound, because each card's handlers capture their deck id once — a
+         * live attribute swap would leave them sending the old letters.
+         */
+        function applyBankToDom(n) {
+          bankIndex = n === 1 ? 1 : 0;
+          deckIds = bankIndex === 1 ? ['c', 'd'] : ['a', 'b'];
+          all('.deck').forEach(function (card, i) {
+            if (i > 1) return;
+            card.setAttribute('data-deck', deckIds[i]);
+            card.classList.remove('a', 'b', 'c', 'd');
+            card.classList.add(deckIds[i]);
+            var letter = card.querySelector('.deck-letter');
+            if (letter) letter.textContent = deckIds[i].toUpperCase();
+          });
+          all('#bank-switch button').forEach(function (b) {
+            b.classList.toggle('on', b.getAttribute('data-bank') === String(bankIndex));
+          });
+          var thumbA = el('#thumb-a');
+          var thumbB = el('#thumb-b');
+          if (thumbA) thumbA.textContent = deckIds[0].toUpperCase() + ' PLAY';
+          if (thumbB) thumbB.textContent = deckIds[1].toUpperCase() + ' PLAY';
+        }
+        function setBank(next) {
+          var n = next === 1 ? 1 : 0;
+          if (n === bankIndex) return;
+          try {
+            localStorage.setItem('vz-deck-bank', String(n));
+          } catch (e) {
+            /* private mode */
+          }
+          // Reload rather than re-point the live DOM: every control on a card is
+          // bound to that card's deck id at startup, so re-binding is the only
+          // way to keep them truthful — and a reload does it for free.
+          location.reload();
+        }
+        try {
+          applyBankToDom(Number(localStorage.getItem('vz-deck-bank') || '0'));
+        } catch (e) {
+          applyBankToDom(0);
+        }
+
         /** One plain sentence: the next useful move, given what the decks are doing. */
         function coachLine() {
           if (!state) return 'Waking the decks up…';
-          var a = state.a;
-          var b = state.b;
+          var a = leftDeck();
+          var b = rightDeck();
           if (!a.source && !b.source) return 'Paste a song name or link into Deck A, then press LOAD.';
           if (!a.source) return 'Deck B is loaded. Load Deck A too if you want to mix two tracks.';
           if (!b.source) {
@@ -3276,7 +3348,7 @@
          *  ~600 buckets per deck. */
         function drawWave(id) {
           var slot = state[id];
-          var rootEl = el('.deck.' + id);
+          var rootEl = el('.deck[data-deck="' + id + '"]');
           var cv = el('[data-role="wave"]', rootEl);
           if (!cv) return;
           var dpr = window.devicePixelRatio || 1;
@@ -3376,9 +3448,10 @@
 
         function paint() {
           if (!state) return;
-          ['a', 'b'].forEach(function (id) {
+          deckIds.forEach(function (id) {
             var slot = state[id];
-            var root = el('.deck.' + id);
+            if (!slot) return;
+            var root = el('.deck[data-deck="' + id + '"]');
             // Interpolate from the last server push so the clock reads live
             // between the 250 ms state broadcasts.
             var pos = slot.positionMs + (slot.playing && localClock.at ? Date.now() - localClock.at : 0);
@@ -3458,7 +3531,7 @@
           el('.lbl', rec).textContent =
             state.record && state.record.active ? 'STOP ' + Math.round(state.record.elapsedMs / 1000) + 'S' : 'REC';
           // Sample bank pads come from the server's samples.json layout (8 slots).
-          var samples = (state.a && state.a.samples) || [];
+          var samples = leftDeck().samples || [];
           var key = samples.join('|');
           if (key !== lastSamplesKey && renderPadsFromState) {
             lastSamplesKey = key;
@@ -3468,8 +3541,8 @@
           // the deck cards it duplicates.
           var thumbA = el('#thumb-a');
           var thumbB = el('#thumb-b');
-          if (thumbA) thumbA.classList.toggle('on', !!state.a.playing);
-          if (thumbB) thumbB.classList.toggle('on', !!state.b.playing);
+          if (thumbA) thumbA.classList.toggle('on', !!leftDeck().playing);
+          if (thumbB) thumbB.classList.toggle('on', !!rightDeck().playing);
           var thumbX = el('#thumb-xfade');
           if (thumbX && document.activeElement !== thumbX) thumbX.value = Math.round(state.crossfader * 100);
           // Filter knobs mirror the server value.
@@ -3496,8 +3569,8 @@
           if (document.activeElement !== xf) xf.value = Math.round(state.crossfader * 100);
           el('#xfade-val').textContent = Math.round(state.crossfader * 100) + '%';
           // Live match readout: effective BPM per deck (BPM × tempo) plus drift.
-          var a = state.a;
-          var b = state.b;
+          var a = leftDeck();
+          var b = rightDeck();
           var tempoA = a.tempo || 1;
           var tempoB = b.tempo || 1;
           var effA = a.bpm ? a.bpm * tempoA : null;
@@ -3544,21 +3617,30 @@
             val.textContent = k || '—';
             if (k) badge.classList.add('set');
           });
-          var ka = state.a.key;
-          var kb = state.b.key;
+          var ka = leftDeck().key;
+          var kb = rightDeck().key;
           var compat = camelotCompat(ka, kb);
           if (compat) {
             el('#key-a').classList.add(compat);
             el('#key-b').classList.add(compat);
           }
 
-          // Mix sum: what both sides contribute after the crossfader, in dB.
-          // Text instead of a bar - the same numbers drawn as two horizontal
-          // tracks under the crossfader looked like a second crossfader.
+          // Mix sum: everything routed to master, after the fader, in dB. A and
+          // B ride the crossfader (equal power); C and D are line channels at
+          // unity — the same law the engine applies in deckLaneGain().
           var xfadeAmt = state.crossfader;
-          var mixA = Math.max(0, state.a.gain) * (1 - xfadeAmt) * (state.a.playing ? 1 : 0.6);
-          var mixB = Math.max(0, state.b.gain) * xfadeAmt * (state.b.playing ? 1 : 0.6);
-          var mixSum = mixA + mixB;
+          var laneOf = {
+            a: Math.cos((xfadeAmt * Math.PI) / 2),
+            b: Math.sin((xfadeAmt * Math.PI) / 2),
+            c: 1,
+            d: 1,
+          };
+          var mixSum = 0;
+          ['a', 'b', 'c', 'd'].forEach(function (id) {
+            var d = state[id];
+            if (!d) return;
+            mixSum += Math.max(0, d.gain || 0) * laneOf[id] * (d.playing ? 1 : 0.6);
+          });
           var sumEl = el('#mix-sum');
           var sumDb = mixSum > 0.0005 ? 20 * Math.log10(mixSum) : -60;
           sumEl.textContent = sumDb <= -60 ? '−∞ dB' : (sumDb >= 0 ? '+' : '−') + Math.abs(sumDb).toFixed(1) + ' dB';
@@ -3572,14 +3654,16 @@
             var srcId = srcDeck && srcDeck.getAttribute('data-deck');
             btn.disabled = !srcId || !state[srcId] || !state[srcId].source;
           });
-          var active = state.a.playing || state.b.playing;
+          var active = ['a', 'b', 'c', 'd'].some(function (id) {
+            return state[id] && state[id].playing;
+          });
           el('#engine').textContent = active
             ? 'live — feeding the voice channel'
             : state.active
               ? 'cued'
               : 'engine idle';
           // Keep an outgoing MIDI clock locked to the decks' tempo.
-          var clockBpm = state.b.bpm || state.a.bpm || 120;
+          var clockBpm = rightDeck().bpm || leftDeck().bpm || 120;
           if (Math.abs(clockBpm - midi.bpm) > 0.5) {
             if (midi.restart) midi.restart(clockBpm);
             else midi.bpm = clockBpm;
@@ -3680,6 +3764,11 @@
             applyMode('pro');
             closeTutorial();
           };
+          all('#bank-switch button').forEach(function (b) {
+            b.onclick = function () {
+              setBank(Number(b.getAttribute('data-bank')));
+            };
+          });
           el('#btn-help').onclick = openTutorial;
           el('#tut-start').onclick = closeTutorial;
           el('#tut-pro').onclick = function () {
@@ -3773,7 +3862,7 @@
                 // Opening the page before loading a track used to leave the pads
                 // blank even though the library was there. Show the saved/banked
                 // pads until the deck state supplies its own.
-                var deckSamples = (state && state.a && state.a.samples) || [];
+                var deckSamples = deckState('a').samples || [];
                 var hasDeck = deckSamples.some(function (n) {
                   return !!n;
                 });
@@ -3939,7 +4028,7 @@
           }
           function assignSample(file, slot) {
             if (!slot) {
-              var pads = (state && state.a && state.a.samples) || [];
+              var pads = deckState('a').samples || [];
               slot = 1;
               for (var i = 0; i < 8; i++) {
                 if (!pads[i]) {
@@ -4420,16 +4509,16 @@
 
           /* Thumb dock: the same actions as the deck cards, within reach. */
           el('#thumb-a').onclick = function () {
-            deckToggle('a');
+            deckToggle(deckIds[0]);
           };
           el('#thumb-b').onclick = function () {
-            deckToggle('b');
+            deckToggle(deckIds[1]);
           };
           el('#thumb-a-cue').onclick = function () {
-            control('cue', { deck: 'a' });
+            control('cue', { deck: deckIds[0] });
           };
           el('#thumb-b-cue').onclick = function () {
-            control('cue', { deck: 'b' });
+            control('cue', { deck: deckIds[1] });
           };
           var thumbXfade = el('#thumb-xfade');
           thumbXfade.addEventListener('input', function (e) {
@@ -4490,7 +4579,14 @@
             var k = e.key.toLowerCase();
             if (k === ' ') {
               e.preventDefault();
-              if (state) control(state.a.playing || state.b.playing ? 'pause' : 'play');
+              if (state)
+                control(
+                  ['a', 'b', 'c', 'd'].some(function (id) {
+                    return state[id] && state[id].playing;
+                  })
+                    ? 'pause'
+                    : 'play',
+                );
               return;
             }
             if (!state) return;
@@ -4626,7 +4722,10 @@
                   send({ type: 'cmd', command: 'sfx', sfxId: FX[idx].id });
                 } else if (cc >= 48 && cc < 56 && state) {
                   var slot = cc - 47;
-                  control(state.a.cues[slot - 1] != null ? 'cue-jump' : 'cue-set', { deck: 'a', slot: slot });
+                  control(deckState(deckIds[0]).cues[slot - 1] != null ? 'cue-jump' : 'cue-set', {
+                    deck: deckIds[0],
+                    slot: slot,
+                  });
                 }
               }
             };
