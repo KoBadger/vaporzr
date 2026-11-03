@@ -249,6 +249,9 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
         youtube: youtubeHealth().status,
         ytdlp: ytDlpVersion(),
         build: (process.env.VAPORZR_BUILD ?? 'dev').slice(0, 7),
+        // The origin every generated link is built from. One field makes a
+        // half-finished domain migration obvious instead of a mystery in QR codes.
+        publicBase: config.staticBaseUrl || null,
         cookieAgeDays: cookieAgeDays(),
         push: pushSubscriptionCount(),
         memory: {
