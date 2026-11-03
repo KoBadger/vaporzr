@@ -65,7 +65,19 @@ export interface QueueSnapshot {
 
 /* ------------------------------------------------------------------ decks -- */
 
-export type DeckId = 'a' | 'b';
+export type DeckId = 'a' | 'b' | 'c' | 'd';
+
+/** Every deck, in display order. Banks are a/b and c/d. */
+export const DECK_IDS: readonly DeckId[] = ['a', 'b', 'c', 'd'];
+
+export function isDeckId(v: unknown): v is DeckId {
+  return typeof v === 'string' && (DECK_IDS as readonly string[]).includes(v);
+}
+
+/** The deck a sync pair rides with: a↔b, c↔d. */
+export function deckPartner(id: DeckId): DeckId {
+  return id === 'a' ? 'b' : id === 'b' ? 'a' : id === 'c' ? 'd' : 'c';
+}
 
 /** Per-deck 3-band EQ in dB. -40 is a kill; 0 is flat. */
 export interface DeckEq {
@@ -153,6 +165,9 @@ export interface DeckMixerState {
   masterGain: number;
   a: DeckSlotState;
   b: DeckSlotState;
+  /** Decks C and D: the second bank (crossfader-free line channels). */
+  c: DeckSlotState;
+  d: DeckSlotState;
   /** Filled in by the controller; the mixer itself is sync-agnostic. */
   sync?: DeckSyncState | null;
   record?: DeckRecordState;
