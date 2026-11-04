@@ -303,8 +303,11 @@ export class LibrespotManager implements SpotifyBackend {
         this.socket = socket;
         this.bridgeEverConnected = true;
         socket.on('data', (d) => {
-          this.pcmBytes += d.length;
-          const ok = this.pcmHandler?.(d);
+          // Node types the payload as string | Buffer; the PCM tap only ever
+          // takes bytes, so normalise (the socket is never put in string mode).
+          const chunk = typeof d === 'string' ? Buffer.from(d) : d;
+          this.pcmBytes += chunk.length;
+          const ok = this.pcmHandler?.(chunk);
           if (ok === false && !socket.isPaused()) {
             socket.pause();
           }
