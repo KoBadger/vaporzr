@@ -3681,6 +3681,21 @@
                 : 'connected';
         }
 
+        /* Only ever turn a recording URL into an href when it is a real web
+           URL; a `javascript:` or other scheme from a compromised/odd upload
+           target must not become a clickable link (CodeQL js/xss +
+           js/client-side-unvalidated-url-redirection). */
+        function safeExternalUrl(raw) {
+          try {
+            var u = new URL(String(raw || ''), location.origin);
+            if (u.protocol === 'https:') return u.href;
+            if (u.protocol === 'http:' && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(u.hostname)) return u.href;
+          } catch (e) {
+            /* not a URL */
+          }
+          return '';
+        }
+
         /* Four-deck overview: see C/D without giving up the two-card mixer. */
         var railChips = null;
         function railFocus(id) {
@@ -3824,7 +3839,7 @@
           // Finished sets were encoded and published but had no link in the UI.
           var lastSet = el('#rec-last');
           if (lastSet) {
-            var lastUrl = state.record && state.record.lastUrl;
+            var lastUrl = safeExternalUrl(state.record && state.record.lastUrl);
             lastSet.hidden = !lastUrl;
             if (lastUrl) {
               lastSet.href = lastUrl;
