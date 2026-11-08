@@ -321,6 +321,9 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
   transform:translate(-50%,-50%);box-shadow:0 1px 2px rgba(0,0,0,.7)}
 .ds-sync{font:700 7.5px/1 inherit;letter-spacing:.16em;color:#5f6c99;min-height:8px}
 #deck-strip.locked .ds-sync{color:#22e6a4}
+/* C/D are line channels - the crossfader does not apply to them. Dim it so the
+   overlay never implies the fader is riding the visible pair. */
+#deck-strip.bank-cd .ds-xf,#deck-strip.bank-cd #ds-xfade{opacity:.22;pointer-events:none}
 .ds-deck.b .d-top{flex-direction:row-reverse}
 .ds-deck.b{text-align:right}
 /* Host controls: only shown when the page was opened with a control key. An
@@ -470,11 +473,11 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
   </div>
   <div class="ds-note" id="ds-note"></div>
   <div class="ds-ctrl" id="ds-ctrl">
-    <button class="ds-btn" data-ds-act="play" data-deck="a">▶ A</button>
-    <button class="ds-btn" data-ds-act="cue" data-deck="a">CUE A</button>
+    <button class="ds-btn" data-ds-act="play" data-slot="a" data-deck="a">▶ A</button>
+    <button class="ds-btn" data-ds-act="cue" data-slot="a" data-deck="a">CUE A</button>
     <button class="ds-btn" data-ds-act="sync">SYNC</button>
-    <button class="ds-btn" data-ds-act="cue" data-deck="b">CUE B</button>
-    <button class="ds-btn" data-ds-act="play" data-deck="b">▶ B</button>
+    <button class="ds-btn" data-ds-act="cue" data-slot="b" data-deck="b">CUE B</button>
+    <button class="ds-btn" data-ds-act="play" data-slot="b" data-deck="b">▶ B</button>
   </div>
 </div>
 
@@ -1434,6 +1437,22 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
      crossfader and a lock light over whatever visual is playing. A guest - the
      Activity always is one - only ever watches the set. */
   var dsEl=$('deck-strip'),dsState=null,dsAt=0,dsControl=false,dsXfAt=0,dsCoachOn=dsPref('vz.viz.decks.coach')==='on';
+  /* Which bank the two overlay cards show. Prefer the bank with more decks
+     loaded/playing so a C/D-only set is not invisible under a parked A/B. */
+  var dsPair=['a','b'];
+  function dsPickPair(){
+    if(!dsState)return ['a','b'];
+    var score=function(pair){
+      var n=0;
+      for(var i=0;i<pair.length;i++){
+        var s=dsState[pair[i]];
+        if(!s)continue;
+        if(s.playing)n+=2;else if(s.source)n+=1;
+      }
+      return n;
+    };
+    return score(['c','d'])>score(['a','b'])?['c','d']:['a','b'];
+  }
   function dsPref(k){try{return localStorage.getItem(k)}catch(e){return null}}
   function dsSetPref(k,v){try{localStorage.setItem(k,v)}catch(e){}}
   function dsFmt(ms){ms=Math.max(0,ms||0);var s=Math.floor(ms/1000);return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')}
@@ -1452,14 +1471,24 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
   /** Spectator narration: what a first-timer would want the overlay to say. */
   function dsNoteText(){
     if(!dsState)return 'Waiting for the decks.';
-    var a=dsState.a||{},b=dsState.b||{},line;
-    if(!a.source&&!b.source)line='Nothing loaded yet - as soon as a track is cued it appears here.';
-    else if(a.source&&!b.source)line=a.playing?'Deck A is rolling. Deck B is still empty.':'Deck A is cued and ready.';
-    else if(!a.source&&b.source)line=b.playing?'Deck B is rolling. Deck A is still empty.':'Deck B is cued and ready.';
-    else if(a.playing&&b.playing)line=dsState.sync?'Both tracks are locked in step - a clean blend.':'Both decks are running; the fader decides who is heard.';
-    else if(a.playing)line='Deck A is out front. Deck B is cued, waiting for its moment.';
-    else if(b.playing)line='Deck B is out front. Deck A is cued, waiting for its moment.';
+    var left=dsState[dsPair[0]]||{},right=dsState[dsPair[1]]||{};
+    var L=dsPair[0].toUpperCase(),R=dsPair[1].toUpperCase(),line;
+    if(!left.source&&!right.source)line='Nothing loaded yet - as soon as a track is cued it appears here.';
+    else if(left.source&&!right.source)line=left.playing?'Deck '+L+' is rolling. Deck '+R+' is still empty.':'Deck '+L+' is cued and ready.';
+    else if(!left.source&&right.source)line=right.playing?'Deck '+R+' is rolling. Deck '+L+' is still empty.':'Deck '+R+' is cued and ready.';
+    else if(left.playing&&right.playing)line=dsState.sync?'Both tracks are locked in step - a clean blend.':'Both decks are running; the fader decides who is heard.';
+    else if(left.playing)line='Deck '+L+' is out front. Deck '+R+' is cued, waiting for its moment.';
+    else if(right.playing)line='Deck '+R+' is out front. Deck '+L+' is cued, waiting for its moment.';
     else line='Both decks are loaded and paused.';
+    // Call out the bank that is not on the two cards (A/B when C/D is shown,
+    // and vice versa) so a four-deck set never hides half the mixer.
+    var other=dsPair[0]==='a'?['c','d']:['a','b'];
+    var extra=[];
+    other.forEach(function(id){
+      var s=dsState[id];
+      if(s&&s.source)extra.push(id.toUpperCase()+(s.playing?' ▶ ':' · ')+s.source.title);
+    });
+    if(extra.length)line+=' Other bank: '+extra.join(' | ')+'.';
     if(dsState.record&&dsState.record.active)line+=' Recording this set.';
     return line;
   }
@@ -1471,10 +1500,18 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
   }
   function dsPaint(){
     if(!dsState||!dsEl)return;
-    var live=false;
-    ['a','b'].forEach(function(id){
-      var d=dsState[id]||{},root=$('ds-'+id);
+    // ON AIR means any of the four decks is rolling, not just the A/B pair
+    // drawn on the overlay — a C/D-only set is still live.
+    var live=!dsState.active?false:['a','b','c','d'].some(function(id){
+      return !!(dsState[id]&&dsState[id].playing);
+    });
+    dsPair=dsPickPair();
+    ['a','b'].forEach(function(slot,i){
+      var id=dsPair[i];
+      var d=dsState[id]||{},root=$('ds-'+slot);
       if(!root)return;
+      var letter=root.querySelector('.ds-letter');
+      if(letter)letter.textContent=id.toUpperCase();
       if(d.playing)live=true;
       var pos=(d.positionMs||0)+(d.playing&&dsAt?Date.now()-dsAt:0);
       var dur=d.durationMs||0;
@@ -1500,6 +1537,13 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
         cues[i].style.left=(at/dur)*100+'%';
       }
     });
+    // Re-point the transport at whichever bank the cards show. Click handlers
+    // read data-deck at click time, so this keeps the overlay honest for C/D.
+    var slotBtns=dsEl.querySelectorAll('[data-slot]');
+    for(var sb=0;sb<slotBtns.length;sb++){
+      var slot=slotBtns[sb].getAttribute('data-slot');
+      slotBtns[sb].setAttribute('data-deck',dsPair[slot==='b'?1:0]);
+    }
     if(dsControl){
       var ctrls=dsEl.querySelectorAll('[data-ds-act]');
       for(var ci=0;ci<ctrls.length;ci++){
@@ -1508,6 +1552,8 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
           var playing=!!(dsState[dk]&&dsState[dk].playing);
           cb.textContent=(playing?'❚❚ ':'▶ ')+dk.toUpperCase();
           cb.classList.toggle('on',playing);
+        }else if(act==='cue'&&dk){
+          cb.textContent='CUE '+dk.toUpperCase();
         }else if(act==='sync'){
           cb.classList.toggle('on',!!dsState.sync);
         }
@@ -1517,6 +1563,7 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
         xfIn.value=Math.round(Math.max(0,Math.min(1,dsState.crossfader||0))*100);
     }
     dsEl.classList.toggle('live',live);
+    dsEl.classList.toggle('bank-cd',dsPair[0]==='c');
     var note=$('ds-note');if(note)note.textContent=dsNoteText();
     var xf=dsEl.querySelector('.ds-xf i');
     if(xf)xf.style.left=Math.max(0,Math.min(1,dsState.crossfader||0))*100+'%';
@@ -1558,6 +1605,8 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
       btn.onclick=function(){
         var act=btn.getAttribute('data-ds-act'),dk=btn.getAttribute('data-deck')||undefined;
         if(act==='play'&&dk&&dsState)act=dsState[dk].playing?'pause':'play';
+        // SYNC belongs to the bank the overlay is showing (c↔d included).
+        if(act==='sync')dk=dsPair[0];
         dsSend({type:'deck:control',action:act,deck:dk});
       };
     })(dsBtns[bi]);}

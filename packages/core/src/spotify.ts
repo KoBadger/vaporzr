@@ -289,6 +289,11 @@ export function buildAuthorizeUrl(state: string): string {
       'user-modify-playback-state',
       'user-read-currently-playing',
       'playlist-read-private',
+      // Creating and filling the bot's own playlists (/tape). Refresh tokens keep
+      // the scopes they were issued with, so existing logins need one re-login
+      // (/login) before these take effect.
+      'playlist-modify-private',
+      'playlist-modify-public',
     ].join(' '),
     state,
   });
@@ -956,8 +961,9 @@ async function resolvePlaylistWeb(id: string): Promise<ResolvedTrack[] | null> {
   }
 }
 
-/** Raw Spotify Web API call for a device (uses the account token). */
-async function apiRaw(method: 'GET' | 'PUT' | 'POST', path: string, body?: unknown): Promise<Response> {
+/** Raw Spotify Web API call (uses the account token). Exported for spotifyPlaylist.ts, which
+ *  needs authenticated writes without re-implementing token refresh and the shared rate limit. */
+export async function apiRaw(method: 'GET' | 'PUT' | 'POST', path: string, body?: unknown): Promise<Response> {
   const waitMs = await rateLimit.wait(`raw:${path}`);
   if (waitMs > 0) await new Promise((r) => setTimeout(r, waitMs));
   throwIfSpotifyCooling();

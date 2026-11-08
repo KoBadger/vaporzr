@@ -1435,7 +1435,9 @@ export class DiscordBot {
           quiet(decks.setQuantize(deck, Boolean(msg.on)));
           break;
         case 'sync':
-          report(decks.sync());
+          // Sync within the bank that is actually on screen (c↔d when the
+          // deck page is on the 3·4 bank), not always the A/B pair.
+          report(decks.sync(deck));
           break;
         case 'stop':
           report(decks.stop());

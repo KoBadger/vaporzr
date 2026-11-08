@@ -2250,6 +2250,215 @@
         border-style: dashed;
         background: #0a0d1b;
       }
+      /* ---------- all-deck rail ---------- */
+      .deck-rail {
+        display: flex;
+        gap: 8px;
+        padding: 0 18px 8px;
+        overflow-x: auto;
+      }
+      .dr-chip {
+        flex: 1 1 0;
+        min-width: 130px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 9px;
+        border-radius: 9px;
+        border: 1px solid #2a3350;
+        background: rgba(13, 17, 32, 0.55);
+        color: #9fb0e8;
+        cursor: pointer;
+        text-align: left;
+        font: 600 10px/1.2 inherit;
+      }
+      .dr-chip:hover {
+        border-color: #4a5b9a;
+      }
+      .dr-chip.focus {
+        border-color: var(--brand);
+        color: #eef1ff;
+        background: rgba(106, 92, 255, 0.12);
+      }
+      .dr-letter {
+        font: 800 12px/1 var(--display);
+        color: var(--brand);
+      }
+      .dr-chip[data-deck='b'] .dr-letter,
+      .dr-chip[data-deck='d'] .dr-letter {
+        color: #ff3cac;
+      }
+      .dr-name {
+        flex: 1;
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .dr-bpm {
+        font: 800 8px/1 var(--mono);
+        color: #6d7cae;
+        white-space: nowrap;
+      }
+      .dr-led {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #2a3350;
+        flex: none;
+      }
+      .dr-chip.playing .dr-led {
+        background: #22e6a4;
+        box-shadow: 0 0 7px rgba(34, 230, 164, 0.9);
+      }
+
+      /* ---------- track browser (VirtualDJ-style drawer) ---------- */
+      #browser-pane {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 80;
+        display: flex;
+        flex-direction: column;
+        height: min(46vh, 540px);
+        background: rgba(8, 10, 24, 0.98);
+        border-top: 1px solid #2a3350;
+        box-shadow: 0 -18px 50px rgba(0, 0, 0, 0.62);
+        transform: translateY(102%);
+        transition: transform 0.18s ease;
+      }
+      #browser-pane.open {
+        transform: none;
+      }
+      body.browsing .rig {
+        padding-bottom: min(46vh, 540px);
+      }
+      .bp-head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 14px;
+        border-bottom: 1px solid #1b2340;
+        flex: none;
+      }
+      .bp-title {
+        font: 800 10px/1 var(--display);
+        letter-spacing: 0.18em;
+        color: #b9c6ff;
+        white-space: nowrap;
+      }
+      #browser-q {
+        flex: 1;
+        min-width: 0;
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid #2a3350;
+        background: #0b0e1d;
+        color: #e7ecff;
+        font: 600 12px/1.2 inherit;
+        outline: none;
+      }
+      #browser-q:focus {
+        border-color: var(--brand);
+      }
+      .bp-count {
+        color: #6d7cae;
+        font: 600 10px/1 var(--mono);
+        white-space: nowrap;
+      }
+      .bp-close {
+        width: 28px;
+        height: 28px;
+        border-radius: 8px;
+        border: 1px solid #2a3350;
+        background: transparent;
+        color: #9fb0e8;
+        cursor: pointer;
+        font: 700 15px/1 system-ui;
+      }
+      #browser-results {
+        flex: 1;
+        overflow: auto;
+        overscroll-behavior: contain;
+      }
+      .bp-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto auto;
+        gap: 10px;
+        align-items: center;
+        padding: 7px 14px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.045);
+      }
+      .bp-row:hover {
+        background: rgba(106, 92, 255, 0.08);
+      }
+      .bp-meta {
+        min-width: 0;
+      }
+      .bp-name {
+        display: block;
+        font: 600 12.5px/1.25 inherit;
+        color: #e7ecff;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .bp-sub {
+        font: 600 10px/1.25 inherit;
+        color: #6d7cae;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .bp-src {
+        font: 800 8px/1 var(--mono);
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: #8e9bd0;
+        border: 1px solid #2a3350;
+        border-radius: 5px;
+        padding: 3px 5px;
+        white-space: nowrap;
+      }
+      .bp-load {
+        display: flex;
+        gap: 4px;
+      }
+      .bp-load button {
+        width: 24px;
+        height: 24px;
+        border-radius: 6px;
+        border: 1px solid #2a3350;
+        background: #12172a;
+        color: #b9c6ff;
+        font: 800 9px/1 var(--mono);
+        cursor: pointer;
+      }
+      .bp-load button:hover {
+        border-color: var(--brand);
+        color: #fff;
+      }
+      .bp-msg {
+        padding: 18px 14px;
+        color: #6d7cae;
+        font: 600 11px/1.5 inherit;
+      }
+      .rec-last {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        color: #7ff0c4;
+        text-decoration: none;
+        font: 800 8px/1 var(--mono);
+        letter-spacing: 0.08em;
+        border: 1px solid #2c5a50;
+        border-radius: 7px;
+        padding: 4px 6px;
+      }
+      .rec-last:hover {
+        background: rgba(34, 230, 164, 0.12);
+      }
     </style>
   </head>
   <body>
@@ -2277,11 +2486,14 @@
         <button data-bank="0" class="on" title="Decks A and B">1·2</button>
         <button data-bank="1" title="Decks C and D">3·4</button>
       </div>
+      <button class="fn" id="btn-browse" title="Track browser (press /)"><span class="led"></span>BROWSE</button>
+      <button class="fn pro-only" id="btn-range" title="Pitch fader range"><span class="lbl">±8%</span></button>
       <button class="fn help-btn" id="btn-help" title="How to mix (short guide)" aria-label="How to mix">?</button>
       <span class="spacer"></span>
       <button class="fn" id="btn-sync"><span class="led"></span>SYNC</button>
       <button class="fn pro-only" id="btn-lock"><span class="led"></span><span class="lbl">LOCK</span></button>
       <button class="fn rec pro-only" id="btn-rec"><span class="led"></span><span class="lbl">REC</span></button>
+      <a class="rec-last pro-only" id="rec-last" target="_blank" rel="noopener" hidden>LAST SET ↗</a>
       <button class="fn pro-only" id="btn-play"><span class="led"></span>PLAY BOTH</button>
       <button class="fn pro-only" id="btn-pause">PAUSE</button>
       <button class="fn" id="btn-stop">STOP</button>
@@ -2291,6 +2503,9 @@
       <span class="coach-led" aria-hidden="true"></span>
       <span id="coach-text">Paste a song name into Deck A and press LOAD to begin.</span>
     </div>
+
+    <!-- All four decks at a glance; click 3·4 to bring that bank on screen. -->
+    <div class="deck-rail" id="deck-rail" aria-label="All decks"></div>
 
     <main class="rig">
       <section class="deck a" data-deck="a">
@@ -2304,7 +2519,7 @@
               <input
                 type="text"
                 data-role="query"
-                placeholder="Search, or paste a link"
+                placeholder="Search, or paste any link (podcast, video…)"
                 autocomplete="off"
                 role="combobox"
                 aria-expanded="false"
@@ -2642,7 +2857,7 @@
               <input
                 type="text"
                 data-role="query"
-                placeholder="Search, or paste a link"
+                placeholder="Search, or paste any link (podcast, video…)"
                 autocomplete="off"
                 role="combobox"
                 aria-expanded="false"
@@ -2856,6 +3071,26 @@
       <button id="thumb-b-cue" class="tb-b" title="Cue deck B back to the start">CUE</button>
       <button id="thumb-b" class="tb-b" title="Play or pause deck B">B PLAY</button>
     </div>
+
+    <!-- VirtualDJ-style track browser: stays open while you load across decks. -->
+    <section id="browser-pane" aria-label="Track browser" aria-hidden="true">
+      <div class="bp-head">
+        <span class="bp-title">TRACK BROWSER</span>
+        <input
+          id="browser-q"
+          type="search"
+          placeholder="Search Spotify, YouTube, or paste any link…"
+          autocomplete="off"
+        />
+        <span class="bp-count" id="browser-count">press / to search</span>
+        <button class="bp-close" id="browser-close" title="Close browser" aria-label="Close browser">×</button>
+      </div>
+      <div id="browser-results">
+        <div class="bp-msg">
+          Type at least two characters. Load straight to A, B, C or D without closing the browser.
+        </div>
+      </div>
+    </section>
 
     <div class="tut" id="tut" role="dialog" aria-modal="true" aria-labelledby="tut-title">
       <div class="tut-card">
@@ -3446,8 +3681,79 @@
                 : 'connected';
         }
 
+        /* Only ever turn a recording URL into an href when it is a real web
+           URL; a `javascript:` or other scheme from a compromised/odd upload
+           target must not become a clickable link (CodeQL js/xss +
+           js/client-side-unvalidated-url-redirection). */
+        function safeExternalUrl(raw) {
+          try {
+            var u = new URL(String(raw || ''), location.origin);
+            if (u.protocol === 'https:') return u.href;
+            if (u.protocol === 'http:' && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(u.hostname)) return u.href;
+          } catch (e) {
+            /* not a URL */
+          }
+          return '';
+        }
+
+        /* Four-deck overview: see C/D without giving up the two-card mixer. */
+        var railChips = null;
+        function railFocus(id) {
+          var bank = id === 'c' || id === 'd' ? 1 : 0;
+          if (bank !== bankIndex) {
+            setBank(bank);
+            return;
+          }
+          var card = el('.deck[data-deck="' + id + '"]');
+          if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+        function paintDeckRail() {
+          var rail = el('#deck-rail');
+          if (!rail || !state) return;
+          if (!railChips) {
+            railChips = {};
+            ['a', 'b', 'c', 'd'].forEach(function (id) {
+              var chip = document.createElement('button');
+              chip.type = 'button';
+              chip.className = 'dr-chip';
+              chip.setAttribute('data-deck', id);
+              var led = document.createElement('span');
+              led.className = 'dr-led';
+              var letter = document.createElement('span');
+              letter.className = 'dr-letter';
+              letter.textContent = id.toUpperCase();
+              var name = document.createElement('span');
+              name.className = 'dr-name';
+              var bpm = document.createElement('span');
+              bpm.className = 'dr-bpm';
+              chip.appendChild(led);
+              chip.appendChild(letter);
+              chip.appendChild(name);
+              chip.appendChild(bpm);
+              chip.onclick = function () {
+                railFocus(id);
+              };
+              rail.appendChild(chip);
+              railChips[id] = { chip: chip, name: name, bpm: bpm };
+            });
+          }
+          ['a', 'b', 'c', 'd'].forEach(function (id) {
+            var refs = railChips[id];
+            var slot = state[id] || {};
+            refs.name.textContent = slot.source ? slot.source.title : 'empty';
+            refs.bpm.textContent = slot.bpm ? Math.round(slot.bpm) + ' BPM' : '';
+            refs.chip.classList.toggle('playing', !!slot.playing);
+            refs.chip.classList.toggle('focus', deckIds.indexOf(id) >= 0);
+            refs.chip.title =
+              'Deck ' +
+              id.toUpperCase() +
+              (slot.source ? ' · ' + slot.source.title + ' · ' + (slot.playing ? 'playing' : 'paused') : ' · empty');
+          });
+        }
+
         function paint() {
           if (!state) return;
+          paintDeckRail();
           deckIds.forEach(function (id) {
             var slot = state[id];
             if (!slot) return;
@@ -3530,6 +3836,16 @@
           rec.classList.toggle('on', !!(state.record && state.record.active));
           el('.lbl', rec).textContent =
             state.record && state.record.active ? 'STOP ' + Math.round(state.record.elapsedMs / 1000) + 'S' : 'REC';
+          // Finished sets were encoded and published but had no link in the UI.
+          var lastSet = el('#rec-last');
+          if (lastSet) {
+            var lastUrl = safeExternalUrl(state.record && state.record.lastUrl);
+            lastSet.hidden = !lastUrl;
+            if (lastUrl) {
+              lastSet.href = lastUrl;
+              lastSet.title = state.record.lastName || 'Download the last recorded set';
+            }
+          }
           // Sample bank pads come from the server's samples.json layout (8 slots).
           var samples = leftDeck().samples || [];
           var key = samples.join('|');
@@ -4487,11 +4803,11 @@
             flushOnRelease(input, key);
           });
           el('#btn-sync').onclick = function () {
-            control('sync');
+            control('sync', { deck: deckIds[0] });
           };
           el('#btn-lock').onclick = function () {
             if (!state) return;
-            control('lock', state.sync ? { enabled: false } : { deck: 'a', enabled: true });
+            control('lock', state.sync ? { enabled: false } : { deck: deckIds[0], enabled: true });
           };
           el('#btn-rec').onclick = function () {
             if (!state) return;
@@ -4590,17 +4906,21 @@
               return;
             }
             if (!state) return;
-            /* Per-deck transport on the home row, like a controller's A/B keys. */
-            if (k === 'a' || k === 'b') {
-              deckToggle(k);
+            /* Per-deck transport on the home row, like a controller's A/B keys.
+               Map the left/right keys to whichever bank is on screen, and also
+               accept the literal C/D letters so a 3·4 set works either way. */
+            if (k === 'a' || k === 'b' || k === 'c' || k === 'd') {
+              var keyDeck = k === 'a' || k === 'c' ? deckIds[0] : deckIds[1];
+              if (k === 'c' || k === 'd') keyDeck = k;
+              deckToggle(keyDeck);
               return;
             }
             if (k === 's') {
-              control('sync');
+              control('sync', { deck: deckIds[0] });
               return;
             }
             if (k === 'l') {
-              control('lock', state.sync ? { enabled: false } : { deck: 'a', enabled: true });
+              control('lock', state.sync ? { enabled: false } : { deck: deckIds[0], enabled: true });
               return;
             }
             if (k === 'arrowleft' || k === 'arrowright') {
@@ -4612,7 +4932,8 @@
             }
             if (k >= '1' && k <= '8') {
               var pad = Number(k);
-              var dk = e.shiftKey ? 'b' : 'a';
+              // Follow the focused bank so 1–8 are the visible deck's cues.
+              var dk = e.shiftKey ? deckIds[1] : deckIds[0];
               control(state[dk].cues[pad - 1] != null ? 'cue-jump' : 'cue-set', { deck: dk, slot: pad });
               return;
             }
@@ -4701,11 +5022,13 @@
               var v = val / 127;
               if (status === 0xb0) {
                 if (cc === 1) controlThrottled('midi:xfade', 'crossfader', { value: v });
-                else if (cc === 2) controlThrottled('midi:a:gain', 'gain', { deck: 'a', value: v });
-                else if (cc === 3) controlThrottled('midi:b:gain', 'gain', { deck: 'b', value: v });
+                else if (cc === 2)
+                  controlThrottled('midi:' + deckIds[0] + ':gain', 'gain', { deck: deckIds[0], value: v });
+                else if (cc === 3)
+                  controlThrottled('midi:' + deckIds[1] + ':gain', 'gain', { deck: deckIds[1], value: v });
                 else if (cc >= 4 && cc <= 9) {
                   var bands = ['low', 'mid', 'high'];
-                  var mdeck = cc < 7 ? 'a' : 'b';
+                  var mdeck = cc < 7 ? deckIds[0] : deckIds[1];
                   var band = bands[(cc - 4) % 3];
                   // Same law as the on-screen knobs: centre (CC 64) is 0 dB,
                   // the left half cuts to -40, the right half boosts to +6.
@@ -4713,7 +5036,7 @@
                   var edb = Math.round(efrac >= 0 ? efrac * 6 : efrac * 40);
                   controlThrottled('midi:' + mdeck + band, 'eq', { deck: mdeck, band: band, db: edb });
                 } else if (cc === 10 || cc === 11) {
-                  var fdeck = cc === 10 ? 'a' : 'b';
+                  var fdeck = cc === 10 ? deckIds[0] : deckIds[1];
                   controlThrottled('midi:filter:' + fdeck, 'filter', { deck: fdeck, value: v });
                 }
               } else if (status === 0x90 && val > 0) {
@@ -4749,6 +5072,174 @@
           } else {
             el('#midi-status').textContent = 'MIDI IN: browser unsupported';
           }
+
+          /* ---------- track browser (VirtualDJ-style drawer) ----------
+             One persistent crate you can search once and load to any of the
+             four decks without reopening it between picks. */
+          (function () {
+            var pane = el('#browser-pane');
+            var input = el('#browser-q');
+            var results = el('#browser-results');
+            var count = el('#browser-count');
+            var timer = null;
+            var seq = 0;
+            var lastList = [];
+
+            function setOpen(on) {
+              pane.classList.toggle('open', on);
+              pane.setAttribute('aria-hidden', String(!on));
+              document.body.classList.toggle('browsing', on);
+              el('#btn-browse').classList.toggle('on', on);
+              if (on) {
+                input.focus();
+                input.select();
+              }
+            }
+            el('#btn-browse').onclick = function () {
+              setOpen(!pane.classList.contains('open'));
+            };
+            el('#browser-close').onclick = function () {
+              setOpen(false);
+            };
+            document.addEventListener('keydown', function (e) {
+              var tag = document.activeElement && document.activeElement.tagName;
+              var typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+              if (e.key === '/' && !typing && !e.metaKey && !e.ctrlKey && !e.altKey) {
+                e.preventDefault();
+                setOpen(true);
+              } else if (e.key === 'Escape' && pane.classList.contains('open')) {
+                setOpen(false);
+              }
+            });
+
+            function load(deck, it) {
+              send({
+                type: 'deck:load',
+                deck: deck,
+                query: it.uri || (it.title || '') + ' ' + (it.artist || ''),
+              });
+              toast('ok', 'Deck ' + deck.toUpperCase() + ' ← ' + (it.title || 'track'));
+            }
+
+            function render(list) {
+              lastList = list;
+              results.innerHTML = '';
+              if (!list.length) {
+                var empty = document.createElement('div');
+                empty.className = 'bp-msg';
+                empty.textContent = input.value.trim()
+                  ? 'No matches. Try fewer words, a different spelling, or paste a direct link.'
+                  : 'Type at least two characters, or paste a link.';
+                results.appendChild(empty);
+                count.textContent = '0 results';
+                return;
+              }
+              list.forEach(function (it) {
+                var row = document.createElement('div');
+                row.className = 'bp-row';
+                var meta = document.createElement('div');
+                meta.className = 'bp-meta';
+                var name = document.createElement('span');
+                name.className = 'bp-name';
+                name.textContent = it.title || '—';
+                var sub = document.createElement('span');
+                sub.className = 'bp-sub';
+                sub.textContent = (it.artist || 'unknown artist') + (it.durationMs ? ' · ' + fmt(it.durationMs) : '');
+                meta.appendChild(name);
+                meta.appendChild(sub);
+                row.appendChild(meta);
+
+                var src = document.createElement('span');
+                src.className = 'bp-src';
+                src.textContent = it.source || 'link';
+                row.appendChild(src);
+
+                var loadWrap = document.createElement('div');
+                loadWrap.className = 'bp-load';
+                ['a', 'b', 'c', 'd'].forEach(function (id) {
+                  var b = document.createElement('button');
+                  b.type = 'button';
+                  b.textContent = id.toUpperCase();
+                  b.title = 'Load to deck ' + id.toUpperCase();
+                  b.onclick = function () {
+                    load(id, it);
+                  };
+                  loadWrap.appendChild(b);
+                });
+                row.appendChild(loadWrap);
+                results.appendChild(row);
+              });
+              count.textContent = list.length + (list.length === 1 ? ' result' : ' results');
+            }
+
+            function run() {
+              var q = input.value.trim();
+              clearTimeout(timer);
+              if (q.length < 2) {
+                render([]);
+                count.textContent = q ? 'keep typing…' : 'press / to search';
+                return;
+              }
+              var mine = ++seq;
+              count.textContent = 'searching…';
+              fetch('/api/search?limit=25&q=' + encodeURIComponent(q), { credentials: 'same-origin' })
+                .then(function (r) {
+                  if (!r.ok) throw new Error('HTTP ' + r.status);
+                  return r.json();
+                })
+                .then(function (d) {
+                  if (mine !== seq) return;
+                  render((d && d.items) || []);
+                })
+                .catch(function (err) {
+                  if (mine !== seq) return;
+                  lastList = [];
+                  results.innerHTML = '';
+                  var msg = document.createElement('div');
+                  msg.className = 'bp-msg';
+                  msg.textContent = 'Search unavailable (' + (err && err.message ? err.message : 'network') + ').';
+                  results.appendChild(msg);
+                  count.textContent = 'offline';
+                });
+            }
+            input.addEventListener('input', function () {
+              clearTimeout(timer);
+              timer = setTimeout(run, 220);
+            });
+            input.addEventListener('keydown', function (e) {
+              if (e.key === 'Enter' && lastList.length) {
+                e.preventDefault();
+                load(deckIds[0], lastList[0]);
+              }
+            });
+          })();
+
+          /* VirtualDJ-style pitch range: 4/8/16/50% instead of a fixed ±8.
+             Key lock is inherent here — the engine time-stretches with atempo,
+             so pitch never follows the fader. */
+          (function () {
+            var RANGES = [4, 8, 16, 50];
+            var range = Number(localStorage.getItem('vz-pitch-range') || '8');
+            if (RANGES.indexOf(range) < 0) range = 8;
+            function applyRange() {
+              all('[data-role="tempo"]').forEach(function (slider) {
+                slider.min = String(100 - range);
+                slider.max = String(100 + range);
+              });
+              var lbl = el('#btn-range .lbl');
+              if (lbl) lbl.textContent = '±' + range + '%';
+            }
+            el('#btn-range').onclick = function () {
+              range = RANGES[(RANGES.indexOf(range) + 1) % RANGES.length];
+              try {
+                localStorage.setItem('vz-pitch-range', String(range));
+              } catch (e) {
+                /* private mode */
+              }
+              applyRange();
+            };
+            applyRange();
+          })();
 
           setInterval(function () {
             if (state) paint();

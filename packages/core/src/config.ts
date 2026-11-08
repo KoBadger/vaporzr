@@ -28,6 +28,7 @@ export const config = {
   ownerId: process.env.OWNER_ID ?? '',
   dataDir: process.env.DATA_DIR ?? path.join(repoRoot, 'apps', 'bot', 'data'),
   youtubeApiKey: process.env.YOUTUBE_API_KEY ?? '',
+  auddToken: process.env.AUDD_API_TOKEN ?? '',
   /**
    * Replicate API token. When set, `V@mashup` separates stems on Replicate's
    * hosted Demucs (GPU, ~2¢/song, ~80s) instead of the local CPU run (~29 min).
