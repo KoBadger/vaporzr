@@ -1605,6 +1605,8 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
       btn.onclick=function(){
         var act=btn.getAttribute('data-ds-act'),dk=btn.getAttribute('data-deck')||undefined;
         if(act==='play'&&dk&&dsState)act=dsState[dk].playing?'pause':'play';
+        // SYNC belongs to the bank the overlay is showing (c↔d included).
+        if(act==='sync')dk=dsPair[0];
         dsSend({type:'deck:control',action:act,deck:dk});
       };
     })(dsBtns[bi]);}

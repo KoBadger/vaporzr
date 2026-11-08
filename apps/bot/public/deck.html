@@ -4667,11 +4667,11 @@
             flushOnRelease(input, key);
           });
           el('#btn-sync').onclick = function () {
-            control('sync');
+            control('sync', { deck: deckIds[0] });
           };
           el('#btn-lock').onclick = function () {
             if (!state) return;
-            control('lock', state.sync ? { enabled: false } : { deck: 'a', enabled: true });
+            control('lock', state.sync ? { enabled: false } : { deck: deckIds[0], enabled: true });
           };
           el('#btn-rec').onclick = function () {
             if (!state) return;
@@ -4770,17 +4770,21 @@
               return;
             }
             if (!state) return;
-            /* Per-deck transport on the home row, like a controller's A/B keys. */
-            if (k === 'a' || k === 'b') {
-              deckToggle(k);
+            /* Per-deck transport on the home row, like a controller's A/B keys.
+               Map the left/right keys to whichever bank is on screen, and also
+               accept the literal C/D letters so a 3·4 set works either way. */
+            if (k === 'a' || k === 'b' || k === 'c' || k === 'd') {
+              var keyDeck = k === 'a' || k === 'c' ? deckIds[0] : deckIds[1];
+              if (k === 'c' || k === 'd') keyDeck = k;
+              deckToggle(keyDeck);
               return;
             }
             if (k === 's') {
-              control('sync');
+              control('sync', { deck: deckIds[0] });
               return;
             }
             if (k === 'l') {
-              control('lock', state.sync ? { enabled: false } : { deck: 'a', enabled: true });
+              control('lock', state.sync ? { enabled: false } : { deck: deckIds[0], enabled: true });
               return;
             }
             if (k === 'arrowleft' || k === 'arrowright') {
@@ -4792,7 +4796,8 @@
             }
             if (k >= '1' && k <= '8') {
               var pad = Number(k);
-              var dk = e.shiftKey ? 'b' : 'a';
+              // Follow the focused bank so 1–8 are the visible deck's cues.
+              var dk = e.shiftKey ? deckIds[1] : deckIds[0];
               control(state[dk].cues[pad - 1] != null ? 'cue-jump' : 'cue-set', { deck: dk, slot: pad });
               return;
             }
@@ -4881,11 +4886,13 @@
               var v = val / 127;
               if (status === 0xb0) {
                 if (cc === 1) controlThrottled('midi:xfade', 'crossfader', { value: v });
-                else if (cc === 2) controlThrottled('midi:a:gain', 'gain', { deck: 'a', value: v });
-                else if (cc === 3) controlThrottled('midi:b:gain', 'gain', { deck: 'b', value: v });
+                else if (cc === 2)
+                  controlThrottled('midi:' + deckIds[0] + ':gain', 'gain', { deck: deckIds[0], value: v });
+                else if (cc === 3)
+                  controlThrottled('midi:' + deckIds[1] + ':gain', 'gain', { deck: deckIds[1], value: v });
                 else if (cc >= 4 && cc <= 9) {
                   var bands = ['low', 'mid', 'high'];
-                  var mdeck = cc < 7 ? 'a' : 'b';
+                  var mdeck = cc < 7 ? deckIds[0] : deckIds[1];
                   var band = bands[(cc - 4) % 3];
                   // Same law as the on-screen knobs: centre (CC 64) is 0 dB,
                   // the left half cuts to -40, the right half boosts to +6.
@@ -4893,7 +4900,7 @@
                   var edb = Math.round(efrac >= 0 ? efrac * 6 : efrac * 40);
                   controlThrottled('midi:' + mdeck + band, 'eq', { deck: mdeck, band: band, db: edb });
                 } else if (cc === 10 || cc === 11) {
-                  var fdeck = cc === 10 ? 'a' : 'b';
+                  var fdeck = cc === 10 ? deckIds[0] : deckIds[1];
                   controlThrottled('midi:filter:' + fdeck, 'filter', { deck: fdeck, value: v });
                 }
               } else if (status === 0x90 && val > 0) {
