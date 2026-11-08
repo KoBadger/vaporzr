@@ -1965,7 +1965,7 @@
             <div class="sw-wrap">
               <input
                 id="search"
-                placeholder="Song, artist, or link (Spotify, YouTube, Suno…)"
+                placeholder="Song, artist, or any media link (podcast, video, Spotify, YouTube…)"
                 autocomplete="off"
                 role="combobox"
                 aria-expanded="false"
@@ -1978,8 +1978,8 @@
             <button id="btn-q-play" class="primary" data-tip="Search &amp; play right now">▶</button>
           </div>
           <div class="sub" style="margin-top: 8px">
-            Searches Spotify &amp; YouTube, or paste a link (Spotify, YouTube, SoundCloud, Apple, Suno…). Playlists
-            queue up to 25. Shift+Enter = play next.
+            Searches Spotify &amp; YouTube, or paste a link (Spotify, YouTube, SoundCloud, Apple, Suno, a podcast
+            feed/episode, or any page with audio). Playlists queue up to 25. Shift+Enter = play next.
           </div>
           <div style="margin-top: 8px">
             <a href="#" id="bulk-toggle" style="color: var(--accent); font-size: 11px; text-decoration: none"
@@ -3261,16 +3261,30 @@
           /* ---- Jam: presence roster + a scan-to-join QR ---- */
           var jam = { names: [], contributors: [], joinPath: '', joinUrl: '' };
           var jamQrDrawn = false;
+          var jamQrUrl = '';
+          var qrLibWaiters = null;
           function ensureQrLib(cb) {
             if (window.qrcode) return cb(true);
+            // One script tag per page: queue callbacks while it loads so a
+            // roster update arriving mid-load cannot drop the redraw.
+            if (qrLibWaiters) {
+              qrLibWaiters.push(cb);
+              return;
+            }
+            qrLibWaiters = [cb];
+            var done = function (ok) {
+              var waiters = qrLibWaiters || [];
+              qrLibWaiters = null;
+              for (var i = 0; i < waiters.length; i++) waiters[i](ok);
+            };
             var s = document.createElement('script');
             s.src = '/vendor/qrcode.min.js';
             s.async = true;
             s.onload = function () {
-              cb(!!window.qrcode);
+              done(!!window.qrcode);
             };
             s.onerror = function () {
-              cb(false);
+              done(false);
             };
             document.head.appendChild(s);
           }
@@ -3298,11 +3312,18 @@
             var url = jam.joinUrl || location.origin + jam.joinPath;
             var l = document.getElementById('jam-link');
             if (l) l.textContent = url;
-            if (jamQrDrawn) return;
+            // The jam invite rotates hourly, so a code drawn when the panel
+            // first connected goes stale. Redraw whenever the URL changes —
+            // otherwise the QR keeps pointing at an expired invite.
+            if (jamQrDrawn && jamQrUrl === url) return;
             var cv = document.getElementById('jam-qr');
             if (!cv) return;
+            jamQrUrl = url;
             ensureQrLib(function (ok) {
-              if (!ok) return;
+              if (!ok) {
+                jamQrUrl = '';
+                return;
+              }
               try {
                 var qr = qrcode(0, 'M');
                 qr.addData(url);
@@ -4204,10 +4225,17 @@
             var bpm = slot.bpm ? Math.round(slot.bpm) + ' BPM' : '…';
             return label + ' ' + (slot.playing ? '▶' : '⏸') + ' ' + slot.source.title + ' · ' + bpm;
           }
+          // Four-deck engine: show whichever decks are actually loaded. C/D are
+          // line channels (no crossfader), so they must not disappear from the
+          // strip just because the fader is parked on A/B.
+          var loaded = [];
+          ['a', 'b', 'c', 'd'].forEach(function (id) {
+            if (state[id] && state[id].source) loaded.push(part(id.toUpperCase(), state[id]));
+          });
+          if (!loaded.length) loaded.push(part('A', state.a), part('B', state.b));
           var xf = Math.round((state.crossfader || 0.5) * 100);
           var lock = state.sync ? ' 🔒' : '';
-          document.getElementById('deck-strip-text').textContent =
-            part('A', state.a) + '  |  ' + part('B', state.b) + '  |  ' + xf + '%' + lock;
+          document.getElementById('deck-strip-text').textContent = loaded.join('  |  ') + '  |  ' + xf + '%' + lock;
           last = Date.now();
         };
       })();

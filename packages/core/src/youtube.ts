@@ -791,13 +791,22 @@ export async function resolveYoutubeVideo(input: string): Promise<ResolvedVideo>
   };
 }
 
-/** Non-YouTube audio hosts yt-dlp can resolve directly. */
-const GENERIC_MEDIA_HOST_RE =
-  /(^|[./])(bandcamp\.com|deezer\.com|tidal\.com|mixcloud\.com|audiomack\.com|jamendo\.com|qobuz\.com|napster\.com)\//i;
+/** True for any http(s) URL that isn't claimed by a more specific resolver.
+ *  yt-dlp's `generic` extractor (and its site-specific ones) can pull a
+ *  playable audio stream out of a huge range of pages — podcast RSS feeds and
+ *  episode pages, Bandcamp/Deezer/Tidal/Mixcloud, Vimeo, Twitch, TikTok,
+ *  direct movie/clip pages, etc. — so we treat every remaining URL as a
+ *  candidate and let yt-dlp decide whether it can actually extract audio. */
+const DEDICATED_RESOLVER_HOST_RE =
+  /(^|[./])(youtube\.com|youtu\.be|spotify\.com|suno\.com|suno\.ai|music\.apple\.com|soundcloud\.com)($|[./?#])/i;
 
 export function isGenericMediaUrl(input: string): boolean {
   const t = input.trim();
-  return /^https?:\/\//i.test(t) && GENERIC_MEDIA_HOST_RE.test(t);
+  if (!/^https?:\/\//i.test(t)) return false;
+  // Hosts with their own resolvers are handled earlier in resolvePlayInput;
+  // don't steal them here, and don't claim Spotify URLs for yt-dlp.
+  if (DEDICATED_RESOLVER_HOST_RE.test(t)) return false;
+  return true;
 }
 
 /** Resolve any yt-dlp-supported URL (Bandcamp, Deezer, Tidal, Mixcloud, …)
@@ -805,16 +814,22 @@ export function isGenericMediaUrl(input: string): boolean {
 export async function resolveGenericMediaUrl(input: string): Promise<ResolvedVideo> {
   const url = input.trim();
   const META_SEP = '\t';
-  const raw = await runYtDlp([
-    '--no-playlist',
-    '--no-warnings',
-    '-f',
-    AUDIO_FORMAT,
-    '--get-url',
-    '--print',
-    `%(id)s${META_SEP}%(title)s${META_SEP}%(duration)s${META_SEP}%(thumbnail)s${META_SEP}%(uploader)s`,
-    url,
-  ]);
+  const raw = await runYtDlp(
+    [
+      '--playlist-items',
+      '1',
+      '--no-warnings',
+      '-f',
+      AUDIO_FORMAT,
+      '--get-url',
+      '--print',
+      `%(id)s${META_SEP}%(title)s${META_SEP}%(duration)s${META_SEP}%(thumbnail)s${META_SEP}%(uploader)s`,
+      url,
+    ],
+    2,
+    undefined,
+    60_000,
+  );
   const lines = raw.trim().split(/\r?\n/);
   const metaLine = lines.find((l) => l.includes(META_SEP));
   const streamUrl = lines.find((l) => /^https?:\/\//.test(l));
@@ -824,7 +839,7 @@ export async function resolveGenericMediaUrl(input: string): Promise<ResolvedVid
     videoId: id,
     uri: `direct:${url}`,
     name: title || 'Unknown',
-    artists: [uploader || 'Web'],
+    artists: [uploader && uploader !== 'NA' && uploader !== 'N/A' ? uploader : 'Web'],
     album: '',
     durationMs: (Number(duration) || 0) * 1000,
     image: thumbnail || undefined,
