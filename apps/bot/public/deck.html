@@ -2250,6 +2250,68 @@
         border-style: dashed;
         background: #0a0d1b;
       }
+      /* ---------- all-deck rail ---------- */
+      .deck-rail {
+        display: flex;
+        gap: 8px;
+        padding: 0 18px 8px;
+        overflow-x: auto;
+      }
+      .dr-chip {
+        flex: 1 1 0;
+        min-width: 130px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 9px;
+        border-radius: 9px;
+        border: 1px solid #2a3350;
+        background: rgba(13, 17, 32, 0.55);
+        color: #9fb0e8;
+        cursor: pointer;
+        text-align: left;
+        font: 600 10px/1.2 inherit;
+      }
+      .dr-chip:hover {
+        border-color: #4a5b9a;
+      }
+      .dr-chip.focus {
+        border-color: var(--brand);
+        color: #eef1ff;
+        background: rgba(106, 92, 255, 0.12);
+      }
+      .dr-letter {
+        font: 800 12px/1 var(--display);
+        color: var(--brand);
+      }
+      .dr-chip[data-deck='b'] .dr-letter,
+      .dr-chip[data-deck='d'] .dr-letter {
+        color: #ff3cac;
+      }
+      .dr-name {
+        flex: 1;
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .dr-bpm {
+        font: 800 8px/1 var(--mono);
+        color: #6d7cae;
+        white-space: nowrap;
+      }
+      .dr-led {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #2a3350;
+        flex: none;
+      }
+      .dr-chip.playing .dr-led {
+        background: #22e6a4;
+        box-shadow: 0 0 7px rgba(34, 230, 164, 0.9);
+      }
+
       /* ---------- track browser (VirtualDJ-style drawer) ---------- */
       #browser-pane {
         position: fixed;
@@ -2441,6 +2503,9 @@
       <span class="coach-led" aria-hidden="true"></span>
       <span id="coach-text">Paste a song name into Deck A and press LOAD to begin.</span>
     </div>
+
+    <!-- All four decks at a glance; click 3·4 to bring that bank on screen. -->
+    <div class="deck-rail" id="deck-rail" aria-label="All decks"></div>
 
     <main class="rig">
       <section class="deck a" data-deck="a">
@@ -3616,8 +3681,64 @@
                 : 'connected';
         }
 
+        /* Four-deck overview: see C/D without giving up the two-card mixer. */
+        var railChips = null;
+        function railFocus(id) {
+          var bank = id === 'c' || id === 'd' ? 1 : 0;
+          if (bank !== bankIndex) {
+            setBank(bank);
+            return;
+          }
+          var card = el('.deck[data-deck="' + id + '"]');
+          if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+        function paintDeckRail() {
+          var rail = el('#deck-rail');
+          if (!rail || !state) return;
+          if (!railChips) {
+            railChips = {};
+            ['a', 'b', 'c', 'd'].forEach(function (id) {
+              var chip = document.createElement('button');
+              chip.type = 'button';
+              chip.className = 'dr-chip';
+              chip.setAttribute('data-deck', id);
+              var led = document.createElement('span');
+              led.className = 'dr-led';
+              var letter = document.createElement('span');
+              letter.className = 'dr-letter';
+              letter.textContent = id.toUpperCase();
+              var name = document.createElement('span');
+              name.className = 'dr-name';
+              var bpm = document.createElement('span');
+              bpm.className = 'dr-bpm';
+              chip.appendChild(led);
+              chip.appendChild(letter);
+              chip.appendChild(name);
+              chip.appendChild(bpm);
+              chip.onclick = function () {
+                railFocus(id);
+              };
+              rail.appendChild(chip);
+              railChips[id] = { chip: chip, name: name, bpm: bpm };
+            });
+          }
+          ['a', 'b', 'c', 'd'].forEach(function (id) {
+            var refs = railChips[id];
+            var slot = state[id] || {};
+            refs.name.textContent = slot.source ? slot.source.title : 'empty';
+            refs.bpm.textContent = slot.bpm ? Math.round(slot.bpm) + ' BPM' : '';
+            refs.chip.classList.toggle('playing', !!slot.playing);
+            refs.chip.classList.toggle('focus', deckIds.indexOf(id) >= 0);
+            refs.chip.title =
+              'Deck ' +
+              id.toUpperCase() +
+              (slot.source ? ' · ' + slot.source.title + ' · ' + (slot.playing ? 'playing' : 'paused') : ' · empty');
+          });
+        }
+
         function paint() {
           if (!state) return;
+          paintDeckRail();
           deckIds.forEach(function (id) {
             var slot = state[id];
             if (!slot) return;
