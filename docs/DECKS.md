@@ -52,7 +52,7 @@ Each deck card has, top to bottom:
 | Play / Cue | Transport, or reset to 0:00 |
 | Low / Mid / High + Kill | 3-band EQ as **rotary knobs** on the channel strip, −40 dB … +6 dB. 12 o'clock is 0 dB; the arc grows left for a cut and right for a boost, so a flat channel is an empty ring. Drag up/down (hold Shift for fine), scroll, arrow keys, double-click to snap back to 0. Kill buttons slam a band out |
 | Trim | Per-deck gain, same knob, 0–100 % |
-| Tempo (vertical fader) | atempo, pitch preserved (92–108 %) |
+| Tempo (vertical fader) | atempo, pitch preserved. **±4/8/16/50 %** via the range button; key lock is inherent |
 | Nudge ±25 ms | Manual phase correction |
 | Platter mode | **VINYL** drags the track under the needle; **CDJ** turns a drag into ±ms nudges while it plays. `BAR n.n` under it is the bar at the playhead |
 | Q | Quantize: seeks snap to the beat grid (armed by default) |
@@ -60,7 +60,16 @@ Each deck card has, top to bottom:
 | 8 cue pads | Tap empty = set at the playhead, tap set = jump, hold = clear (right-click works too) |
 | Loop 1/4 · 1/2 · 1 · 2 · 4 · 8 · On/Off · Exit | Beat-quantised loop, cached as PCM so the wrap is seamless |
 
-Header: **SYNC**, **Lock**, **Record**, **Play both**, **Pause**, **Stop decks**.
+Header: **SYNC**, **Lock**, **Record**, **Play both**, **Pause**, **Stop decks**,
+**BROWSE** and the pitch **range**. A four-chip rail above the decks shows
+A/B/C/D (title, BPM, play state); clicking a C/D chip switches to the 3·4 bank.
+**LAST SET ↗** appears next to REC once a recorded set has been encoded and
+published.
+
+**Track browser.** `BROWSE` (or `/`) opens a persistent drawer with one search
+box and a result list. Every row loads straight to A, B, C or D, so you can
+build both banks without closing and reopening the browser. `Enter` loads the
+first result to the focused left deck.
 Bottom: crossfader, FX bank, a **SYNC / MATCH** readout (each deck's effective BPM,
 tempo % and the drift between them — `LOCKED` when the bot is holding phase), MIDI status.
 
@@ -149,8 +158,12 @@ with the HPF, then whip it back to centre on the downbeat.
 |---|---|
 | `space` | Play / pause both decks |
 | `←` `→` | Crossfader by 4 % |
-| `1`–`8` | Cue pad on deck A (sets if empty, jumps if set) |
-| `shift`+`1`–`8` | Same on deck B |
+| `A` / `B` | Play/pause the left/right deck on the focused bank (`C` / `D` also work) |
+| `1`–`8` | Cue pad on the focused left deck (sets if empty, jumps if set) |
+| `shift`+`1`–`8` | Same on the focused right deck |
+| `S` | Sync the focused bank |
+| `L` | Beat-lock the focused bank |
+| `/` | Open the track browser |
 | `q w e r t y u i` | FX pads |
 
 Cue jumps start **140 ms early** on purpose: Discord's jitter buffer adds roughly
@@ -165,12 +178,15 @@ Plug in any class-compliant controller (nothing to configure). Default mapping:
 | Control | Target |
 |---|---|
 | CC 1 | Crossfader |
-| CC 2 / CC 3 | Trim A / B |
-| CC 4–6 | EQ A: low, mid, high |
-| CC 7–9 | EQ B: low, mid, high |
-| CC 10 / 11 | DJ filter A / B (centre = bypass) |
+| CC 2 / CC 3 | Trim, focused left/right deck |
+| CC 4–6 | EQ, focused left deck: low, mid, high |
+| CC 7–9 | EQ, focused right deck: low, mid, high |
+| CC 10 / 11 | DJ filter, focused left/right deck (centre = bypass) |
 | Note 36–43 | FX pads 1–8 |
-| Note 48–55 | Cue pads 1–8 on deck A |
+| Note 48–55 | Cue pads 1–8 on the focused left deck |
+
+CC 2–11 and the cue pads follow the 1·2 / 3·4 bank, so the same controller
+drives C/D when that bank is on screen.
 
 The status line under the FX pads shows the device it bound to. Re-plugging
 rebinds automatically.
