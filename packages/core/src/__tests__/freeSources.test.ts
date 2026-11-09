@@ -35,7 +35,9 @@ describe('resolveSonglink', () => {
 describe('lookupCoverArt', () => {
   it('returns a cover URL when the release and front image exist', async () => {
     const fetchImpl = vi.fn(async (url: string) => {
-      if (url.includes('musicbrainz.org')) return { ok: true, json: async () => ({ releases: [{ id: 'rel-1' }] }) };
+      if (new URL(url).hostname === 'musicbrainz.org') {
+        return { ok: true, json: async () => ({ releases: [{ id: 'rel-1' }] }) };
+      }
       return { ok: true };
     }) as unknown as typeof fetch;
     expect(await lookupCoverArt('Neon', 'DJ', fetchImpl)).toBe('https://coverartarchive.org/release/rel-1/front-500');
