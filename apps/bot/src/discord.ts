@@ -91,6 +91,8 @@ import {
   type YoutubeHealthContext,
 } from '@vaporzr/core/youtube';
 import { isSunoUrl, resolveSuno } from '@vaporzr/core/suno';
+import { latestPodcastEpisode, searchPodcastFeeds } from '@vaporzr/core/podcastIndex';
+import { findRadioPreset, RADIO_PRESETS, searchRadioBrowser } from '@vaporzr/core/radio';
 import { isAppleMusicUrl, resolveAppleMusicUrl } from '@vaporzr/core/apple';
 import {
   isSoundcloudSetUrl,
@@ -210,6 +212,18 @@ const COMMANDS = [
     .setName('yt')
     .setDescription('Search YouTube and queue a video')
     .addStringOption((o) => o.setName('query').setDescription('YouTube URL or search query').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('podcast')
+    .setDescription('Play the latest episode of a podcast (search by name, or paste a feed/episode URL)')
+    .addStringOption((o) =>
+      o.setName('query').setDescription('Podcast name, feed URL, or episode URL').setRequired(true),
+    ),
+  new SlashCommandBuilder()
+    .setName('radio')
+    .setDescription('Play an internet radio station (presets, or search Radio Browser)')
+    .addStringOption((o) =>
+      o.setName('station').setDescription('Preset name or search term (omit to list presets)').setRequired(false),
+    ),
   new SlashCommandBuilder().setName('queue').setDescription('Show the current queue'),
   new SlashCommandBuilder().setName('skip').setDescription('Skip to the next track'),
   new SlashCommandBuilder().setName('pause').setDescription('Pause playback'),
@@ -2291,6 +2305,76 @@ export class DiscordBot {
           tracks = hit ? [hit] : [];
         }
         await this.addToQueue(interaction, tracks, isUrlPlayInput(query) ? undefined : query);
+        break;
+      }
+
+      case 'podcast': {
+        const query = interaction.options.getString('query', true);
+        await interaction.deferReply();
+        // A feed/episode URL is resolved by the normal link path (yt-dlp/feed).
+        if (isUrlPlayInput(query)) {
+          const tracks = await resolvePlayInput(query);
+          await this.addToQueue(interaction, tracks);
+          break;
+        }
+        const auth = { key: config.podcastIndexKey, secret: config.podcastIndexSecret };
+        const feeds = await searchPodcastFeeds(query, auth);
+        if (!feeds.length) {
+          await interaction.editReply(
+            'Podcast search needs `PODCAST_INDEX_KEY` and `PODCAST_INDEX_SECRET` (free at api.podcastindex.org). ' +
+              'You can still paste a feed or episode URL.',
+          );
+          break;
+        }
+        const ep = await latestPodcastEpisode(feeds[0].id, auth);
+        if (!ep) {
+          await interaction.editReply(`Found **${feeds[0].title}** but no playable episode.`);
+          break;
+        }
+        const track: ResolvedTrack = {
+          uri: `direct:${ep.enclosureUrl}`,
+          name: ep.title,
+          artists: [feeds[0].title],
+          album: feeds[0].title,
+          durationMs: ep.durationSec * 1000,
+          image: ep.image ?? feeds[0].image,
+          source: 'direct',
+          streamUrl: ep.enclosureUrl,
+        };
+        await this.addToQueue(interaction, [track], feeds[0].title);
+        break;
+      }
+
+      case 'radio': {
+        const q = (interaction.options.getString('station') ?? '').trim();
+        await interaction.deferReply();
+        if (!q) {
+          await interaction.editReply(
+            '**Radio presets**\n' +
+              RADIO_PRESETS.map((s) => `• \`${s.id}\` — ${s.name} (${s.genre})`).join('\n') +
+              '\n\nUse `/radio station:<name or search>` to play one.',
+          );
+          break;
+        }
+        let station = findRadioPreset(q);
+        if (!station) {
+          const hits = await searchRadioBrowser(q);
+          station = hits[0] ?? null;
+        }
+        if (!station) {
+          await interaction.editReply(`No station found for \`${truncate(q, 60)}\`.`);
+          break;
+        }
+        const track: ResolvedTrack = {
+          uri: `direct:${station.url}`,
+          name: station.name,
+          artists: ['Radio'],
+          album: 'Radio',
+          durationMs: 0,
+          source: 'direct',
+          streamUrl: station.url,
+        };
+        await this.addToQueue(interaction, [track], station.name);
         break;
       }
 
