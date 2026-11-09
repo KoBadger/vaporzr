@@ -62,7 +62,8 @@ Each deck card has, top to bottom:
 
 Header: **SYNC**, **Lock**, **Record**, **Play both**, **Pause**, **Stop decks**,
 **BROWSE** and the pitch **range**. A four-chip rail above the decks shows
-A/B/C/D (title, BPM, play state); clicking a C/D chip switches to the 3·4 bank.
+A/B/C/D (title, BPM, play state); clicking a chip focuses that deck (outline,
+keyboard cues, SYNC/LOCK target it).
 **LAST SET ↗** appears next to REC once a recorded set has been encoded and
 published.
 
@@ -158,11 +159,10 @@ with the HPF, then whip it back to centre on the downbeat.
 |---|---|
 | `space` | Play / pause both decks |
 | `←` `→` | Crossfader by 4 % |
-| `A` / `B` | Play/pause the left/right deck on the focused bank (`C` / `D` also work) |
-| `1`–`8` | Cue pad on the focused left deck (sets if empty, jumps if set) |
-| `shift`+`1`–`8` | Same on the focused right deck |
-| `S` | Sync the focused bank |
-| `L` | Beat-lock the focused bank |
+| `A` `B` `C` `D` | Focus that deck and play/pause it |
+| `1`–`8` | Cue pad on the focused deck (sets if empty, jumps if set) |
+| `S` | Sync the focused deck with its partner |
+| `L` | Beat-lock the focused deck with its partner |
 | `/` | Open the track browser |
 | `q w e r t y u i` | FX pads |
 
@@ -178,15 +178,15 @@ Plug in any class-compliant controller (nothing to configure). Default mapping:
 | Control | Target |
 |---|---|
 | CC 1 | Crossfader |
-| CC 2 / CC 3 | Trim, focused left/right deck |
-| CC 4–6 | EQ, focused left deck: low, mid, high |
-| CC 7–9 | EQ, focused right deck: low, mid, high |
-| CC 10 / 11 | DJ filter, focused left/right deck (centre = bypass) |
+| CC 2 / CC 3 | Trim A / B |
+| CC 4–6 | EQ A: low, mid, high |
+| CC 7–9 | EQ B: low, mid, high |
+| CC 10 / 11 | DJ filter A / B (centre = bypass) |
 | Note 36–43 | FX pads 1–8 |
-| Note 48–55 | Cue pads 1–8 on the focused left deck |
+| Note 48–55 | Cue pads 1–8 on the focused deck |
 
-CC 2–11 and the cue pads follow the 1·2 / 3·4 bank, so the same controller
-drives C/D when that bank is on screen.
+The mixer CCs stay on the crossfader pair A/B; cue pads follow the focused
+deck, so clicking a C/D rail chip moves the pads without re-plugging.
 
 The status line under the FX pads shows the device it bound to. Re-plugging
 rebinds automatically.
@@ -237,12 +237,12 @@ V@deck rec | rec stop      record the set (posts track count + top artists)
 - **Sync is ±10 %.** Further apart and the refusal is deliberate; no chipmunk vocals.
 - **Beat grids are assumed to start at 0:00.** Right for most dance/pop, wrong for
   free-tempo intros — use **nudge** there.
-- **Four decks exist in the engine; the page shows two at a time.** Decks C and D
-  are live (load them with `V@deck c <song>`, `V@deck d <song>`) and mix as line
-  channels: the crossfader owns A/B, C and D play at their own trim so a second
-  bank stays audible however the fader is parked. The banked web surface is the
-  next step. Measured cost of four simultaneous MP3 decks on the 2-core VPS:
-  **0.10 CPU cores** total (2 decks: 0.08), so the mixer is not the constraint.
+- **Four decks are shown at once.** A/B sit in the top row, C/D below, and the
+  mixer spans both rows. C and D mix as line channels: the crossfader owns A/B,
+  while C and D play at their own trim, so the second bank stays audible however
+  the fader is parked. Measured cost of four simultaneous MP3 decks on the
+  2-core VPS: **0.10 CPU cores** total (2 decks: 0.08), so the mixer is not the
+  constraint.
 - Discord voice is the ceiling: 48 kHz Opus at 64–256 kbps depending on boost tier.
 - Deck loads need YouTube to cooperate; if a load fails, try a different upload or
   a Spotify name instead of a link.
