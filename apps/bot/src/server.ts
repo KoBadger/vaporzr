@@ -365,17 +365,26 @@ function accessNeedFor(pathname: string): AccessScope | null {
   return null;
 }
 
-/** True when the request carries a session (or the master key) for `need`. */
+/** The owner's human-memorable recovery password, accepted anywhere SHARE_KEY
+ *  is. Empty when unset. */
+export function isMasterPassword(value: string | undefined | null): boolean {
+  return secretEquals(value, config.masterPassword);
+}
+
+/** True when the request carries a session (or the master key/password) for `need`. */
 export function hasShareAccess(req: http.IncomingMessage, url: URL, need: AccessScope = 'control'): boolean {
   const key = config.shareKey;
-  if (!key) return true;
+  // A configured master password keeps the gate on even if SHARE_KEY is empty.
+  if (!key && !config.masterPassword) return true;
   const cookie = req.headers.cookie ?? '';
   const session = resolveSession(tokenFromCookieHeader(cookie));
   if (session && scopeSatisfies(session.scope, need)) return true;
   // Legacy devices from before sessions hold the raw-key cookie: still valid,
   // and grantPageAccess upgrades them to a real session on the next page hit.
-  if (secretEquals(keyFromCookieHeader(cookie), key)) return true;
-  return secretEquals(url.searchParams.get('key'), key);
+  const cookieKey = keyFromCookieHeader(cookie);
+  const urlKey = url.searchParams.get('key');
+  if (key && (secretEquals(cookieKey, key) || secretEquals(urlKey, key))) return true;
+  return isMasterPassword(cookieKey) || isMasterPassword(urlKey);
 }
 
 /**
@@ -429,7 +438,7 @@ function tooManyAttempts(res: http.ServerResponse, retryAfterMs: number): void {
  */
 function grantPageAccess(req: http.IncomingMessage, url: URL, res: http.ServerResponse, need: AccessScope): boolean {
   const key = config.shareKey;
-  if (!key) return true;
+  if (!key && !config.masterPassword) return true;
   const cookie = req.headers.cookie ?? '';
   const ip = req.socket.remoteAddress ?? 'unknown';
 
@@ -449,7 +458,8 @@ function grantPageAccess(req: http.IncomingMessage, url: URL, res: http.ServerRe
   }
 
   // Legacy raw-key cookie: upgrade silently to a session (control).
-  if (secretEquals(keyFromCookieHeader(cookie), key)) {
+  const cookieKey = keyFromCookieHeader(cookie);
+  if ((key && secretEquals(cookieKey, key)) || isMasterPassword(cookieKey)) {
     const { token, session: minted } = mintSession('control', 'remembered device', undefined, Date.now(), true);
     // Drop the raw key from the device now that it holds an opaque session.
     res.setHeader('Set-Cookie', [
@@ -461,7 +471,7 @@ function grantPageAccess(req: http.IncomingMessage, url: URL, res: http.ServerRe
   }
 
   const qKey = url.searchParams.get('key');
-  if (qKey && secretEquals(qKey, key)) {
+  if (qKey && ((key && secretEquals(qKey, key)) || isMasterPassword(qKey))) {
     const { token, session: minted } = mintSession('control', 'owner link', undefined, Date.now(), true);
     res.setHeader('Set-Cookie', [
       sessionCookie(token, minted.expiresAt, req),
@@ -473,7 +483,9 @@ function grantPageAccess(req: http.IncomingMessage, url: URL, res: http.ServerRe
   }
 
   // Invites are single-use; accept them in `invite=` (and `key=` for old links).
-  const inviteToken = url.searchParams.get('invite') ?? (qKey && !secretEquals(qKey, key) ? qKey : null);
+  const inviteToken =
+    url.searchParams.get('invite') ??
+    (qKey && !(key && secretEquals(qKey, key)) && !isMasterPassword(qKey) ? qKey : null);
   if (inviteToken) {
     const used = consumeInvite(inviteToken);
     if (used) {
@@ -499,10 +511,13 @@ function grantPageAccess(req: http.IncomingMessage, url: URL, res: http.ServerRe
  * higher work too, and the legacy request key / vz_req cookie keep working.
  */
 function hasRequestAccess(req: http.IncomingMessage, url: URL): boolean {
-  if (!config.shareKey && !config.requestKey) return true; // open LAN-only setup
+  if (!config.shareKey && !config.requestKey && !config.masterPassword) return true; // open LAN-only setup
   const cookie = req.headers.cookie ?? '';
   const sess = resolveSession(tokenFromCookieHeader(cookie));
   if (sess && scopeSatisfies(sess.scope, 'request')) return true;
+  // The owner password opens every surface, including the jam/request page.
+  const rawReq = /(?:^|;\s*)vz_req=([^;]+)/.exec(cookie)?.[1];
+  if (isMasterPassword(rawReq) || isMasterPassword(url.searchParams.get('key'))) return true;
   if (config.requestKey) {
     const m = /(?:^|;\s*)vz_req=([^;]+)/.exec(cookie);
     if (m) {
@@ -1544,17 +1559,21 @@ async function handleRoute(
       case '/api/access': {
         // Owner sessions may read the master key back (device recovery).
         // Everyone else gets single-use invite links - never the secret itself.
-        if (!config.shareKey || !hasShareAccess(req, url, 'control')) {
+        if ((!config.shareKey && !config.masterPassword) || !hasShareAccess(req, url, 'control')) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'unauthorized' }));
           return;
         }
         const cookie = req.headers.cookie ?? '';
         const sess = resolveSession(tokenFromCookieHeader(cookie));
+        const cookieKey = keyFromCookieHeader(cookie);
+        const queryKey = url.searchParams.get('key');
         const owner =
           Boolean(sess?.owner) ||
-          secretEquals(keyFromCookieHeader(cookie), config.shareKey) ||
-          secretEquals(url.searchParams.get('key'), config.shareKey);
+          (Boolean(config.shareKey) &&
+            (secretEquals(cookieKey, config.shareKey) || secretEquals(queryKey, config.shareKey))) ||
+          isMasterPassword(cookieKey) ||
+          isMasterPassword(queryKey);
         const pl = vizTunnel.panelLink();
         const vl = vizTunnel.vizLink();
         const ll = vizTunnel.listenLink();
@@ -1574,7 +1593,7 @@ async function handleRoute(
         res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
         res.end(
           JSON.stringify({
-            key: owner ? config.shareKey : undefined,
+            key: owner ? config.shareKey || config.masterPassword : undefined,
             owner,
             panelUrl: inviteLink(pl, 'control', OWNER_LINK_TTL_MS, 'panel link'),
             vizUrl: inviteLink(vl, 'view', INVITE_TTL_MS, 'visualizer link'),

@@ -525,11 +525,17 @@ export class Bridge {
    * A guest never receives PCM - the raw audio is the whole point of /listen.
    */
   private scopeForUpgrade(req: http.IncomingMessage): AccessScope | 'guest' {
-    if (!config.shareKey) return 'control';
+    if (!config.shareKey && !config.masterPassword) return 'control';
     const ip = req.socket.remoteAddress ?? 'unknown';
     const sess = resolveSession(tokenFromCookieHeader(req.headers.cookie));
     if (sess) return sess.scope === 'request' ? 'guest' : sess.scope;
-    if (secretEquals(keyFromCookieHeader(req.headers.cookie), config.shareKey)) return 'control';
+    const cookieKey = keyFromCookieHeader(req.headers.cookie);
+    if (
+      (config.shareKey && secretEquals(cookieKey, config.shareKey)) ||
+      secretEquals(cookieKey, config.masterPassword)
+    ) {
+      return 'control';
+    }
     let qKey: string | null = null;
     let qInvite: string | null = null;
     try {
@@ -539,8 +545,17 @@ export class Bridge {
     } catch {
       /* malformed query: treat as keyless */
     }
-    if (qKey && secretEquals(qKey, config.shareKey)) return 'control';
-    const inviteToken = qInvite ?? (qKey && !secretEquals(qKey, config.shareKey) ? qKey : null);
+    if (
+      qKey &&
+      ((config.shareKey && secretEquals(qKey, config.shareKey)) || secretEquals(qKey, config.masterPassword))
+    ) {
+      return 'control';
+    }
+    const inviteToken =
+      qInvite ??
+      (qKey && !(config.shareKey && secretEquals(qKey, config.shareKey)) && !secretEquals(qKey, config.masterPassword)
+        ? qKey
+        : null);
     if (!inviteToken) return 'guest';
     if (!authThrottle(ip).allowed) return 'guest';
     const used = consumeInvite(inviteToken);
@@ -1448,7 +1463,7 @@ export class Bridge {
    */
   deckLink(): string {
     const base = config.staticBaseUrl ? config.staticBaseUrl.replace(/\/+$/, '') : '';
-    if (!config.shareKey) return `${base}/deck`;
+    if (!config.shareKey && !config.masterPassword) return `${base}/deck`;
     const now = Date.now();
     if (!this.deckInvite || this.deckInvite.expiresAt - now < 24 * 60 * 60 * 1000) {
       const minted = mintInvite('control', 'deck link', 30 * 24 * 60 * 60 * 1000, now, 0);
