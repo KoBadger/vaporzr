@@ -479,7 +479,12 @@ export class PlaybackController {
     // ffmpeg onEnd, and our position is estimated from captured PCM, which runs
     // AHEAD of what the listener actually hears by the buffer depth — so
     // advancing at durationMs clips the ending. +6s lets the buffered tail drain.
-    const wait = Math.min(remaining + 6000, 6 * 60 * 60 * 1000);
+    // With a crossfade armed the fade/overlay already covers the tail, so the
+    // handoff must land ON the track end. The old flat +6 s buffer (for the
+    // Spotify PCM estimate) left a full crossfade length of silence after the
+    // fade finished — the "song cuts out, pause, next song" bug.
+    const tailBufferMs = this.xfadeMs > 0 ? 400 : 6000;
+    const wait = Math.min(remaining + tailBufferMs, 6 * 60 * 60 * 1000);
     // Resolve the PLAYING track (state.track), not the cursor: endUri must match
     // the track this timer was armed for, or onTrackMaybeEnded rejects it.
     const scheduled = this.queue.getState().track ?? this.queue.getCurrentTrack();
@@ -561,6 +566,15 @@ export class PlaybackController {
   }
 
   private async startCrossfade(outgoingUri: string | null, next: TrackInfo, xfadeMs: number): Promise<void> {
+    // Spotify→Spotify has no second decodable stream (librespot plays one at a
+    // time). Decide that before waiting on the resolver, so the sequential fade
+    // starts on the scheduled beat instead of two seconds late.
+    const known = next.source === 'local' ? next.filePath : this.streamCache.get(next.uri)?.streamUrl;
+    if (!known && next.source === 'spotify') {
+      console.log(`[playback] crossfade: sequential fade for "${next.name}" (librespot has one stream)`);
+      this.voice.fadeOutResource(xfadeMs);
+      return;
+    }
     const url = await this.resolveBlendUrl(outgoingUri, next);
     if (!url) {
       // No decodable incoming stream (Spotify→Spotify via librespot plays one
