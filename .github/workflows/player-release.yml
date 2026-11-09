@@ -1,0 +1,84 @@
+name: Player release
+
+# Tag `player-v0.1.0` to publish a portable Windows build plus its SHA-256.
+# Manual runs upload the same zip as a workflow artifact without touching a
+# release, which is the dry-run path.
+on:
+  workflow_dispatch:
+  push:
+    tags: ['player-v*']
+
+permissions:
+  contents: write
+
+env:
+  ELECTRON_VERSION: '43.2.0+wvcus'
+  ELECTRON_SHA256: 'f940a668d563a6395157718e4ee0d9de6d9011dd9c1003558877610e1679ecc5'
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build player
+        run: npm run build -w @vaporzr/player
+
+      # The vendored Electron fork is untracked (vendor/), so CI downloads the
+      # same castlabs artifact and verifies the published checksum first.
+      - name: Download Electron runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = Join-Path $env:RUNNER_TEMP 'electron.zip'
+          $url = "https://github.com/castlabs/electron-releases/releases/download/v$env:ELECTRON_VERSION/electron-v$env:ELECTRON_VERSION-win32-x64.zip"
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          $got = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $env:ELECTRON_SHA256) {
+            throw "Electron checksum mismatch: $got"
+          }
+          Expand-Archive -Path $zip -DestinationPath vendor/electron-ecs/dist -Force
+
+      - name: Stage portable build
+        run: node scripts/pack-player.mjs --platform win32 --arch x64
+
+      - name: Zip and checksum
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $zip = 'dist/Vaporzr-win32-x64.zip'
+          Compress-Archive -Path apps/player/release/Vaporzr-win32-x64 -DestinationPath $zip
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  Vaporzr-win32-x64.zip" | Out-File -FilePath "$zip.sha256" -Encoding ascii
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Vaporzr-win32-x64
+          path: |
+            dist/Vaporzr-win32-x64.zip
+            dist/Vaporzr-win32-x64.zip.sha256
+
+      - name: Publish release assets
+        if: startsWith(github.ref, 'refs/tags/player-v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = $env:GITHUB_REF_NAME
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag dist/Vaporzr-win32-x64.zip dist/Vaporzr-win32-x64.zip.sha256 --clobber
+          } else {
+            gh release create $tag dist/Vaporzr-win32-x64.zip dist/Vaporzr-win32-x64.zip.sha256 `
+              --title "Vaporzr player $tag" --generate-notes
+          }
