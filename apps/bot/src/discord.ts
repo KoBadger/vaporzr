@@ -13242,6 +13242,28 @@ async function findTrackVideo(name: string, artists: string[]): Promise<VideoMat
   return id ? { id, official: best.official } : null;
 }
 
+/** A human-readable search phrase from a link's last path segment, for the
+ *  fallback when yt-dlp cannot extract audio from the page. Returns '' for
+ *  UUIDs/hashes and other non-word slugs, so we never search an opaque id. */
+function urlSearchHint(raw: string): string {
+  try {
+    const u = new URL(raw);
+    const seg = decodeURIComponent(u.pathname.split('/').filter(Boolean).pop() ?? '');
+    const cleaned = seg
+      .replace(/\.[a-z0-9]{2,5}$/i, '')
+      .replace(/[-_+]+/g, ' ')
+      .replace(/[^a-z0-9 ']/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const words = cleaned.match(/[a-z]{3,}/gi) ?? [];
+    if (cleaned.length < 6 || words.length < 2) return '';
+    if (/^[0-9a-f-]{20,}$/i.test(cleaned.replace(/\s/g, ''))) return '';
+    return cleaned.slice(0, 80);
+  } catch {
+    return '';
+  }
+}
+
 async function resolvePlayInput(query: string): Promise<ResolvedTrack[]> {
   // Internal uri from the search type-ahead: `youtube:video:<id>`. Resolve the
   // id directly instead of feeding the scheme back through text search.
@@ -13271,7 +13293,22 @@ async function resolvePlayInput(query: string): Promise<ResolvedTrack[]> {
     return [await resolveSoundcloudVideo(query)];
   }
   if (isGenericMediaUrl(query)) {
-    return [await resolveGenericMediaUrl(query)];
+    try {
+      return [await resolveGenericMediaUrl(query)];
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Policy refusals (SSRF guard) and duration caps are final, not a reason
+      // to go looking for a different song.
+      if (/private address|Only http|current cap for generic links/i.test(msg)) throw err;
+      // Some pages expose no direct stream. A readable slug is often enough to
+      // find the same episode/track on YouTube, which keeps the command useful.
+      const hint = urlSearchHint(query);
+      if (hint) {
+        const hit = await searchAndResolveYoutube(hint).catch(() => null);
+        if (hit) return [hit];
+      }
+      throw err;
+    }
   }
   try {
     return await resolveTracks(query);

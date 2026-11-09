@@ -82,6 +82,10 @@ export const config = {
    * (e.g. 80) when the metered proxy hops matter more than fidelity.
    */
   youtubeAudioMaxAbr: Number(process.env.YOUTUBE_AUDIO_MAX_ABR) || 160,
+  /** Longest generic (yt-dlp) link the bot will queue, in minutes. 0 = no cap.
+   *  Stops a whole movie or a multi-hour podcast from being pulled in by one
+   *  pasted URL; shorter clips still play in full. */
+  genericMediaMaxMinutes: Number(process.env.GENERIC_MEDIA_MAX_MINUTES ?? 120) || 0,
   /**
    * Public base URL for the jam join link and its QR code, e.g.
    * https://vaporzr.duckdns.org. The bot binds to loopback behind a reverse
