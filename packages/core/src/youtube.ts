@@ -7,6 +7,7 @@ import path from 'node:path';
 import { config } from '@vaporzr/core/config';
 import type { ResolvedTrack } from './spotify.js';
 import { isBlockedFetchHost } from './net.js';
+import { lookupCoverArt } from './musicbrainz.js';
 
 export class YoutubeError extends Error {}
 
@@ -920,18 +921,22 @@ export async function resolveGenericMediaUrl(input: string): Promise<ResolvedVid
         `${config.genericMediaMaxMinutes} minutes. Try a shorter clip or raise GENERIC_MEDIA_MAX_MINUTES.`,
     );
   }
+  const genericArtist = uploader && uploader !== 'NA' && uploader !== 'N/A' ? uploader : 'Web';
+  // Last-resort artwork: MusicBrainz/Cover Art when the extractor gave none.
+  const cover =
+    thumbnail || (await lookupCoverArt(title || '', genericArtist === 'Web' ? '' : genericArtist).catch(() => null));
   return {
     videoId: id,
     uri: `direct:${url}`,
     name: title || 'Unknown',
-    artists: [uploader && uploader !== 'NA' && uploader !== 'N/A' ? uploader : 'Web'],
+    artists: [genericArtist],
     album: '',
     durationMs,
-    image: thumbnail || undefined,
+    image: cover || undefined,
     source: 'direct',
     streamUrl,
     channel: uploader || 'Web',
-    thumbnail: thumbnail || undefined,
+    thumbnail: cover || undefined,
   };
 }
 
