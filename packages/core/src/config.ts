@@ -175,6 +175,10 @@ export const config = {
    *  out of the public repo (env only) and can be rotated independently of the
    *  randomly generated share key. */
   masterPassword: process.env.MASTER_PASSWORD ?? '',
+  /** Free Podcast Index credentials (https://api.podcastindex.org). Empty =
+   *  podcast search is disabled; pasted feed/episode URLs still work. */
+  podcastIndexKey: process.env.PODCAST_INDEX_KEY ?? '',
+  podcastIndexSecret: process.env.PODCAST_INDEX_SECRET ?? '',
   /**
    * Separate, lower-privilege key for the public /request page (search + queue
    * only, no playback control). Requiring it keeps the full-control SHARE_KEY
