@@ -31,9 +31,14 @@ for (const page of [
   'apps/bot/public/listen.html',
   'apps/bot/public/panel.html',
   'apps/bot/public/deck.html',
+  'apps/bot/public/home.html',
 ]) {
   const html = fs.readFileSync(page, 'utf8');
-  const blocks = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)];
+  const blocks = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)].filter((m) => {
+    // JSON-LD and other data blocks are not JavaScript; skip them.
+    const type = /type\s*=\s*["']([^"']+)/i.exec(m[0].slice(0, m[0].indexOf('>')))?.[1]?.toLowerCase();
+    return !type || type === 'text/javascript' || type === 'module';
+  });
   console.log(`${page} inline script blocks: ${blocks.length}`);
   blocks.forEach((m, i) => {
     const line = html.slice(0, m.index).split('\n').length;

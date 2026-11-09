@@ -359,7 +359,8 @@ function accessNeedFor(pathname: string): AccessScope | null {
   if (pathname === '/panel' || pathname === '/panel.html') return 'control';
   // Decks change what the whole voice channel hears — same gate as the panel.
   if (pathname === '/deck' || pathname === '/deck.html' || pathname === '/decks') return 'control';
-  if (pathname === '/' || pathname === '/index.html') return 'view';
+  // `/` is the public portal. The old status page moved to /status.
+  if (pathname === '/status') return 'view';
   if (pathname === '/viz' || pathname === '/viz.html') return 'view';
   if (pathname === '/listen' || pathname === '/listen.html') return 'view';
   return null;
@@ -850,6 +851,22 @@ function activityHtml(origin: string): string | null {
   }
 }
 
+/** Public marketing/portal page at the root. Everything sensitive stays behind
+ *  /panel, /deck, /viz, /listen and /status. */
+function homeHtml(origin: string): string | null {
+  try {
+    const build = (process.env.VAPORZR_BUILD ?? 'dev').slice(0, 7);
+    const appId = Buffer.from(config.discordToken.split('.')[0] ?? '', 'base64').toString('ascii');
+    return fs
+      .readFileSync(path.join(__dirname, '..', 'public', 'home.html'), 'utf8')
+      .replace(/\{\{ORIGIN\}\}/g, origin)
+      .replace(/\{\{APP_ID\}\}/g, encodeURIComponent(appId))
+      .replace(/\{\{BUILD\}\}/g, build);
+  } catch {
+    return null;
+  }
+}
+
 /** OAuth states issued by /login ΓåÆ expiry timestamp; verified once by /callback. */
 const oauthStates = new Map<string, number>();
 
@@ -1239,7 +1256,7 @@ async function handleRoute(
       case '/':
       case '/index.html': {
         // A Discord Activity launch arrives at the mapped root with ?instance_id=…
-        // Serve the visualizer for that; the status page for everyone else.
+        // Serve the visualizer for that; the public portal for everyone else.
         if (url.searchParams.has('instance_id')) {
           const page = activityHtml(origin);
           if (page) {
@@ -1248,6 +1265,20 @@ async function handleRoute(
             return;
           }
         }
+        const portal = homeHtml(origin);
+        if (portal) {
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
+          res.end(portal);
+          break;
+        }
+        res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Portal page is missing from the image.');
+        break;
+      }
+
+      case '/status': {
+        // The old gated status page: operator links, Spotify link and player
+        // health. Kept behind the view gate; the public root is /.
         // Bot tokens are base64(appId).signature — decode for the invite link.
         const appId = Buffer.from(config.discordToken.split('.')[0], 'base64').toString('ascii');
         const perms = (1n << 11n) | (1n << 14n) | (1n << 15n) | (1n << 20n) | (1n << 31n) | (1n << 52n);
@@ -1256,11 +1287,12 @@ async function handleRoute(
         res.end(
           html(`
           <img src="/logo.png" alt="Vaporzr" style="width:96px;height:96px;border-radius:22px;box-shadow:0 8px 30px rgba(106,92,255,.45);margin-bottom:1rem">
-          <h1>Vaporzr Bot</h1>
+          <h1>Vaporzr Status</h1>
           <p><a href="${inviteUrl}" style="border-color:#6a5cff;background:rgba(106,92,255,.18);font-weight:600">➕ Add to your server</a></p>
           <p>${tokenStore.load() ? 'Spotify account linked.' : 'Spotify not linked.'}</p>
           <p><a href="/login">Link Spotify account</a></p>
           <p>Player status: <span id="s">checking…</span></p>
+          <p><a href="/">← Public portal</a></p>
           <p><a href="/panel">Open the control panel →</a> <a href="/deck">Live decks →</a> <a href="/viz">Visualizer →</a></p>
           <script>
             try {
