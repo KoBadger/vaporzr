@@ -1,10 +1,12 @@
 import { execFile } from 'node:child_process';
+import dns from 'node:dns';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { config } from '@vaporzr/core/config';
 import type { ResolvedTrack } from './spotify.js';
+import { isBlockedFetchHost } from './net.js';
 
 export class YoutubeError extends Error {}
 
@@ -185,12 +187,21 @@ function stageCookieCopy(): string | null {
   }
 }
 
-function ytDlpOnce(args: string[], proxy = '', skipCookies = false, timeoutMs = 20_000): Promise<string> {
+function ytDlpOnce(
+  args: string[],
+  proxy = '',
+  skipCookies = false,
+  timeoutMs = 20_000,
+  withCookies = true,
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const noProxyEnv = Object.fromEntries(
       Object.entries(process.env).filter(([k]) => !k.toLowerCase().endsWith('_proxy')),
     );
-    const flags = ['--no-check-certificates', '--socket-timeout', '10', '--retries', '1'];
+    // TLS verification stays on: the image ships ca-certificates. The old
+    // blanket --no-check-certificates covered every extractor, not just the
+    // one site that once needed it.
+    const flags = ['--socket-timeout', '10', '--retries', '1'];
     // The proxy hands out dual-stack exits; resolving over IPv6 produced URLs
     // whose ip= could never match the IPv4 stream fetch. Keep everything IPv4.
     flags.push('--force-ipv4');
@@ -201,7 +212,9 @@ function ytDlpOnce(args: string[], proxy = '', skipCookies = false, timeoutMs = 
     // The proxy's exit IP resolves the URL AND downloads it (ffmpeg uses the
     // same proxy — googlevideo URLs are IP-bound). An empty value = direct.
     if (proxy) flags.push('--proxy', proxy);
-    const cookieCopy = skipCookies ? null : stageCookieCopy();
+    // Only YouTube needs the account cookie jar. A generic podcast/movie URL
+    // must never receive it — that would hand the session to every site.
+    const cookieCopy = withCookies && !skipCookies ? stageCookieCopy() : null;
     if (cookieCopy) flags.push('--cookies', cookieCopy);
     execFile(
       config.ytDlpPath,
@@ -225,7 +238,13 @@ function ytDlpOnce(args: string[], proxy = '', skipCookies = false, timeoutMs = 
             reject(new YoutubeBusyError(YOUTUBE_BUSY_TEXT));
             return;
           }
-          reject(new YoutubeError(`yt-dlp failed: ${detail.slice(0, 300)}`));
+          // Keep the actionable line without leaking the bot's filesystem
+          // layout (cookie copies, data dir, yt-dlp temp files) to Discord.
+          const redacted = detail
+            .replace(/[A-Za-z]:\\[^\s"']+/g, '<path>')
+            .replace(/(?:\/[\w.-]+){2,}/g, '<path>')
+            .slice(0, 300);
+          reject(new YoutubeError(`yt-dlp failed: ${redacted}`));
           return;
         }
         resolve(stdout);
@@ -478,7 +497,13 @@ export function shouldRetryYtDlp(
  *  URL = that hop only (no fallback, no direct — otherwise a dead hop would be
  *  masked by a route that happens to work). Undefined = the normal chain:
  *  direct first, then every configured proxy hop in trial order. */
-async function runYtDlp(args: string[], retries = 2, route?: string, timeoutMs = 20_000): Promise<string> {
+async function runYtDlp(
+  args: string[],
+  retries = 2,
+  route?: string,
+  timeoutMs = 20_000,
+  withCookies = true,
+): Promise<string> {
   let lastErr: unknown;
 
   /** Retry a single network path (`proxy` = '' is a direct connection). */
@@ -488,7 +513,7 @@ async function runYtDlp(args: string[], retries = 2, route?: string, timeoutMs =
       try {
         // On a rotating residential fallback retry, drop the cookie jar so a
         // flagged/invalidated session cookie doesn't poison the clean exit IP.
-        return await ytDlpOnce(args, curProxy, rotating && attempt > 0, timeoutMs);
+        return await ytDlpOnce(args, curProxy, rotating && attempt > 0, timeoutMs, withCookies);
       } catch (err) {
         lastErr = err;
         const msg = err instanceof Error ? err.message : String(err);
@@ -797,22 +822,73 @@ export async function resolveYoutubeVideo(input: string): Promise<ResolvedVideo>
  *  episode pages, Bandcamp/Deezer/Tidal/Mixcloud, Vimeo, Twitch, TikTok,
  *  direct movie/clip pages, etc. — so we treat every remaining URL as a
  *  candidate and let yt-dlp decide whether it can actually extract audio. */
-const DEDICATED_RESOLVER_HOST_RE =
-  /(^|[./])(youtube\.com|youtu\.be|spotify\.com|suno\.com|suno\.ai|music\.apple\.com|soundcloud\.com)($|[./?#])/i;
+const DEDICATED_RESOLVER_HOSTS = [
+  'youtube.com',
+  'youtu.be',
+  'spotify.com',
+  'suno.com',
+  'suno.ai',
+  'music.apple.com',
+  'soundcloud.com',
+];
+
+/** True when the URL's host is (or is a subdomain of) a dedicated resolver.
+ *  Parsing the hostname instead of regex-matching the whole string avoids
+ *  substring collisions like `youtube.com.evil.example`. */
+function hasDedicatedResolver(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/\.$/, '');
+  return DEDICATED_RESOLVER_HOSTS.some((d) => host === d || host.endsWith('.' + d));
+}
 
 export function isGenericMediaUrl(input: string): boolean {
   const t = input.trim();
-  if (!/^https?:\/\//i.test(t)) return false;
+  let u: URL;
+  try {
+    u = new URL(t);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
   // Hosts with their own resolvers are handled earlier in resolvePlayInput;
   // don't steal them here, and don't claim Spotify URLs for yt-dlp.
-  if (DEDICATED_RESOLVER_HOST_RE.test(t)) return false;
+  if (hasDedicatedResolver(u.hostname)) return false;
   return true;
+}
+
+/** Refuse a URL whose host — or every DNS answer — is a machine only the bot
+ *  can reach. yt-dlp does its own networking, so the safeFetch connector cannot
+ *  protect this path; this is the pre-flight check. DNS rebinding is still
+ *  theoretically possible because yt-dlp resolves again, but the obvious
+ *  localhost/LAN/metadata probes are stopped here. */
+async function assertPublicMediaUrl(raw: string): Promise<void> {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    throw new YoutubeError('That is not a valid link.');
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+    throw new YoutubeError('Only http(s) links can be played.');
+  }
+  if (isBlockedFetchHost(u.hostname)) {
+    throw new YoutubeError('That link points at a private address and was refused.');
+  }
+  try {
+    const records = await dns.promises.lookup(u.hostname, { all: true });
+    if (records.length > 0 && records.every((r) => isBlockedFetchHost(r.address))) {
+      throw new YoutubeError('That link resolves to a private address and was refused.');
+    }
+  } catch (err) {
+    if (err instanceof YoutubeError) throw err;
+    // DNS failure: let yt-dlp report its own error rather than masking it.
+  }
 }
 
 /** Resolve any yt-dlp-supported URL (Bandcamp, Deezer, Tidal, Mixcloud, …)
  *  into a single queuable track with a live stream URL. */
 export async function resolveGenericMediaUrl(input: string): Promise<ResolvedVideo> {
   const url = input.trim();
+  await assertPublicMediaUrl(url);
   const META_SEP = '\t';
   const raw = await runYtDlp(
     [
@@ -829,19 +905,28 @@ export async function resolveGenericMediaUrl(input: string): Promise<ResolvedVid
     2,
     undefined,
     60_000,
+    false, // never send the YouTube cookie jar to an arbitrary site
   );
   const lines = raw.trim().split(/\r?\n/);
   const metaLine = lines.find((l) => l.includes(META_SEP));
   const streamUrl = lines.find((l) => /^https?:\/\//.test(l));
   if (!metaLine || !streamUrl) throw new YoutubeError('Could not extract a playable stream from that link.');
   const [id, title, duration, thumbnail, uploader] = metaLine.split(META_SEP);
+  const durationMs = (Number(duration) || 0) * 1000;
+  const capMs = config.genericMediaMaxMinutes > 0 ? config.genericMediaMaxMinutes * 60_000 : 0;
+  if (capMs > 0 && durationMs > capMs) {
+    throw new YoutubeError(
+      `That link is ${Math.round(durationMs / 60_000)} minutes long; the current cap for generic links is ` +
+        `${config.genericMediaMaxMinutes} minutes. Try a shorter clip or raise GENERIC_MEDIA_MAX_MINUTES.`,
+    );
+  }
   return {
     videoId: id,
     uri: `direct:${url}`,
     name: title || 'Unknown',
     artists: [uploader && uploader !== 'NA' && uploader !== 'N/A' ? uploader : 'Web'],
     album: '',
-    durationMs: (Number(duration) || 0) * 1000,
+    durationMs,
     image: thumbnail || undefined,
     source: 'direct',
     streamUrl,

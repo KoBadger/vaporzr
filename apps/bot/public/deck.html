@@ -299,24 +299,53 @@
       .rig {
         display: grid;
         grid-template-columns: minmax(300px, 1fr) minmax(320px, 400px) minmax(300px, 1fr);
+        /* Four decks at once: A/B on the top row, C/D below, mixer spanning
+           both rows in the centre like a four-channel club mixer. */
+        grid-template-areas:
+          'a mixer b'
+          'c mixer d';
         gap: 12px;
         align-items: stretch;
+      }
+      .rig .deck.a {
+        grid-area: a;
+      }
+      .rig .deck.b {
+        grid-area: b;
+      }
+      .rig .deck.c {
+        grid-area: c;
+      }
+      .rig .deck.d {
+        grid-area: d;
+      }
+      .rig .mixer {
+        grid-area: mixer;
+        align-self: start;
+        position: sticky;
+        top: 12px;
       }
       @media (max-width: 1180px) {
         .rig {
           grid-template-columns: 1fr 1fr;
+          grid-template-areas:
+            'a b'
+            'c d'
+            'mixer mixer';
         }
         .rig .mixer {
-          grid-column: 1 / -1;
-          order: 3;
+          position: static;
         }
       }
       @media (max-width: 760px) {
         .rig {
           grid-template-columns: 1fr;
-        }
-        .rig .mixer {
-          order: 0;
+          grid-template-areas:
+            'a'
+            'b'
+            'c'
+            'd'
+            'mixer';
         }
       }
       /* Grid/flex items default to min-content width, which made the deck cards
@@ -395,6 +424,11 @@
       }
       .deck.a {
         --deck: var(--a);
+      }
+      /* Focused deck (keyboard cues, 1–8, SYNC/LOCK target this one). */
+      .deck.focus {
+        outline: 1px solid var(--deck);
+        outline-offset: 3px;
       }
       .deck.b {
         --deck: var(--b);
@@ -2482,10 +2516,6 @@
         </button>
         <button id="mode-pro" aria-pressed="true" title="Full CDJ layout">PRO</button>
       </div>
-      <div class="mode-switch pro-only" id="bank-switch" role="group" aria-label="Deck bank">
-        <button data-bank="0" class="on" title="Decks A and B">1·2</button>
-        <button data-bank="1" title="Decks C and D">3·4</button>
-      </div>
       <button class="fn" id="btn-browse" title="Track browser (press /)"><span class="led"></span>BROWSE</button>
       <button class="fn pro-only" id="btn-range" title="Pitch fader range"><span class="lbl">±8%</span></button>
       <button class="fn help-btn" id="btn-help" title="How to mix (short guide)" aria-label="How to mix">?</button>
@@ -2560,6 +2590,9 @@
             <button class="jog-mode" data-jogmode="vinyl" title="Vinyl: drag the platter to scratch">VINYL</button>
             <button class="jog-mode" data-jogmode="cdj" title="CDJ: drag the platter to bend the beat">CDJ</button>
             <button class="q-btn" data-quantize title="Snap cues, seeks and loops to the beat grid">Q</button>
+            <button class="q-btn" data-grid="-10" title="Move the beat grid 10 ms earlier">−</button>
+            <button class="q-btn" data-grid="10" title="Move the beat grid 10 ms later">+</button>
+            <span class="bar-read" data-out="grid">GRID 0 ms</span>
             <span class="bar-read" data-out="bar">BAR —</span>
           </div>
           <div class="jog" data-role="jog">
@@ -2898,6 +2931,9 @@
             <button class="jog-mode" data-jogmode="vinyl" title="Vinyl: drag the platter to scratch">VINYL</button>
             <button class="jog-mode" data-jogmode="cdj" title="CDJ: drag the platter to bend the beat">CDJ</button>
             <button class="q-btn" data-quantize title="Snap cues, seeks and loops to the beat grid">Q</button>
+            <button class="q-btn" data-grid="-10" title="Move the beat grid 10 ms earlier">−</button>
+            <button class="q-btn" data-grid="10" title="Move the beat grid 10 ms later">+</button>
+            <span class="bar-read" data-out="grid">GRID 0 ms</span>
             <span class="bar-read" data-out="bar">BAR —</span>
           </div>
           <div class="jog" data-role="jog">
@@ -3171,62 +3207,53 @@
           return (v < 50 ? 'LPF ' : 'HPF ') + (hz >= 1000 ? (hz / 1000).toFixed(1) + 'k' : String(Math.round(hz)));
         }
 
-        /* ---- banks: the two cards show whichever pair is focused ---- */
-        // The engine has four decks; the page shows two at a time. `deckIds` is
-        // the focused pair, in card order, so every control below keeps working
-        // unchanged — it is just addressed at the ids the cards currently carry.
-        var deckIds = ['a', 'b'];
-        var bankIndex = 0;
+        /* ---- four decks, all on screen ---- */
+        // The engine has four decks and now the page shows all of them: A/B in
+        // the top row, C/D below, mixer spanning both. `deckIds` is the full
+        // list so `paint()` walks every card; the mixer's own A/B helpers stay
+        // explicit because the crossfader only routes that pair.
+        var deckIds = ['a', 'b', 'c', 'd'];
+        var focusId = 'a';
         function deckState(id) {
           return (state && state[id]) || {};
         }
         function leftDeck() {
-          return deckState(deckIds[0]);
+          return deckState('a');
         }
         function rightDeck() {
-          return deckState(deckIds[1]);
+          return deckState('b');
         }
-        /**
-         * Point the two cards at a bank. Runs BEFORE the deck controls are
-         * bound, because each card's handlers capture their deck id once — a
-         * live attribute swap would leave them sending the old letters.
-         */
-        function applyBankToDom(n) {
-          bankIndex = n === 1 ? 1 : 0;
-          deckIds = bankIndex === 1 ? ['c', 'd'] : ['a', 'b'];
-          all('.deck').forEach(function (card, i) {
-            if (i > 1) return;
-            card.setAttribute('data-deck', deckIds[i]);
-            card.classList.remove('a', 'b', 'c', 'd');
-            card.classList.add(deckIds[i]);
+        // Clone A/B into C/D before the control binders run, so every handler
+        // below binds to the clone's own data-deck for free.
+        (function mountBankTwo() {
+          var rig = el('.rig');
+          var a = el('.deck.a');
+          var b = el('.deck.b');
+          if (!rig || !a || !b) return;
+          function clone(src, id) {
+            var card = src.cloneNode(true);
+            card.classList.remove('a', 'b');
+            card.classList.add(id);
+            card.setAttribute('data-deck', id);
             var letter = card.querySelector('.deck-letter');
-            if (letter) letter.textContent = deckIds[i].toUpperCase();
-          });
-          all('#bank-switch button').forEach(function (b) {
-            b.classList.toggle('on', b.getAttribute('data-bank') === String(bankIndex));
-          });
-          var thumbA = el('#thumb-a');
-          var thumbB = el('#thumb-b');
-          if (thumbA) thumbA.textContent = deckIds[0].toUpperCase() + ' PLAY';
-          if (thumbB) thumbB.textContent = deckIds[1].toUpperCase() + ' PLAY';
-        }
-        function setBank(next) {
-          var n = next === 1 ? 1 : 0;
-          if (n === bankIndex) return;
-          try {
-            localStorage.setItem('vz-deck-bank', String(n));
-          } catch (e) {
-            /* private mode */
+            if (letter) letter.textContent = id.toUpperCase();
+            rig.appendChild(card);
           }
-          // Reload rather than re-point the live DOM: every control on a card is
-          // bound to that card's deck id at startup, so re-binding is the only
-          // way to keep them truthful — and a reload does it for free.
-          location.reload();
-        }
-        try {
-          applyBankToDom(Number(localStorage.getItem('vz-deck-bank') || '0'));
-        } catch (e) {
-          applyBankToDom(0);
+          clone(a, 'c');
+          clone(b, 'd');
+        })();
+        function focusDeck(id) {
+          focusId = id;
+          all('.deck').forEach(function (card) {
+            card.classList.toggle('focus', card.getAttribute('data-deck') === id);
+          });
+          if (railChips) {
+            Object.keys(railChips).forEach(function (key) {
+              railChips[key].chip.classList.toggle('focus', key === id);
+            });
+          }
+          var card = el('.deck[data-deck="' + id + '"]');
+          if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
 
         /** One plain sentence: the next useful move, given what the decks are doing. */
@@ -3699,13 +3726,7 @@
         /* Four-deck overview: see C/D without giving up the two-card mixer. */
         var railChips = null;
         function railFocus(id) {
-          var bank = id === 'c' || id === 'd' ? 1 : 0;
-          if (bank !== bankIndex) {
-            setBank(bank);
-            return;
-          }
-          var card = el('.deck[data-deck="' + id + '"]');
-          if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          focusDeck(id);
         }
         function paintDeckRail() {
           var rail = el('#deck-rail');
@@ -3743,7 +3764,7 @@
             refs.name.textContent = slot.source ? slot.source.title : 'empty';
             refs.bpm.textContent = slot.bpm ? Math.round(slot.bpm) + ' BPM' : '';
             refs.chip.classList.toggle('playing', !!slot.playing);
-            refs.chip.classList.toggle('focus', deckIds.indexOf(id) >= 0);
+            refs.chip.classList.toggle('focus', id === focusId);
             refs.chip.title =
               'Deck ' +
               id.toUpperCase() +
@@ -3785,10 +3806,14 @@
             var qBtn = el('[data-quantize]', root);
             if (qBtn) qBtn.classList.toggle('on', slot.quantize !== false);
             var beatMs = slot.bpm ? 60_000 / slot.bpm : 0;
+            var gridOffset = Number(slot.beatOffsetMs) || 0;
+            var gridOut = el('[data-out="grid"]', root);
+            if (gridOut) gridOut.textContent = 'GRID ' + (gridOffset > 0 ? '+' : '') + gridOffset + ' ms';
             var barOut = el('[data-out="bar"]', root);
             if (barOut) {
+              var beatPos = Math.max(0, pos - gridOffset);
               barOut.textContent = beatMs
-                ? 'BAR ' + (Math.floor(pos / beatMs / 4) + 1) + '.' + ((Math.floor(pos / beatMs) % 4) + 1)
+                ? 'BAR ' + (Math.floor(beatPos / beatMs / 4) + 1) + '.' + ((Math.floor(beatPos / beatMs) % 4) + 1)
                 : 'BAR —';
             }
             var leftOut = el('[data-out="left"]', root);
@@ -4080,11 +4105,6 @@
             applyMode('pro');
             closeTutorial();
           };
-          all('#bank-switch button').forEach(function (b) {
-            b.onclick = function () {
-              setBank(Number(b.getAttribute('data-bank')));
-            };
-          });
           el('#btn-help').onclick = openTutorial;
           el('#tut-start').onclick = closeTutorial;
           el('#tut-pro').onclick = function () {
@@ -4584,6 +4604,11 @@
                 control('quantize', { deck: id, on: on });
               });
             }
+            all('[data-grid]', card).forEach(function (btn) {
+              btn.addEventListener('click', function () {
+                control('beatgrid', { deck: id, value: Number(btn.getAttribute('data-grid')) });
+              });
+            });
           });
 
           /** One transport rule for the deck card and the mobile thumb dock. */
@@ -4803,11 +4828,11 @@
             flushOnRelease(input, key);
           });
           el('#btn-sync').onclick = function () {
-            control('sync', { deck: deckIds[0] });
+            control('sync', { deck: focusId });
           };
           el('#btn-lock').onclick = function () {
             if (!state) return;
-            control('lock', state.sync ? { enabled: false } : { deck: deckIds[0], enabled: true });
+            control('lock', state.sync ? { enabled: false } : { deck: focusId, enabled: true });
           };
           el('#btn-rec').onclick = function () {
             if (!state) return;
@@ -4912,15 +4937,16 @@
             if (k === 'a' || k === 'b' || k === 'c' || k === 'd') {
               var keyDeck = k === 'a' || k === 'c' ? deckIds[0] : deckIds[1];
               if (k === 'c' || k === 'd') keyDeck = k;
+              focusDeck(keyDeck);
               deckToggle(keyDeck);
               return;
             }
             if (k === 's') {
-              control('sync', { deck: deckIds[0] });
+              control('sync', { deck: focusId });
               return;
             }
             if (k === 'l') {
-              control('lock', state.sync ? { enabled: false } : { deck: deckIds[0], enabled: true });
+              control('lock', state.sync ? { enabled: false } : { deck: focusId, enabled: true });
               return;
             }
             if (k === 'arrowleft' || k === 'arrowright') {
@@ -4932,8 +4958,8 @@
             }
             if (k >= '1' && k <= '8') {
               var pad = Number(k);
-              // Follow the focused bank so 1–8 are the visible deck's cues.
-              var dk = e.shiftKey ? deckIds[1] : deckIds[0];
+              // 1–8 are the focused deck's cues; click a rail chip to focus.
+              var dk = focusId;
               control(state[dk].cues[pad - 1] != null ? 'cue-jump' : 'cue-set', { deck: dk, slot: pad });
               return;
             }
@@ -5045,8 +5071,8 @@
                   send({ type: 'cmd', command: 'sfx', sfxId: FX[idx].id });
                 } else if (cc >= 48 && cc < 56 && state) {
                   var slot = cc - 47;
-                  control(deckState(deckIds[0]).cues[slot - 1] != null ? 'cue-jump' : 'cue-set', {
-                    deck: deckIds[0],
+                  control(deckState(focusId).cues[slot - 1] != null ? 'cue-jump' : 'cue-set', {
+                    deck: focusId,
                     slot: slot,
                   });
                 }
