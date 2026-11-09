@@ -5307,12 +5307,34 @@
                     meta.appendChild(name);
                     meta.appendChild(sub);
                     row.appendChild(meta);
+                    var actions = document.createElement('div');
+                    actions.className = 'bp-load';
                     var a = document.createElement('a');
                     a.className = 'btn small';
                     a.textContent = 'Download';
                     a.href = '/api/deck/recording?name=' + encodeURIComponent(it.name);
                     a.setAttribute('download', '');
-                    row.appendChild(a);
+                    actions.appendChild(a);
+                    var del = document.createElement('button');
+                    del.type = 'button';
+                    del.textContent = '✕';
+                    del.title = 'Delete this recording';
+                    del.onclick = function () {
+                      if (!window.confirm('Delete this recording?')) return;
+                      fetch('/api/deck/recording?name=' + encodeURIComponent(it.name), {
+                        method: 'DELETE',
+                        credentials: 'same-origin',
+                      })
+                        .then(function (r) {
+                          if (!r.ok) throw new Error('HTTP ' + r.status);
+                          load();
+                        })
+                        .catch(function (err) {
+                          window.alert('Could not delete: ' + (err && err.message ? err.message : 'network'));
+                        });
+                    };
+                    actions.appendChild(del);
+                    row.appendChild(actions);
                     list.appendChild(row);
                   });
                 })

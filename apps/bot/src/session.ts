@@ -6,6 +6,7 @@ import { VoiceManager } from './voice.js';
 import type { SpotifyBackend } from '@vaporzr/core/librespot';
 import { config } from '@vaporzr/core/config';
 import { getCrossfadeMs } from './crossfadeStore.js';
+import { getSponsorEnabled } from './sponsorStore.js';
 import type { PlaybackState, TrackInfo } from '@vaporzr/shared';
 import * as EW from '@vaporzr/core/endlesswave';
 import { writeJsonAtomicSync } from './jsonFile.js';
@@ -40,6 +41,7 @@ export class Session {
     this.voice.setFadeOut(xfadeMs / 1000);
     this.playback = new PlaybackController(this.queue, () => {}, this.voice, this.librespot);
     this.playback.setCrossfade(xfadeMs);
+    this.playback.setSponsorBlock(getSponsorEnabled(guildId));
   }
 
   /** Feed the spectrum analyzer (only the primary session should). */

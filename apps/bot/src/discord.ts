@@ -56,6 +56,7 @@ import {
 import { generateDependencyReport } from '@discordjs/voice';
 import { config } from '@vaporzr/core/config';
 import { getCrossfadeMs, setCrossfadeMs } from './crossfadeStore.js';
+import { getSponsorEnabled, setSponsorEnabled } from './sponsorStore.js';
 import {
   getRecommendations,
   resolveTracks,
@@ -91,7 +92,7 @@ import {
   type YoutubeHealthContext,
 } from '@vaporzr/core/youtube';
 import { isSunoUrl, resolveSuno } from '@vaporzr/core/suno';
-import { latestPodcastEpisode, searchPodcastFeeds } from '@vaporzr/core/podcastIndex';
+import { latestPodcastEpisode, podcastEpisodes, searchPodcastFeeds } from '@vaporzr/core/podcastIndex';
 import { findRadioPreset, RADIO_PRESETS, searchRadioBrowser } from '@vaporzr/core/radio';
 import { isAudiusUrl, resolveAudius } from '@vaporzr/core/audius';
 import { isArchiveDetailsUrl, resolveInternetArchive } from '@vaporzr/core/internetArchive';
@@ -217,9 +218,17 @@ const COMMANDS = [
     .addStringOption((o) => o.setName('query').setDescription('YouTube URL or search query').setRequired(true)),
   new SlashCommandBuilder()
     .setName('podcast')
-    .setDescription('Play the latest episode of a podcast (search by name, or paste a feed/episode URL)')
+    .setDescription('Play a podcast episode (search by name, or paste a feed/episode URL)')
     .addStringOption((o) =>
       o.setName('query').setDescription('Podcast name, feed URL, or episode URL').setRequired(true),
+    )
+    .addIntegerOption((o) =>
+      o
+        .setName('episode')
+        .setDescription('Which recent episode (1 = newest, default 1)')
+        .setMinValue(1)
+        .setMaxValue(20)
+        .setRequired(false),
     ),
   new SlashCommandBuilder()
     .setName('radio')
@@ -2329,10 +2338,19 @@ export class DiscordBot {
           );
           break;
         }
-        const ep = await latestPodcastEpisode(feeds[0].id, auth);
+        const want = interaction.options.getInteger('episode') ?? 1;
+        const episodes = await podcastEpisodes(feeds[0].id, auth, Math.max(want, 10));
+        const ep = episodes[want - 1] ?? episodes[0];
         if (!ep) {
           await interaction.editReply(`Found **${feeds[0].title}** but no playable episode.`);
           break;
+        }
+        if (episodes.length > 1) {
+          // Make the choice visible: the queue card only has the episode title.
+          await interaction.followUp({
+            content: `Podcast **${feeds[0].title}** — episode ${Math.min(want, episodes.length)} of ${episodes.length}.`,
+            ephemeral: true,
+          });
         }
         const track: ResolvedTrack = {
           uri: `direct:${ep.enclosureUrl}`,
@@ -4601,6 +4619,29 @@ export class DiscordBot {
           this.setAutoplayMode(s, 'smart');
           await message.reply(
             `🎚️ Automix **on** — ${(applied / 1000).toFixed(1)}s crossfade, smart autoplay keeps the next track coming.`,
+          );
+          break;
+        }
+
+        case 'sponsor': {
+          if (!canUse('crossfade')) return void (await deny());
+          if (!message.guildId) return void (await message.reply('Must be used in a server.'));
+          const arg = args.trim().toLowerCase();
+          if (!arg || arg === 'status') {
+            await message.reply(
+              getSponsorEnabled(message.guildId)
+                ? '⏭ SponsorBlock is **on** — sponsor/intro/outro segments in YouTube audio are skipped.'
+                : '⏭ SponsorBlock is **off** — the full video audio plays.',
+            );
+            break;
+          }
+          const on = !/^(off|false|no|0|disable)$/.test(arg);
+          setSponsorEnabled(message.guildId, on);
+          s.playback.setSponsorBlock(on);
+          await message.reply(
+            on
+              ? '⏭ SponsorBlock **on** — segments are skipped from the next track.'
+              : '⏭ SponsorBlock **off** — segments play through.',
           );
           break;
         }

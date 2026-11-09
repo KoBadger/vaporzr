@@ -1790,8 +1790,23 @@ async function handleRoute(
           /* no recordings yet */
         }
         items.sort((a, b) => b.at - a.at);
+        // Retention: keep the newest 10 forever-ish, drop anything older than
+        // 30 days beyond that. Listing is the natural place to prune.
+        const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+        const now = Date.now();
+        const kept = items.filter((it, i) => {
+          const stale = i >= 10 && now - it.at > RETENTION_MS;
+          if (stale) {
+            try {
+              fs.rmSync(path.join(dir, it.name), { force: true });
+            } catch {
+              /* keep serving the listing even if a delete fails */
+            }
+          }
+          return !stale;
+        });
         res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-        res.end(JSON.stringify({ items: items.slice(0, 50) }));
+        res.end(JSON.stringify({ items: kept.slice(0, 50) }));
         break;
       }
 
@@ -1813,6 +1828,22 @@ async function handleRoute(
         if (!file.startsWith(dir + path.sep) || !fs.existsSync(file)) {
           res.writeHead(404, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'not found' }));
+          return;
+        }
+        if (req.method === 'DELETE') {
+          try {
+            fs.rmSync(file, { force: true });
+            res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+            res.end(JSON.stringify({ ok: true }));
+          } catch (err) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'delete failed' }));
+          }
+          return;
+        }
+        if (req.method !== 'GET') {
+          res.writeHead(405);
+          res.end();
           return;
         }
         const size = fs.statSync(file).size;
