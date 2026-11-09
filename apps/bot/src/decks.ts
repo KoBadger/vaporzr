@@ -301,6 +301,14 @@ export class DeckController {
     return { ok: true, message: `Deck ${deck.toUpperCase()} quantize ${on ? 'on' : 'off'}.` };
   }
 
+  /** Shift the beat grid so quantized jumps land on the real downbeat. */
+  nudgeBeatGrid(deck: DeckId, deltaMs: number): DeckActionResult {
+    const delta = Math.max(-100, Math.min(100, Math.round(deltaMs || 0)));
+    this.mixer.nudgeBeatGrid(deck, delta);
+    const offset = this.mixer.state()[deck].beatOffsetMs;
+    return { ok: true, message: `Deck ${deck.toUpperCase()} beat grid ${offset >= 0 ? '+' : ''}${offset} ms.` };
+  }
+
   crossfader(x: number): DeckActionResult {
     this.mixer.setCrossfader(x);
     const pct = Math.round(this.mixer.getCrossfader() * 100);

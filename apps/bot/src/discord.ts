@@ -1434,6 +1434,9 @@ export class DiscordBot {
         case 'quantize':
           quiet(decks.setQuantize(deck, Boolean(msg.on)));
           break;
+        case 'beatgrid':
+          quiet(decks.nudgeBeatGrid(deck, Number(msg.value ?? 0)));
+          break;
         case 'sync':
           // Sync within the bank that is actually on screen (c↔d when the
           // deck page is on the 3·4 bank), not always the A/B pair.

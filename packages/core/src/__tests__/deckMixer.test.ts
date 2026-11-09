@@ -226,6 +226,13 @@ describe('quantized seeks', () => {
     expect(snapToBeat(1260, 120, true)).toBe(1500);
   });
 
+  it('shifts the grid by the manual beat offset', () => {
+    // 120 BPM = 500 ms beats. A +120 ms grid puts beats at 120, 620, 1120…
+    expect(snapToBeat(700, 120, true, 120)).toBe(620);
+    expect(snapToBeat(1100, 120, true, 120)).toBe(1120);
+    expect(snapToBeat(400, 120, true, -120)).toBe(380);
+  });
+
   it('passes the target through when quantize is off or the tempo is unknown', () => {
     expect(snapToBeat(1234, 120, false)).toBe(1234);
     expect(snapToBeat(1234, null, true)).toBe(1234);

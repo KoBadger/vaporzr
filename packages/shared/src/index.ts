@@ -138,6 +138,9 @@ export interface DeckSlotState {
   jogMode: 'vinyl' | 'cdj';
   /** Snap seeks, cue jumps and loop points to the beat grid. */
   quantize: boolean;
+  /** Beat-grid offset in ms (positive = grid starts later). Detection is
+   *  approximate; this is the manual correction DJs nudge in. */
+  beatOffsetMs: number;
   /** Cue samples available to the pad bank (controller-provided). */
   samples?: string[];
 }
@@ -202,7 +205,8 @@ export type DeckAction =
   | 'sampleAssign'
   | 'sampleSwap'
   | 'jogMode'
-  | 'quantize';
+  | 'quantize'
+  | 'beatgrid';
 
 export interface GuildPermissions {
   roles: Record<PermissionLevel, string[]>;

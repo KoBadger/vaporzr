@@ -40,12 +40,15 @@ export function beatLoopRegion(
   return { inMs, outMs: inMs + beatMs * count, beats: count };
 }
 
-/** Round a seek target to the nearest beat when quantize is armed. */
-export function snapToBeat(ms: number, bpm: number | null | undefined, quantize: boolean): number {
+/** Round a seek target to the nearest beat when quantize is armed. `offsetMs`
+ *  shifts the grid (positive = the first beat starts later), which is how a
+ *  DJ corrects detection that put beat one a few ms off the downbeat. */
+export function snapToBeat(ms: number, bpm: number | null | undefined, quantize: boolean, offsetMs = 0): number {
   if (!Number.isFinite(ms)) return 0;
   if (!quantize || !bpm || bpm <= 0) return Math.max(0, Math.round(ms));
   const beatMs = 60_000 / bpm;
-  return Math.max(0, Math.round(Math.round(ms / beatMs) * beatMs));
+  const off = Number.isFinite(offsetMs) ? offsetMs : 0;
+  return Math.max(0, Math.round(Math.round((ms - off) / beatMs) * beatMs + off));
 }
 
 /** EQ band gains in dB. -40 is treated as a kill, 0 is flat. */
@@ -348,6 +351,7 @@ const emptySlot = (): DeckSlotState => ({
   drift: 1,
   jogMode: 'vinyl',
   quantize: true,
+  beatOffsetMs: 0,
   filter: { type: 'off', cutoff: 20_000 },
 });
 
@@ -502,7 +506,7 @@ export class DeckMixer {
     const slot = this.slot(id);
     if (!slot.state.source) return;
     const dur = slot.state.durationMs;
-    const snapped = snapToBeat(ms, slot.state.bpm, slot.state.quantize);
+    const snapped = snapToBeat(ms, slot.state.bpm, slot.state.quantize, slot.state.beatOffsetMs);
     const target = Math.max(0, dur ? Math.min(snapped, dur - 250) : Math.round(snapped));
     slot.baseMs = target;
     slot.consumedFrames = 0;
@@ -684,6 +688,16 @@ export class DeckMixer {
     const slot = this.slot(id);
     if (slot.state.quantize === Boolean(on)) return;
     slot.state.quantize = Boolean(on);
+    this.emit();
+  }
+
+  /** Move the beat grid by `deltaMs` (positive = later). Clamped to ±1 s —
+   *  detection is never off by more than about a beat. */
+  nudgeBeatGrid(id: DeckId, deltaMs: number): void {
+    const slot = this.slot(id);
+    const next = Math.max(-1000, Math.min(1000, Math.round(slot.state.beatOffsetMs + deltaMs)));
+    if (next === slot.state.beatOffsetMs) return;
+    slot.state.beatOffsetMs = next;
     this.emit();
   }
 

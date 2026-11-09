@@ -2590,6 +2590,9 @@
             <button class="jog-mode" data-jogmode="vinyl" title="Vinyl: drag the platter to scratch">VINYL</button>
             <button class="jog-mode" data-jogmode="cdj" title="CDJ: drag the platter to bend the beat">CDJ</button>
             <button class="q-btn" data-quantize title="Snap cues, seeks and loops to the beat grid">Q</button>
+            <button class="q-btn" data-grid="-10" title="Move the beat grid 10 ms earlier">−</button>
+            <button class="q-btn" data-grid="10" title="Move the beat grid 10 ms later">+</button>
+            <span class="bar-read" data-out="grid">GRID 0 ms</span>
             <span class="bar-read" data-out="bar">BAR —</span>
           </div>
           <div class="jog" data-role="jog">
@@ -2928,6 +2931,9 @@
             <button class="jog-mode" data-jogmode="vinyl" title="Vinyl: drag the platter to scratch">VINYL</button>
             <button class="jog-mode" data-jogmode="cdj" title="CDJ: drag the platter to bend the beat">CDJ</button>
             <button class="q-btn" data-quantize title="Snap cues, seeks and loops to the beat grid">Q</button>
+            <button class="q-btn" data-grid="-10" title="Move the beat grid 10 ms earlier">−</button>
+            <button class="q-btn" data-grid="10" title="Move the beat grid 10 ms later">+</button>
+            <span class="bar-read" data-out="grid">GRID 0 ms</span>
             <span class="bar-read" data-out="bar">BAR —</span>
           </div>
           <div class="jog" data-role="jog">
@@ -3800,10 +3806,14 @@
             var qBtn = el('[data-quantize]', root);
             if (qBtn) qBtn.classList.toggle('on', slot.quantize !== false);
             var beatMs = slot.bpm ? 60_000 / slot.bpm : 0;
+            var gridOffset = Number(slot.beatOffsetMs) || 0;
+            var gridOut = el('[data-out="grid"]', root);
+            if (gridOut) gridOut.textContent = 'GRID ' + (gridOffset > 0 ? '+' : '') + gridOffset + ' ms';
             var barOut = el('[data-out="bar"]', root);
             if (barOut) {
+              var beatPos = Math.max(0, pos - gridOffset);
               barOut.textContent = beatMs
-                ? 'BAR ' + (Math.floor(pos / beatMs / 4) + 1) + '.' + ((Math.floor(pos / beatMs) % 4) + 1)
+                ? 'BAR ' + (Math.floor(beatPos / beatMs / 4) + 1) + '.' + ((Math.floor(beatPos / beatMs) % 4) + 1)
                 : 'BAR —';
             }
             var leftOut = el('[data-out="left"]', root);
@@ -4594,6 +4604,11 @@
                 control('quantize', { deck: id, on: on });
               });
             }
+            all('[data-grid]', card).forEach(function (btn) {
+              btn.addEventListener('click', function () {
+                control('beatgrid', { deck: id, value: Number(btn.getAttribute('data-grid')) });
+              });
+            });
           });
 
           /** One transport rule for the deck card and the mobile thumb dock. */
