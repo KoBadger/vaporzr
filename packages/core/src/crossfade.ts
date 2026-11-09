@@ -68,6 +68,19 @@ export function canCrossfade(xfadeMs: number): boolean {
   return xfadeMs > 0;
 }
 
+/**
+ * How long after the track's calculated end the handoff timer should wait.
+ *
+ * The 6 s Spotify buffer exists to let the PCM-derived position catch up, but
+ * it must NOT be applied when a crossfade owns the tail: the fade reaches zero
+ * at the track end, so waiting another 6 s produced the infamous "song fades
+ * out, silence, next song" gap. With crossfade armed only a small guard is
+ * needed.
+ */
+export function handoffBufferMs(xfadeMs: number): number {
+  return xfadeMs > 0 ? 400 : 6000;
+}
+
 /** Linear ramp in [0,1]. */
 export function linearIn(t: number): number {
   return Math.max(0, Math.min(1, t));
