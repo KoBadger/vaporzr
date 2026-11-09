@@ -2347,7 +2347,8 @@
       }
 
       /* ---------- track browser (VirtualDJ-style drawer) ---------- */
-      #browser-pane {
+      #browser-pane,
+      #sets-pane {
         position: fixed;
         left: 0;
         right: 0;
@@ -2362,7 +2363,8 @@
         transform: translateY(102%);
         transition: transform 0.18s ease;
       }
-      #browser-pane.open {
+      #browser-pane.open,
+      #sets-pane.open {
         transform: none;
       }
       body.browsing .rig {
@@ -2524,6 +2526,7 @@
       <button class="fn pro-only" id="btn-lock"><span class="led"></span><span class="lbl">LOCK</span></button>
       <button class="fn rec pro-only" id="btn-rec"><span class="led"></span><span class="lbl">REC</span></button>
       <a class="rec-last pro-only" id="rec-last" target="_blank" rel="noopener" hidden>LAST SET ↗</a>
+      <button class="fn pro-only" id="btn-sets" title="Recorded sets"><span class="lbl">SETS</span></button>
       <button class="fn pro-only" id="btn-play"><span class="led"></span>PLAY BOTH</button>
       <button class="fn pro-only" id="btn-pause">PAUSE</button>
       <button class="fn" id="btn-stop">STOP</button>
@@ -3126,6 +3129,16 @@
           Type at least two characters. Load straight to A, B, C or D without closing the browser.
         </div>
       </div>
+    </section>
+
+    <!-- Recorded sets: download or re-load a finished mix. -->
+    <section id="sets-pane" aria-label="Recorded sets" aria-hidden="true">
+      <div class="bp-head">
+        <span class="bp-title">RECORDED SETS</span>
+        <span class="bp-count" id="sets-count">—</span>
+        <button class="bp-close" id="sets-close" title="Close" aria-label="Close recorded sets">×</button>
+      </div>
+      <div id="sets-results"><div class="bp-msg">No recordings yet. Press REC, play a set, then STOP.</div></div>
     </section>
 
     <div class="tut" id="tut" role="dialog" aria-modal="true" aria-labelledby="tut-title">
@@ -5238,6 +5251,89 @@
                 load(deckIds[0], lastList[0]);
               }
             });
+          })();
+
+          /* Recorded sets: list the mp3s the deck recorder has finished. */
+          (function () {
+            var pane = el('#sets-pane');
+            var list = el('#sets-results');
+            var count = el('#sets-count');
+            function setOpen(on) {
+              pane.classList.toggle('open', on);
+              pane.setAttribute('aria-hidden', String(!on));
+              el('#btn-sets').classList.toggle('on', on);
+              if (on) load();
+            }
+            function fmtBytes(n) {
+              if (!n || n < 1024) return (n || 0) + ' B';
+              if (n < 1024 * 1024) return Math.round(n / 1024) + ' KB';
+              return (n / (1024 * 1024)).toFixed(1) + ' MB';
+            }
+            function label(name) {
+              return String(name || '')
+                .replace(/^set-/, '')
+                .replace(/\.mp3$/i, '')
+                .replace(/T/, ' ')
+                .replace(/-/g, ':')
+                .replace(/\..*$/, '');
+            }
+            function load() {
+              list.innerHTML = '<div class="bp-msg">Loading…</div>';
+              fetch('/api/deck/recordings', { credentials: 'same-origin' })
+                .then(function (r) {
+                  if (!r.ok) throw new Error('HTTP ' + r.status);
+                  return r.json();
+                })
+                .then(function (d) {
+                  var items = (d && d.items) || [];
+                  count.textContent = items.length + (items.length === 1 ? ' set' : ' sets');
+                  list.innerHTML = '';
+                  if (!items.length) {
+                    list.innerHTML = '<div class="bp-msg">No recordings yet. Press REC, play a set, then STOP.</div>';
+                    return;
+                  }
+                  items.forEach(function (it) {
+                    var row = document.createElement('div');
+                    row.className = 'bp-row';
+                    var meta = document.createElement('div');
+                    meta.className = 'bp-meta';
+                    var name = document.createElement('span');
+                    name.className = 'bp-name';
+                    name.textContent = label(it.name);
+                    var sub = document.createElement('span');
+                    sub.className = 'bp-sub';
+                    var when = it.at ? new Date(it.at).toLocaleString() : '';
+                    sub.textContent = when + ' · ' + fmtBytes(it.sizeBytes);
+                    meta.appendChild(name);
+                    meta.appendChild(sub);
+                    row.appendChild(meta);
+                    var a = document.createElement('a');
+                    a.className = 'btn small';
+                    a.textContent = 'Download';
+                    a.href = '/api/deck/recording?name=' + encodeURIComponent(it.name);
+                    a.setAttribute('download', '');
+                    row.appendChild(a);
+                    list.appendChild(row);
+                  });
+                })
+                .catch(function (err) {
+                  count.textContent = 'offline';
+                  list.innerHTML =
+                    '<div class="bp-msg">Could not load recordings (' +
+                    (err && err.message ? err.message : 'network') +
+                    ').</div>';
+                });
+            }
+            if (el('#btn-sets')) {
+              el('#btn-sets').onclick = function () {
+                setOpen(!pane.classList.contains('open'));
+              };
+            }
+            if (el('#sets-close')) {
+              el('#sets-close').onclick = function () {
+                setOpen(false);
+              };
+            }
           })();
 
           /* VirtualDJ-style pitch range: 4/8/16/50% instead of a fixed ±8.
