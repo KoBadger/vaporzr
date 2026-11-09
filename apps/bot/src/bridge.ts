@@ -30,7 +30,7 @@ import { DEFAULT_THEME, themeById } from './themes.js';
 import { analyzer } from '@vaporzr/core/analyzer';
 import { searchAndResolveYoutube } from '@vaporzr/core/youtube';
 import type { ResolvedTrack } from '@vaporzr/core/spotify';
-import { secretEquals, keyFromCookieHeader } from './secretCompare.js';
+import { secretEquals, keyFromCookieHeader, masterPasswordEquals } from './secretCompare.js';
 import {
   authThrottle,
   consumeInvite,
@@ -532,7 +532,7 @@ export class Bridge {
     const cookieKey = keyFromCookieHeader(req.headers.cookie);
     if (
       (config.shareKey && secretEquals(cookieKey, config.shareKey)) ||
-      secretEquals(cookieKey, config.masterPassword)
+      masterPasswordEquals(cookieKey, config.masterPassword)
     ) {
       return 'control';
     }
@@ -547,13 +547,15 @@ export class Bridge {
     }
     if (
       qKey &&
-      ((config.shareKey && secretEquals(qKey, config.shareKey)) || secretEquals(qKey, config.masterPassword))
+      ((config.shareKey && secretEquals(qKey, config.shareKey)) || masterPasswordEquals(qKey, config.masterPassword))
     ) {
       return 'control';
     }
     const inviteToken =
       qInvite ??
-      (qKey && !(config.shareKey && secretEquals(qKey, config.shareKey)) && !secretEquals(qKey, config.masterPassword)
+      (qKey &&
+      !(config.shareKey && secretEquals(qKey, config.shareKey)) &&
+      !masterPasswordEquals(qKey, config.masterPassword)
         ? qKey
         : null);
     if (!inviteToken) return 'guest';

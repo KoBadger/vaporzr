@@ -18,7 +18,7 @@ import { Bridge } from './bridge.js';
 import { SessionManager } from './session.js';
 import { PermissionsManager } from './permissions.js';
 import { vizTunnel } from './tunnel.js';
-import { secretEquals, keyFromCookieHeader } from './secretCompare.js';
+import { secretEquals, keyFromCookieHeader, masterPasswordEquals } from './secretCompare.js';
 import { handleVideoProxy } from './videoProxy.js';
 import { resolveJamCode } from './jamLinks.js';
 import {
@@ -368,7 +368,7 @@ function accessNeedFor(pathname: string): AccessScope | null {
 /** The owner's human-memorable recovery password, accepted anywhere SHARE_KEY
  *  is. Empty when unset. */
 export function isMasterPassword(value: string | undefined | null): boolean {
-  return secretEquals(value, config.masterPassword);
+  return masterPasswordEquals(value, config.masterPassword);
 }
 
 /** True when the request carries a session (or the master key/password) for `need`. */
