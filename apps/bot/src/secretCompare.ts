@@ -13,6 +13,24 @@ export function secretEquals(a: string | undefined | null, b: string | undefined
   return crypto.timingSafeEqual(ha, hb);
 }
 
+/**
+ * Verify the owner's human-memorable master password with a memory-hard KDF.
+ * A plain SHA-256 comparison is timing-safe but cheap enough to brute-force
+ * offline if a digest ever leaks; scrypt is the correct primitive for a
+ * low-entropy password (and satisfies CodeQL's password-hashing rule).
+ */
+const MASTER_SALT = 'vaporzr-master-password-v1';
+let cachedMaster: { password: string; digest: Buffer } | null = null;
+
+export function masterPasswordEquals(value: string | undefined | null, expected: string | undefined | null): boolean {
+  if (!value || !expected) return false;
+  if (!cachedMaster || cachedMaster.password !== expected) {
+    cachedMaster = { password: expected, digest: crypto.scryptSync(expected, MASTER_SALT, 32) };
+  }
+  const actual = crypto.scryptSync(value, MASTER_SALT, 32);
+  return crypto.timingSafeEqual(actual, cachedMaster.digest);
+}
+
 /** Read the `vz_key` cookie value out of a raw Cookie header. */
 export function keyFromCookieHeader(cookie: string | undefined | null): string | undefined {
   if (!cookie) return undefined;

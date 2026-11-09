@@ -171,6 +171,10 @@ export const config = {
    * Empty = no gate (LAN-only setups).
    */
   shareKey: process.env.SHARE_KEY ?? '',
+  /** Owner recovery password accepted anywhere SHARE_KEY is accepted. Kept
+   *  out of the public repo (env only) and can be rotated independently of the
+   *  randomly generated share key. */
+  masterPassword: process.env.MASTER_PASSWORD ?? '',
   /**
    * Separate, lower-privilege key for the public /request page (search + queue
    * only, no playback control). Requiring it keeps the full-control SHARE_KEY
