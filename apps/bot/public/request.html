@@ -81,6 +81,20 @@
       .jam-title p.sub {
         margin: 0;
       }
+      .crowd-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin: -2px 0 12px;
+        color: #9fb0ff;
+        font-size: 12px;
+        letter-spacing: 0.04em;
+        text-decoration: none;
+        border-bottom: 1px dotted rgba(159, 176, 255, 0.5);
+      }
+      .crowd-link:hover {
+        color: #fff;
+      }
       #bars {
         width: 100%;
         height: 56px;
@@ -506,6 +520,7 @@
           <p class="sub" id="sub">Request a song — it gets queued for everyone.</p>
         </div>
       </div>
+      <a class="crowd-link" href="/crowd">◉ Crowd view — now playing, queue &amp; lyrics</a>
       <canvas id="bars" aria-hidden="true"></canvas>
       <input id="who" placeholder="Your name (shows on the queue)" autocomplete="off" maxlength="24" />
       <div class="sw-wrap">

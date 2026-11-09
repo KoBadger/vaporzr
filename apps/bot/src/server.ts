@@ -20,6 +20,7 @@ import { PermissionsManager } from './permissions.js';
 import { vizTunnel } from './tunnel.js';
 import { secretEquals, keyFromCookieHeader, masterPasswordEquals } from './secretCompare.js';
 import { handleVideoProxy } from './videoProxy.js';
+import { renderJamCardPng } from './jamCardArt.js';
 import { resolveJamCode } from './jamLinks.js';
 import {
   SESSION_COOKIE,
@@ -624,6 +625,8 @@ function grantRequestPage(req: http.IncomingMessage, url: URL, res: http.ServerR
  * socket presents once.
  */
 const activityPairs = new Map<string, { createdAt: number; invite?: string }>();
+/** Rendered jam cards, keyed by join URL (bounded; an hour each). */
+const jamCardCache = new Map<string, { at: number; png: Buffer }>();
 /** Short-lived search results so type-ahead keystrokes don't hit Spotify each time. */
 const searchCache = new Map<string, { at: number; items: unknown[] }>();
 const ACTIVITY_PAIR_TTL_MS = 5 * 60 * 1000;
@@ -1238,6 +1241,46 @@ async function handleRoute(
       return;
     }
 
+    // Jam invite card as an image, for the embed. Rendering it here (instead of
+    // attaching a file to the Discord post) avoids the undici FormData instance
+    // mismatch that made Discord refuse the jam card, and the URL can be cached.
+    if (url.pathname === '/jam-card.png') {
+      const raw = (url.searchParams.get('u') ?? '').slice(0, 500);
+      let target: URL;
+      try {
+        target = new URL(raw);
+      } catch {
+        res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Invalid card URL.');
+        return;
+      }
+      const loopback = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(target.hostname);
+      if (target.protocol !== 'https:' && !(target.protocol === 'http:' && loopback)) {
+        res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Card URL must be https.');
+        return;
+      }
+      const key = target.toString();
+      const hit = jamCardCache.get(key);
+      let png: Buffer;
+      if (hit && Date.now() - hit.at < 60 * 60 * 1000) {
+        png = hit.png;
+      } else {
+        try {
+          png = renderJamCardPng(key);
+        } catch {
+          res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('Could not render the card.');
+          return;
+        }
+        if (jamCardCache.size > 100) jamCardCache.clear();
+        jamCardCache.set(key, { at: Date.now(), png });
+      }
+      res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=3600' });
+      res.end(png);
+      return;
+    }
+
     // Short jam links (/j/<CODE> from the QR cards): serve a tiny handoff page
     // that instantly walks the browser to /jam with the invite. Public on
     // purpose — the code IS the credential, so with no match there is nothing
@@ -1249,6 +1292,21 @@ async function handleRoute(
         'Cache-Control': 'no-store',
       });
       res.end(jamHandoffHtml(token ? `/jam?invite=${encodeURIComponent(token)}` : null));
+      return;
+    }
+
+    // The same short code, but for the read-only crowd panel: the request
+    // invite keeps the socket at guest scope, so nothing here can change
+    // playback — it just shows the full panel with the jam art.
+    if (url.pathname.startsWith('/c/')) {
+      const token = resolveJamCode(url.pathname.slice(3));
+      if (!token) {
+        res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('That jam link has expired.');
+        return;
+      }
+      res.writeHead(302, { Location: `/crowd?invite=${encodeURIComponent(token)}`, 'Cache-Control': 'no-store' });
+      res.end();
       return;
     }
 
@@ -1386,6 +1444,25 @@ async function handleRoute(
         }
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
         res.end(page);
+        break;
+      }
+
+      case '/crowd': {
+        // Guest-facing copy of the panel: a request invite logs the socket in
+        // at guest scope, which is exactly what panel.html's guest mode wants.
+        if (!grantRequestPage(req, url, res)) return;
+        try {
+          const build = (process.env.VAPORZR_BUILD ?? 'dev').slice(0, 7);
+          const file = fs
+            .readFileSync(path.join(__dirname, '..', 'public', 'panel.html'), 'utf8')
+            .replace(/\{\{ORIGIN\}\}/g, origin)
+            .replace(/\{\{BUILD\}\}/g, build);
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+          res.end(file);
+        } catch {
+          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('Crowd view not found.');
+        }
         break;
       }
 
