@@ -93,6 +93,9 @@ import {
 import { isSunoUrl, resolveSuno } from '@vaporzr/core/suno';
 import { latestPodcastEpisode, searchPodcastFeeds } from '@vaporzr/core/podcastIndex';
 import { findRadioPreset, RADIO_PRESETS, searchRadioBrowser } from '@vaporzr/core/radio';
+import { isAudiusUrl, resolveAudius } from '@vaporzr/core/audius';
+import { isArchiveDetailsUrl, resolveInternetArchive } from '@vaporzr/core/internetArchive';
+import { resolveSonglink } from '@vaporzr/core/songlink';
 import { isAppleMusicUrl, resolveAppleMusicUrl } from '@vaporzr/core/apple';
 import {
   isSoundcloudSetUrl,
@@ -13379,6 +13382,35 @@ async function resolvePlayInput(query: string): Promise<ResolvedTrack[]> {
   if (isSoundcloudUrl(query)) {
     return [await resolveSoundcloudVideo(query)];
   }
+  if (isAudiusUrl(query)) {
+    const a = await resolveAudius(query);
+    return [
+      {
+        uri: `audius:${a.id}`,
+        name: a.title,
+        artists: [a.artist],
+        album: 'Audius',
+        durationMs: a.durationMs,
+        image: a.image,
+        source: 'direct',
+        streamUrl: a.streamUrl,
+      },
+    ];
+  }
+  if (isArchiveDetailsUrl(query)) {
+    const a = await resolveInternetArchive(query);
+    return [
+      {
+        uri: `archive:${a.id}:${a.streamUrl}`,
+        name: a.title,
+        artists: [a.artist],
+        album: 'Internet Archive',
+        durationMs: a.durationMs,
+        source: 'direct',
+        streamUrl: a.streamUrl,
+      },
+    ];
+  }
   if (isGenericMediaUrl(query)) {
     try {
       return [await resolveGenericMediaUrl(query)];
@@ -13407,6 +13439,18 @@ async function resolvePlayInput(query: string): Promise<ResolvedTrack[]> {
     if (err instanceof SpotifyError && !isSpotifyLink) {
       const hit = await searchAndResolveYoutube(query);
       if (hit) return [hit];
+    }
+    if (err instanceof SpotifyError && isSpotifyLink) {
+      // Cross-platform fallback: find the same entity on YouTube via Odesli.
+      const links = await resolveSonglink(query).catch(() => null);
+      const mirror = links?.youtube ?? links?.youtubeMusic;
+      if (mirror) {
+        try {
+          return [await resolveYoutubeVideo(mirror)];
+        } catch {
+          /* fall through to the original error */
+        }
+      }
     }
     if (err instanceof SpotifyError) throw err;
     throw new YoutubeError(err instanceof Error ? err.message : String(err));
