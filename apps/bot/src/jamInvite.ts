@@ -6,14 +6,15 @@
  * Deliberately free of config and Discord-client state — the caller passes
  * every number in, so the whole card is testable without a guild.
  */
-import { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
-import { renderJamCardPng } from './jamCardArt.js';
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
 
 export const JAM_CARD_NAME = 'jam-card.png';
 
 export interface JamInviteInfo {
   /** The guest URL the QR points at (already carries the request key). */
   joinUrl: string;
+  /** Read-only crowd panel for the same room, when a public base exists. */
+  crowdUrl?: string;
   /** People in the voice channel, bots excluded; undefined hides the field. */
   inRoom?: number;
   /** What the bot is playing right now; null/undefined = nothing loaded yet. */
@@ -31,7 +32,7 @@ function truncate(s: string, max: number): string {
 /** Build the jam invite card: embed + vaporwave QR postcard + a link button. */
 export async function buildJamInviteCard(info: JamInviteInfo): Promise<{
   embeds: EmbedBuilder[];
-  files: AttachmentBuilder[];
+  files: [];
   components: ActionRowBuilder<ButtonBuilder>[];
 }> {
   const embed = new EmbedBuilder()
@@ -42,7 +43,10 @@ export async function buildJamInviteCard(info: JamInviteInfo): Promise<{
         `Or open: \`${info.joinUrl}\``,
     )
     .setColor(info.color)
-    .setImage(`attachment://${JAM_CARD_NAME}`)
+    // Served by /jam-card.png instead of an attachment: Discord's REST layer
+    // rejected the file upload with undici's cross-instance FormData error.
+    // A URL image keeps the same card art without touching multipart bodies.
+    .setImage(`${new URL('/jam-card.png?u=' + encodeURIComponent(info.joinUrl), info.joinUrl).toString()}`)
     .setFooter({ text: 'Guests can add songs — playback control stays with the panel.' });
 
   const fields: { name: string; value: string; inline: boolean }[] = [];
@@ -72,10 +76,13 @@ export async function buildJamInviteCard(info: JamInviteInfo): Promise<{
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder().setLabel('🔗 Join the jam').setStyle(ButtonStyle.Link).setURL(info.joinUrl),
   );
+  if (info.crowdUrl) {
+    row.addComponents(new ButtonBuilder().setLabel('Crowd view').setStyle(ButtonStyle.Link).setURL(info.crowdUrl));
+  }
 
   return {
     embeds: [embed],
-    files: [new AttachmentBuilder(renderJamCardPng(info.joinUrl), { name: JAM_CARD_NAME })],
+    files: [],
     components: [row],
   };
 }

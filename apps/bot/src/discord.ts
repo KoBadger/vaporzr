@@ -7899,7 +7899,7 @@ export class DiscordBot {
     guildId: string,
     channel: GuildTextBasedChannel | null,
   ): Promise<{ ok: boolean; where?: string; error?: string; pinRow?: ActionRowBuilder<ButtonBuilder> }> {
-    const { joinUrl } = jamJoinLinks();
+    const { joinUrl, crowdUrl } = jamJoinLinks();
     if (!joinUrl) {
       return {
         ok: false,
@@ -7916,7 +7916,7 @@ export class DiscordBot {
     }
     let card: Awaited<ReturnType<typeof buildJamInviteCard>>;
     try {
-      card = await buildJamInviteCard(this.jamInviteInfo(guildId, joinUrl));
+      card = await buildJamInviteCard(this.jamInviteInfo(guildId, joinUrl, crowdUrl));
     } catch (err) {
       return { ok: false, error: `Could not build the jam card: ${err instanceof Error ? err.message : String(err)}` };
     }
@@ -7939,7 +7939,7 @@ export class DiscordBot {
 
   /** The live numbers on the jam card. Room count = humans in the bot's voice
    *  channel (bots excluded, so it reads as listeners). */
-  private jamInviteInfo(guildId: string, joinUrl: string): JamInviteInfo {
+  private jamInviteInfo(guildId: string, joinUrl: string, crowdUrl?: string): JamInviteInfo {
     const s = this.sessionFor(guildId);
     const state = s.queue.getState();
     const snap = s.queue.getSnapshot();
@@ -7948,6 +7948,7 @@ export class DiscordBot {
     const current = state.track;
     return {
       joinUrl,
+      crowdUrl,
       inRoom,
       now: current ? { name: current.name, artists: current.artists ?? [] } : null,
       upNext: Math.max(0, snap.tracks.length - (snap.currentIndex + 1)),

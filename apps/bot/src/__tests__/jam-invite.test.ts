@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildJamInviteCard, JAM_CARD_NAME } from '../jamInvite.js';
-import { CARD_H, CARD_W } from '../jamCardArt.js';
+import { buildJamInviteCard } from '../jamInvite.js';
 
 const JOIN = 'https://vaporzr.example.com/jam?key=k1';
 
@@ -16,22 +15,31 @@ describe('jam invite card', () => {
     const embed = card.embeds[0].data;
     // 1. Typed URL under the card for anyone who prefers copying it…
     expect(embed.description).toContain(JOIN);
-    // 2. …the QR postcard itself (attached, not a CDN URL, so it never expires)…
-    expect(embed.image?.url).toBe(`attachment://${JAM_CARD_NAME}`);
-    expect(card.files[0].name).toBe(JAM_CARD_NAME);
+    // 2. …the QR postcard, served as a URL instead of a multipart attachment…
+    expect(embed.image?.url).toContain('/jam-card.png?u=');
+    expect(card.files).toHaveLength(0);
     // 3. …and the tap target for desktop users.
     const row = card.components[0].toJSON() as { components: { style: number; url?: string }[] };
     expect(row.components[0].style).toBe(5); // Link
     expect(row.components[0].url).toBe(JOIN);
   });
 
-  it('attaches the vaporwave postcard as a real PNG at card size', async () => {
+  it('adds a crowd-view button next to the request link', async () => {
+    const card = await buildJamInviteCard({
+      joinUrl: JOIN,
+      crowdUrl: 'https://vaporzr.example.com/c/ABC234',
+      color: 0x6a5cff,
+    });
+    const row = card.components[0].toJSON() as { components: { label: string; url?: string }[] };
+    expect(row.components.map((c) => c.label)).toEqual(['🔗 Join the jam', 'Crowd view']);
+    expect(row.components[1].url).toBe('https://vaporzr.example.com/c/ABC234');
+  });
+
+  it('points the embed at the card endpoint with the join URL encoded', async () => {
     const card = await buildJamInviteCard({ joinUrl: JOIN, color: 0x6a5cff });
-    const buf = card.files[0].attachment as Buffer;
-    expect(buf.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
-    expect(buf.readUInt32BE(16)).toBe(CARD_W);
-    expect(buf.readUInt32BE(20)).toBe(CARD_H);
-    expect(buf.length).toBeGreaterThan(1000);
+    const image = new URL(card.embeds[0].data.image?.url ?? '');
+    expect(image.pathname).toBe('/jam-card.png');
+    expect(image.searchParams.get('u')).toBe(JOIN);
   });
 
   it('shows the live room, now-playing and up-next numbers', async () => {

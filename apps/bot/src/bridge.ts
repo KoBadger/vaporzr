@@ -51,11 +51,18 @@ import { codeFor } from './jamLinks.js';
  *  address only resolves on the machine holding the tunnel. */
 let jamInviteCache: { token: string; expiresAt: number } | null = null;
 
-export function jamJoinLinks(): { joinPath: string; joinUrl: string | undefined } {
+export function jamJoinLinks(): {
+  joinPath: string;
+  joinUrl: string | undefined;
+  /** The read-only panel (same request invite, guest socket). */
+  crowdPath: string;
+  crowdUrl: string | undefined;
+} {
   // A posted jam card has to keep working for the whole party, so this is a
   // reusable "request" invite that rotates hourly - expiring and revocable,
   // unlike the static REQUEST_KEY QR code it replaces.
   let joinPath = '/jam';
+  let crowdPath = '/crowd';
   if (config.shareKey || config.requestKey) {
     const now = Date.now();
     if (!jamInviteCache || jamInviteCache.expiresAt - now < 60 * 60 * 1000) {
@@ -67,9 +74,18 @@ export function jamJoinLinks(): { joinPath: string; joinUrl: string | undefined 
     // instead of ~70, so the QR on the posted card prints far larger — and the
     // /j page itself unfurls a proper invite card wherever the link is pasted.
     const jamCode = codeFor(jamInviteCache.token, jamInviteCache.expiresAt, now);
-    if (jamCode) joinPath = `/j/${jamCode}`;
+    if (jamCode) {
+      joinPath = `/j/${jamCode}`;
+      crowdPath = `/c/${jamCode}`;
+    }
   }
-  return { joinPath, joinUrl: config.jamPublicBase ? config.jamPublicBase + joinPath : undefined };
+  const base = config.jamPublicBase;
+  return {
+    joinPath,
+    joinUrl: base ? base + joinPath : undefined,
+    crowdPath,
+    crowdUrl: base ? base + crowdPath : undefined,
+  };
 }
 
 /** One row of the public jam queue. Plain strings — the page is dumb HTML. */
