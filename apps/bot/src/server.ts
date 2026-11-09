@@ -1768,6 +1768,64 @@ async function handleRoute(
         break;
       }
 
+      case '/api/deck/recordings': {
+        if (!hasShareAccess(req, url, 'control')) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'forbidden' }));
+          return;
+        }
+        const dir = path.join(config.dataDir, 'decks');
+        const items: Array<{ name: string; sizeBytes: number; at: number }> = [];
+        try {
+          for (const name of fs.readdirSync(dir)) {
+            if (!/^set-[\w.-]+\.mp3$/i.test(name)) continue;
+            try {
+              const st = fs.statSync(path.join(dir, name));
+              items.push({ name, sizeBytes: st.size, at: st.mtimeMs });
+            } catch {
+              /* vanished between readdir and stat */
+            }
+          }
+        } catch {
+          /* no recordings yet */
+        }
+        items.sort((a, b) => b.at - a.at);
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ items: items.slice(0, 50) }));
+        break;
+      }
+
+      case '/api/deck/recording': {
+        if (!hasShareAccess(req, url, 'control')) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'forbidden' }));
+          return;
+        }
+        const name = url.searchParams.get('name') ?? '';
+        // Only the files this server wrote; the name is never trusted as a path.
+        if (!/^set-[\w.-]+\.mp3$/i.test(name)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'invalid recording name' }));
+          return;
+        }
+        const dir = path.join(config.dataDir, 'decks');
+        const file = path.join(dir, name);
+        if (!file.startsWith(dir + path.sep) || !fs.existsSync(file)) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'not found' }));
+          return;
+        }
+        const size = fs.statSync(file).size;
+        res.writeHead(200, {
+          'Content-Type': 'audio/mpeg',
+          'Content-Disposition': `attachment; filename="${name}"`,
+          'Content-Length': String(size),
+          'Cache-Control': 'no-store',
+        });
+        fs.createReadStream(file).pipe(res);
+        break;
+      }
+
       case '/api/deck/track': {
         if (req.method !== 'POST') {
           res.writeHead(405);
