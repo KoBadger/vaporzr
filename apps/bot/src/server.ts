@@ -351,9 +351,18 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
  * always send Sec-Fetch-Mode, so the gate still applies to them.
  */
 function isActivityFetch(req: http.IncomingMessage): boolean {
-  const mode = req.headers['sec-fetch-mode'];
-  if (!mode) return true;
-  return req.headers['sec-fetch-dest'] === 'iframe';
+  // Discord launches the Activity into an iframe at the mapped root with an
+  // instance token. That token is the reliable signal: the proxy sometimes
+  // sends fetch metadata that does not say "iframe", and older clients send
+  // none at all. Treating *missing* metadata as Activity used to hand the
+  // visualizer to curl (and to any crawler hitting /panel) while a real
+  // Activity with `Sec-Fetch-Dest: document` fell through to the key gate.
+  if (req.headers['sec-fetch-mode'] === 'navigate' && req.headers['sec-fetch-dest'] === 'iframe') return true;
+  try {
+    return new URL(req.url ?? '/', 'http://localhost').searchParams.has('instance_id');
+  } catch {
+    return false;
+  }
 }
 
 function accessNeedFor(pathname: string): AccessScope | null {
