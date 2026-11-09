@@ -750,6 +750,58 @@ function isSpotifyUrl(input: string): boolean {
   return /^(spotify:|https?:\/\/(open|play|embed)\.spotify\.com\/)/i.test(input);
 }
 
+interface SpotifyEpisode {
+  name?: string;
+  duration_ms?: number;
+  images?: Array<{ url?: string }>;
+  show?: { name?: string; publisher?: string };
+}
+
+/**
+ * Resolve a Spotify podcast episode URL. Episodes are not tracks, so the old
+ * parser rejected them and the request stalled through search/fallback paths.
+ * The track URI is `spotify:episode:<id>`, which the existing librespot player
+ * can issue directly; metadata comes from the Web API and falls back to the
+ * public oEmbed card (no token, fast).
+ */
+export async function resolveSpotifyEpisode(input: string): Promise<ResolvedTrack> {
+  const m = input.match(/episode[:/]([A-Za-z0-9]+)/);
+  if (!m) throw new SpotifyError('Could not parse that Spotify episode URL.');
+  const id = m[1];
+  const cached = cacheGet<ResolvedTrack[]>(`episode:${id}`);
+  if (cached?.[0]) return cached[0];
+
+  let meta: SpotifyEpisode | null = null;
+  try {
+    meta = await apiGet<SpotifyEpisode>(`/episodes/${id}`, await getAccessToken());
+  } catch {
+    /* no account token: use the public card below */
+  }
+  if (!meta?.name) {
+    try {
+      const res = await fetchWithTimeout(`https://open.spotify.com/oembed?url=${encodeURIComponent(input)}`);
+      if (res.ok) {
+        const card = (await res.json()) as { title?: string; thumbnail_url?: string; author_name?: string };
+        meta = { name: card.title, images: [{ url: card.thumbnail_url }], show: { name: card.author_name } };
+      }
+    } catch {
+      /* fall through to the error */
+    }
+  }
+  if (!meta?.name) throw new SpotifyError('Could not read that Spotify episode.');
+  const track: ResolvedTrack = {
+    uri: `spotify:episode:${id}`,
+    name: meta.name,
+    artists: [meta.show?.publisher ?? meta.show?.name ?? 'Podcast'],
+    album: meta.show?.name ?? '',
+    durationMs: meta.duration_ms ?? 0,
+    image: meta.images?.[0]?.url,
+    source: 'spotify',
+  };
+  cacheSet(`episode:${id}`, [track]);
+  return track;
+}
+
 export async function resolveTracks(input: string): Promise<ResolvedTrack[]> {
   await loadCache();
   if (!isSpotifyUrl(input)) {
@@ -760,6 +812,10 @@ export async function resolveTracks(input: string): Promise<ResolvedTrack[]> {
     const q = input.toLowerCase().trim();
     results.sort((a, b) => scorePlayResult(a, q) - scorePlayResult(b, q));
     return [results[0]];
+  }
+
+  if (/\/episode\/|^spotify:episode:/.test(input)) {
+    return [await resolveSpotifyEpisode(input)];
   }
 
   const idMatch = input.match(/(?:track|album|playlist|artist)[:/]([A-Za-z0-9]+)/);
