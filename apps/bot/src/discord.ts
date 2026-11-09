@@ -4572,6 +4572,50 @@ export class DiscordBot {
           break;
         }
 
+        case 'automix': {
+          if (!canUse('crossfade')) return void (await deny());
+          if (!message.guildId) return void (await message.reply('Must be used in a server.'));
+          const arg = args.trim().toLowerCase();
+          if (arg === 'status') {
+            const cur = getCrossfadeMs(message.guildId);
+            await message.reply(
+              cur > 0
+                ? `🎚️ Automix is **on** — ${(cur / 1000).toFixed(1)}s crossfade + smart autoplay.`
+                : '🎚️ Automix is **off**. `V@automix on` enables crossfade + smart autoplay.',
+            );
+            break;
+          }
+          if (arg === 'off') {
+            setCrossfadeMs(message.guildId, 0);
+            s.playback.setCrossfade(0);
+            s.voice.setFadeOut(0);
+            this.setAutoplayMode(s, 'off');
+            await message.reply('🎚️ Automix **off** — tracks play to the end and autoplay stops.');
+            break;
+          }
+          const sec = arg ? Number.parseFloat(arg.replace(/s$/, '')) : 6;
+          const ms = Math.max(2000, Math.min(15_000, (Number.isFinite(sec) ? sec : 6) * 1000));
+          const applied = setCrossfadeMs(message.guildId, ms);
+          s.playback.setCrossfade(applied);
+          s.voice.setFadeOut(applied / 1000);
+          this.setAutoplayMode(s, 'smart');
+          await message.reply(
+            `🎚️ Automix **on** — ${(applied / 1000).toFixed(1)}s crossfade, smart autoplay keeps the next track coming.`,
+          );
+          break;
+        }
+
+        case 'loopsave':
+        case 'loopcap': {
+          if (!canUse('deck')) return void (await deny());
+          if (!message.guildId) return void (await message.reply('Must be used in a server.'));
+          const deckArg = args.trim().toLowerCase();
+          const deck = isDeckId(deckArg) ? deckArg : 'a';
+          const result = this.deckFor(message.guildId).captureLoop(deck);
+          await message.reply(result.message);
+          break;
+        }
+
         case 'tts': {
           if (!canUse('tts')) return void (await deny());
           if (!message.guildId) return void (await message.reply('Must be used in a server.'));
