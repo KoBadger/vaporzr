@@ -18,6 +18,7 @@ import { writeJsonAtomicSync } from './jsonFile.js';
 import { buildAudioFxChain, isEqPreset } from './audiofx.js';
 import { canCrossfade, fadeInPcm, planCrossfade, tempoMatchRatio } from './crossfade.js';
 import * as EW from '@vaporzr/core/endlesswave';
+import { fetchSkipSegments, type SkipSegment } from './sponsorblock.js';
 import {
   spotifyPause,
   spotifyPlay,
@@ -130,6 +131,8 @@ export class PlaybackController {
   private spotifyPlaybackBlockedUntil = 0;
   /** Video of the server-side stream (YouTube or Spotify-fallback). */
   private currentVideo: ResolvedVideo | null = null;
+  /** SponsorBlock segments for the current YouTube track (empty otherwise). */
+  private sponsorSkips: SkipSegment[] = [];
   /** YouTube videoId of the last-started server-side stream. Used to prevent
    *  a Spotify→YouTube fallback from accidentally replaying the exact same
    *  video that just finished. */
@@ -429,7 +432,16 @@ export class PlaybackController {
         this.stopPositionTracker();
         return;
       }
-      this.queue.setState({ positionMs: this.voice.getPositionMs() });
+      const positionMs = this.voice.getPositionMs();
+      // SponsorBlock: jump over a segment the moment the playhead enters it.
+      // The 250 ms tail avoids a skip loop at the boundary.
+      const skip = this.sponsorSkips.find((s) => positionMs >= s.startMs && positionMs < s.endMs - 250);
+      if (skip) {
+        console.log(`[sponsorblock] skipping ${skip.category} ${Math.round((skip.endMs - skip.startMs) / 1000)}s`);
+        this.seek(skip.endMs);
+        return;
+      }
+      this.queue.setState({ positionMs });
     }, 2000);
   }
 
@@ -1055,6 +1067,7 @@ export class PlaybackController {
   /** Server-side YouTube via ffmpeg straight into the voice channel. */
   private async playYoutube(current: TrackInfo, generation: number): Promise<void> {
     this.spotifyFallback = false;
+    this.sponsorSkips = [];
     this.stopSpotifyFeed();
     this.stopSpotifyProgress();
     this.pauseSpotifyAny();
@@ -1104,6 +1117,11 @@ export class PlaybackController {
       this.scheduleEnd(video.durationMs, 0);
       this.schedulePreload(video.durationMs, 0);
       this.startPositionTracker();
+      // SponsorBlock is best-effort: fetch in the background and ignore a slow
+      // or offline API. Segments apply on the next position tick.
+      void fetchSkipSegments(video.videoId).then((segments) => {
+        if (this.currentVideo?.videoId === video.videoId) this.sponsorSkips = segments;
+      });
       this.sendVisualizer({ type: 'cmd', command: 'stop' });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
