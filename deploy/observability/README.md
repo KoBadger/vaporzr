@@ -43,6 +43,17 @@ UMAMI_APP_SECRET=$(openssl rand -hex 32)
   forwards `unhandledRejection`/`uncaughtException` to GlitchTip's DSN; otherwise
   use Dozzle for log-level visibility first.
 
+## Backups
+
+`deploy/backup.sh` archives the durable data volume (queues, tokens, keys,
+samples, uploads, stats) while skipping rebuildable caches, keeps seven
+archives, and is meant for a nightly cron:
+
+```sh
+install -m 755 deploy/backup.sh /opt/vaporzr/backup.sh
+(crontab -l; echo "0 4 * * * /opt/vaporzr/backup.sh >> /var/log/vaporzr-backup.log 2>&1") | crontab -
+```
+
 ## Security
 
 - Bind these ports to `127.0.0.1` when possible and use an SSH tunnel:

@@ -5,6 +5,7 @@ import {
   equalPowerIn,
   equalPowerOut,
   fadeInPcm,
+  handoffBufferMs,
   linearIn,
   planCrossfade,
   tailFadeSeconds,
@@ -106,6 +107,18 @@ describe('crossfadePcm', () => {
       expect(out.readInt16LE(i * 4)).toBeLessThanOrEqual(32767);
       expect(out.readInt16LE(i * 4)).toBeGreaterThanOrEqual(-32768);
     }
+  });
+});
+
+describe('handoffBufferMs (no post-fade silence)', () => {
+  it('uses only a small guard when a crossfade owns the tail', () => {
+    expect(handoffBufferMs(6000)).toBe(400);
+    expect(handoffBufferMs(1)).toBe(400);
+  });
+
+  it('keeps the 6s Spotify buffer when crossfade is off', () => {
+    expect(handoffBufferMs(0)).toBe(6000);
+    expect(handoffBufferMs(-1)).toBe(6000);
   });
 });
 

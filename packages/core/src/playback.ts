@@ -16,7 +16,7 @@ import { LocalFeatureCollector, toAudioFeatures } from './audioFeatures.js';
 import { rememberMeasuredFeatures } from './featureStore.js';
 import { writeJsonAtomicSync } from './jsonFile.js';
 import { buildAudioFxChain, isEqPreset } from './audiofx.js';
-import { canCrossfade, fadeInPcm, planCrossfade, tempoMatchRatio } from './crossfade.js';
+import { canCrossfade, fadeInPcm, handoffBufferMs, planCrossfade, tempoMatchRatio } from './crossfade.js';
 import * as EW from '@vaporzr/core/endlesswave';
 import { fetchSkipSegments, type SkipSegment } from './sponsorblock.js';
 import {
@@ -492,7 +492,7 @@ export class PlaybackController {
     // handoff must land ON the track end. The old flat +6 s buffer (for the
     // Spotify PCM estimate) left a full crossfade length of silence after the
     // fade finished — the "song cuts out, pause, next song" bug.
-    const tailBufferMs = this.xfadeMs > 0 ? 400 : 6000;
+    const tailBufferMs = handoffBufferMs(this.xfadeMs);
     const wait = Math.min(remaining + tailBufferMs, 6 * 60 * 60 * 1000);
     // Resolve the PLAYING track (state.track), not the cursor: endUri must match
     // the track this timer was armed for, or onTrackMaybeEnded rejects it.

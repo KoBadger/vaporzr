@@ -93,9 +93,10 @@ docker run -d --name "$CONTAINER" \
   "$REF"
 
 docker image prune -f >/dev/null 2>&1 || true
-# Keep the 6 newest bot images (current + rollback targets).
+# Keep the 3 newest bot images (current + two rollback targets). Six 3.1 GB
+# images filled a 38 GB disk; three still allow a rollback without hoarding.
 docker images --format '{{.ID}} {{.CreatedAt}}' "$IMAGE" \
-  | sort -k2 -r | tail -n +7 | awk '{print $1}' | sort -u \
+  | sort -k2 -r | tail -n +4 | awk '{print $1}' | sort -u \
   | xargs -r docker rmi -f >/dev/null 2>&1 || true
 
 echo "==> Waiting for health check"
