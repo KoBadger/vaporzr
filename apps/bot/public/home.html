@@ -1,0 +1,876 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Vaporzr — a Discord music bot with a live DJ deck</title>
+    <meta
+      name="description"
+      content="Vaporzr is a Discord music bot with a four-deck DJ mixer, MilkDrop visuals, lossless browser listening and jam requests. Spotify, YouTube, SoundCloud, podcasts and any audio link."
+    />
+    <meta name="theme-color" content="#070912" />
+    <link rel="icon" href="/favicon.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Vaporzr — music, mixed live" />
+    <meta
+      property="og:description"
+      content="A Discord music bot with a four-deck DJ mixer, visuals, lossless listening and jam requests."
+    />
+    <meta property="og:image" content="{{ORIGIN}}/logo.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="canonical" href="{{ORIGIN}}/" />
+    <style>
+      :root {
+        --bg: #070912;
+        --panel: rgba(14, 18, 34, 0.78);
+        --line: rgba(255, 255, 255, 0.1);
+        --text: #e9edf9;
+        --muted: #98a4c4;
+        --purple: #6a5cff;
+        --cyan: #00f0ff;
+        --pink: #ff3cac;
+        --green: #22e6a4;
+        --display: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+        --mono: ui-monospace, 'SF Mono', 'Cascadia Mono', monospace;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html {
+        scroll-behavior: smooth;
+      }
+      body {
+        margin: 0;
+        background:
+          radial-gradient(1100px 600px at 10% -10%, rgba(106, 92, 255, 0.28), transparent 60%),
+          radial-gradient(900px 600px at 95% 5%, rgba(255, 60, 172, 0.18), transparent 55%),
+          radial-gradient(800px 500px at 50% 110%, rgba(0, 240, 255, 0.12), transparent 60%), var(--bg);
+        color: var(--text);
+        font: 16px/1.6 var(--display);
+        -webkit-font-smoothing: antialiased;
+      }
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+      .wrap {
+        max-width: 1180px;
+        margin: 0 auto;
+        padding: 0 24px;
+      }
+      /* ---------- nav ---------- */
+      header.nav {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        backdrop-filter: blur(14px);
+        background: rgba(7, 9, 18, 0.72);
+        border-bottom: 1px solid var(--line);
+      }
+      .nav-in {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        height: 66px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font: 800 15px/1 var(--display);
+        letter-spacing: 0.18em;
+      }
+      .brand img {
+        width: 30px;
+        height: 30px;
+        border-radius: 8px;
+        box-shadow: 0 0 18px rgba(106, 92, 255, 0.5);
+      }
+      .nav-links {
+        display: flex;
+        gap: 18px;
+        margin-left: 16px;
+        font: 600 13px/1 var(--display);
+        color: var(--muted);
+      }
+      .nav-links a:hover {
+        color: #fff;
+      }
+      .spacer {
+        flex: 1;
+      }
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 10px 16px;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--text);
+        font: 700 13px/1 var(--display);
+        cursor: pointer;
+        transition:
+          transform 0.15s ease,
+          border-color 0.15s ease,
+          background 0.15s ease;
+      }
+      .btn:hover {
+        transform: translateY(-1px);
+        border-color: rgba(255, 255, 255, 0.28);
+      }
+      .btn.primary {
+        background: linear-gradient(180deg, #7a6dff, #5a4be8);
+        border-color: #8b80ff;
+        box-shadow: 0 8px 30px rgba(106, 92, 255, 0.4);
+      }
+      .btn.primary:hover {
+        background: linear-gradient(180deg, #8a7dff, #6758f0);
+      }
+      .btn.ghost {
+        background: transparent;
+      }
+      .btn.small {
+        padding: 8px 12px;
+        font-size: 12px;
+      }
+      /* ---------- hero ---------- */
+      .hero {
+        display: grid;
+        grid-template-columns: 1.05fr 0.95fr;
+        gap: 40px;
+        align-items: center;
+        padding: 84px 0 56px;
+      }
+      .kicker {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font: 700 11px/1 var(--mono);
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--cyan);
+        border: 1px solid rgba(0, 240, 255, 0.28);
+        background: rgba(0, 240, 255, 0.06);
+        padding: 7px 10px;
+        border-radius: 999px;
+      }
+      .kicker i {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--green);
+        box-shadow: 0 0 8px var(--green);
+      }
+      h1 {
+        margin: 18px 0 14px;
+        font: 800 clamp(38px, 5.2vw, 68px) / 0.98 var(--display);
+        letter-spacing: -0.035em;
+      }
+      h1 span {
+        background: linear-gradient(90deg, var(--cyan), var(--purple) 45%, var(--pink));
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+      }
+      .lede {
+        max-width: 540px;
+        color: var(--muted);
+        font-size: 17px;
+      }
+      .cta-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 26px;
+      }
+      .micro {
+        margin-top: 18px;
+        font: 600 12px/1.5 var(--mono);
+        color: #6f7b9c;
+      }
+      /* ---------- deck mock ---------- */
+      .mock {
+        position: relative;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: linear-gradient(180deg, rgba(18, 22, 40, 0.95), rgba(8, 10, 22, 0.95));
+        box-shadow:
+          0 30px 80px rgba(0, 0, 0, 0.55),
+          inset 0 1px 0 rgba(255, 255, 255, 0.06);
+        padding: 16px;
+        overflow: hidden;
+      }
+      .mock::before {
+        content: '';
+        position: absolute;
+        inset: -40% -10% auto;
+        height: 80%;
+        background: radial-gradient(ellipse at center, rgba(106, 92, 255, 0.25), transparent 70%);
+        pointer-events: none;
+      }
+      .mock-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font: 800 9px/1 var(--mono);
+        letter-spacing: 0.16em;
+        color: #8e9bd0;
+        margin-bottom: 12px;
+      }
+      .mock-grid {
+        display: grid;
+        grid-template-columns: 1fr 86px 1fr;
+        gap: 10px;
+        align-items: stretch;
+      }
+      .md {
+        border: 1px solid #232b4a;
+        border-radius: 12px;
+        background: #0b0e1d;
+        padding: 10px;
+        min-width: 0;
+      }
+      .md .letter {
+        font: 800 11px/1 var(--mono);
+        color: var(--cyan);
+      }
+      .md.b .letter {
+        color: var(--pink);
+      }
+      .md .name {
+        margin: 6px 0 10px;
+        font: 700 12px/1.25 var(--display);
+        color: #dfe6ff;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .wave {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        height: 54px;
+        padding: 4px;
+        border-radius: 8px;
+        background: #060814;
+        border: 1px solid #1b2340;
+      }
+      .wave i {
+        flex: 1;
+        border-radius: 2px;
+        background: linear-gradient(180deg, var(--cyan), #2a5bff);
+        opacity: 0.85;
+      }
+      .md.b .wave i {
+        background: linear-gradient(180deg, var(--pink), #7a2cff);
+      }
+      .knobs {
+        display: flex;
+        gap: 6px;
+        margin-top: 10px;
+      }
+      .knobs span {
+        flex: 1;
+        height: 8px;
+        border-radius: 99px;
+        background: #1b2340;
+      }
+      .xfader {
+        display: grid;
+        place-items: center;
+        gap: 8px;
+        border: 1px solid #232b4a;
+        border-radius: 12px;
+        background: #0b0e1d;
+        padding: 8px;
+      }
+      .xfader b {
+        font: 800 8px/1 var(--mono);
+        color: #6f7b9c;
+        letter-spacing: 0.12em;
+      }
+      .xfader .track {
+        position: relative;
+        width: 100%;
+        height: 4px;
+        border-radius: 99px;
+        background: linear-gradient(90deg, var(--cyan), #1a2340 50%, var(--pink));
+      }
+      .xfader .track i {
+        position: absolute;
+        top: 50%;
+        left: 52%;
+        width: 10px;
+        height: 16px;
+        border-radius: 3px;
+        background: #e6ecff;
+        transform: translate(-50%, -50%);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+      }
+      .pads {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 6px;
+        margin-top: 10px;
+      }
+      .pads span {
+        height: 16px;
+        border-radius: 5px;
+        background: #12172a;
+        border: 1px solid #232b4a;
+      }
+      .pads span.on {
+        background: rgba(106, 92, 255, 0.35);
+        border-color: #6a5cff;
+      }
+      /* ---------- status ---------- */
+      .status {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        padding: 14px 0 48px;
+      }
+      .stat {
+        flex: 1 1 150px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: var(--panel);
+        padding: 12px 14px;
+      }
+      .stat b {
+        display: block;
+        font: 800 18px/1.2 var(--display);
+      }
+      .stat span {
+        font: 700 9px/1 var(--mono);
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: #6f7b9c;
+      }
+      /* ---------- sections ---------- */
+      section {
+        padding: 54px 0;
+        border-top: 1px solid var(--line);
+      }
+      .sec-head {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 20px;
+        margin-bottom: 26px;
+      }
+      h2 {
+        margin: 0;
+        font: 800 clamp(26px, 3.4vw, 40px) / 1.05 var(--display);
+        letter-spacing: -0.02em;
+      }
+      .sec-head p {
+        margin: 0;
+        max-width: 440px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 12px;
+      }
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: var(--panel);
+        padding: 18px;
+        transition:
+          transform 0.15s ease,
+          border-color 0.15s ease;
+      }
+      .card:hover {
+        transform: translateY(-2px);
+        border-color: rgba(106, 92, 255, 0.5);
+      }
+      .card .ico {
+        font-size: 20px;
+        margin-bottom: 10px;
+      }
+      .card h3 {
+        margin: 0 0 6px;
+        font: 700 15px/1.25 var(--display);
+      }
+      .card p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      /* steps */
+      .steps {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 12px;
+        counter-reset: step;
+      }
+      .step {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: var(--panel);
+        padding: 18px;
+      }
+      .step::before {
+        counter-increment: step;
+        content: '0' counter(step);
+        display: block;
+        font: 800 11px/1 var(--mono);
+        color: var(--cyan);
+        margin-bottom: 10px;
+      }
+      .step b {
+        display: block;
+        margin-bottom: 4px;
+      }
+      .step span {
+        color: var(--muted);
+        font-size: 13px;
+      }
+      /* downloads */
+      .downloads {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 12px;
+      }
+      .dl {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: var(--panel);
+        padding: 18px;
+      }
+      .dl b {
+        font-size: 15px;
+      }
+      .dl span {
+        color: var(--muted);
+        font-size: 12px;
+        flex: 1;
+      }
+      .dl .meta {
+        font: 700 9px/1 var(--mono);
+        letter-spacing: 0.08em;
+        color: #6f7b9c;
+      }
+      /* pricing */
+      .prices {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 12px;
+      }
+      .price {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: var(--panel);
+        padding: 20px;
+      }
+      .price.featured {
+        border-color: rgba(106, 92, 255, 0.65);
+        box-shadow: 0 18px 50px rgba(106, 92, 255, 0.18);
+      }
+      .price .tag {
+        font: 800 9px/1 var(--mono);
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--cyan);
+      }
+      .price .amount {
+        font: 800 34px/1 var(--display);
+      }
+      .price .amount small {
+        font: 600 12px/1 var(--display);
+        color: var(--muted);
+      }
+      .price ul {
+        margin: 0;
+        padding-left: 18px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .price li {
+        margin: 4px 0;
+      }
+      .price .soon {
+        font: 700 9px/1 var(--mono);
+        letter-spacing: 0.1em;
+        color: var(--green);
+      }
+      /* directory */
+      .dir {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 10px;
+      }
+      .dir a {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.03);
+        padding: 12px 14px;
+        font: 600 13px/1 var(--display);
+        color: var(--muted);
+      }
+      .dir a:hover {
+        color: #fff;
+        border-color: rgba(255, 255, 255, 0.25);
+      }
+      .dir a span {
+        color: #4e5a7a;
+      }
+      /* footer */
+      footer {
+        border-top: 1px solid var(--line);
+        padding: 28px 0 40px;
+        color: #6f7b9c;
+        font-size: 12px;
+      }
+      .foot-in {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 18px;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .foot-links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+      }
+      @media (max-width: 940px) {
+        .hero {
+          grid-template-columns: 1fr;
+          padding-top: 48px;
+        }
+        .mock {
+          max-width: 520px;
+        }
+        .grid,
+        .steps,
+        .downloads,
+        .prices {
+          grid-template-columns: 1fr 1fr;
+        }
+        .dir {
+          grid-template-columns: 1fr 1fr;
+        }
+      }
+      @media (max-width: 620px) {
+        .nav-links {
+          display: none;
+        }
+        .grid,
+        .steps,
+        .downloads,
+        .prices,
+        .dir {
+          grid-template-columns: 1fr;
+        }
+        .sec-head {
+          flex-direction: column;
+          align-items: start;
+        }
+      }
+    </style>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Vaporzr",
+        "applicationCategory": "MultimediaApplication",
+        "operatingSystem": "Web, Discord",
+        "description": "A Discord music bot with a four-deck DJ mixer, MilkDrop visuals, lossless browser listening and jam requests.",
+        "url": "{{ORIGIN}}/"
+      }
+    </script>
+  </head>
+  <body>
+    <header class="nav">
+      <div class="wrap nav-in">
+        <a class="brand" href="/"><img src="/logo.png" alt="" />VAPORZR</a>
+        <nav class="nav-links">
+          <a href="#features">Features</a>
+          <a href="#downloads">Downloads</a>
+          <a href="#pricing">Pricing</a>
+          <a href="/status">Status</a>
+          <a href="https://github.com/KoBadger/vaporzr" rel="noopener">GitHub</a>
+        </nav>
+        <span class="spacer"></span>
+        <a class="btn primary" id="add-btn" href="https://discord.com/oauth2/authorize?client_id={{APP_ID}}"
+          >Add to Discord</a
+        >
+      </div>
+    </header>
+
+    <main class="wrap">
+      <section class="hero" style="border: 0">
+        <div>
+          <span class="kicker"><i></i> live in <b id="guilds">—</b> servers</span>
+          <h1>Music,<br /><span>mixed live.</span></h1>
+          <p class="lede">
+            A Discord music bot with a real four-deck DJ mixer, MilkDrop visuals, lossless browser listening and one-tap
+            jam requests. Spotify, YouTube, SoundCloud, Apple Music, podcasts — or any link with audio.
+          </p>
+          <div class="cta-row">
+            <a class="btn primary" href="https://discord.com/oauth2/authorize?client_id={{APP_ID}}"
+              >➕ Add to Discord</a
+            >
+            <a class="btn" href="/panel">Open control panel</a>
+            <a class="btn ghost" href="/viz">Watch visuals</a>
+          </div>
+          <p class="micro">Free to use · no account required for guests · self-hostable</p>
+        </div>
+        <div class="mock" aria-hidden="true">
+          <div class="mock-top"><span>VAPORZR · LIVE DECKS</span><span>48 kHz</span></div>
+          <div class="mock-grid">
+            <div class="md">
+              <div class="letter">A</div>
+              <div class="name">Midnight Drive</div>
+              <div class="wave" id="wave-a"></div>
+              <div class="knobs"><span></span><span></span><span></span><span></span></div>
+            </div>
+            <div class="xfader">
+              <b>MIX</b>
+              <div class="track"><i></i></div>
+              <b>SYNC</b>
+            </div>
+            <div class="md b">
+              <div class="letter">B</div>
+              <div class="name">Neon Rain</div>
+              <div class="wave" id="wave-b"></div>
+              <div class="knobs"><span></span><span></span><span></span><span></span></div>
+            </div>
+          </div>
+          <div class="pads">
+            <span class="on"></span><span></span><span></span><span class="on"></span><span></span><span></span
+            ><span class="on"></span><span></span>
+          </div>
+        </div>
+      </section>
+
+      <div class="status" id="status-strip">
+        <div class="stat"><b id="st-guilds">—</b><span>servers</span></div>
+        <div class="stat"><b id="st-playing">—</b><span>playing now</span></div>
+        <div class="stat"><b id="st-yt">—</b><span>youtube</span></div>
+        <div class="stat"><b id="st-up">—</b><span>uptime</span></div>
+      </div>
+
+      <section id="features">
+        <div class="sec-head">
+          <h2>Everything a room needs</h2>
+          <p>A queue everyone can share, a mixer for the host, and visuals for the wall.</p>
+        </div>
+        <div class="grid">
+          <div class="card">
+            <div class="ico">🎛</div>
+            <h3>Four-deck DJ mixer</h3>
+            <p>
+              Two banks, crossfader, EQ, filters, hot cues, loops, beat grid and per-deck pitch. C/D are line channels.
+            </p>
+          </div>
+          <div class="card">
+            <div class="ico">🌊</div>
+            <h3>MilkDrop visuals</h3>
+            <p>Butterchurn presets, beat reactivity and a live deck overlay you can control from the visualizer.</p>
+          </div>
+          <div class="card">
+            <div class="ico">🎧</div>
+            <h3>Lossless listening</h3>
+            <p>Hear the bot’s 48 kHz stereo stream in a browser, ahead of Discord’s lossy relay.</p>
+          </div>
+          <div class="card">
+            <div class="ico">📻</div>
+            <h3>Any link with audio</h3>
+            <p>
+              Spotify, YouTube, SoundCloud, Apple Music, Bandcamp, podcast feeds, video pages — the bot extracts the
+              sound.
+            </p>
+          </div>
+          <div class="card">
+            <div class="ico">🎉</div>
+            <h3>Jam requests</h3>
+            <p>Scan a QR, pick a track, add your name. No app, no account, no voice-channel invite needed.</p>
+          </div>
+          <div class="card">
+            <div class="ico">⏭</div>
+            <h3>SponsorBlock</h3>
+            <p>Skips sponsor and intro segments in YouTube/podcast audio automatically, so the room hears the track.</p>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="sec-head">
+          <h2>Three steps to a set</h2>
+          <p>From an empty voice channel to a mixed room in about a minute.</p>
+        </div>
+        <div class="steps">
+          <div class="step"><b>Add Vaporzr</b><span>Invite the bot and join a voice channel.</span></div>
+          <div class="step"><b>Load a track</b><span>Search in Discord or the panel, or paste any link.</span></div>
+          <div class="step">
+            <b>Press play</b><span>Share the panel or jam link. The room takes over the queue.</span>
+          </div>
+        </div>
+      </section>
+
+      <section id="downloads">
+        <div class="sec-head">
+          <h2>Official downloads</h2>
+          <p>Signed builds and source live on GitHub Releases. Verify the SHA-256 before you run anything.</p>
+        </div>
+        <div class="downloads">
+          <div class="dl">
+            <b>Desktop player</b>
+            <span>The Electron companion: panel and visualizer in one window.</span>
+            <span class="meta">WINDOWS · MACOS · LINUX</span>
+            <a class="btn small" href="https://github.com/KoBadger/vaporzr/releases" rel="noopener">Latest release →</a>
+          </div>
+          <div class="dl">
+            <b>Spicetify extension</b>
+            <span>Control the bot from inside Spotify.</span>
+            <span class="meta">SPICETIFY MARKETPLACE</span>
+            <a class="btn small" href="https://github.com/KoBadger/vaporzr/tree/master/apps/spicetify" rel="noopener"
+              >Install guide →</a
+            >
+          </div>
+          <div class="dl">
+            <b>Visualizer presets</b>
+            <span>Extra MilkDrop packs for the wall screen.</span>
+            <span class="meta">FREE · MIT</span>
+            <a class="btn small" href="/viz" rel="noopener">Open visualizer →</a>
+          </div>
+        </div>
+      </section>
+
+      <section id="pricing">
+        <div class="sec-head">
+          <h2>Simple pricing</h2>
+          <p>Free while the bot is in beta. Paid tiers are being finalised — these are the intended ranges.</p>
+        </div>
+        <div class="prices">
+          <div class="price">
+            <span class="tag">Free</span>
+            <div class="amount">$0</div>
+            <ul>
+              <li>1 Discord server</li>
+              <li>Two decks, full queue</li>
+              <li>Visualizer and jam requests</li>
+              <li>Any-link playback</li>
+            </ul>
+            <a class="btn" href="https://discord.com/oauth2/authorize?client_id={{APP_ID}}">Add to Discord</a>
+          </div>
+          <div class="price featured">
+            <span class="tag">Plus · coming soon</span>
+            <div class="amount">$4–5<small>/mo</small></div>
+            <ul>
+              <li>Four decks and recording/export</li>
+              <li>Custom themes and presets</li>
+              <li>Lossless browser listening</li>
+              <li>Priority support</li>
+            </ul>
+            <span class="soon">EARLY SUPPORTERS GET A LIFETIME RATE</span>
+          </div>
+          <div class="price">
+            <span class="tag">Server · coming soon</span>
+            <div class="amount">$15–25<small>/mo</small></div>
+            <ul>
+              <li>Up to five servers</li>
+              <li>White-label branding</li>
+              <li>Analytics and API/webhooks</li>
+              <li>Priority support</li>
+            </ul>
+            <span class="soon">TALK TO US BEFORE YOU BUY</span>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="sec-head">
+          <h2>Directory</h2>
+          <p>Docs, status, legal and source — everything you need to trust the deployment.</p>
+        </div>
+        <div class="dir">
+          <a href="/status">Status <span>→</span></a>
+          <a href="https://github.com/KoBadger/vaporzr" rel="noopener">Source <span>↗</span></a>
+          <a href="https://github.com/KoBadger/vaporzr/blob/master/README.md" rel="noopener"
+            >Documentation <span>↗</span></a
+          >
+          <a href="https://github.com/KoBadger/vaporzr/releases" rel="noopener">Changelog <span>↗</span></a>
+          <a href="/privacy">Privacy <span>→</span></a>
+          <a href="/tos">Terms <span>→</span></a>
+          <a href="https://github.com/KoBadger/vaporzr/issues" rel="noopener">Support <span>↗</span></a>
+          <a href="https://github.com/KoBadger/vaporzr/security" rel="noopener">Security <span>↗</span></a>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="wrap foot-in">
+        <span>© <span id="year">2026</span> Vaporzr. Not affiliated with Discord or Spotify.</span>
+        <nav class="foot-links">
+          <a href="/privacy">Privacy</a>
+          <a href="/tos">Terms</a>
+          <a href="/status">Status</a>
+          <a href="https://github.com/KoBadger/vaporzr" rel="noopener">GitHub</a>
+        </nav>
+      </div>
+    </footer>
+
+    <script>
+      (function () {
+        // Decorative waveform: deterministic heights, no assets.
+        function wave(el, seed) {
+          if (!el) return;
+          var h = '';
+          for (var i = 0; i < 34; i++) {
+            var v = 18 + Math.abs(Math.sin((i + seed) * 0.7)) * 70;
+            h += '<i style="height:' + v.toFixed(0) + '%"></i>';
+          }
+          el.innerHTML = h;
+        }
+        wave(document.getElementById('wave-a'), 1);
+        wave(document.getElementById('wave-b'), 7);
+        document.getElementById('year').textContent = String(new Date().getFullYear());
+        function fmtUptime(s) {
+          if (!s || !isFinite(s)) return '—';
+          var d = Math.floor(s / 86400);
+          if (d > 0) return d + 'd';
+          var h = Math.floor(s / 3600);
+          if (h > 0) return h + 'h';
+          return Math.floor(s / 60) + 'm';
+        }
+        fetch('/health')
+          .then(function (r) {
+            return r.json();
+          })
+          .then(function (d) {
+            var set = function (id, v) {
+              var el = document.getElementById(id);
+              if (el) el.textContent = v;
+            };
+            set('guilds', d.guilds != null ? d.guilds : '—');
+            set('st-guilds', d.guilds != null ? d.guilds : '—');
+            set('st-playing', d.playing != null ? d.playing : '—');
+            set('st-yt', d.youtube || '—');
+            set('st-up', fmtUptime(d.uptimeSec));
+          })
+          .catch(function () {
+            /* leave the dashes */
+          });
+      })();
+    </script>
+  </body>
+</html>
