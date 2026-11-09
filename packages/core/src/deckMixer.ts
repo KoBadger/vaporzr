@@ -691,6 +691,13 @@ export class DeckMixer {
     this.emit();
   }
 
+  /** The PCM captured for the active loop (stereo 48 kHz Int16), or null while
+   *  the first pass is still filling. Used by "save loop to sample bank". */
+  captureLoopPcm(id: DeckId): Buffer | null {
+    const slot = this.slot(id);
+    return slot.loopBuf ? Buffer.from(slot.loopBuf) : null;
+  }
+
   /** Move the beat grid by `deltaMs` (positive = later). Clamped to ±1 s —
    *  detection is never off by more than about a beat. */
   nudgeBeatGrid(id: DeckId, deltaMs: number): void {

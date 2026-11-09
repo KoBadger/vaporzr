@@ -21,6 +21,7 @@ import type { ResolvedTrack } from '@vaporzr/core/spotify';
 import { probeDuration } from '@vaporzr/core/suno';
 import { estimateKey } from '@vaporzr/core/audioFeatures';
 import { estimateTempo } from '@vaporzr/core/tempo';
+import { pcmToWav } from '@vaporzr/core/recognize';
 import type { VoiceManager } from './voice.js';
 
 /**
@@ -521,6 +522,28 @@ export class DeckController {
     this.sampleListCache = null;
     this.sampleCache.clear();
     return this.samplePadNames();
+  }
+
+  /** Save the deck's currently captured loop into the sample library. The
+   *  first loop pass fills the PCM cache, so this is immediate after that. */
+  captureLoop(deck: DeckId): DeckActionResult {
+    const pcm = this.mixer.captureLoopPcm(deck);
+    if (!pcm || pcm.length < 4800) {
+      return {
+        ok: false,
+        message: `Deck ${deck.toUpperCase()} has no captured loop yet — set a loop and let it play one pass.`,
+      };
+    }
+    try {
+      const dir = path.join(config.dataDir, 'samples');
+      fs.mkdirSync(dir, { recursive: true });
+      const name = `loop-${deck}-${Date.now()}.wav`;
+      fs.writeFileSync(path.join(dir, name), pcmToWav(pcm, 48_000, 2));
+      this.refreshSamples();
+      return { ok: true, message: `Loop saved as **${name}** in the sample library.` };
+    } catch (err) {
+      return { ok: false, message: `Could not save the loop: ${err instanceof Error ? err.message : err}` };
+    }
   }
 
   /** Put a library file on a pad. */
