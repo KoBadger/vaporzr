@@ -133,6 +133,13 @@ export class PlaybackController {
   private currentVideo: ResolvedVideo | null = null;
   /** SponsorBlock segments for the current YouTube track (empty otherwise). */
   private sponsorSkips: SkipSegment[] = [];
+  /** Per-guild SponsorBlock toggle (default on). */
+  private sponsorEnabled = true;
+
+  setSponsorBlock(on: boolean): void {
+    this.sponsorEnabled = Boolean(on);
+    if (!this.sponsorEnabled) this.sponsorSkips = [];
+  }
   /** YouTube videoId of the last-started server-side stream. Used to prevent
    *  a Spotify→YouTube fallback from accidentally replaying the exact same
    *  video that just finished. */
@@ -435,7 +442,9 @@ export class PlaybackController {
       const positionMs = this.voice.getPositionMs();
       // SponsorBlock: jump over a segment the moment the playhead enters it.
       // The 250 ms tail avoids a skip loop at the boundary.
-      const skip = this.sponsorSkips.find((s) => positionMs >= s.startMs && positionMs < s.endMs - 250);
+      const skip = this.sponsorEnabled
+        ? this.sponsorSkips.find((s) => positionMs >= s.startMs && positionMs < s.endMs - 250)
+        : undefined;
       if (skip) {
         console.log(`[sponsorblock] skipping ${skip.category} ${Math.round((skip.endMs - skip.startMs) / 1000)}s`);
         this.seek(skip.endMs);
@@ -1133,9 +1142,11 @@ export class PlaybackController {
       this.startPositionTracker();
       // SponsorBlock is best-effort: fetch in the background and ignore a slow
       // or offline API. Segments apply on the next position tick.
-      void fetchSkipSegments(video.videoId).then((segments) => {
-        if (this.currentVideo?.videoId === video.videoId) this.sponsorSkips = segments;
-      });
+      if (this.sponsorEnabled) {
+        void fetchSkipSegments(video.videoId).then((segments) => {
+          if (this.sponsorEnabled && this.currentVideo?.videoId === video.videoId) this.sponsorSkips = segments;
+        });
+      }
       this.sendVisualizer({ type: 'cmd', command: 'stop' });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

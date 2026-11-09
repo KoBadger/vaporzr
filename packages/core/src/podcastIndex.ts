@@ -150,30 +150,42 @@ interface EpisodeResponse {
   }>;
 }
 
+/** Episodes for a feed id (newest first), or [] when unreachable. */
+export async function podcastEpisodes(
+  feedId: number,
+  auth: PodcastAuth | null,
+  max = 10,
+  fetchImpl: typeof fetch = fetch,
+): Promise<PodcastEpisode[]> {
+  if (!auth?.key || !auth.secret || !Number.isFinite(feedId)) return [];
+  try {
+    const limit = Math.max(1, Math.min(50, Math.round(max) || 10));
+    const res = await fetchImpl(`${API}/episodes/byfeedid?id=${feedId}&max=${limit}`, {
+      headers: authHeaders(auth),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return [];
+    const json = (await res.json()) as EpisodeResponse;
+    return (json.items ?? [])
+      .filter((ep) => Boolean(ep.enclosureUrl))
+      .map((ep) => ({
+        title: String(ep.title ?? 'Podcast episode'),
+        enclosureUrl: String(ep.enclosureUrl),
+        durationSec: Number(ep.duration) || 0,
+        image: ep.image,
+        datePublished: ep.datePublished,
+      }));
+  } catch {
+    return [];
+  }
+}
+
 /** Latest episode for a feed id, or null when the feed is empty/unreachable. */
 export async function latestPodcastEpisode(
   feedId: number,
   auth: PodcastAuth | null,
   fetchImpl: typeof fetch = fetch,
 ): Promise<PodcastEpisode | null> {
-  if (!auth?.key || !auth.secret || !Number.isFinite(feedId)) return null;
-  try {
-    const res = await fetchImpl(`${API}/episodes/byfeedid?id=${feedId}&max=1`, {
-      headers: authHeaders(auth),
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!res.ok) return null;
-    const json = (await res.json()) as EpisodeResponse;
-    const ep = json.items?.[0];
-    if (!ep?.enclosureUrl) return null;
-    return {
-      title: String(ep.title ?? 'Podcast episode'),
-      enclosureUrl: String(ep.enclosureUrl),
-      durationSec: Number(ep.duration) || 0,
-      image: ep.image,
-      datePublished: ep.datePublished,
-    };
-  } catch {
-    return null;
-  }
+  const episodes = await podcastEpisodes(feedId, auth, 1, fetchImpl);
+  return episodes[0] ?? null;
 }
