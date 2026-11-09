@@ -488,6 +488,44 @@
         height: 150px;
         background: #fff;
       }
+      .jam-links {
+        margin-top: 10px;
+        display: grid;
+        gap: 6px;
+      }
+      .jam-link-row {
+        display: grid;
+        grid-template-columns: 52px minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 8px;
+      }
+      .jam-link-name {
+        font-size: 9px;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .jam-link-url {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        padding: 4px 7px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: rgba(148, 163, 184, 0.07);
+        color: var(--muted);
+        font:
+          10px/1.4 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
+      }
+      .jam-copy {
+        height: 24px;
+        padding: 0 8px;
+        font-size: 10px;
+      }
       .ss-item {
         display: grid;
         grid-template-columns: 1fr auto;
@@ -2033,10 +2071,18 @@
               Scan to join - pick a track and it lands in the queue.
             </div>
             <div class="qr-card"><canvas id="jam-qr" width="150" height="150"></canvas></div>
-            <div
-              id="jam-link"
-              style="font-size: 10px; color: var(--muted); word-break: break-all; margin-top: 8px"
-            ></div>
+            <div class="jam-links">
+              <div class="jam-link-row">
+                <span class="jam-link-name">Request</span>
+                <code class="jam-link-url" id="jam-link" title="Simple request page"></code>
+                <button class="jam-copy" id="jam-copy" data-tip="Copy the request link">Copy</button>
+              </div>
+              <div class="jam-link-row">
+                <span class="jam-link-name">Crowd</span>
+                <code class="jam-link-url" id="jam-crowd-link" title="Read-only panel for guests"></code>
+                <button class="jam-copy" id="jam-crowd-copy" data-tip="Copy the crowd-view link">Copy</button>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -3286,7 +3332,7 @@
             send({ type: 'state:request' });
           };
           /* ---- Jam: presence roster + a scan-to-join QR ---- */
-          var jam = { names: [], contributors: [], joinPath: '', joinUrl: '' };
+          var jam = { names: [], contributors: [], joinPath: '', joinUrl: '', crowdPath: '', crowdUrl: '' };
           var jamQrDrawn = false;
           var jamQrUrl = '';
           var qrLibWaiters = null;
@@ -3337,8 +3383,18 @@
             // panel was itself opened through the tunnel, where 127.0.0.1 means
             // nothing to the phone that scans the code.
             var url = jam.joinUrl || location.origin + jam.joinPath;
+            var crowdUrl = jam.crowdUrl || (jam.crowdPath ? location.origin + jam.crowdPath : '');
             var l = document.getElementById('jam-link');
-            if (l) l.textContent = url;
+            if (l) {
+              l.textContent = url;
+              l.title = url;
+            }
+            var cl = document.getElementById('jam-crowd-link');
+            if (cl) {
+              cl.textContent = crowdUrl;
+              cl.title = crowdUrl;
+              cl.parentElement.style.display = crowdUrl ? '' : 'none';
+            }
             // The jam invite rotates hourly, so a code drawn when the panel
             // first connected goes stale. Redraw whenever the URL changes —
             // otherwise the QR keeps pointing at an expired invite.
@@ -4153,6 +4209,12 @@
         };
         el['btn-share'].onclick = function () {
           cmd('share-jam');
+        };
+        document.getElementById('jam-copy').onclick = function () {
+          copyText(document.getElementById('jam-link').textContent, 'Jam link');
+        };
+        document.getElementById('jam-crowd-copy').onclick = function () {
+          copyText(document.getElementById('jam-crowd-link').textContent, 'Crowd link');
         };
         el['key-close'].onclick = closeKeyModal;
         el['key-modal'].addEventListener('click', function (e) {

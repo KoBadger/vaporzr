@@ -1877,7 +1877,15 @@ export class Bridge {
    *  - the names already credited on the queue via `addedBy`.
    * `request`/`panel` are queue origins, not people, so they are dropped.
    */
-  private presence(): { names: string[]; count: number; contributors: string[]; joinPath: string; joinUrl?: string } {
+  private presence(): {
+    names: string[];
+    count: number;
+    contributors: string[];
+    joinPath: string;
+    joinUrl?: string;
+    crowdPath: string;
+    crowdUrl?: string;
+  } {
     const isPerson = (n: string): boolean => !!n && !/^web-viz-|^vaporzr-/.test(n) && !/^vz-/.test(n);
     /** Queue origins that are plumbing rather than people. */
     const ORIGINS = QUEUE_ORIGINS;
@@ -1900,8 +1908,16 @@ export class Bridge {
     // public base — a client-derived address only resolves where that address
     // means something (the tunnel's 127.0.0.1 resolves on a phone to the phone
     // itself, which is why the QR "never loaded").
-    const { joinPath, joinUrl } = jamJoinLinks();
-    return { names, count: names.length, contributors: [...contributors].sort(), joinPath, joinUrl };
+    const { joinPath, joinUrl, crowdPath, crowdUrl } = jamJoinLinks();
+    return {
+      names,
+      count: names.length,
+      contributors: [...contributors].sort(),
+      joinPath,
+      joinUrl,
+      crowdPath,
+      crowdUrl,
+    };
   }
 
   /** Broadcast the jam roster. Called on connect, disconnect and queue change. */
