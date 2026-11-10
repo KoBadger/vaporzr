@@ -56,6 +56,19 @@ export function streamCacheEntryIsFresh(savedAt: number | undefined, now = Date.
 }
 /** Debounce before the stream cache is flushed to `stream-cache.json`. */
 export const STREAM_CACHE_SAVE_DEBOUNCE_MS = 4000;
+
+/** Clamp a remote seek request into a usable position.
+ *
+ *  Panel/bridge/Discord callers can send a string, null or NaN. Unvalidated that
+ *  reached ffmpeg as `-ss NaN` and setTimeout as `NaN` (which fires at once), so
+ *  a bad seek could skip the track outright. Returns null when unusable.
+ *  The 250 ms tail margin keeps a seek from scheduling an end in the past. */
+export function clampSeekMs(value: unknown, durationMs: number): number | null {
+  const raw = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(raw)) return null;
+  const limit = durationMs > 0 ? Math.max(0, durationMs - 250) : Number.MAX_SAFE_INTEGER;
+  return Math.max(0, Math.min(Math.round(raw), limit));
+}
 /** Resample librespot's 44.1 kHz PCM to Discord's 48 kHz, plus R128 loudness
  *  normalization so Spotify and YouTube/EW tracks land at the same target. A
  *  per-session effect filter string (upbeat/slowed/bass) is appended last so
@@ -1230,6 +1243,7 @@ export class PlaybackController {
 
   /** Server-side playback of a locally-uploaded file (e.g. a .wav) via ffmpeg. */
   private async playLocal(current: TrackInfo): Promise<void> {
+    const generation = this.playGeneration;
     const filePath = current.filePath;
     if (!filePath) throw new Error(`No local file path for "${current.name}".`);
     this.spotifyFallback = false;
@@ -1237,6 +1251,9 @@ export class PlaybackController {
     this.stopSpotifyProgress();
     this.pauseSpotifyAny();
     const durationMs = (await probeLocalDuration(filePath)) ?? current.durationMs;
+    // Probing can take a moment; if a new play()/skip superseded us, starting the
+    // stream now would overrun the track the user actually selected.
+    if (generation !== this.playGeneration) return;
     this.currentUri = current.uri;
     this.queue.setState({
       playing: true,
@@ -1260,12 +1277,16 @@ export class PlaybackController {
 
   /** Server-side playback of a direct audio/video file URL via ffmpeg. */
   private async playDirect(current: TrackInfo): Promise<void> {
+    const generation = this.playGeneration;
     if (!current.streamUrl) throw new Error(`No stream URL for "${current.name}".`);
     this.spotifyFallback = false;
     this.stopSpotifyFeed();
     this.stopSpotifyProgress();
     this.pauseSpotifyAny();
     const durationMs = (await probeDuration(current.streamUrl)) ?? current.durationMs;
+    // Same guard as playLocal: a superseded probe must not start over the track
+    // the user moved on to.
+    if (generation !== this.playGeneration) return;
     this.currentUri = current.uri;
     this.queue.setState({
       playing: true,
@@ -2006,6 +2027,9 @@ export class PlaybackController {
       // Record it so a later add appends and takes over instead of being
       // mistaken for an idle add and inserted at the front.
       this.queue.markPlayedThrough();
+      // A crossfade armed for a handoff that will never happen must not survive
+      // into the next track added later — it would start that song mid-way in.
+      this.pendingXfadeSeekMs = 0;
       const snap = this.queue.getSnapshot();
       console.log(`[playback] advance failed — queue ended (index ${snap.currentIndex} of ${snap.tracks.length})`);
       this.clearEndTimer();
@@ -2171,24 +2195,29 @@ export class PlaybackController {
 
   seek(positionMs: number): void {
     const state = this.queue.getState();
+    // Callers are remote (panel, bridge, Discord): the value can arrive as a
+    // string, null or NaN. Unvalidated it reached ffmpeg as `-ss NaN` and
+    // setTimeout as `NaN` (which fires immediately), skipping the track.
+    const pos = clampSeekMs(positionMs, state.durationMs);
+    if (pos === null) return;
     if (this.usingServerStream()) {
-      this.seekServerStream(positionMs);
-      this.queue.setState({ positionMs });
+      this.seekServerStream(pos);
+      this.queue.setState({ positionMs: pos });
     } else if (this.spotifyDeviceId) {
-      if (this.librespot?.seekMs) void this.librespot.seekMs(positionMs);
-      else void spotifySeek(this.spotifyDeviceId, positionMs).catch(() => {});
-      this.librespot?.setPositionMs(positionMs);
+      if (this.librespot?.seekMs) void this.librespot.seekMs(pos);
+      else void spotifySeek(this.spotifyDeviceId, pos).catch(() => {});
+      this.librespot?.setPositionMs(pos);
       // Rebase the wall-clock baseline too. The progress ticker treats a
       // position that runs ahead of "wall-clock since the track started" as a
       // stale byte counter and resyncs it back down — which clobbered this
       // deliberate seek: a stall restart from 103s got reset to ~2s, so the
       // panel bar read ~100s low and the end-of-track log reported a false
       // "CUT SHORT". The guard still catches a genuinely stale counter.
-      this.spotifyTrackStartedAt = Date.now() - positionMs;
-      this.queue.setState({ positionMs });
+      this.spotifyTrackStartedAt = Date.now() - pos;
+      this.queue.setState({ positionMs: pos });
     }
-    if (state.playing) this.scheduleEnd(state.durationMs, positionMs);
-    this.schedulePreload(state.durationMs, positionMs);
+    if (state.playing) this.scheduleEnd(state.durationMs, pos);
+    this.schedulePreload(state.durationMs, pos);
   }
 
   volume(vol: number): void {

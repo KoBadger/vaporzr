@@ -618,6 +618,9 @@ export class VoiceManager implements AudioTransport {
     this.clearWatchdog();
     this.stopReconnectSupervisor();
     this.voiceLinkDown = false;
+    // Speaker 'end' events are delivered by the connection; once it is gone a
+    // missed one would leave the next join ducked forever.
+    this.duckSpeakers.clear();
     this.stopStream();
     this.onVoiceChange?.(false, null);
     if (this.player) {
@@ -1078,13 +1081,21 @@ export class VoiceManager implements AudioTransport {
           );
           this.ffmpeg = null;
           const rt = setTimeout(() => {
+            // The 1.5s delay is long enough for a skip or /stop to land. Without
+            // this check the stale continuation re-entered playFfmpegUrl, whose
+            // first act is stopStream() — tearing down the track the user just
+            // started and replacing it with the abandoned one.
+            if (token !== this.streamToken) return;
             opts.refreshUrl!()
               .then((newUrl) => {
+                // Re-resolving takes seconds; a newer play() supersedes this one.
+                if (token !== this.streamToken) return;
                 this.playFfmpegUrl(newUrl, { ...opts, seekMs: resumeMs, retries: nextRetries });
               })
               .catch((err) => {
                 const msg = err instanceof Error ? err.message : String(err);
                 console.warn(`[voice] could not refresh stream URL: ${msg}`);
+                if (token !== this.streamToken) return;
                 this.ffmpeg = null;
                 if (refusedAtStart) this.reportStreamRefusal(refusal.detail);
                 if (opts.onEnd) opts.onEnd();
