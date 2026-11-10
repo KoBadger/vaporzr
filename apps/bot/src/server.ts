@@ -2211,7 +2211,13 @@ async function handleRoute(
         }
         const bot = bridgeRef();
         res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-        res.end(JSON.stringify({ requests: bot?.jamPending(bot.getPrimaryGuildId() ?? undefined) ?? [] }));
+        const gid = bot?.getPrimaryGuildId() ?? undefined;
+        res.end(
+          JSON.stringify({
+            requests: bot?.jamPending(gid) ?? [],
+            guests: bot?.jamGuests(gid) ?? [],
+          }),
+        );
         break;
       }
 

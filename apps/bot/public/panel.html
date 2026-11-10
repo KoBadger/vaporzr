@@ -2254,11 +2254,16 @@
             <button id="req-save">Save limits</button>
           </div>
           <div id="req-list" class="dj-list" style="margin-top: 8px"></div>
+          <div id="req-guests" class="qhint"></div>
           <div class="search-row" style="margin-top: 8px">
             <input id="req-mute" placeholder="Mute a guest name" autocomplete="off" maxlength="24" />
             <button id="req-mute-add">Mute</button>
           </div>
           <div id="req-muted" class="qhint">No muted guests.</div>
+          <div class="search-row" style="margin-top: 8px">
+            <input id="req-shout" placeholder="Shoutout to the Discord channel" autocomplete="off" maxlength="200" />
+            <button id="req-shout-go">📣 Send</button>
+          </div>
         </div>
 
         <!-- Vibes (saved queues) -->
@@ -4302,6 +4307,16 @@
                 row.appendChild(no);
                 list.appendChild(row);
               });
+              var guests = (res[1] && res[1].guests) || [];
+              document.getElementById('req-guests').textContent = guests.length
+                ? 'Top requesters: ' +
+                  guests
+                    .slice(0, 8)
+                    .map(function (g) {
+                      return g.name + ' (' + g.count + ')';
+                    })
+                    .join(' · ')
+                : 'No requests yet this session.';
             })
             .catch(function () {});
         }
@@ -4345,6 +4360,12 @@
               loadRequests();
             })
             .catch(function () {});
+        };
+        document.getElementById('req-shout-go').onclick = function () {
+          var text = (document.getElementById('req-shout').value || '').trim();
+          if (!text) return;
+          cmd('shoutout', { query: text });
+          document.getElementById('req-shout').value = '';
         };
         loadRequests();
         setInterval(loadRequests, 5000);

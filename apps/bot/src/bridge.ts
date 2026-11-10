@@ -862,6 +862,23 @@ export class Bridge {
       case 'seek':
         if (msg.positionMs != null) s.playback.seek(msg.positionMs);
         break;
+      case 'shoutout': {
+        const text = String(msg.query ?? '')
+          .replace(/[\u0000-\u001f\u007f]/g, '')
+          .trim()
+          .slice(0, 200);
+        if (!text) break;
+        if (!this.onShoutout) {
+          this.notice('error', 'Shoutouts are not available on this instance.');
+          break;
+        }
+        void this.onShoutout(guildId, text)
+          .then((r) =>
+            this.notice(r.ok ? 'success' : 'error', r.ok ? '📣 Shoutout posted' : (r.error ?? 'Could not post')),
+          )
+          .catch(() => this.notice('error', 'Could not post that shoutout'));
+        break;
+      }
       case 'share-jam': {
         void (async () => {
           if (!this.onShareJam) {
@@ -1361,6 +1378,18 @@ export class Bridge {
     return next;
   }
 
+  /** Who has asked for the most this session (owner-side leaderboard/audit). */
+  jamGuests(guildId: string | undefined): { name: string; count: number }[] {
+    if (!guildId) return [];
+    const byGuest = this.requestStats.get(guildId);
+    if (!byGuest) return [];
+    return [...byGuest.entries()]
+      .filter(([, v]) => v.count > 0)
+      .sort((a, b) => b[1].count - a[1].count)
+      .slice(0, 12)
+      .map(([name, v]) => ({ name, count: v.count }));
+  }
+
   jamPending(guildId: string | undefined): PendingRequest[] {
     const now = Date.now();
     for (const [id, p] of this.pendingRequests) if (now - p.createdAt > 30 * 60 * 1000) this.pendingRequests.delete(id);
@@ -1394,6 +1423,10 @@ export class Bridge {
    *  panel's text channel. A hook rather than an import for the same reason as
    *  onEnsureJoined — everything channel-facing lives in discord.ts. */
   onShareJam: ((guildId?: string) => Promise<{ ok: boolean; where?: string; error?: string }>) | null = null;
+
+  /** Wired by the bot at startup: post a short host announcement in the
+   *  panel's text channel. */
+  onShoutout: ((guildId: string | undefined, text: string) => Promise<{ ok: boolean; error?: string }>) | null = null;
 
   /** Used by the public /request page: resolve a query and queue it (no playback).
    *  `who` is the guest's display name, so a jam credit reads as a person rather
