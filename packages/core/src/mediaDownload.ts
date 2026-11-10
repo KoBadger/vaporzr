@@ -72,7 +72,10 @@ async function egressIp(proxy: string, family: 4 | 6): Promise<string> {
  * the resolve forced IPv4.
  */
 async function mediaFetch(url: string, init: RequestInit): Promise<Response> {
-  if (!/googlevideo\.com\//.test(url)) return safeFetch(url, init);
+  // A stalled socket used to hang downloadToTempFile's promise forever (the
+  // playback path has MEDIA_REQUEST_TIMEOUT_MS; this one had none).
+  const withTimeout: RequestInit = init.signal ? init : { ...init, signal: AbortSignal.timeout(30_000) };
+  if (!/googlevideo\.com\//.test(url)) return safeFetch(url, withTimeout);
   const mintedIp = decodeURIComponent(/[?&]ip=([^&]+)/.exec(url)?.[1] ?? '');
   const family: 4 | 6 = mintedIp.includes(':') ? 6 : 4;
   const hops = youtubeProxyHops();
@@ -91,9 +94,9 @@ async function mediaFetch(url: string, init: RequestInit): Promise<Response> {
   // the caller refreshes the URL, which re-resolves through whatever works now.
   if (route === null) route = hops[0] ?? '';
   try {
-    return await fetchViaProxy(url, route, init);
+    return await fetchViaProxy(url, route, withTimeout);
   } catch {
-    return fetch(url, init);
+    return fetch(url, withTimeout);
   }
 }
 
