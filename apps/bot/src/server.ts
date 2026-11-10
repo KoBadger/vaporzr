@@ -7,6 +7,15 @@ import { fileURLToPath, domainToASCII } from 'node:url';
 import { config } from '@vaporzr/core/config';
 import { clientIp, isLoopbackAddress } from './clientIp.js';
 import {
+  activePlan,
+  applyBillingEvent,
+  billingEnabled,
+  createCheckoutSession,
+  entitlementFor,
+  mapStripeEvent,
+  verifyStripeSignature,
+} from './billing.js';
+import {
   buildAuthorizeUrl,
   exchangeCode,
   getAccessToken,
@@ -766,6 +775,36 @@ function requestGate(): boolean {
   return true;
 }
 
+/**
+ * Read the body verbatim as a UTF-8 string.
+ *
+ * Stripe signs the EXACT bytes it sent, so the webhook cannot go through
+ * `readJsonBody` — re-serialising the parsed object would invalidate the HMAC.
+ */
+async function readRawBody(req: http.IncomingMessage, limit = 256 * 1024): Promise<string | null> {
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let settled = false;
+    const finish = (value: string | null): void => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    req.on('data', (chunk: Buffer) => {
+      total += chunk.length;
+      if (total > limit) {
+        req.destroy();
+        finish(null);
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => finish(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', () => finish(null));
+  });
+}
+
 async function readJsonBody(req: http.IncomingMessage, limit = 64 * 1024): Promise<unknown> {
   return new Promise((resolve) => {
     let data = '';
@@ -1353,6 +1392,56 @@ async function handleRoute(
       return;
     }
 
+    // Stripe webhooks. The signature is the credential, so this is the one POST
+    // that needs no session; it also bypasses the JSON body reader because the
+    // HMAC is over the exact bytes Stripe sent.
+    if (url.pathname === '/api/stripe/webhook') {
+      if (req.method !== 'POST') {
+        res.writeHead(405, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'method not allowed' }));
+        return;
+      }
+      if (!config.stripeWebhookSecret) {
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'billing not configured' }));
+        return;
+      }
+      const raw = await readRawBody(req);
+      const sigHeader = req.headers['stripe-signature'];
+      const signature = Array.isArray(sigHeader) ? sigHeader[0] : sigHeader;
+      if (!raw || !verifyStripeSignature(raw, signature, config.stripeWebhookSecret)) {
+        // 400 (not 401): Stripe retries a failed delivery, and a forged body
+        // should not be retried forever.
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'bad signature' }));
+        return;
+      }
+      let parsed: unknown = null;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'bad json' }));
+        return;
+      }
+      const action = mapStripeEvent(parsed);
+      try {
+        applyBillingEvent(action);
+      } catch (err) {
+        // A persistence failure must be retried by Stripe, not swallowed.
+        console.warn('[billing] webhook apply failed:', err instanceof Error ? err.message : err);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'could not apply' }));
+        return;
+      }
+      console.log(
+        `[billing] webhook ${String((parsed as { type?: string })?.type ?? '?')} → ${action.kind} ${action.subject ?? ''}`,
+      );
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ received: true, applied: action.kind }));
+      return;
+    }
+
     // Official-video proxy: downloads on demand, then serves a seekable MP4.
     if (url.pathname.startsWith('/api/video/')) {
       const id = safeDecode(url.pathname.slice('/api/video/'.length));
@@ -1755,6 +1844,79 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
         } catch {
           res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
           res.end('Terms of service not found.');
+        }
+        break;
+      }
+
+      case '/api/billing/status': {
+        // The panel asks for this on load to render the plan badge. A jam guest
+        // must not learn anything about billing, so it needs `view`.
+        if (!hasShareAccess(req, url, 'view')) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'forbidden' }));
+          return;
+        }
+        const gid = url.searchParams.get('guildId') || (bridgeRef()?.getPrimaryGuildId() ?? '');
+        const subject = `guild:${gid}`;
+        const record = entitlementFor(subject);
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(
+          JSON.stringify({
+            enabled: billingEnabled(),
+            subject,
+            plan: activePlan(subject),
+            status: record?.status ?? null,
+            currentPeriodEnd: record?.currentPeriodEnd ?? null,
+          }),
+        );
+        break;
+      }
+
+      case '/api/billing/checkout': {
+        if (req.method !== 'POST') {
+          res.writeHead(405);
+          res.end();
+          return;
+        }
+        if (!hasShareAccess(req, url, 'control')) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'forbidden' }));
+          return;
+        }
+        if (!billingEnabled()) {
+          res.writeHead(503, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Billing is not configured yet.' }));
+          return;
+        }
+        const body = (await readJsonBody(req)) as { plan?: string; guildId?: string } | null;
+        // The panel has no Discord user identity, so it can only buy the server
+        // plan it is currently looking at. Per-account Plus is bought from
+        // Discord with /upgrade, where the user id is known.
+        if (body?.plan !== 'server') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Use /upgrade in Discord for the Plus plan.' }));
+          return;
+        }
+        const gid = body.guildId || bridgeRef()?.getPrimaryGuildId() || '';
+        if (!gid) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'No server to bill.' }));
+          return;
+        }
+        const origin = config.staticBaseUrl || config.jamPublicBase;
+        if (!origin) {
+          res.writeHead(503, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Public base URL is not configured.' }));
+          return;
+        }
+        try {
+          const session = await createCheckoutSession({ plan: 'server', subject: `guild:${gid}`, origin });
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          res.end(JSON.stringify({ ok: true, url: session.url }));
+        } catch (err) {
+          console.warn('[billing] checkout failed:', err instanceof Error ? err.message : err);
+          res.writeHead(502, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'Checkout failed.' }));
         }
         break;
       }
