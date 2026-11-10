@@ -61,6 +61,18 @@ function serveFile(req: IncomingMessage, res: ServerResponse, file: string): voi
     res.end();
     return;
   }
+  /** A read that fails after the headers are out must end the response, or the
+   *  client waits forever on a body that will never arrive. */
+  const pipe = (stream: fs.ReadStream): void => {
+    stream.on('error', () => {
+      try {
+        res.end();
+      } catch {
+        /* client already gone */
+      }
+    });
+    stream.pipe(res);
+  };
   const range = req.headers.range;
   if (range) {
     const m = /^bytes=(\d*)-(\d*)$/.exec(range);
@@ -75,7 +87,7 @@ function serveFile(req: IncomingMessage, res: ServerResponse, file: string): voi
           'Accept-Ranges': 'bytes',
           'Cache-Control': 'public, max-age=86400',
         });
-        fs.createReadStream(file, { start, end }).pipe(res);
+        pipe(fs.createReadStream(file, { start, end }));
         return;
       }
     }
@@ -86,7 +98,14 @@ function serveFile(req: IncomingMessage, res: ServerResponse, file: string): voi
     'Accept-Ranges': 'bytes',
     'Cache-Control': 'public, max-age=86400',
   });
-  fs.createReadStream(file).pipe(res);
+  pipe(fs.createReadStream(file));
+}
+
+/** Mark a job failed AND let a later request retry it — a 'failed' entry that
+ *  never expires makes that video permanently un-requestable until restart. */
+function failJob(id: string): void {
+  jobs.set(id, 'failed');
+  setTimeout(() => jobs.delete(id), 5 * 60_000).unref?.();
 }
 
 function startJob(id: string, file: string): void {
@@ -112,15 +131,13 @@ function startJob(id: string, file: string): void {
         } catch {
           /* best effort */
         }
-        jobs.set(id, 'failed');
-        // Let a later request try again rather than caching the failure.
-        setTimeout(() => jobs.delete(id), 5 * 60_000).unref?.();
+        failJob(id);
         return;
       }
       try {
         fs.renameSync(tmp, file);
       } catch {
-        jobs.set(id, 'failed');
+        failJob(id);
         return;
       }
       jobs.delete(id);
@@ -128,7 +145,7 @@ function startJob(id: string, file: string): void {
       console.log(`[video] cached ${id} (${(size / (1024 * 1024)).toFixed(1)} MB)`);
     })
     .catch(() => {
-      jobs.set(id, 'failed');
+      failJob(id);
       try {
         fs.rmSync(tmp, { force: true });
       } catch {
