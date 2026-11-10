@@ -203,6 +203,14 @@ export class PlaybackController {
     // Measure what we play, so `V@shuffle smart|arc|key` can order the tracks the
     // feature mirror does not know (see audioFeatures.ts).
     this.voice.setFeatureTap((data) => this.featureCollector.feed(data));
+    // A stream refused at byte 0 used to end with the queue silently skipping to
+    // the next track — indistinguishable from a short song. Name the track and
+    // the reason instead, so the owner can actually fix the cookies.
+    this.voice.setOnStreamRefused((detail) => {
+      const track = this.queue.getCurrentTrack();
+      console.warn(`[playback] stream refused for "${track?.name ?? 'unknown track'}" (${detail})`);
+      if (this.onStreamRefused) this.onStreamRefused(detail, track?.name);
+    });
   }
 
   /**
@@ -341,6 +349,10 @@ export class PlaybackController {
   onQueueEnd: (() => void) | null = null;
   /** Callback fired when playback stops because several tracks in a row failed to start. */
   onPlaybackStalled: (() => void) | null = null;
+  /** Callback fired when a stream is refused before its first byte (the CDN
+   *  answered 401/403). Distinct from a stall: the queue and the bot are fine —
+   *  the media session is not authorized (stale YouTube cookies / PO token). */
+  onStreamRefused: ((detail: string, trackName?: string) => void) | null = null;
 
   /** Route visualizer-targeted state messages (only the primary session broadcasts). */
   setSendVisualizer(fn: SendFn): void {

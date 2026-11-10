@@ -261,6 +261,22 @@ export function isBotWall(msg: string): boolean {
   return /Sign in to confirm|not a bot/i.test(msg) || msg === YOUTUBE_BUSY_TEXT;
 }
 
+/** Marker prefix for "resolution worked, but the media bytes were refused".
+ *  A prefix rather than a boolean because the status code is worth logging. */
+const STREAM_REFUSED_PREFIX = 'stream refused';
+
+/** True when a probe result means the route RESOLVED a media URL but YouTube
+ *  then refused to hand over its bytes.
+ *
+ *  This is the failure that /health used to miss entirely: a stale cookie jar
+ *  still resolves (yt-dlp prints a URL), and every byte of that URL is a 403.
+ *  Playback was dead for hours while `youtube` still read `ok`, because the
+ *  canary only ever ran `--get-url`. A refusal is an authorization problem —
+ *  the cookies or the PO token — not a blocked exit IP. */
+export function isStreamRefused(msg: string): boolean {
+  return msg.startsWith(STREAM_REFUSED_PREFIX);
+}
+
 /**
  * Download a progressive MP4 for a video id through the same route chain as
  * playback (cookies, PO tokens, direct → alt warp → metered fallback). Used by
@@ -689,7 +705,8 @@ function hopName(hop: string): YoutubeHopName {
 
 /** Per-route outcomes of a canary probe, in trial order. */
 export interface YoutubeProbeResults {
-  /** 'ok' or the error text of the direct attempt. */
+  /** 'ok' or the error text of the direct attempt. 'ok' means the route both
+   *  resolved a media URL AND served its first bytes. */
   direct: string;
   /** Each hop examined after direct failed: 'ok', 'unreachable' (the endpoint
    *  refused connections, checked before yt-dlp), or the error text. */
@@ -705,8 +722,13 @@ export interface YoutubeProbeResults {
 export function classifyYoutubeProbe(r: YoutubeProbeResults): YoutubeHealth {
   if (r.direct === 'ok') return 'ok';
   // No hops configured: the old reading stands — a wall means the host IP is
-  // blocked, anything else is a genuine outage.
-  if (r.hops.length === 0) return isBotWall(r.direct) ? 'blocked' : 'down';
+  // blocked, anything else is a genuine outage. A refusal AFTER a successful
+  // resolve is the exception: the gate let us through, so the session (cookies /
+  // PO token) is what YouTube refused, not the address.
+  if (r.hops.length === 0) {
+    if (isStreamRefused(r.direct)) return 'auth';
+    return isBotWall(r.direct) ? 'blocked' : 'down';
+  }
   const last = r.hops[r.hops.length - 1];
   if (last.result === 'ok') {
     // Playback works. Through a free hop that is the intended degradation
@@ -722,17 +744,76 @@ export function classifyYoutubeProbe(r: YoutubeProbeResults): YoutubeHealth {
   // A hop that refuses connections is a fact yt-dlp cannot see; it is reported
   // before the softer interpretations below.
   if (r.hops.some((h) => h.result === 'unreachable')) return 'bridge';
+  // Every route RESOLVED but none would serve bytes: the media is unauthorized
+  // for this session, which is the cookies/PO-token diagnosis (`auth`), not a
+  // wall and not an outage.
+  if (isStreamRefused(r.direct) || r.hops.some((h) => isStreamRefused(h.result))) return 'auth';
   if (isBotWall(r.direct) || r.hops.some((h) => isBotWall(h.result))) return 'auth';
   if (r.hops.some((h) => isProxyError(h.result))) return 'proxy';
   return 'down';
+}
+
+/** Browser-like UA: googlevideo rejects plain client UAs. Mirrors the one the
+ *  playback path uses, so a passing canary really is representative. */
+const PROBE_USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
+
+/** Cached undici ProxyAgents for the canary's byte fetch, keyed by hop URL. */
+const probeAgents = new Map<string, unknown>();
+
+/** fetch() through one hop ('' = the direct connection), reusing an agent. */
+async function probeFetch(url: string, proxy: string, init: RequestInit): Promise<Response> {
+  if (!proxy) return (await fetch(url, init)) as unknown as Response;
+  let agent = probeAgents.get(proxy);
+  if (!agent) {
+    const { ProxyAgent } = await import('undici');
+    agent = new ProxyAgent(proxy);
+    probeAgents.set(proxy, agent);
+  }
+  const { fetch: uFetch } = await import('undici');
+  return (await uFetch(url, { ...init, dispatcher: agent } as never)) as unknown as Response;
+}
+
+/**
+ * Pull the first bytes of a resolved media URL so the canary proves what
+ * actually matters: that YouTube will serve this session's audio.
+ *
+ * `Range` is mandatory (googlevideo refuses an open-ended request) and only
+ * the status is used, so the body is cancelled immediately — a probe costs at
+ * most one 64 KiB range. Returns `'ok'`, `stream refused (HTTP 403)` for an
+ * authorization refusal, or a descriptive failure for anything else.
+ */
+async function probeStreamBytes(url: string, proxy: string): Promise<string> {
+  try {
+    const res = await probeFetch(url, proxy, {
+      headers: { 'User-Agent': PROBE_USER_AGENT, Range: 'bytes=0-65535' },
+      redirect: 'follow',
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (res.body) void res.body.cancel().catch(() => {});
+    if (res.status === 206 || res.status === 200) return 'ok';
+    if (res.status === 401 || res.status === 403) return `${STREAM_REFUSED_PREFIX} (HTTP ${res.status})`;
+    return `stream fetch failed (HTTP ${res.status})`;
+  } catch (err) {
+    return `stream fetch failed (${err instanceof Error ? err.message : String(err)})`;
+  }
 }
 
 export async function probeYoutube(): Promise<YoutubeHealth> {
   const args = ['--no-playlist', '--get-url', '-f', AUDIO_FORMAT, CANARY_URL];
   const attempt = async (route: string): Promise<string> => {
     try {
-      await runYtDlp(args, 0, route);
-      return 'ok';
+      const raw = await runYtDlp(args, 0, route);
+      const url = raw
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .reverse()
+        .find((l) => l.startsWith('https://'));
+      if (!url) return 'no stream URL in yt-dlp output';
+      // Resolution alone is not proof of playback: fetch the first bytes too,
+      // through the SAME route (googlevideo signs a URL against the exit IP
+      // that minted it, so a different route would 403 for the wrong reason).
+      return await probeStreamBytes(url, route);
     } catch (err) {
       return err instanceof Error ? err.message : String(err);
     }

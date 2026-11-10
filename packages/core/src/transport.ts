@@ -65,6 +65,9 @@ export interface AudioTransport {
 
   // ---- callbacks / taps ----
   setOnVoiceReconnect(cb: (() => void) | null): void;
+  /** Called when a server-side stream is refused before its first byte (the CDN
+   *  answered 401/403) — an authorization failure, not a transient hiccup. */
+  setOnStreamRefused(cb: ((detail: string) => void) | null): void;
   setStallRecovery(cb: (() => void) | null): void;
   setSpectrumTap(cb: ((data: Buffer) => void) | null): void;
   /** Feed the local audio-feature collector (independent of the analyzer tap). */
