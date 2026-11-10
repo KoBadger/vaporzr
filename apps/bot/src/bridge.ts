@@ -42,6 +42,7 @@ import {
 } from './access.js';
 import { fetchLyrics } from '@vaporzr/core/lyrics';
 import { playlistStore } from '@vaporzr/core/playlists';
+import { getCrossfadeMs, setCrossfadeMs } from './crossfadeStore.js';
 import { codeFor } from './jamLinks.js';
 
 /** The jam page's guest URL: built from the LOW-privilege request key, not the
@@ -833,6 +834,17 @@ export class Bridge {
       case 'volume':
         if (msg.volume != null) s.playback.volume(msg.volume);
         break;
+      case 'crossfade': {
+        // Same persisted store as V@crossfade; the panel toggle is just a
+        // shortcut. 0 = off, otherwise overlap + tail fade in ms.
+        if (msg.ms != null && s.guildId) {
+          const ms = setCrossfadeMs(s.guildId, Number(msg.ms));
+          this.notice('success', ms > 0 ? `Crossfade ${ms / 1000}s` : 'Crossfade off');
+          for (const panel of this.panels)
+            if (this.clientOf(panel.socket)?.guildId === s.guildId) this.sendSnapshot(panel.socket);
+        }
+        break;
+      }
       case 'shuffle':
         if (msg.shuffle != null) s.playback.shuffle(msg.shuffle);
         break;
@@ -1352,6 +1364,61 @@ export class Bridge {
     }
   }
 
+  /** Saved vibes for the public jam page: names and track counts only. */
+  jamVibes(): { name: string; tracks: number }[] {
+    const s = this.sessions.primary ?? this.fallback;
+    if (!s.guildId) return [];
+    return playlistStore.list(s.guildId).map((p) => ({ name: p.name, tracks: p.tracks.length }));
+  }
+
+  /** Read-only preview of one vibe, so a shared /jam?vibe= link can show what
+   *  it contains before a guest requests the whole thing. */
+  jamVibe(name: string): { ok: boolean; name?: string; tracks?: { name: string; artists: string }[]; error?: string } {
+    const s = this.sessions.primary ?? this.fallback;
+    if (!s.guildId) return { ok: false, error: 'No active server.' };
+    const vibe = playlistStore.get(s.guildId, name.trim());
+    if (!vibe) return { ok: false, error: 'That vibe no longer exists.' };
+    return {
+      ok: true,
+      name: vibe.name,
+      tracks: vibe.tracks.slice(0, 25).map((t) => ({
+        name: t.name,
+        artists: (t.artists ?? []).join(', '),
+      })),
+    };
+  }
+
+  /** Add a saved vibe to the queue on behalf of a guest. This is the request
+   *  path, not the control path: one bulk add, capped and deduped exactly like
+   *  a pasted playlist link. */
+  async requestVibe(name: string, who?: string): Promise<{ ok: boolean; name?: string; error?: string }> {
+    const s = this.sessions.primary ?? this.fallback;
+    if (!s.guildId) return { ok: false, error: 'No active server.' };
+    const vibe = playlistStore.get(s.guildId, name.trim());
+    if (!vibe || !vibe.tracks.length) return { ok: false, error: 'That vibe no longer exists.' };
+    const credit =
+      (who ?? '')
+        .replace(/[\u0000-\u001f\u007f]/g, '')
+        .trim()
+        .slice(0, 24) || 'request';
+    const tracks = vibe.tracks.slice(0, 25).map((t) => ({
+      uri: t.uri,
+      name: t.name,
+      artists: t.artists ?? [],
+      album: t.album ?? '',
+      durationMs: t.durationMs ?? 0,
+      source: (t.source || undefined) as MediaSource | undefined,
+      image: t.image,
+    }));
+    const fresh = s.queue.filterNew(tracks);
+    if (!fresh.length) return { ok: false, error: 'That whole vibe is already queued.' };
+    s.queue.enqueueMany(fresh, credit);
+    return {
+      ok: true,
+      name: `${fresh.length} track${fresh.length === 1 ? '' : 's'} from "${vibe.name}"`,
+    };
+  }
+
   /** Read-only view of the queue for the public jam page: what is on now and
    *  what is next, with who asked for each. Deliberately small and free of
    *  internal ids — it is served to key-holding guests on a phone.
@@ -1756,9 +1823,10 @@ export class Bridge {
     const guestSocket = this.scopeOf(socket) === 'guest';
     const selected =
       allGuilds.find((g) => g.id === selectedId) ?? (selectedId ? { id: selectedId, name: selectedId } : undefined);
-    // Guests see a generic label; anyone signed in (view or control) sees real
-    // server names, so a listener knows which server they are hearing.
-    const guildsForClient = guestSocket ? (selected ? [{ id: selected.id, name: 'Server' }] : []) : allGuilds;
+    // Guests never receive the server list at all: a crowd panel is for one
+    // room, and the names of the operator's other servers are not its business.
+    // Signed-in viewers (view/control) keep the switcher.
+    const guildsForClient = guestSocket ? [] : allGuilds;
     const ew = s.endlessWave;
     const out: OutboundMessage = {
       type: 'snapshot',
@@ -1773,6 +1841,7 @@ export class Bridge {
       primaryGuildId: selectedId ?? undefined,
       guilds: guildsForClient.length > 0 ? guildsForClient : undefined,
       sensitivity: this.sensitivity,
+      crossfadeMs: s.guildId ? getCrossfadeMs(s.guildId) : 0,
       presetCycle: this.presetCycleSec,
       deckUrl: this.deckLink(),
       preset:

@@ -4,6 +4,28 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Vaporzr Panel</title>
+    <meta
+      name="description"
+      content="Queue, seek, mix and light up the room: the operator console for a live Vaporzr session."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Vaporzr" />
+    <meta property="og:title" content="Vaporzr Control Panel" />
+    <meta
+      property="og:description"
+      content="Queue, seek, four decks, soundboard and visuals - the operator console for a live Vaporzr session."
+    />
+    <meta property="og:image" content="{{ORIGIN}}/ew-bg.jpg" />
+    <meta property="og:image:width" content="1280" />
+    <meta property="og:image:height" content="720" />
+    <meta property="og:image:alt" content="Vaporzr control panel" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Vaporzr Control Panel" />
+    <meta
+      name="twitter:description"
+      content="Queue, seek, four decks, soundboard and visuals - the operator console for a live Vaporzr session."
+    />
+    <meta name="twitter:image" content="{{ORIGIN}}/ew-bg.jpg" />
     <link rel="icon" type="image/png" href="/favicon.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="theme-color" content="#6a5cff" />
@@ -620,6 +642,7 @@
         gap: 4px;
         max-height: 420px;
         overflow-y: auto;
+        overflow-x: hidden;
         scrollbar-width: thin;
         scrollbar-color: color-mix(in srgb, var(--accent) 40%, transparent) transparent;
       }
@@ -634,6 +657,7 @@
         position: relative;
         display: flex;
         align-items: center;
+        min-width: 0;
         gap: 11px;
         padding: 7px 9px;
         border-radius: 12px;
@@ -717,20 +741,34 @@
         flex-shrink: 0;
         box-shadow: 0 0 6px currentColor;
       }
+      /* Actions float over the row instead of taking layout width. Reserving
+         5 × 27px pushed the title off-screen on phones and forced the queue to
+         scroll sideways. */
       #queue .qacts {
+        position: absolute;
+        right: 5px;
+        top: 50%;
+        transform: translateY(-50%);
         display: flex;
-        gap: 4px;
+        gap: 3px;
+        padding: 3px;
+        border-radius: 9px;
+        background: color-mix(in srgb, var(--bg) 88%, transparent);
+        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45);
         opacity: 0;
+        pointer-events: none;
         transition: opacity 0.15s;
-        flex-shrink: 0;
       }
       #queue li:hover .qacts,
       #queue li:focus-within .qacts {
         opacity: 1;
+        pointer-events: auto;
       }
       @media (hover: none) {
+        /* Touch has the long-press context menu; an always-on action strip
+           would cover the title and reintroduce the overflow. */
         #queue .qacts {
-          opacity: 1;
+          display: none;
         }
       }
       #queue button {
@@ -1971,6 +2009,11 @@
                 <button data-speed="1">Normal</button><button data-speed="1.25">Nightcore</button
                 ><button data-speed="0.85">Slowed</button>
               </div>
+              <div class="mlabel">CROSSFADE</div>
+              <div class="mrow" id="xfade-row">
+                <button data-xfade="0">Off</button><button data-xfade="4000">4s</button
+                ><button data-xfade="6000">6s</button><button data-xfade="10000">10s</button>
+              </div>
               <div class="mlabel">MORE</div>
               <button data-ambient="toggle">🌙 Lo-fi intermission: <span id="amb-state">off</span></button>
               <button data-voteskip="toggle">🗳 Vote-skip: <span id="vs-state">on</span></button>
@@ -2172,6 +2215,9 @@
             <input id="vibe-name" placeholder="Name this queue…" autocomplete="off" />
             <button id="btn-vibe-save" data-tip="Save the current queue as a vibe">💾 Save</button>
             <button id="btn-vibe-load" class="primary" data-tip="Load the selected vibe into the queue">⬇ Load</button>
+            <button id="btn-vibe-share" data-tip="Copy a link guests can use to request this whole vibe">
+              🔗 Share
+            </button>
           </div>
           <select
             id="vibe-list"
@@ -2459,6 +2505,7 @@
           'vibe-name',
           'btn-vibe-save',
           'btn-vibe-load',
+          'btn-vibe-share',
           'vibe-list',
           'btn-vibes-refresh',
           'swatches',
@@ -3027,7 +3074,8 @@
               who.setAttribute('data-tip', 'Added by ' + by);
               who.style.cssText =
                 'font-size:10px;padding:2px 8px;border-radius:999px;' +
-                'background:rgba(148,163,184,.14);color:#94a3b8;white-space:nowrap;margin-right:6px';
+                'background:rgba(148,163,184,.14);color:#94a3b8;white-space:nowrap;margin-right:6px;' +
+                'max-width:84px;overflow:hidden;text-overflow:ellipsis;flex-shrink:0';
               li.appendChild(who);
             }
             var src = (t.source || '').toLowerCase();
@@ -3469,9 +3517,12 @@
                   for (var i = 0; i < THEMES.length; i++) if (THEMES[i].id === msg.theme.id) applyTheme(THEMES[i]);
                 }
                 if (typeof msg.sensitivity === 'number') setSens(msg.sensitivity, false);
+                if (typeof msg.crossfadeMs === 'number' && typeof window.paintXfade === 'function')
+                  window.paintXfade(msg.crossfadeMs);
                 if (typeof msg.presetCycle === 'number') setCycle(msg.presetCycle, false);
                 if (msg.voice) el.voice.textContent = msg.voice.joined ? '🔊 streaming' : '🔇 not streaming';
                 if (msg.guilds && msg.primaryGuildId) renderGuilds(msg.guilds, msg.primaryGuildId);
+                else if (msg.guest) el.guilds.innerHTML = '';
                 render();
                 renderDj();
                 renderWave();
@@ -3635,6 +3686,17 @@
           menu.querySelectorAll('button[data-speed]').forEach(function (b) {
             b.onclick = function () {
               cmd('speed', { factor: Number(b.getAttribute('data-speed')) });
+              close();
+            };
+          });
+          window.paintXfade = function (ms) {
+            menu.querySelectorAll('button[data-xfade]').forEach(function (b) {
+              b.classList.toggle('on', Number(b.getAttribute('data-xfade')) === ms);
+            });
+          };
+          menu.querySelectorAll('button[data-xfade]').forEach(function (b) {
+            b.onclick = function () {
+              cmd('crossfade', { ms: Number(b.getAttribute('data-xfade')) });
               close();
             };
           });
@@ -3986,6 +4048,14 @@
           toast('info', 'Saving vibe "' + name + '"…');
           el['vibe-name'].value = '';
           setTimeout(loadVibes, 1500);
+        };
+        el['btn-vibe-share'].onclick = function () {
+          var name = el['vibe-list'].value;
+          if (!name) {
+            toast('error', 'Pick a saved vibe');
+            return;
+          }
+          copyText(location.origin + '/jam?vibe=' + encodeURIComponent(name), 'Vibe link');
         };
         el['btn-vibe-load'].onclick = function () {
           var name = el['vibe-list'].value;
