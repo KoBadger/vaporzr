@@ -154,7 +154,13 @@ function startJob(id: string, file: string): void {
     });
 }
 
-export function handleVideoProxy(req: IncomingMessage, res: ServerResponse, rawId: string, url: URL): void {
+export function handleVideoProxy(
+  req: IncomingMessage,
+  res: ServerResponse,
+  rawId: string,
+  url: URL,
+  allowed?: Set<string>,
+): void {
   const id = String(rawId ?? '').replace(/\.mp4$/i, '');
   if (req.method !== 'GET' || !ID_RE.test(id)) {
     res.writeHead(req.method === 'GET' ? 400 : 405);
@@ -163,6 +169,16 @@ export function handleVideoProxy(req: IncomingMessage, res: ServerResponse, rawI
   }
   const file = path.join(cacheDir(), `${id}.mp4`);
   const ready = fs.existsSync(file);
+
+  // Serving a file already on disk is harmless. STARTING a download is the part
+  // that costs CPU, disk and (on a metered hop) money, and this endpoint cannot
+  // use a cookie — the Activity iframe cannot carry one. So only an id the bot
+  // is actually playing may kick a job off.
+  if (!ready && !allowed?.has(id)) {
+    res.writeHead(403, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'forbidden' }));
+    return;
+  }
 
   if (url.searchParams.get('check')) {
     // The page polls this endpoint, so it is also what starts the download —

@@ -5,6 +5,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { fileURLToPath, domainToASCII } from 'node:url';
 import { config } from '@vaporzr/core/config';
+import { clientIp, isLoopbackAddress } from './clientIp.js';
 import {
   buildAuthorizeUrl,
   exchangeCode,
@@ -39,6 +40,7 @@ import {
   listAccess,
   scopeSatisfies,
   webAccessAllowed,
+  isTailnetAddress,
   tokenFromCookieHeader,
   type AccessScope,
 } from './access.js';
@@ -426,7 +428,24 @@ export function hasShareAccess(req: http.IncomingMessage, url: URL, need: Access
   const cookieKey = keyFromCookieHeader(cookie);
   const urlKey = url.searchParams.get('key');
   if (key && (secretEquals(cookieKey, key) || secretEquals(urlKey, key))) return true;
-  return isMasterPassword(cookieKey) || isMasterPassword(urlKey);
+  const supplied = cookieKey || urlKey;
+  if (!supplied) return false;
+  // The master password is checked with a memory-hard KDF, so an unauthenticated
+  // caller sending a junk `?key=` to any gated endpoint could otherwise burn a
+  // full scrypt per request. Throttle BEFORE the KDF and count failures, so the
+  // cost is bounded like a page login attempt instead of scaling with traffic.
+  const ip = clientIp(req);
+  if (!authThrottle(ip).allowed) return false;
+  const ok = isMasterPassword(supplied);
+  if (!ok) noteAuthFailure(ip);
+  return ok;
+}
+
+/** Socket-side half of `WEB_ACCESS=tailnet`: loopback (the cloudflared connector
+ *  and local tools) or a genuine tailnet address. */
+function socketAllowedForWebAccess(socketAddr: string): boolean {
+  if (config.webAccess !== 'tailnet') return true;
+  return isLoopbackAddress(socketAddr) || isTailnetAddress(socketAddr);
 }
 
 /** True when a control credential is configured at all.
@@ -502,7 +521,7 @@ function grantPageAccess(req: http.IncomingMessage, url: URL, res: http.ServerRe
   const key = config.shareKey;
   if (!key && !config.masterPassword) return true;
   const cookie = req.headers.cookie ?? '';
-  const ip = req.socket.remoteAddress ?? 'unknown';
+  const ip = clientIp(req);
 
   const session = resolveSession(tokenFromCookieHeader(cookie), Date.now(), {
     userAgent: String(req.headers['user-agent'] ?? ''),
@@ -652,7 +671,7 @@ function grantRequestPage(req: http.IncomingMessage, url: URL, res: http.ServerR
   const cookie = req.headers.cookie ?? '';
   const sess = resolveSession(tokenFromCookieHeader(cookie), Date.now(), {
     userAgent: String(req.headers['user-agent'] ?? ''),
-    ip: req.socket.remoteAddress,
+    ip: clientIp(req),
   });
   if (sess && scopeSatisfies(sess.scope, 'request')) return true;
 
@@ -977,7 +996,12 @@ async function handleRoute(
     res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
 
     // Tailnet-only mode: a public host is refused before any credential work.
-    if (!webAccessAllowed(req.headers.host)) {
+    // The SOCKET is checked as well as the Host header: the header alone is
+    // client-supplied, so a direct connection could otherwise claim `localhost`
+    // (or any *.ts.net name) and walk straight past this gate. The tunnel and
+    // local tools connect over loopback; anything else must really be tailnet.
+    const socketAddr = req.socket.remoteAddress ?? '';
+    if (!webAccessAllowed(req.headers.host) || !socketAllowedForWebAccess(socketAddr)) {
       res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
       res.end('Vaporzr is reachable from the tailnet only (WEB_ACCESS=tailnet).');
       return;
@@ -1337,7 +1361,7 @@ async function handleRoute(
         res.end(JSON.stringify({ status: 'failed' }));
         return;
       }
-      handleVideoProxy(req, res, id, url);
+      handleVideoProxy(req, res, id, url, bridgeRef()?.videoAllowList() ?? new Set());
       return;
     }
 
@@ -1783,7 +1807,7 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
           res.end();
           return;
         }
-        const ip = req.socket.remoteAddress ?? 'unknown';
+        const ip = clientIp(req);
         if (!activityPairAllowed(ip)) {
           res.writeHead(429, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Too many attempts - try again in a minute.' }));

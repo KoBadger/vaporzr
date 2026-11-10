@@ -2757,6 +2757,10 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
             return;
           }
           if(d&&d.status==='failed'){videoPanel.classList.add('hidden');return}
+          // 'forbidden' means the bot is not playing this id any more (the
+          // proxy only downloads what is current) — stop polling, don't hide
+          // the panel state for every future track.
+          if(d&&d.status==='forbidden'){return}
           if(++tries>VIDEO_WAIT_TRIES)return;
           videoNow.timer=setTimeout(poll,2000);
         })

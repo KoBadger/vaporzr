@@ -348,6 +348,22 @@ export function webAccessAllowed(hostHeader: string | undefined): boolean {
   return false;
 }
 
+/**
+ * True when `ip` is inside the Tailscale address space we accept in
+ * `WEB_ACCESS=tailnet` mode: 100.64.0.0/10 (CGNAT) or Tailscale's ULA prefix.
+ * Checked against the SOCKET, so a direct connection cannot claim a tailnet
+ * address with a spoofed `Host` header.
+ */
+export function isTailnetAddress(ip: string | undefined): boolean {
+  if (!ip) return false;
+  const addr = ip.replace(/^::ffff:/i, '');
+  if (addr.startsWith('fd7a:115c:a1e0:')) return true;
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(addr);
+  if (!m) return false;
+  const second = Number(m[2]);
+  return Number(m[1]) === 100 && second >= 64 && second <= 127;
+}
+
 /** Human sentence for a scope, used by the new-device DM and /key list. */
 export function describeScope(scope: AccessScope): string {
   if (scope === 'control') return 'full control - can play music, change settings and open every page';

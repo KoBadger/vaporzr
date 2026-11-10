@@ -2193,6 +2193,13 @@ export class PlaybackController {
     else await this.resume();
   }
 
+  /** The YouTube id currently (or just) playing. The video proxy is necessarily
+   *  credential-free (the Activity iframe cannot carry a cookie), so this is the
+   *  allowlist that keeps it from being an open yt-dlp trigger. */
+  currentYoutubeId(): string | null {
+    return this.currentVideo?.videoId ?? this.lastYoutubeVideoId;
+  }
+
   seek(positionMs: number): void {
     const state = this.queue.getState();
     // Callers are remote (panel, bridge, Discord): the value can arrive as a

@@ -394,6 +394,22 @@ export class Bridge {
     return (this.sessions.primary ?? this.fallback).voice;
   }
 
+  /** YouTube ids the bot will download a picture for right now.
+   *
+   *  `/api/video/<id>` must stay credential-free (the Discord Activity iframe
+   *  cannot carry a cookie), so the id has to be constrained instead: only what
+   *  is playing — or just played — may start a download. Without this the
+   *  endpoint was an open yt-dlp trigger on metered proxy traffic.
+   */
+  videoAllowList(): Set<string> {
+    const ids = new Set<string>();
+    for (const s of this.sessions.all()) {
+      const id = s.playback.currentYoutubeId();
+      if (id) ids.add(id);
+    }
+    return ids;
+  }
+
   private resolveGuildId(requested?: string): string | undefined {
     return requested || this.primaryGuildId || undefined;
   }
