@@ -2154,6 +2154,91 @@ async function handleRoute(
         break;
       }
 
+      case '/api/jam/policy': {
+        if (req.method === 'GET') {
+          if (!hasRequestAccess(req, url)) {
+            res.writeHead(403, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'forbidden' }));
+            return;
+          }
+          const p = bridgeRef()?.jamPolicy(bridgeRef()?.getPrimaryGuildId() ?? undefined);
+          const owner = hasShareAccess(req, url, 'control');
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          res.end(
+            JSON.stringify(
+              p
+                ? {
+                    locked: p.locked,
+                    approval: p.approval,
+                    maxPerGuest: p.maxPerGuest,
+                    cooldownSec: p.cooldownSec,
+                    mute: owner ? p.mute : undefined,
+                  }
+                : { locked: false, approval: false, maxPerGuest: 0, cooldownSec: 0 },
+            ),
+          );
+          return;
+        }
+        if (req.method !== 'POST') {
+          res.writeHead(405);
+          res.end();
+          return;
+        }
+        if (!hasShareAccess(req, url, 'control')) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'unauthorized' }));
+          return;
+        }
+        const body = (await readJsonBody(req)) as Partial<{
+          locked: boolean;
+          approval: boolean;
+          maxPerGuest: number;
+          cooldownSec: number;
+          mute: string[];
+        }> | null;
+        const bot = bridgeRef();
+        const next = bot?.setJamPolicy(bot.getPrimaryGuildId() ?? undefined, body ?? {});
+        res.writeHead(next ? 200 : 503, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify(next ?? { error: 'bot offline' }));
+        break;
+      }
+
+      case '/api/jam/requests': {
+        if (!hasShareAccess(req, url, 'control')) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'unauthorized' }));
+          return;
+        }
+        const bot = bridgeRef();
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ requests: bot?.jamPending(bot.getPrimaryGuildId() ?? undefined) ?? [] }));
+        break;
+      }
+
+      case '/api/jam/approve':
+      case '/api/jam/deny': {
+        if (req.method !== 'POST') {
+          res.writeHead(405);
+          res.end();
+          return;
+        }
+        if (!hasShareAccess(req, url, 'control')) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'unauthorized' }));
+          return;
+        }
+        const body = (await readJsonBody(req)) as { id?: string } | null;
+        const bot = bridgeRef();
+        const id = String(body?.id ?? '');
+        const result =
+          url.pathname === '/api/jam/approve'
+            ? await bot?.approveJamRequest(id)
+            : { ok: bot?.denyJamRequest(id) ?? false };
+        res.writeHead(result?.ok ? 200 : 400, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify(result ?? { error: 'bot offline' }));
+        break;
+      }
+
       case '/api/vibe': {
         if (!hasRequestAccess(req, url)) {
           res.writeHead(403, { 'Content-Type': 'application/json' });

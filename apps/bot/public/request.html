@@ -653,6 +653,22 @@
           msg.textContent = text;
           msg.className = cls || '';
         }
+        fetch('/api/jam/policy')
+          .then(function (r) {
+            return r.ok ? r.json() : null;
+          })
+          .then(function (p) {
+            if (!p) return;
+            if (p.locked) {
+              go.disabled = true;
+              q.disabled = true;
+              q.placeholder = 'Requests are locked by the host';
+              say('The host has locked requests for now.', 'err');
+            } else if (p.approval) {
+              say('Requests go to the host for approval before they are queued.', '');
+            }
+          })
+          .catch(function () {});
         /* A shared vibe link (/jam?vibe=Name) previews the saved queue and lets
            a guest ask for the whole thing without gaining control. */
         var vibeName = new URLSearchParams(location.search).get('vibe');
@@ -725,7 +741,7 @@
             })
             .then(function (res) {
               if (res.ok && res.d.ok) {
-                say('Added: ' + res.d.name, 'ok');
+                say((res.d.pending ? '⏳ ' : 'Added: ') + res.d.name, res.d.pending ? '' : 'ok');
                 try {
                   localStorage.setItem('vzWho', who.value.trim());
                 } catch (e) {}
