@@ -410,7 +410,7 @@ export type OutboundMessage =
       deckUrl?: string;
       preset?: { name: string; index: number };
       /** Access level of this socket; only `control` can drive the decks. */
-      scope?: 'control' | 'view' | 'guest';
+      scope?: 'control' | 'view' | 'dj' | 'guest';
       guest?: boolean;
       endlesswave?: boolean;
       endlesswaveMode?: 'off' | 'basic' | 'smart';

@@ -106,6 +106,32 @@ interface JamQueueTrack {
  *  person who asked for the song. */
 const QUEUE_ORIGINS = new Set(['request', 'panel', 'endless-wave', 'autoplay', 'vibe', 'bulk']);
 
+/** Commands a per-person DJ link may run. Deliberately excludes settings,
+ *  visual themes, server switching, recording and access management. */
+const DJ_COMMANDS = new Set([
+  'play',
+  'pause',
+  'resume',
+  'toggle',
+  'next',
+  'previous',
+  'seek',
+  'volume',
+  'shuffle',
+  'repeat',
+  'remove',
+  'clear',
+  'playAt',
+  'queuePlay',
+  'move',
+  'dedupe',
+  'skipto',
+  'crossfade',
+  'bass',
+  'speed',
+  'sfx',
+]);
+
 interface Client {
   socket: WebSocket;
   role: 'panel' | 'visualizer';
@@ -531,9 +557,17 @@ export class Bridge {
     return this.socketScope.get(socket) ?? 'control';
   }
 
-  /** True when this socket may control playback (control sessions and local tests). */
+  /** True when this socket has the full control scope (decks, settings, keys). */
   private isAuthed(socket: WebSocket): boolean {
     return this.scopeOf(socket) === 'control';
+  }
+
+  /** Playback commands: control gets everything, a DJ link gets the allowlist. */
+  private mayRunCommand(socket: WebSocket, command: (InboundMessage & { type: 'cmd' })['command']): boolean {
+    const scope = this.scopeOf(socket);
+    if (scope === 'control') return true;
+    if (scope === 'dj') return DJ_COMMANDS.has(command);
+    return false;
   }
 
   /**
@@ -647,7 +681,7 @@ export class Bridge {
         });
         break;
       case 'cmd':
-        if (!this.isAuthed(socket) && !this.guestMaySend(msg)) return;
+        if (!this.mayRunCommand(socket, msg.command) && !this.guestMaySend(msg)) return;
         if (!this.allowCommand(socket)) return;
         this.handlePanelCommand(socket, msg, this.clientGuildId(socket));
         break;
@@ -688,7 +722,7 @@ export class Bridge {
         break;
       }
       case 'cmd':
-        if (!this.isAuthed(socket) && !this.guestMaySend(msg)) return;
+        if (!this.mayRunCommand(socket, msg.command) && !this.guestMaySend(msg)) return;
         if (!this.allowCommand(socket)) return;
         this.handlePanelCommand(socket, msg, this.clientGuildId(socket));
         break;
@@ -1825,8 +1859,9 @@ export class Bridge {
       allGuilds.find((g) => g.id === selectedId) ?? (selectedId ? { id: selectedId, name: selectedId } : undefined);
     // Guests never receive the server list at all: a crowd panel is for one
     // room, and the names of the operator's other servers are not its business.
-    // Signed-in viewers (view/control) keep the switcher.
-    const guildsForClient = guestSocket ? [] : allGuilds;
+    // DJ links are also locked to the room they were created for.
+    const noSwitcher = guestSocket || this.scopeOf(socket) === 'dj';
+    const guildsForClient = noSwitcher ? [] : allGuilds;
     const ew = s.endlessWave;
     const out: OutboundMessage = {
       type: 'snapshot',
@@ -1849,7 +1884,7 @@ export class Bridge {
           ? { name: this.presetNames[this.presetIdx], index: this.presetIdx }
           : undefined,
       guest: guestSocket || undefined,
-      scope: guestSocket ? 'guest' : this.scopeOf(socket) === 'control' ? 'control' : 'view',
+      scope: guestSocket ? 'guest' : (this.scopeOf(socket) as 'control' | 'view' | 'dj'),
       endlesswave: ew ? ew.active : undefined,
       endlesswaveMode: ew ? (ew.active ? 'smart' : ew.basic ? 'basic' : 'off') : undefined,
       ambient: s.guildId ? this.perms.getAmbient(s.guildId) : undefined,

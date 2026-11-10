@@ -33,7 +33,10 @@ import {
   authThrottle,
   clearAuthFailures,
   resolveSession,
+  revokeInvite,
+  revokeSession,
   revokeSessionByToken,
+  listAccess,
   scopeSatisfies,
   webAccessAllowed,
   tokenFromCookieHeader,
@@ -366,7 +369,9 @@ function isActivityFetch(req: http.IncomingMessage): boolean {
 }
 
 function accessNeedFor(pathname: string): AccessScope | null {
-  if (pathname === '/panel' || pathname === '/panel.html') return 'control';
+  // DJ links open the same panel, but the socket only gets the playback
+  // command allowlist (enforced in bridge.ts).
+  if (pathname === '/panel' || pathname === '/panel.html') return 'dj';
   // Decks change what the whole voice channel hears — same gate as the panel.
   if (pathname === '/deck' || pathname === '/deck.html' || pathname === '/decks') return 'control';
   // `/` is the public portal. The old status page moved to /status.
@@ -1752,6 +1757,73 @@ async function handleRoute(
             secure: Boolean(pl.secure && vl.secure && ll.secure),
           }),
         );
+        break;
+      }
+
+      case '/api/dj': {
+        // Per-person playback access. Only an existing control session may mint
+        // or list these; a DJ session can never mint another DJ.
+        if (!hasShareAccess(req, url, 'control')) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'unauthorized' }));
+          return;
+        }
+        if (req.method === 'POST') {
+          const body = (await readJsonBody(req)) as { label?: string } | null;
+          const label =
+            String(body?.label ?? '')
+              .replace(/[\u0000-\u001f\u007f]/g, '')
+              .trim()
+              .slice(0, 40) || 'DJ';
+          const { token, invite } = mintInvite('dj', label, 7 * 24 * 60 * 60 * 1000, Date.now(), 1);
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          res.end(
+            JSON.stringify({
+              url: `${origin}/panel?invite=${encodeURIComponent(token)}`,
+              id: invite.id,
+              label,
+              expiresAt: invite.expiresAt,
+            }),
+          );
+          return;
+        }
+        const data = listAccess();
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(
+          JSON.stringify({
+            sessions: data.sessions
+              .filter((s) => s.scope === 'dj')
+              .map((s) => ({ id: s.id, label: s.label, expiresAt: s.expiresAt, lastSeenAt: s.lastSeenAt })),
+            invites: data.invites
+              .filter((i) => i.scope === 'dj')
+              .map((i) => ({
+                id: i.id,
+                label: i.label,
+                expiresAt: i.expiresAt,
+                uses: i.uses,
+                maxUses: i.maxUses,
+              })),
+          }),
+        );
+        break;
+      }
+
+      case '/api/dj/revoke': {
+        if (req.method !== 'POST') {
+          res.writeHead(405);
+          res.end();
+          return;
+        }
+        if (!hasShareAccess(req, url, 'control')) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'unauthorized' }));
+          return;
+        }
+        const body = (await readJsonBody(req)) as { type?: string; id?: string } | null;
+        const id = String(body?.id ?? '');
+        const ok = body?.type === 'invite' ? revokeInvite(id) : revokeSession(id);
+        res.writeHead(ok ? 200 : 404, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ ok }));
         break;
       }
 
