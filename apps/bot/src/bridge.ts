@@ -1386,6 +1386,7 @@ export class Bridge {
   }
 
   private votesFor(guildId: string, uri: string): number {
+    if (!this.trackVotes) this.trackVotes = new Map();
     return this.trackVotes.get(guildId)?.get(uri)?.size ?? 0;
   }
 
@@ -1400,6 +1401,7 @@ export class Bridge {
         .trim()
         .slice(0, 24)
         .toLowerCase() || 'guest';
+    if (!this.trackVotes) this.trackVotes = new Map();
     let byUri = this.trackVotes.get(gid);
     if (!byUri) {
       byUri = new Map();
@@ -1662,7 +1664,7 @@ export class Bridge {
     tracks: JamQueueTrack[];
   } {
     const snap = this.queue.getSnapshot();
-    const voteGid = this.sessions.primary?.guildId ?? this.fallback.guildId ?? '';
+    const voteGid = this.sessions?.primary?.guildId ?? this.fallback?.guildId ?? '';
     const map = (t: {
       uri?: string;
       name?: string;
