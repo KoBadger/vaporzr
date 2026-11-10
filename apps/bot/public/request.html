@@ -317,6 +317,23 @@
       .q-row:last-child {
         border-bottom: 0;
       }
+      .q-vote {
+        flex: 0 0 auto;
+        margin-left: auto;
+        min-width: 34px;
+        height: 28px;
+        padding: 0 7px;
+        border-radius: 8px;
+        border: 1px solid rgba(140, 160, 255, 0.26);
+        background: rgba(106, 92, 255, 0.12);
+        color: #9fb0ff;
+        font-size: 10px;
+        cursor: pointer;
+      }
+      .q-vote:hover {
+        border-color: #6a5cff;
+        color: #fff;
+      }
       .q-num {
         width: 16px;
         flex: 0 0 16px;
@@ -857,6 +874,35 @@
           txt.textContent = fmtMs(pos);
         }
         setInterval(tickBar, 1000);
+        qList.addEventListener('click', function (e) {
+          var btn = e.target && e.target.closest ? e.target.closest('.q-vote') : null;
+          if (!btn || btn.disabled) return;
+          btn.disabled = true;
+          fetch('/api/jam/vote', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uri: btn.getAttribute('data-uri'), name: (who.value || '').trim() }),
+          })
+            .then(function (r) {
+              return r.json();
+            })
+            .then(function (d) {
+              if (d && d.ok) {
+                var n = btn.querySelector('span');
+                if (n) n.textContent = d.votes || 0;
+                if (d.promoted) {
+                  say('🔥 Enough votes — that track is playing next.', 'ok');
+                  pollQueue();
+                }
+              } else say((d && d.error) || 'Vote failed.', 'err');
+            })
+            .catch(function () {
+              say('Vote failed — try again.', 'err');
+            })
+            .then(function () {
+              btn.disabled = false;
+            });
+        });
 
         function renderQueue(d) {
           var now = d && d.playing,
@@ -934,7 +980,15 @@
                 '</div>' +
                 '<div class="q-sub">' +
                 subHtml(t, est ? [est] : []) +
-                '</div></div></div>'
+                '</div></div>' +
+                (t.uri
+                  ? '<button class="q-vote" data-uri="' +
+                    esc(t.uri) +
+                    '" aria-label="Vote to play next">▲ <span>' +
+                    (t.votes || 0) +
+                    '</span></button>'
+                  : '') +
+                '</div>'
               );
             })
             .join('');

@@ -2066,6 +2066,7 @@
           <button id="dj-toggle" data-tip="Toggle the DJ soundboard on/off">🎛</button>
           <button id="btn-key" data-tip="Show / copy the access key and links (owner only)">🔑</button>
           <button id="btn-push" data-tip="Enable browser notifications (YouTube / cookie alerts)">🔔</button>
+          <button id="btn-share-now" data-tip="Copy a link that previews what is playing right now">🔗</button>
           <button id="btn-share" data-tip="Post the jam invite card (QR + link) into this channel">📱</button>
         </div>
         <div id="guilds"></div>
@@ -2300,6 +2301,28 @@
               font-size: 12.5px;
             "
           ></select>
+          <select
+            id="vibe-xfade"
+            style="
+              margin-top: 8px;
+              width: 100%;
+              padding: 8px 10px;
+              border-radius: 9px;
+              border: 1px solid rgba(140, 160, 255, 0.3);
+              background: rgba(10, 14, 32, 0.7);
+              color: #e2e8f0;
+              font-size: 12px;
+            "
+          >
+            <option value="-1">Vibe crossfade: use current</option>
+            <option value="0">Vibe crossfade: off</option>
+            <option value="4000">Vibe crossfade: 4s</option>
+            <option value="6000">Vibe crossfade: 6s</option>
+            <option value="10000">Vibe crossfade: 10s</option>
+          </select>
+          <div class="qr-card" id="vibe-qr-wrap" style="display: none; margin-top: 10px">
+            <canvas id="vibe-qr" width="130" height="130" aria-label="Vibe link QR"></canvas>
+          </div>
           <div class="qhint">Saved per server (max 25) · load adds the vibe to the queue.</div>
         </div>
       </div>
@@ -4137,6 +4160,7 @@
         setInterval(loadStats, 60000);
 
         /* ---------- vibes (saved queues) ---------- */
+        var vibeXfade = {};
         function loadVibes() {
           fetch('/api/vibes')
             .then(function (r) {
@@ -4161,6 +4185,7 @@
                 opt.value = v.name;
                 opt.textContent = v.name + ' (' + v.tracks + ')';
                 sel.appendChild(opt);
+                vibeXfade[v.name] = v.crossfadeMs == null ? -1 : v.crossfadeMs;
               });
             })
             .catch(function () {});
@@ -4177,14 +4202,77 @@
           el['vibe-name'].value = '';
           setTimeout(loadVibes, 1500);
         };
-        el['btn-vibe-share'].onclick = function () {
+        function vibeShareUrl() {
           var name = el['vibe-list'].value;
-          if (!name) {
+          if (!name) return '';
+          var base = jam.joinUrl || location.origin + jam.joinPath;
+          return base + (base.indexOf('?') >= 0 ? '&' : '?') + 'vibe=' + encodeURIComponent(name);
+        }
+        function renderVibeQr() {
+          var url = vibeShareUrl();
+          var wrap = document.getElementById('vibe-qr-wrap');
+          var cv = document.getElementById('vibe-qr');
+          if (!wrap || !cv) return;
+          if (!url) {
+            wrap.style.display = 'none';
+            return;
+          }
+          ensureQrLib(function (ok) {
+            if (!ok) return;
+            try {
+              var qr = qrcode(0, 'M');
+              qr.addData(url);
+              qr.make();
+              var n = qr.getModuleCount(),
+                ctx = cv.getContext('2d'),
+                total = n + 8,
+                px = Math.max(1, Math.floor(Math.min(cv.width, cv.height) / total)),
+                side = px * total,
+                offX = Math.floor((cv.width - side) / 2),
+                offY = Math.floor((cv.height - side) / 2);
+              ctx.clearRect(0, 0, cv.width, cv.height);
+              ctx.fillStyle = '#fff';
+              ctx.fillRect(0, 0, cv.width, cv.height);
+              ctx.fillStyle = '#05060f';
+              for (var y = 0; y < n; y++)
+                for (var x = 0; x < n; x++)
+                  if (qr.isDark(y, x)) ctx.fillRect(offX + (x + 4) * px, offY + (y + 4) * px, px, px);
+              wrap.style.display = 'flex';
+            } catch (e) {
+              wrap.style.display = 'none';
+            }
+          });
+        }
+        el['vibe-list'].onchange = function () {
+          renderVibeQr();
+          var x = vibeXfade[el['vibe-list'].value];
+          el['vibe-xfade'].value = x == null ? '-1' : String(x);
+        };
+        el['vibe-xfade'].onchange = function () {
+          var name = el['vibe-list'].value;
+          if (!name) return;
+          fetch('/api/vibes/crossfade', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: name, ms: Number(el['vibe-xfade'].value) }),
+          })
+            .then(function (r) {
+              if (!r.ok) throw new Error('save failed');
+              vibeXfade[name] = Number(el['vibe-xfade'].value);
+              toast('success', 'Vibe crossfade saved');
+            })
+            .catch(function () {
+              toast('error', 'Could not save that vibe preset');
+            });
+        };
+        el['btn-vibe-share'].onclick = function () {
+          var url = vibeShareUrl();
+          if (!url) {
             toast('error', 'Pick a saved vibe');
             return;
           }
-          var base = jam.joinUrl || location.origin + jam.joinPath;
-          copyText(base + (base.indexOf('?') >= 0 ? '&' : '?') + 'vibe=' + encodeURIComponent(name), 'Vibe link');
+          copyText(url, 'Vibe link');
+          renderVibeQr();
         };
         el['btn-vibe-load'].onclick = function () {
           var name = el['vibe-list'].value;
@@ -4631,6 +4719,9 @@
         };
         el['btn-share'].onclick = function () {
           cmd('share-jam');
+        };
+        document.getElementById('btn-share-now').onclick = function () {
+          copyText(location.origin + '/now', 'Now playing link');
         };
         document.getElementById('jam-copy').onclick = function () {
           copyText(document.getElementById('jam-link').textContent, 'Jam link');

@@ -1478,6 +1478,62 @@ async function handleRoute(
         break;
       }
 
+      case '/now':
+      case '/now.html': {
+        // A link that unfurls into the actual track playing right now. Public
+        // like the jam page: it exposes title/artist/artwork, nothing internal.
+        const e = (s: string): string =>
+          s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        const q = bridgeRef()?.jamQueue() ?? null;
+        const t = q?.playing ?? null;
+        const base = config.staticBaseUrl || config.jamPublicBase || '';
+        const art = t?.image && /^https:\/\//i.test(t.image) ? t.image : `${base}/ew-bg.jpg`;
+        const title = t ? `▶ ${t.name}${t.artists ? ` — ${t.artists}` : ''}` : 'Vaporzr — nothing playing';
+        const desc = t
+          ? `Now playing on Vaporzr${q && q.queueTotal > 1 ? ` · ${q.queueTotal} in the queue` : ''}. Join the jam and pick the next track.`
+          : 'The decks are idle. Join the jam and pick the next track.';
+        const body = t
+          ? `<img src="${e(art)}" alt="" />
+             <div class="badge">${q?.playingNow ? 'NOW PLAYING' : 'UP NEXT'}</div>
+             <h1>${e(t.name)}</h1>
+             <p>${e(t.artists || t.album || 'Vaporzr')}</p>
+             <small>${q?.queueTotal ?? 0} track${(q?.queueTotal ?? 0) === 1 ? '' : 's'} in the room queue</small>`
+          : `<h1>Nothing playing</h1><p>The decks are idle.</p>`;
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end(
+          `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${e(title)}</title>
+<meta name="description" content="${e(desc)}">
+<meta property="og:type" content="music.song">
+<meta property="og:site_name" content="Vaporzr">
+<meta property="og:title" content="${e(title)}">
+<meta property="og:description" content="${e(desc)}">
+<meta property="og:image" content="${e(art)}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="${e(title)}">
+<meta name="twitter:description" content="${e(desc)}">
+<meta name="twitter:image" content="${e(art)}">
+<meta name="theme-color" content="#070912">
+<style>
+:root{color-scheme:dark}
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:radial-gradient(800px 460px at 50% -10%,#1b1638,#070912 65%);color:#e9edf6;font:15px/1.5 system-ui,sans-serif;padding:24px}
+main{width:min(430px,100%);padding:22px;border:1px solid rgba(140,160,255,.22);border-radius:20px;background:rgba(13,17,35,.86);box-shadow:0 24px 80px rgba(0,0,0,.5);text-align:center}
+img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:14px;background:#11162b;margin-bottom:14px}
+.badge{font-size:10px;letter-spacing:.18em;color:#22d3ee;margin-bottom:6px}
+h1{font-size:21px;line-height:1.25;margin:0 0 4px}
+p{color:#9fb0ff;margin:0 0 6px}
+small{color:#64748b}
+nav{display:flex;gap:8px;margin-top:18px}
+a{flex:1;text-decoration:none;color:#fff;background:linear-gradient(135deg,#6a5cff,#22d3ee);padding:11px;border-radius:10px;font-weight:600;font-size:13px}
+a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);color:#cbd5e1}
+</style></head><body><main>${body}
+<nav><a href="/jam">Join the jam</a><a class="ghost" href="/crowd">Crowd view</a></nav>
+</main></body></html>`,
+        );
+        break;
+      }
+
       case '/activity': {
         // Direct visit / alias for the Activity page (also what the portal maps).
         const page = activityHtml(origin);
@@ -1637,7 +1693,12 @@ async function handleRoute(
         }
         const gid = url.searchParams.get('guildId') || (bridgeRef()?.getPrimaryGuildId() ?? '');
         const vibes = gid
-          ? playlistStore.list(gid).map((p) => ({ name: p.name, tracks: p.tracks.length, updatedAt: p.updatedAt }))
+          ? playlistStore.list(gid).map((p) => ({
+              name: p.name,
+              tracks: p.tracks.length,
+              updatedAt: p.updatedAt,
+              crossfadeMs: p.crossfadeMs ?? null,
+            }))
           : [];
         res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
         res.end(JSON.stringify({ vibes }));
@@ -2203,6 +2264,29 @@ async function handleRoute(
         break;
       }
 
+      case '/api/jam/vote': {
+        if (req.method !== 'POST') {
+          res.writeHead(405);
+          res.end();
+          return;
+        }
+        if (!hasRequestAccess(req, url)) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'forbidden' }));
+          return;
+        }
+        if (!requestGate()) {
+          res.writeHead(429, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Too many votes — try again shortly.' }));
+          return;
+        }
+        const body = (await readJsonBody(req)) as { uri?: string; name?: string } | null;
+        const result = bridgeRef()?.voteTrack(String(body?.uri ?? ''), body?.name);
+        res.writeHead(result?.ok ? 200 : 400, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify(result ?? { error: 'bot offline' }));
+        break;
+      }
+
       case '/api/jam/requests': {
         if (!hasShareAccess(req, url, 'control')) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -2242,6 +2326,25 @@ async function handleRoute(
             : { ok: bot?.denyJamRequest(id) ?? false };
         res.writeHead(result?.ok ? 200 : 400, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
         res.end(JSON.stringify(result ?? { error: 'bot offline' }));
+        break;
+      }
+
+      case '/api/vibes/crossfade': {
+        if (req.method !== 'POST') {
+          res.writeHead(405);
+          res.end();
+          return;
+        }
+        if (!hasShareAccess(req, url, 'control')) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'unauthorized' }));
+          return;
+        }
+        const body = (await readJsonBody(req)) as { name?: string; ms?: number } | null;
+        const gid = bridgeRef()?.getPrimaryGuildId() ?? '';
+        const ok = gid ? playlistStore.setCrossfade(gid, String(body?.name ?? ''), Number(body?.ms ?? 0)) : false;
+        res.writeHead(ok ? 200 : 404, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ ok }));
         break;
       }
 

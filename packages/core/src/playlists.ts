@@ -18,6 +18,8 @@ export interface SavedPlaylist {
   name: string;
   tracks: SavedTrack[];
   updatedAt: number;
+  /** Optional crossfade preset applied when this vibe is loaded. */
+  crossfadeMs?: number;
 }
 
 const MAX_PER_GUILD = 25;
@@ -75,9 +77,27 @@ export class PlaylistStore {
       return { ok: false, error: `You already have ${MAX_PER_GUILD} playlists — delete one first.` };
     }
     const trimmed = tracks.slice(0, MAX_TRACKS);
-    data[key] = { name: name.trim().slice(0, 60), tracks: trimmed, updatedAt: Date.now() };
+    const previous = data[key];
+    data[key] = {
+      name: name.trim().slice(0, 60),
+      tracks: trimmed,
+      updatedAt: Date.now(),
+      crossfadeMs: previous?.crossfadeMs,
+    };
     this.persist(guildId);
     return { ok: true, tracks: trimmed.length };
+  }
+
+  /** Store the crossfade preset that belongs to a vibe (0 = off). */
+  setCrossfade(guildId: string, name: string, ms: number): boolean {
+    const key = normalizeName(name);
+    const data = this.load(guildId);
+    const pl = data[key];
+    if (!pl) return false;
+    pl.crossfadeMs = Math.max(0, Math.min(15_000, Math.round(ms)));
+    pl.updatedAt = Date.now();
+    this.persist(guildId);
+    return true;
   }
 
   /** Append a track to a playlist (creating it if needed), skipping exact dupes. */
