@@ -1325,6 +1325,9 @@ export class Bridge {
   }
 
   private statsFor(guildId: string, guest: string): { count: number; last: number } {
+    // Unit tests construct a prototype-level fake, so tolerate an uninitialised
+    // field just like the real constructor would have set.
+    if (!this.requestStats) this.requestStats = new Map();
     let byGuest = this.requestStats.get(guildId);
     if (!byGuest) {
       byGuest = new Map();
