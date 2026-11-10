@@ -108,6 +108,7 @@ import {
 import { Session, SessionManager, type RestoredPlayingInfo } from './session.js';
 import { fetchLyrics, type LyricsResult, type SyncedLine } from '@vaporzr/core/lyrics';
 import { PermissionsManager } from './permissions.js';
+import { billingEnabled, createCheckoutSession } from './billing.js';
 import { analyzer } from '@vaporzr/core/analyzer';
 import { vizTunnel } from './tunnel.js';
 import { renderPanelIconPng, PANEL_ICON_FALLBACKS } from './panelIcons.js';
@@ -438,6 +439,18 @@ const COMMANDS = [
     .setName('jam')
     .setDescription('Post the jam invite card — QR + link so guests can request songs from their phones'),
   new SlashCommandBuilder().setName('stats').setDescription('Show bot statistics'),
+  new SlashCommandBuilder()
+    .setName('upgrade')
+    .setDescription('Get a checkout link for Vaporzr plans')
+    .addStringOption((o) =>
+      o
+        .setName('plan')
+        .setDescription('Which plan')
+        .addChoices(
+          { name: 'Plus - my account - four decks, recording, themes, lossless', value: 'plus' },
+          { name: 'Server - this server - five servers, white-label, analytics', value: 'server' },
+        ),
+    ),
   new SlashCommandBuilder().setName('privacy').setDescription('What data the bot stores, and how to remove it'),
   new SlashCommandBuilder()
     .setName('servers')
@@ -3807,6 +3820,54 @@ export class DiscordBot {
 
       case 'stats': {
         await interaction.reply({ embeds: [this.statsEmbed()], flags: MessageFlags.Ephemeral });
+        break;
+      }
+
+      case 'upgrade': {
+        if (!billingEnabled()) {
+          await interaction.reply({
+            content: 'Billing is not configured on this deployment yet — the paid tiers are still being finalised.',
+            flags: MessageFlags.Ephemeral,
+          });
+          break;
+        }
+        const plan = interaction.options.getString('plan') === 'server' ? 'server' : 'plus';
+        if (plan === 'server' && !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+          await interaction.reply({
+            content: 'Only a server admin can buy the Server plan.',
+            flags: MessageFlags.Ephemeral,
+          });
+          break;
+        }
+        const origin = config.staticBaseUrl || config.jamPublicBase;
+        if (!origin) {
+          await interaction.reply({
+            content: 'The public URL is not configured, so checkout links cannot be created.',
+            flags: MessageFlags.Ephemeral,
+          });
+          break;
+        }
+        const subject = plan === 'server' ? `guild:${interaction.guildId ?? ''}` : `user:${interaction.user.id}`;
+        if (plan === 'server' && !interaction.guildId) {
+          await interaction.reply({
+            content: 'Run this inside the server you want to upgrade.',
+            flags: MessageFlags.Ephemeral,
+          });
+          break;
+        }
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        try {
+          const session = await createCheckoutSession({ plan, subject, origin });
+          const name = plan === 'server' ? 'Server' : 'Plus';
+          await interaction.editReply({
+            content: `**Vaporzr ${name}** — finish checkout here:\n${session.url}\n\nThe plan is applied automatically once payment clears.`,
+          });
+        } catch (err) {
+          console.warn(`[billing] checkout failed: ${err instanceof Error ? err.message : err}`);
+          await interaction.editReply({
+            content: `Could not start checkout: ${err instanceof Error ? err.message : 'unknown error'}`,
+          });
+        }
         break;
       }
 

@@ -187,6 +187,16 @@ export const config = {
    */
   requestKey: process.env.REQUEST_KEY ?? '',
   /**
+   * Stripe billing (optional). All of these empty = billing is disabled and the
+   * /api/billing routes answer 503; nothing else in the bot changes. Prices are
+   * the two recurring tiers from the portal: Plus (per user) and Server
+   * (per guild). Create them in the Stripe dashboard and paste the `price_…` ids.
+   */
+  stripeSecretKey: process.env.STRIPE_SECRET_KEY ?? '',
+  stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET ?? '',
+  stripePricePlus: process.env.STRIPE_PRICE_PLUS ?? '',
+  stripePriceServer: process.env.STRIPE_PRICE_SERVER ?? '',
+  /**
    * Marks this instance as the primary (the VPS). A second instance sharing the
    * same bot token fights the primary for the single Discord gateway session, so
    * non-primary instances refuse to boot while the primary is reachable.
