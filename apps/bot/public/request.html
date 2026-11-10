@@ -4,6 +4,28 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Vaporzr — Request a song</title>
+    <meta
+      name="description"
+      content="Join the jam: pick a track, add your name, and it lands in everyone's queue. No app, no account."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Vaporzr" />
+    <meta property="og:title" content="Join the Vaporzr jam" />
+    <meta
+      property="og:description"
+      content="Pick a song from your phone - Spotify, YouTube, SoundCloud, podcasts or any link. It lands in the room's queue."
+    />
+    <meta property="og:image" content="https://www.vaporzr.app/ew-bg.jpg" />
+    <meta property="og:image:width" content="1280" />
+    <meta property="og:image:height" content="720" />
+    <meta property="og:image:alt" content="Vaporzr jam request page" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Join the Vaporzr jam" />
+    <meta
+      name="twitter:description"
+      content="Pick a song from your phone - it lands in the room's queue. No app, no account."
+    />
+    <meta name="twitter:image" content="https://www.vaporzr.app/ew-bg.jpg" />
     <link rel="icon" type="image/png" href="/favicon.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="theme-color" content="#6a5cff" />
@@ -94,6 +116,34 @@
       }
       .crowd-link:hover {
         color: #fff;
+      }
+      #vibe-banner {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin: 0 0 12px;
+        padding: 9px 11px;
+        border: 1px solid rgba(140, 160, 255, 0.32);
+        border-radius: 10px;
+        background: rgba(106, 92, 255, 0.12);
+        font-size: 12px;
+      }
+      #vibe-banner[hidden] {
+        display: none;
+      }
+      #vibe-banner b {
+        display: block;
+        color: #fff;
+      }
+      #vibe-banner span {
+        color: #9fb0ff;
+        font-size: 11px;
+      }
+      #vibe-banner button {
+        flex: 0 0 auto;
+        padding: 8px 12px;
+        font-size: 12px;
       }
       #bars {
         width: 100%;
@@ -521,6 +571,13 @@
         </div>
       </div>
       <a class="crowd-link" href="/crowd">◉ Crowd view — now playing, queue &amp; lyrics</a>
+      <div id="vibe-banner" hidden>
+        <div>
+          <b id="vibe-title">Saved vibe</b>
+          <span id="vibe-count"></span>
+        </div>
+        <button id="vibe-add">Request this vibe</button>
+      </div>
       <canvas id="bars" aria-hidden="true"></canvas>
       <input id="who" placeholder="Your name (shows on the queue)" autocomplete="off" maxlength="24" />
       <div class="sw-wrap">
@@ -595,6 +652,57 @@
         function say(text, cls) {
           msg.textContent = text;
           msg.className = cls || '';
+        }
+        /* A shared vibe link (/jam?vibe=Name) previews the saved queue and lets
+           a guest ask for the whole thing without gaining control. */
+        var vibeName = new URLSearchParams(location.search).get('vibe');
+        var vibeBanner = document.getElementById('vibe-banner');
+        var vibeAdd = document.getElementById('vibe-add');
+        function showVibe(name, count) {
+          document.getElementById('vibe-title').textContent = 'Vibe: ' + name;
+          document.getElementById('vibe-count').textContent = count
+            ? count + ' track' + (count === 1 ? '' : 's') + ' saved'
+            : '';
+          vibeBanner.hidden = false;
+        }
+        if (vibeName) {
+          fetch('/api/vibe?name=' + encodeURIComponent(vibeName))
+            .then(function (r) {
+              return r.json();
+            })
+            .then(function (d) {
+              if (d && d.ok) showVibe(d.name || vibeName, (d.tracks || []).length);
+              else say((d && d.error) || 'That vibe link is no longer active.', 'err');
+            })
+            .catch(function () {});
+          vibeAdd.onclick = function () {
+            vibeAdd.disabled = true;
+            fetch('/api/request/vibe', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name: vibeName, who: who.value.trim() }),
+            })
+              .then(function (r) {
+                return r.json().then(function (d) {
+                  return { ok: r.ok, d: d };
+                });
+              })
+              .then(function (res) {
+                if (res.ok && res.d.ok) {
+                  say('Added ' + res.d.name, 'ok');
+                  try {
+                    localStorage.setItem('vzWho', who.value.trim());
+                  } catch (e) {}
+                  pollQueue();
+                } else say((res.d && res.d.error) || 'Could not add that vibe.', 'err');
+              })
+              .catch(function () {
+                say('Network error — try again.', 'err');
+              })
+              .then(function () {
+                vibeAdd.disabled = false;
+              });
+          };
         }
         function submit() {
           if (go.disabled) return; // Enter + click double-fire guard

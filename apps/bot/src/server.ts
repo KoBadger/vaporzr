@@ -555,7 +555,7 @@ function hasRequestAccess(req: http.IncomingMessage, url: URL): boolean {
  *  tags and unfurl an invite card wherever the link is pasted; humans' browsers
  *  jump straight to /jam with a script, and the meta refresh + noscript link
  *  cover everyone else. Null target = the code is unknown or expired. */
-function jamHandoffHtml(target: string | null): string {
+function jamHandoffHtml(target: string | null, kind: 'request' | 'crowd' = 'request'): string {
   const esc = (s: string): string =>
     s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   if (!target) {
@@ -568,16 +568,32 @@ function jamHandoffHtml(target: string | null): string {
     );
   }
   const jump = JSON.stringify(target).replace(/</g, '\\u003c');
+  const origin = config.staticBaseUrl || config.jamPublicBase;
+  const image = origin ? `${origin}/ew-bg.jpg` : '/ew-bg.jpg';
+  const crowd = kind === 'crowd';
+  const title = crowd ? 'Vaporzr — crowd view' : "Vaporzr — you're invited to the jam";
+  const description = crowd
+    ? 'Now playing, the queue and lyrics for this room. Read-only — your host keeps the controls.'
+    : "Pick a song, add your name — it lands in everyone's queue. No app, no account.";
   return (
-    `<!doctype html><meta charset="utf-8"><title>Vaporzr — join the jam</title>` +
+    `<!doctype html><meta charset="utf-8"><title>${title}</title>` +
     `<meta name="viewport" content="width=device-width,initial-scale=1">` +
     `<meta name="theme-color" content="#6a5cff">` +
-    `<meta property="og:title" content="📼 You're invited to the jam">` +
-    `<meta property="og:description" content="Pick a song, add your name — it lands in everyone's queue. No app, no account.">` +
-    `<meta name="twitter:card" content="summary">` +
+    `<meta name="description" content="${description}">` +
+    `<meta property="og:type" content="website">` +
+    `<meta property="og:site_name" content="Vaporzr">` +
+    `<meta property="og:title" content="${title}">` +
+    `<meta property="og:description" content="${description}">` +
+    `<meta property="og:image" content="${esc(image)}">` +
+    `<meta property="og:image:width" content="1280">` +
+    `<meta property="og:image:height" content="720">` +
+    `<meta name="twitter:card" content="summary_large_image">` +
+    `<meta name="twitter:title" content="${title}">` +
+    `<meta name="twitter:description" content="${description}">` +
+    `<meta name="twitter:image" content="${esc(image)}">` +
     `<meta http-equiv="refresh" content="0;url=${esc(target)}">` +
     `<script>location.replace(${jump});</script>` +
-    `<noscript><a href="${esc(target)}">Open the jam →</a></noscript>`
+    `<noscript><a href="${esc(target)}">${crowd ? 'Open the crowd view' : 'Open the jam'} →</a></noscript>`
   );
 }
 
@@ -1310,12 +1326,14 @@ async function handleRoute(
     if (url.pathname.startsWith('/c/')) {
       const token = resolveJamCode(url.pathname.slice(3));
       if (!token) {
-        res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-        res.end('That jam link has expired.');
+        res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end(jamHandoffHtml(null));
         return;
       }
-      res.writeHead(302, { Location: `/crowd?invite=${encodeURIComponent(token)}`, 'Cache-Control': 'no-store' });
-      res.end();
+      // Same handoff page as /j so the link unfurls with an accurate title,
+      // description and preview instead of a bare 302.
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(jamHandoffHtml(`/crowd?invite=${encodeURIComponent(token)}`, 'crowd'));
       return;
     }
 
@@ -1593,7 +1611,9 @@ async function handleRoute(
       }
 
       case '/api/vibes': {
-        if (config.shareKey && !hasShareAccess(req, url)) {
+        // Crowd/request sessions may read the saved-vibe names: the jam page
+        // offers them as shareable links. They cannot save or load by control.
+        if (config.shareKey && !hasShareAccess(req, url) && !hasRequestAccess(req, url)) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'unauthorized' }));
           return;
@@ -2047,6 +2067,48 @@ async function handleRoute(
         }
         res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
         res.end(JSON.stringify(bot.jamQueue()));
+        break;
+      }
+
+      case '/api/vibe': {
+        if (!hasRequestAccess(req, url)) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'forbidden' }));
+          return;
+        }
+        const bot = bridgeRef();
+        const vibe = bot?.jamVibe(String(url.searchParams.get('name') ?? ''));
+        res.writeHead(vibe?.ok ? 200 : 404, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify(vibe ?? { ok: false, error: 'bot offline' }));
+        break;
+      }
+
+      case '/api/request/vibe': {
+        if (req.method !== 'POST') {
+          res.writeHead(405);
+          res.end();
+          return;
+        }
+        if (!hasRequestAccess(req, url)) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'forbidden' }));
+          return;
+        }
+        if (!requestGate()) {
+          res.writeHead(429, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Too many requests — try again shortly.' }));
+          return;
+        }
+        const body = (await readJsonBody(req)) as { name?: string; who?: string } | null;
+        const bot = bridgeRef();
+        if (!bot) {
+          res.writeHead(503, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'bot offline' }));
+          return;
+        }
+        const result = await bot.requestVibe(String(body?.name ?? ''), body?.who);
+        res.writeHead(result.ok ? 200 : 400, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify(result));
         break;
       }
 

@@ -273,6 +273,7 @@ export type CommandName =
   | 'voteskip'
   | 'dedupe'
   | 'skipto'
+  | 'crossfade'
   | 'share-jam';
 
 export interface CommandMessage {
@@ -301,6 +302,8 @@ export interface CommandMessage {
   db?: number;
   /** Playback speed factor for command: 'speed'. */
   factor?: number;
+  /** Crossfade length in ms for command: 'crossfade' (0 = off). */
+  ms?: number;
   /** Ambient intermission on/off for command: 'ambient'. */
   ambient?: boolean;
   /** Vote-to-skip on/off for command: 'voteskip'. */
@@ -401,6 +404,8 @@ export type OutboundMessage =
       guilds?: Array<{ id: string; name: string }>;
       sensitivity?: number;
       presetCycle?: number;
+      /** Persisted crossfade length for this guild, in ms (0 = off). */
+      crossfadeMs?: number;
       /** Absolute URL of the live-deck page (relative `/deck` when no public base is set). */
       deckUrl?: string;
       preset?: { name: string; index: number };
