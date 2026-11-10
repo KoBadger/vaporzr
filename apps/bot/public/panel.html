@@ -1016,6 +1016,37 @@
         flex: 0 0 auto;
         white-space: nowrap;
       }
+      .dj-list {
+        display: grid;
+        gap: 5px;
+        margin: 2px 0 4px;
+      }
+      .dj-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 8px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: rgba(148, 163, 184, 0.06);
+        font-size: 11.5px;
+      }
+      .dj-item b {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .dj-item span {
+        color: var(--muted);
+        font-size: 10.5px;
+      }
+      .dj-item button {
+        height: 24px;
+        padding: 0 7px;
+        font-size: 10px;
+      }
       .key-foot {
         display: flex;
         justify-content: flex-end;
@@ -1119,6 +1150,15 @@
       }
       body.guest #guilds {
         display: none;
+      }
+      body.dj #guilds,
+      body.dj #btn-key,
+      body.dj #btn-share {
+        display: none;
+      }
+      body.dj #dj-badge {
+        border-color: color-mix(in srgb, var(--accent2) 55%, transparent);
+        color: var(--accent2);
       }
 
       /* Queue: drag-to-reorder + multi-select */
@@ -2392,6 +2432,19 @@
             <input id="key-deck" type="text" readonly spellcheck="false" placeholder="Live decks link" />
             <button id="key-copy-deck" data-tip="Copy the live decks link (rotates monthly)">⧉ decks</button>
           </div>
+          <div class="key-h2">DJ access (playback only)</div>
+          <p class="key-sub">
+            One link per person: transport, queue, volume and crossfade — no settings, decks or access keys.
+          </p>
+          <div class="key-row">
+            <input id="dj-label" type="text" placeholder="Name (e.g. Sam)" autocomplete="off" maxlength="40" />
+            <button id="dj-create">Create</button>
+          </div>
+          <div class="key-row">
+            <input id="dj-link" type="text" readonly spellcheck="false" placeholder="Create a DJ link" />
+            <button id="dj-copy" data-tip="Copy the DJ link">⧉ copy</button>
+          </div>
+          <div id="dj-list" class="dj-list"></div>
         </div>
         <p class="key-sub" id="key-note" style="display: none">
           Only the owner's devices can show the key or create invite links. Ask the owner for a link.
@@ -2463,6 +2516,11 @@
           'key-copy-listen',
           'key-deck',
           'key-copy-deck',
+          'dj-label',
+          'dj-create',
+          'dj-link',
+          'dj-copy',
+          'dj-list',
           'key-owner',
           'key-note',
           'key-signout',
@@ -2557,12 +2615,48 @@
         function send(msg) {
           if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
         }
+        var DJ_ALLOWED = {
+          play: 1,
+          pause: 1,
+          resume: 1,
+          toggle: 1,
+          next: 1,
+          previous: 1,
+          seek: 1,
+          volume: 1,
+          shuffle: 1,
+          repeat: 1,
+          remove: 1,
+          clear: 1,
+          playAt: 1,
+          queuePlay: 1,
+          move: 1,
+          dedupe: 1,
+          skipto: 1,
+          crossfade: 1,
+          bass: 1,
+          speed: 1,
+          sfx: 1,
+        };
         function cmd(command, extra) {
           if (GUEST) {
             toast('info', '👁 View-only — ask for a /key give link to control playback');
             return;
           }
+          if (DJ_MODE && !DJ_ALLOWED[command]) {
+            toast('info', '🎧 DJ access is playback-only — ask the owner for full control');
+            return;
+          }
           send(Object.assign({ type: 'cmd', command: command }, extra || {}));
+        }
+        function enableDjMode() {
+          if (DJ_MODE) return;
+          DJ_MODE = true;
+          document.body.classList.add('dj');
+          if (el['btn-key']) el['btn-key'].style.display = 'none';
+          if (el['btn-share']) el['btn-share'].style.display = 'none';
+          if (el['guilds']) el['guilds'].innerHTML = '';
+          toast('success', '🎧 DJ access — playback and queue controls only');
         }
         function enableGuestMode() {
           if (GUEST_UI) return;
@@ -3351,6 +3445,7 @@
         // the user switches tabs and back. Short delay so /health is up by then.
         setTimeout(checkBuildUpdate, 1200);
         var GUEST = false,
+          DJ_MODE = false,
           GUEST_UI = false;
         function connect() {
           var loc = window.location;
@@ -3507,6 +3602,7 @@
                   GUEST = true;
                   enableGuestMode();
                 }
+                if (msg.scope === 'dj') enableDjMode();
                 if (msg.djEnabled != null) djEnabled = msg.djEnabled;
                 if (msg.endlesswaveMode) waveMode = msg.endlesswaveMode;
                 else if (msg.endlesswave != null) waveMode = msg.endlesswave ? 'smart' : 'off';
@@ -4270,6 +4366,55 @@
         function openKeyModal() {
           el['key-modal'].style.display = 'flex';
           void loadAccessKey();
+          loadDj();
+        }
+        function loadDj() {
+          fetch('/api/dj')
+            .then(function (r) {
+              return r.ok ? r.json() : null;
+            })
+            .then(function (d) {
+              var list = el['dj-list'];
+              if (!list) return;
+              list.innerHTML = '';
+              if (!d) return;
+              (d.invites || []).forEach(function (i) {
+                addDjRow(list, 'invite', i.id, i.label || 'DJ', 'link · unused');
+              });
+              (d.sessions || []).forEach(function (s) {
+                addDjRow(list, 'session', s.id, s.label || 'DJ', 'active');
+              });
+            })
+            .catch(function () {});
+        }
+        function addDjRow(list, type, id, label, state) {
+          var row = document.createElement('div');
+          row.className = 'dj-item';
+          var b = document.createElement('b');
+          b.textContent = label;
+          var s = document.createElement('span');
+          s.textContent = state;
+          var btn = document.createElement('button');
+          btn.textContent = 'Revoke';
+          btn.onclick = function () {
+            fetch('/api/dj/revoke', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ type: type, id: id }),
+            })
+              .then(function (r) {
+                if (!r.ok) throw new Error('revoke failed');
+                toast('success', 'DJ access revoked');
+                loadDj();
+              })
+              .catch(function () {
+                toast('error', 'Could not revoke that DJ link');
+              });
+          };
+          row.appendChild(b);
+          row.appendChild(s);
+          row.appendChild(btn);
+          list.appendChild(row);
         }
         function closeKeyModal() {
           el['key-modal'].style.display = 'none';
@@ -4310,6 +4455,30 @@
         };
         el['key-copy-deck'].onclick = function () {
           copyText(el['key-deck'].value, 'Live decks link');
+        };
+        el['dj-create'].onclick = function () {
+          var label = (el['dj-label'].value || '').trim();
+          fetch('/api/dj', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ label: label }),
+          })
+            .then(function (r) {
+              if (!r.ok) throw new Error('create failed');
+              return r.json();
+            })
+            .then(function (d) {
+              el['dj-link'].value = d.url;
+              el['dj-label'].value = '';
+              copyText(d.url, 'DJ link');
+              loadDj();
+            })
+            .catch(function () {
+              toast('error', 'Could not create a DJ link');
+            });
+        };
+        el['dj-copy'].onclick = function () {
+          if (el['dj-link'].value) copyText(el['dj-link'].value, 'DJ link');
         };
         el['key-signout'].onclick = function () {
           if (!window.confirm('Sign this device out? A key or invite is needed to return.')) return;

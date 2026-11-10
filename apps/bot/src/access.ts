@@ -23,7 +23,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '@vaporzr/core/config';
 
-export type AccessScope = 'request' | 'view' | 'control';
+export type AccessScope = 'request' | 'view' | 'dj' | 'control';
 
 export interface AccessSession {
   /** Short id shown by /key list, used by /key revoke. */
@@ -67,8 +67,8 @@ export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 export const INVITE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
 export const OWNER_LINK_TTL_MS = 60 * 60 * 1000; // 1 hour
 
-/** request < view < control. Higher scopes satisfy lower needs. */
-const SCOPE_RANK: Record<AccessScope, number> = { request: 1, view: 2, control: 3 };
+/** request < view < dj < control. Higher scopes satisfy lower needs. */
+const SCOPE_RANK: Record<AccessScope, number> = { request: 1, view: 2, dj: 3, control: 4 };
 
 export function scopeSatisfies(have: AccessScope, need: AccessScope): boolean {
   return SCOPE_RANK[have] >= SCOPE_RANK[need];
@@ -289,6 +289,16 @@ export function revokeSession(id: string): boolean {
 }
 
 /** Revoke everything: every device, every live invite. Rotation uses this. */
+/** Revoke one invite by id (DJ links are per-person and must be removable). */
+export function revokeInvite(id: string): boolean {
+  const data = load();
+  const i = data.invites.findIndex((x) => x.id === id);
+  if (i < 0) return false;
+  data.invites.splice(i, 1);
+  save(data);
+  return true;
+}
+
 export function revokeAll(): { sessions: number; invites: number } {
   const data = load();
   const counts = { sessions: data.sessions.length, invites: data.invites.length };
@@ -341,6 +351,7 @@ export function webAccessAllowed(hostHeader: string | undefined): boolean {
 /** Human sentence for a scope, used by the new-device DM and /key list. */
 export function describeScope(scope: AccessScope): string {
   if (scope === 'control') return 'full control - can play music, change settings and open every page';
+  if (scope === 'dj') return 'DJ access - playback and queue controls only';
   if (scope === 'view')
     return 'watch + listen only - can see the visualizer and hear the hi-fi stream, but cannot change anything';
   return 'song requests only - can add songs to the queue, nothing else';

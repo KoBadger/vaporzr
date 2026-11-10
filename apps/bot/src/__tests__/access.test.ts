@@ -16,6 +16,7 @@ import {
   resetAccessForTests,
   resolveSession,
   revokeAll,
+  revokeInvite,
   revokeSession,
   revokeSessionByToken,
   scopeSatisfies,
@@ -34,6 +35,24 @@ beforeEach(() => {
 
 afterAll(() => {
   rmSync(dir, { recursive: true, force: true });
+});
+
+describe('scopes', () => {
+  it('ranks DJ between view and control', () => {
+    expect(scopeSatisfies('dj', 'view')).toBe(true);
+    expect(scopeSatisfies('dj', 'dj')).toBe(true);
+    expect(scopeSatisfies('dj', 'control')).toBe(false);
+    expect(scopeSatisfies('control', 'dj')).toBe(true);
+    expect(scopeSatisfies('view', 'dj')).toBe(false);
+  });
+
+  it('revokes a DJ invite without touching sessions', () => {
+    const { invite } = mintInvite('dj', 'Sam', 60_000, Date.now(), 1);
+    expect(listAccess().invites.some((i) => i.id === invite.id)).toBe(true);
+    expect(revokeInvite(invite.id)).toBe(true);
+    expect(listAccess().invites.some((i) => i.id === invite.id)).toBe(false);
+    expect(revokeInvite(invite.id)).toBe(false);
+  });
 });
 
 describe('session tokens', () => {
