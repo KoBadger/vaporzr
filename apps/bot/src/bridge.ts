@@ -43,6 +43,7 @@ import {
 import { fetchLyrics } from '@vaporzr/core/lyrics';
 import { playlistStore } from '@vaporzr/core/playlists';
 import { getCrossfadeMs, setCrossfadeMs } from './crossfadeStore.js';
+import { getJamPolicy, setJamPolicy, type JamPolicy } from './jamPolicy.js';
 import { codeFor } from './jamLinks.js';
 
 /** The jam page's guest URL: built from the LOW-privilege request key, not the
@@ -145,8 +146,20 @@ interface Client {
   roster?: string[];
 }
 
+interface PendingRequest {
+  id: string;
+  guildId: string;
+  query: string;
+  who: string;
+  createdAt: number;
+}
+
 export class Bridge {
   private wss: WebSocketServer;
+  /** Requests waiting for host approval, keyed by a short random id. */
+  private pendingRequests = new Map<string, PendingRequest>();
+  /** Per-guild, per-guest request counters (not persisted; one party). */
+  private requestStats = new Map<string, Map<string, { count: number; last: number }>>();
   private panels = new Set<Client>();
   private visualizers = new Set<Client>();
   private lastState: PlaybackState = emptyState();
@@ -1311,6 +1324,59 @@ export class Bridge {
     );
   }
 
+  private statsFor(guildId: string, guest: string): { count: number; last: number } {
+    let byGuest = this.requestStats.get(guildId);
+    if (!byGuest) {
+      byGuest = new Map();
+      this.requestStats.set(guildId, byGuest);
+    }
+    return byGuest.get(guest) ?? { count: 0, last: 0 };
+  }
+
+  private bumpRequestStat(guildId: string, guest: string): void {
+    const stat = this.statsFor(guildId, guest);
+    stat.count += 1;
+    stat.last = Date.now();
+    this.requestStats.get(guildId)?.set(guest, stat);
+  }
+
+  /** Host-side jam policy and pending approvals. */
+  jamPolicy(guildId: string | undefined): JamPolicy {
+    return getJamPolicy(guildId);
+  }
+
+  setJamPolicy(guildId: string | undefined, patch: Partial<JamPolicy>): JamPolicy | null {
+    if (!guildId) return null;
+    const next = setJamPolicy(guildId, patch);
+    if (patch.mute !== undefined) {
+      // Unmuting should clear the per-session counter too, so a guest who was
+      // muted for spam gets a clean slate.
+      const muted = new Set(next.mute.map((n) => n.toLowerCase()));
+      const byGuest = this.requestStats.get(guildId);
+      if (byGuest) for (const key of byGuest.keys()) if (!muted.has(key)) byGuest.delete(key);
+    }
+    return next;
+  }
+
+  jamPending(guildId: string | undefined): PendingRequest[] {
+    const now = Date.now();
+    for (const [id, p] of this.pendingRequests) if (now - p.createdAt > 30 * 60 * 1000) this.pendingRequests.delete(id);
+    return [...this.pendingRequests.values()]
+      .filter((p) => !guildId || p.guildId === guildId)
+      .sort((a, b) => a.createdAt - b.createdAt);
+  }
+
+  async approveJamRequest(id: string): Promise<{ ok: boolean; name?: string; error?: string }> {
+    const p = this.pendingRequests.get(id);
+    if (!p) return { ok: false, error: 'That request expired.' };
+    this.pendingRequests.delete(id);
+    return this.requestTrack(p.query, p.who, true);
+  }
+
+  denyJamRequest(id: string): boolean {
+    return this.pendingRequests.delete(id);
+  }
+
   /** Wired by the bot at startup to the full V@p resolver. A hook rather than an
    *  import: discord.ts already imports the bridge, and a cycle back would make
    *  module init order matter. */
@@ -1331,7 +1397,11 @@ export class Bridge {
    *  than the `request` origin. Untrusted input: length-capped and stripped of
    *  control characters. Every renderer draws it as text (textContent / canvas),
    *  never as HTML. */
-  async requestTrack(query: string, who?: string): Promise<{ ok: boolean; name?: string; error?: string }> {
+  async requestTrack(
+    query: string,
+    who?: string,
+    bypassApproval = false,
+  ): Promise<{ ok: boolean; name?: string; error?: string; pending?: boolean }> {
     const q = query.trim();
     if (!q) return { ok: false, error: 'Type a song to request.' };
     const credit =
@@ -1339,6 +1409,28 @@ export class Bridge {
         .replace(/[\u0000-\u001f\u007f]/g, '')
         .trim()
         .slice(0, 24) || 'request';
+    const session = this.sessions.primary ?? this.fallback;
+    const gid = session.guildId ?? '';
+    const policy = getJamPolicy(gid);
+    const guestKey = credit.toLowerCase();
+    if (!bypassApproval) {
+      if (policy.locked) return { ok: false, error: 'Requests are locked by the host right now.' };
+      if (policy.mute.some((n) => n.toLowerCase() === guestKey))
+        return { ok: false, error: 'The host muted your requests for this session.' };
+      const stat = this.statsFor(gid, guestKey);
+      if (policy.cooldownSec > 0 && stat.last > 0 && Date.now() - stat.last < policy.cooldownSec * 1000) {
+        const wait = Math.ceil((policy.cooldownSec * 1000 - (Date.now() - stat.last)) / 1000);
+        return { ok: false, error: `One request every ${policy.cooldownSec}s — try again in ${wait}s.` };
+      }
+      if (policy.maxPerGuest > 0 && stat.count >= policy.maxPerGuest) {
+        return { ok: false, error: `You have reached the ${policy.maxPerGuest}-request limit for this session.` };
+      }
+      if (policy.approval) {
+        const id = crypto.randomUUID();
+        this.pendingRequests.set(id, { id, guildId: gid, query: q, who: credit, createdAt: Date.now() });
+        return { ok: true, pending: true, name: 'Sent to the host for approval.' };
+      }
+    }
     try {
       // Same input surface as V@p — direct links, playlists, Spotify, Suno,
       // Apple Music, SoundCloud, plain searches — when the bot has wired its
@@ -1367,7 +1459,7 @@ export class Bridge {
       // A playlist link can resolve to many tracks; cap it so one link cannot
       // flood the queue, and say so when the cap bites.
       const capped = tracks.slice(0, 25);
-      const s = this.sessions.primary ?? this.fallback;
+      const s = session;
       // Never stack a song that's already waiting. The Discord add paths refuse
       // duplicates, and the jam page has the highest chance of them: several
       // guests ask for the same song, or one guest double-taps a slow resolve.
@@ -1382,6 +1474,7 @@ export class Bridge {
       // add uses), so the request's internal order survives whatever the
       // shuffle state is.
       s.queue.enqueueMany(fresh, credit);
+      this.bumpRequestStat(gid, guestKey);
       const extra = tracks.length - capped.length;
       const name =
         fresh.length === 1
@@ -1435,6 +1528,16 @@ export class Bridge {
         .replace(/[\u0000-\u001f\u007f]/g, '')
         .trim()
         .slice(0, 24) || 'request';
+    const policy = getJamPolicy(s.guildId);
+    const guestKey = credit.toLowerCase();
+    if (policy.locked) return { ok: false, error: 'Requests are locked by the host right now.' };
+    if (policy.mute.some((n) => n.toLowerCase() === guestKey))
+      return { ok: false, error: 'The host muted your requests for this session.' };
+    const stat = this.statsFor(s.guildId, guestKey);
+    if (policy.cooldownSec > 0 && stat.last > 0 && Date.now() - stat.last < policy.cooldownSec * 1000)
+      return { ok: false, error: `One request every ${policy.cooldownSec}s.` };
+    if (policy.maxPerGuest > 0 && stat.count >= policy.maxPerGuest)
+      return { ok: false, error: `You have reached the ${policy.maxPerGuest}-request limit for this session.` };
     const tracks = vibe.tracks.slice(0, 25).map((t) => ({
       uri: t.uri,
       name: t.name,
@@ -1447,6 +1550,7 @@ export class Bridge {
     const fresh = s.queue.filterNew(tracks);
     if (!fresh.length) return { ok: false, error: 'That whole vibe is already queued.' };
     s.queue.enqueueMany(fresh, credit);
+    this.bumpRequestStat(s.guildId, guestKey);
     return {
       ok: true,
       name: `${fresh.length} track${fresh.length === 1 ? '' : 's'} from "${vibe.name}"`,

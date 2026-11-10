@@ -2238,6 +2238,29 @@
           <div id="stats-body" style="font-size: 12px; color: var(--muted)">Loading…</div>
         </div>
 
+        <!-- Request moderation -->
+        <div class="card collapsible" id="requests-card" data-tab="more">
+          <div id="queue-info">
+            <span class="section-label">🛡 REQUESTS</span>
+            <span id="req-count" style="font-size: 11px; color: var(--muted)">open</span>
+          </div>
+          <div class="mrow" style="margin-top: 8px">
+            <button id="req-lock" data-tip="Stop accepting new requests">🔓 Requests open</button>
+            <button id="req-approval" data-tip="Hold requests for host approval">⚡ Instant add</button>
+          </div>
+          <div class="search-row" style="margin-top: 8px">
+            <input id="req-max" type="number" min="0" max="99" placeholder="max / guest" />
+            <input id="req-cooldown" type="number" min="0" max="600" placeholder="cooldown s" />
+            <button id="req-save">Save limits</button>
+          </div>
+          <div id="req-list" class="dj-list" style="margin-top: 8px"></div>
+          <div class="search-row" style="margin-top: 8px">
+            <input id="req-mute" placeholder="Mute a guest name" autocomplete="off" maxlength="24" />
+            <button id="req-mute-add">Mute</button>
+          </div>
+          <div id="req-muted" class="qhint">No muted guests.</div>
+        </div>
+
         <!-- Vibes (saved queues) -->
         <div class="card collapsible" id="vibes-card" data-tab="more">
           <div id="queue-info">
@@ -2656,6 +2679,8 @@
           if (el['btn-key']) el['btn-key'].style.display = 'none';
           if (el['btn-share']) el['btn-share'].style.display = 'none';
           if (el['guilds']) el['guilds'].innerHTML = '';
+          var reqCard = document.getElementById('requests-card');
+          if (reqCard) reqCard.style.display = 'none';
           toast('success', '🎧 DJ access — playback and queue controls only');
         }
         function enableGuestMode() {
@@ -2664,6 +2689,8 @@
           document.body.classList.add('guest');
           setConnected(connected);
           if (el['btn-key']) el['btn-key'].style.display = 'none';
+          var reqCard = document.getElementById('requests-card');
+          if (reqCard) reqCard.style.display = 'none';
           var b = document.createElement('div');
           b.id = 'guest-banner';
           b.style.cssText =
@@ -4163,6 +4190,164 @@
           cmd('loadVibe', { name: name });
         };
         loadVibes();
+
+        /* ---------- request moderation ---------- */
+        function reqPolicy(patch) {
+          return fetch('/api/jam/policy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(patch || {}),
+          }).then(function (r) {
+            if (!r.ok) throw new Error('policy failed');
+            return r.json();
+          });
+        }
+        function paintReqPolicy(p) {
+          var lock = document.getElementById('req-lock');
+          var appr = document.getElementById('req-approval');
+          var count = document.getElementById('req-count');
+          if (!p) return;
+          lock.textContent = p.locked ? '🔒 Requests locked' : '🔓 Requests open';
+          lock.classList.toggle('on', !!p.locked);
+          appr.textContent = p.approval ? '🛡 Approval required' : '⚡ Instant add';
+          appr.classList.toggle('on', !!p.approval);
+          if (document.activeElement !== document.getElementById('req-max'))
+            document.getElementById('req-max').value = p.maxPerGuest || '';
+          if (document.activeElement !== document.getElementById('req-cooldown'))
+            document.getElementById('req-cooldown').value = p.cooldownSec || '';
+          count.textContent = p.locked ? 'locked' : 'open';
+          var muted = document.getElementById('req-muted');
+          muted.innerHTML = '';
+          if (!p.mute || !p.mute.length) {
+            muted.textContent = 'No muted guests.';
+            return;
+          }
+          muted.textContent = 'Muted: ';
+          p.mute.forEach(function (name, i) {
+            var chip = document.createElement('button');
+            chip.textContent = name + ' ×';
+            chip.style.cssText = 'height:22px;font-size:10px;margin:2px;padding:0 6px';
+            chip.onclick = function () {
+              var rest = p.mute.filter(function (_, j) {
+                return j !== i;
+              });
+              reqPolicy({ mute: rest })
+                .then(loadRequests)
+                .catch(function () {});
+            };
+            muted.appendChild(chip);
+          });
+        }
+        function loadRequests() {
+          if (GUEST || DJ_MODE) return;
+          Promise.all([
+            fetch('/api/jam/policy').then(function (r) {
+              return r.ok ? r.json() : null;
+            }),
+            fetch('/api/jam/requests').then(function (r) {
+              return r.ok ? r.json() : null;
+            }),
+          ])
+            .then(function (res) {
+              paintReqPolicy(res[0]);
+              var list = document.getElementById('req-list');
+              list.innerHTML = '';
+              var pending = (res[1] && res[1].requests) || [];
+              if (!pending.length) {
+                var empty = document.createElement('div');
+                empty.className = 'qhint';
+                empty.textContent = 'No requests waiting.';
+                list.appendChild(empty);
+                return;
+              }
+              pending.forEach(function (q) {
+                var row = document.createElement('div');
+                row.className = 'dj-item';
+                var b = document.createElement('b');
+                b.textContent = q.query;
+                var s = document.createElement('span');
+                s.textContent = q.who;
+                var ok = document.createElement('button');
+                ok.textContent = 'Approve';
+                ok.onclick = function () {
+                  fetch('/api/jam/approve', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: q.id }),
+                  })
+                    .then(function (r) {
+                      return r.json();
+                    })
+                    .then(function (d) {
+                      toast(d.ok ? 'success' : 'error', d.ok ? 'Added ' + d.name : d.error || 'Approve failed');
+                      loadRequests();
+                    })
+                    .catch(function () {});
+                };
+                var no = document.createElement('button');
+                no.textContent = 'Deny';
+                no.className = 'danger';
+                no.onclick = function () {
+                  fetch('/api/jam/deny', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: q.id }),
+                  })
+                    .then(loadRequests)
+                    .catch(function () {});
+                };
+                row.appendChild(b);
+                row.appendChild(s);
+                row.appendChild(ok);
+                row.appendChild(no);
+                list.appendChild(row);
+              });
+            })
+            .catch(function () {});
+        }
+        document.getElementById('req-lock').onclick = function () {
+          reqPolicy({ locked: !document.getElementById('req-lock').classList.contains('on') })
+            .then(loadRequests)
+            .catch(function () {});
+        };
+        document.getElementById('req-approval').onclick = function () {
+          reqPolicy({ approval: !document.getElementById('req-approval').classList.contains('on') })
+            .then(loadRequests)
+            .catch(function () {});
+        };
+        document.getElementById('req-save').onclick = function () {
+          reqPolicy({
+            maxPerGuest: Number(document.getElementById('req-max').value) || 0,
+            cooldownSec: Number(document.getElementById('req-cooldown').value) || 0,
+          })
+            .then(function () {
+              toast('success', 'Request limits saved');
+              loadRequests();
+            })
+            .catch(function () {
+              toast('error', 'Could not save limits');
+            });
+        };
+        document.getElementById('req-mute-add').onclick = function () {
+          var name = (document.getElementById('req-mute').value || '').trim();
+          if (!name) return;
+          fetch('/api/jam/policy')
+            .then(function (r) {
+              return r.json();
+            })
+            .then(function (p) {
+              var mute = (p.mute || []).slice();
+              if (mute.indexOf(name) < 0) mute.push(name);
+              return reqPolicy({ mute: mute });
+            })
+            .then(function () {
+              document.getElementById('req-mute').value = '';
+              loadRequests();
+            })
+            .catch(function () {});
+        };
+        loadRequests();
+        setInterval(loadRequests, 5000);
 
         /* ---------- keyboard shortcuts ---------- */
         document.addEventListener('keydown', function (e) {
