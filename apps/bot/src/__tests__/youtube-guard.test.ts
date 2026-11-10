@@ -12,6 +12,7 @@ import {
   isClearlyWrongMatch,
   isProxyError,
   isProxyExhausted,
+  isStreamRefused,
   parseIsoDuration,
   probeYtDlpVersion,
   probeYoutube,
@@ -619,6 +620,51 @@ describe('canary classification (classifyYoutubeProbe)', () => {
         hops: [{ name: 'alt', result: 'yt-dlp failed: something odd' }],
       }),
     ).toBe('down');
+  });
+
+  // The outage this exists for: the cookie jar was dead, yt-dlp still printed a
+  // media URL, and googlevideo answered 403 for every byte. The canary used to
+  // stop after resolving, so /health read `ok` while playback was fully dead.
+  describe('bytes refused after a successful resolve', () => {
+    const REFUSED = 'stream refused (HTTP 403)';
+
+    it('is auth on the only route: the session is unauthorized, not the IP', () => {
+      expect(classifyYoutubeProbe({ direct: REFUSED, hops: [] })).toBe('auth');
+    });
+
+    it('is auth when every route resolves but none serves bytes', () => {
+      expect(
+        classifyYoutubeProbe({
+          direct: REFUSED,
+          hops: [
+            { name: 'alt', result: REFUSED },
+            { name: 'fallback', result: REFUSED },
+          ],
+        }),
+      ).toBe('auth');
+    });
+
+    it('is ok when a hop serves the bytes the direct route refused', () => {
+      expect(classifyYoutubeProbe({ direct: REFUSED, hops: [{ name: 'alt', result: 'ok' }] })).toBe('ok');
+    });
+
+    it('still reports a dead hop before blaming authorization', () => {
+      expect(
+        classifyYoutubeProbe({
+          direct: REFUSED,
+          hops: [
+            { name: 'alt', result: 'unreachable' },
+            { name: 'fallback', result: REFUSED },
+          ],
+        }),
+      ).toBe('bridge');
+    });
+
+    it('single source of truth: isStreamRefused matches the probe output', () => {
+      expect(isStreamRefused(REFUSED)).toBe(true);
+      expect(isStreamRefused('stream fetch failed (HTTP 500)')).toBe(false);
+      expect(isStreamRefused(WALL)).toBe(false);
+    });
   });
 });
 

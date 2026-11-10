@@ -886,6 +886,8 @@ export class DiscordBot {
    *  Retried at most hourly — otherwise a permanent permission error logs on
    *  every attempt, every three minutes, forever. */
   private voiceStatusDenied = new Map<string, number>();
+  /** guildId -> last time a byte-0 stream refusal was announced. */
+  private streamRefusalNotices = new Map<string, number>();
   /** guildId -> fire a short SFX on strong beats (auto-hype). */
   private hypeGuilds = new Set<string>();
   private lastHypeAt = new Map<string, number>();
@@ -1339,6 +1341,11 @@ export class DiscordBot {
       // Playback stopped because several tracks in a row couldn't start.
       s.playback.onPlaybackStalled = () => {
         void this.notifyPlaybackStalled(s.guildId);
+      };
+      // A stream was refused before its first byte — say why instead of letting
+      // the queue skip to the next track as if the song had ended.
+      s.playback.onStreamRefused = (detail, trackName) => {
+        void this.notifyStreamRefused(s.guildId, detail, trackName);
       };
       // Auto ducking: 'auto' ducks for any speaker, 'hosts' only for DJ/owner,
       // 'off' (default) disables it. Manual /duck still works either way.
@@ -6751,6 +6758,41 @@ export class DiscordBot {
             .setColor(this.themeColor())
             .setDescription(
               "⚠️ **Playback stopped** — several tracks in a row couldn't start (Spotify device unavailable / no YouTube match). The queue is intact; try `V@p` again or re-link Spotify.",
+            ),
+        ],
+      });
+    } catch {
+      /* no access — skip */
+    }
+  }
+
+  /**
+   * A stream was refused before its first byte. That is an authorization
+   * answer from the CDN — most often YouTube's stale cookies or a missing PO
+   * token — and it used to be completely silent: the track just "ended" and
+   * the queue moved on. Throttled per guild so a dead music source can't turn
+   * into a wall of identical messages.
+   */
+  private async notifyStreamRefused(guildId: string, detail: string, trackName?: string): Promise<void> {
+    const now = Date.now();
+    const last = this.streamRefusalNotices.get(guildId) ?? 0;
+    if (now - last < 10 * 60_000) return;
+    this.streamRefusalNotices.set(guildId, now);
+    // Only the opted-in now-playing channel (see /npchannel), same as a stall.
+    const channelId = this.perms.getNpChannel(guildId);
+    if (!channelId) return;
+    try {
+      const channel = await this.client.channels.fetch(channelId);
+      if (!channel || !('send' in channel)) return;
+      const who = trackName ? `**${trackName}**` : 'that track';
+      await channel.send({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(this.themeColor())
+            .setDescription(
+              `⚠️ **Couldn't play ${who}** — the media server refused the audio (${detail}), so the bot could not get a single byte.\n\n` +
+                'The usual cause is an expired YouTube session: export a fresh `cookies.txt` from a signed-in browser and run `/cookie-upload`. ' +
+                'Check `/health` → `youtube` to confirm. The queue is intact — re-queue the track once that reads `ok`.',
             ),
         ],
       });

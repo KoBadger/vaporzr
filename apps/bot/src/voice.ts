@@ -126,6 +126,9 @@ export class VoiceManager implements AudioTransport {
   private stallWarnings = 0;
   /** Called by playback when the voice link recovers to a Ready state. */
   private onVoiceReconnect: (() => void) | null = null;
+  /** Called when a stream is refused before its first byte (YouTube 401/403),
+   *  so playback can say WHY a track died instead of skipping it silently. */
+  private onStreamRefused: ((detail: string) => void) | null = null;
   /** Periodic supervisor that force-rejoins a stuck voice link (bounded). */
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectStrikes = 0;
@@ -395,6 +398,16 @@ export class VoiceManager implements AudioTransport {
   /** Playback registers this to be told when a downed voice link recovers to Ready. */
   setOnVoiceReconnect(cb: (() => void) | null): void {
     this.onVoiceReconnect = cb;
+  }
+
+  /**
+   * Playback registers this to hear about a stream that was refused before a
+   * single byte arrived. That is an authorization answer from the CDN (stale
+   * YouTube cookies / missing PO token), and retrying or silently skipping the
+   * track hides a real, fixable failure.
+   */
+  setOnStreamRefused(cb: ((detail: string) => void) | null): void {
+    this.onStreamRefused = cb;
   }
 
   /**
@@ -926,6 +939,11 @@ export class VoiceManager implements AudioTransport {
       `[voice] stream start ${requestedSeekMs > 0 ? `(seek ${requestedSeekMs}ms) ` : ''}retries=${opts.retries ?? 0} refresh=${opts.refreshUrl ? 'yes' : 'no'} · ${String(url).slice(0, 96).replace(/\s+/g, ' ')}`,
     );
     const isHttp = /^https?:\/\//i.test(url);
+    // Set when this attempt was refused before a single byte arrived. A 403 at
+    // byte 0 means YouTube will not serve this session's audio at all (stale
+    // cookies / missing PO token) — very different from a signed URL expiring
+    // mid-track, and it must not be retried into oblivion or skipped silently.
+    const refusal = { detail: '' };
     // HLS playlists (SoundCloud serves .m3u8) must be demuxed by ffmpeg itself —
     // piping the playlist bytes into stdin produces noise, not audio.
     const isHls = isHttp && /\.m3u8(\?|$)/i.test(url);
@@ -1025,7 +1043,7 @@ export class VoiceManager implements AudioTransport {
       }
     });
     proc.stdout.pipe(stream);
-    if (fetchSelf) this.fetchIntoStdin(url, proc, token);
+    if (fetchSelf) this.fetchIntoStdin(url, proc, token, refusal);
     const resource = this.makeResource(stream);
     this.resource = resource;
     if (opts.volume !== undefined) this.volumePercent = opts.volume;
@@ -1041,30 +1059,41 @@ export class VoiceManager implements AudioTransport {
         console.warn(`[voice] ffmpeg exited with code ${code}${signal ? ` (${signal})` : ''} — stream cut short`);
         const ranForMs = Date.now() - startedAt;
         const attemptsLeft = (opts.retries ?? 0) - 1;
+        const refusedAtStart = refusal.detail !== '';
         if (opts.refreshUrl && attemptsLeft >= 0) {
           // A signed YouTube URL can fail after minutes of otherwise healthy
           // playback. Refresh it and resume near the last known position rather
           // than treating a mid-track failure as a natural end and skipping.
-          const resumeMs = requestedSeekMs + Math.max(0, ranForMs - 250);
+          //
+          // A byte-0 refusal is the other case: the URL was just minted and the
+          // CDN still said no, so re-resolving four times (what this used to do)
+          // only hammers yt-dlp and ends in a silent skip. Try exactly ONE fresh
+          // URL in case the signed URL was already stale, then report it.
+          const resumeMs = refusedAtStart ? 0 : requestedSeekMs + Math.max(0, ranForMs - 250);
+          const nextRetries = refusedAtStart ? 0 : attemptsLeft;
           console.warn(
-            `[voice] stream failed after ${ranForMs}ms — refreshing URL and resuming at ${Math.round(resumeMs)}ms (${attemptsLeft} retries left)`,
+            refusedAtStart
+              ? `[voice] stream refused at byte 0 (${refusal.detail}) — refreshing the URL once before giving up`
+              : `[voice] stream failed after ${ranForMs}ms — refreshing URL and resuming at ${Math.round(resumeMs)}ms (${attemptsLeft} retries left)`,
           );
           this.ffmpeg = null;
           const rt = setTimeout(() => {
             opts.refreshUrl!()
               .then((newUrl) => {
-                this.playFfmpegUrl(newUrl, { ...opts, seekMs: resumeMs, retries: attemptsLeft });
+                this.playFfmpegUrl(newUrl, { ...opts, seekMs: resumeMs, retries: nextRetries });
               })
               .catch((err) => {
                 const msg = err instanceof Error ? err.message : String(err);
                 console.warn(`[voice] could not refresh stream URL: ${msg}`);
                 this.ffmpeg = null;
+                if (refusedAtStart) this.reportStreamRefusal(refusal.detail);
                 if (opts.onEnd) opts.onEnd();
               });
           }, 1500);
           rt.unref?.();
           return;
         }
+        if (refusedAtStart) this.reportStreamRefusal(refusal.detail);
       }
       this.ffmpeg = null;
       if (opts.onEnd) opts.onEnd();
@@ -1097,7 +1126,18 @@ export class VoiceManager implements AudioTransport {
    * exits; download failures close stdin, which makes ffmpeg exit and
    * triggers the caller's refreshUrl retry path.
    */
-  private fetchIntoStdin(url: string, proc: ChildProcess, token: number): void {
+  /** Tell playback a stream was refused at byte 0. Listener errors must never
+   *  break the ffmpeg exit path. */
+  private reportStreamRefusal(detail: string): void {
+    if (!this.onStreamRefused) return;
+    try {
+      this.onStreamRefused(detail);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  private fetchIntoStdin(url: string, proc: ChildProcess, token: number, refusal?: { detail: string }): void {
     const CHUNK_BYTES = 256 * 1024;
     const abort = new AbortController();
     proc.on('exit', () => abort.abort());
@@ -1130,6 +1170,15 @@ export class VoiceManager implements AudioTransport {
               done = true; // requested past EOF — track fully fetched
               break;
             }
+            if (res.status === 401 || res.status === 403) {
+              if (offset === 0) {
+                // A refusal on the very first byte is an authorization answer,
+                // not a hiccup: asking the same URL again cannot change it, and
+                // the caller needs to know so it can report the real reason.
+                if (refusal) refusal.detail = `HTTP ${res.status}`;
+                throw new Error(`HTTP ${res.status} at byte 0`);
+              }
+            }
             if (res.status !== 206 && res.status !== 200) throw new Error(`HTTP ${res.status}`);
             chunk = Buffer.from(await res.arrayBuffer());
             const contentRange = res.headers.get('content-range'); // "bytes start-end/total"
@@ -1138,6 +1187,8 @@ export class VoiceManager implements AudioTransport {
           } catch (err) {
             lastErr = err;
             if (abort.signal.aborted) throw err;
+            // A byte-0 refusal is terminal for this URL — stop retrying it.
+            if (refusal?.detail) throw err;
             if (attempt < 2) {
               console.warn(
                 `[voice] chunk ${range} failed (${err instanceof Error ? err.message : err}) — retrying ${attempt + 1}/2`,
