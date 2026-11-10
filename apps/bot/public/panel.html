@@ -1047,6 +1047,29 @@
         padding: 0 7px;
         font-size: 10px;
       }
+      /* Inline form rows (request limits, mute, shoutout). */
+      .search-row {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .search-row input,
+      #vibe-name,
+      #vibe-list {
+        flex: 1 1 110px;
+        min-width: 0;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        padding: 9px 11px;
+        color: var(--text, #e2e8f0);
+        font: 12.5px/1.2 inherit;
+      }
+      .search-row button {
+        flex: 0 0 auto;
+        white-space: nowrap;
+      }
       .key-foot {
         display: flex;
         justify-content: flex-end;
@@ -1348,6 +1371,7 @@
           background: none;
           color: var(--muted);
           font: 700 11.5px/1.1 inherit;
+          white-space: nowrap;
           cursor: pointer;
           border-top: 2px solid transparent;
           display: flex;
@@ -1650,8 +1674,13 @@
           border-radius: 10px;
         }
         #queue .qn {
-          flex: 1 1 calc(100% - 140px);
-          min-width: 120px;
+          /* Shrink the text block instead of letting the duration or the
+             requester chip wrap onto a line of their own. */
+          flex: 1 1 0;
+          min-width: 0;
+        }
+        #queue .qby {
+          max-width: 72px;
         }
         #queue .qn b {
           font-size: 14.5px;
@@ -1668,6 +1697,13 @@
           font-size: 12px;
         }
         #queue .qacts {
+          /* Base rules float the strip over the row for mouse hover; on touch
+             that overlay sits right on top of the title and artwork, so reset
+             it to a normal wrapped row underneath. */
+          position: static;
+          right: auto;
+          top: auto;
+          transform: none;
           opacity: 1;
           display: flex;
           width: 100%;
@@ -1684,6 +1720,20 @@
           font-size: 14px;
           border-radius: 10px;
           padding: 0 8px;
+        }
+        /* Approval/limits rows reuse the DJ list styling; keep them two-line. */
+        .dj-item button {
+          height: 30px;
+          min-width: 0;
+        }
+        .search-row input {
+          flex: 1 1 45%;
+          height: 44px;
+          font-size: 15px;
+        }
+        .search-row button {
+          height: 44px;
+          font-size: 14px;
         }
         /* Soundboard, Vibes & Look & Feel controls */
         #sfx-row {
@@ -1796,6 +1846,13 @@
           font-size: 15px;
           line-height: 1.7;
           color: var(--muted);
+        }
+      }
+      /* Small phones: the requester chip squeezes the title, and the title is
+         what people actually need to read in a queue. */
+      @media (max-width: 520px) {
+        #queue .qby {
+          display: none;
         }
       }
       /* Landscape on phones (e.g. S23 Ultra landscape): 2-column layout with ALL cards visible, sleek jump bar */
@@ -1958,6 +2015,8 @@
       }
       /* Queue context menu: right-click on desktop, long-press on touch. */
       #qctx {
+        /* The `hidden` attribute only wins at UA specificity, so the ID rule
+           below would otherwise paint an empty menu pill in the page flow. */
         position: fixed;
         z-index: 9999;
         min-width: 188px;
@@ -1969,6 +2028,9 @@
         display: flex;
         flex-direction: column;
         gap: 2px;
+      }
+      #qctx[hidden] {
+        display: none;
       }
       #qctx button {
         text-align: left;
@@ -3222,6 +3284,7 @@
             var by = t.addedBy;
             if (by && ORIGINS.indexOf(by) < 0) {
               var who = document.createElement('span');
+              who.className = 'qby';
               who.textContent = by;
               who.setAttribute('data-tip', 'Added by ' + by);
               who.style.cssText =
