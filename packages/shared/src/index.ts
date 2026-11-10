@@ -274,6 +274,7 @@ export type CommandName =
   | 'dedupe'
   | 'skipto'
   | 'crossfade'
+  | 'shoutout'
   | 'share-jam';
 
 export interface CommandMessage {

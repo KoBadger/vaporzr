@@ -1238,6 +1238,8 @@ export class DiscordBot {
     // /jam. The panel has no channel of its own, so the bot resolves one (the
     // panel's channel, else the last text channel it heard from).
     bridge.onShareJam = (guildId) => this.shareJamCard(guildId ?? this.client.guilds.cache.first()?.id ?? '', null);
+    bridge.onShoutout = (guildId, text) =>
+      this.postShoutout(guildId ?? this.client.guilds.cache.first()?.id ?? '', text);
     // Panel toggles Endless Wave through the same machinery as `V@ew on/off`.
     bridge.setEndlessWaveToggle((guildId, mode) => {
       void this.panelSetEndlessWave(guildId, mode).catch((err) => {
@@ -7890,6 +7892,19 @@ export class DiscordBot {
     const sent = await channel.send(this.panelPayload(s));
     this.panels.set(guildId, { channelId: sent.channelId, messageId: sent.id });
     this.scheduleSavePanels();
+  }
+
+  /** A short host announcement in the channel the panel lives in. No mention
+   *  parsing, so a shoutout can never ping the whole server. */
+  private async postShoutout(guildId: string, text: string): Promise<{ ok: boolean; error?: string }> {
+    const target = await this.panelShareChannel(guildId);
+    if (!target) return { ok: false, error: 'No channel to post in yet — run `/panel` first.' };
+    try {
+      await target.send({ content: `📣 **Host:** ${text}`, allowedMentions: { parse: [] } });
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: `Discord refused the shoutout: ${err instanceof Error ? err.message : String(err)}` };
+    }
   }
 
   /** Post the jam invite card (link + QR) so guests can join from their phones.
