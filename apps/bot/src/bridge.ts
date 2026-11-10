@@ -92,11 +92,13 @@ export function jamJoinLinks(): {
 
 /** One row of the public jam queue. Plain strings — the page is dumb HTML. */
 interface JamQueueTrack {
+  uri: string;
   name: string;
   artists: string;
   album: string;
   addedBy: string;
   durationMs: number;
+  votes: number;
   image?: string;
   /** Source key for the row's colour dot / art fallback glyph. */
   source?: string;
@@ -160,6 +162,8 @@ export class Bridge {
   private pendingRequests = new Map<string, PendingRequest>();
   /** Per-guild, per-guest request counters (not persisted; one party). */
   private requestStats = new Map<string, Map<string, { count: number; last: number }>>();
+  /** Per-guild track upvotes: uri → set of guest names (one vote each). */
+  private trackVotes = new Map<string, Map<string, Set<string>>>();
   private panels = new Set<Client>();
   private visualizers = new Set<Client>();
   private lastState: PlaybackState = emptyState();
@@ -1106,6 +1110,7 @@ export class Bridge {
           image: t.image,
         }));
         const res = playlistStore.save(s.guildId, name, tracks);
+        if (res.ok) playlistStore.setCrossfade(s.guildId, name, getCrossfadeMs(s.guildId));
         this.notice(
           res.ok ? 'success' : 'error',
           res.ok ? `Saved vibe "${name}" (${res.tracks} tracks)` : (res.error ?? 'Save failed.'),
@@ -1141,6 +1146,8 @@ export class Bridge {
           break;
         }
         s.queue.enqueueMany(fresh, 'vibe');
+        // A vibe can carry its own mix setting; apply it when the set loads.
+        if (pl.crossfadeMs != null && s.guildId) setCrossfadeMs(s.guildId, pl.crossfadeMs);
         const dropped = pl.tracks.length - fresh.length;
         this.notice(
           'success',
@@ -1376,6 +1383,47 @@ export class Bridge {
       if (byGuest) for (const key of byGuest.keys()) if (!muted.has(key)) byGuest.delete(key);
     }
     return next;
+  }
+
+  private votesFor(guildId: string, uri: string): number {
+    return this.trackVotes.get(guildId)?.get(uri)?.size ?? 0;
+  }
+
+  /** Upvote a queued track. Three distinct guests move it to play next. */
+  voteTrack(uri: string, who?: string): { ok: boolean; votes: number; promoted: boolean; error?: string } {
+    const s = this.sessions.primary ?? this.fallback;
+    const gid = s.guildId ?? '';
+    if (!gid || !uri) return { ok: false, votes: 0, promoted: false, error: 'Nothing to vote for.' };
+    const voter =
+      (who ?? '')
+        .replace(/[\u0000-\u001f\u007f]/g, '')
+        .trim()
+        .slice(0, 24)
+        .toLowerCase() || 'guest';
+    let byUri = this.trackVotes.get(gid);
+    if (!byUri) {
+      byUri = new Map();
+      this.trackVotes.set(gid, byUri);
+    }
+    let voters = byUri.get(uri);
+    if (!voters) {
+      voters = new Set();
+      byUri.set(uri, voters);
+    }
+    voters.add(voter);
+    const votes = voters.size;
+    let promoted = false;
+    if (votes >= 3) {
+      const snap = s.queue.getSnapshot();
+      const from = snap.tracks.findIndex((t) => t.uri === uri);
+      const cur = snap.currentIndex;
+      const to = cur >= 0 ? cur + 1 : 0;
+      if (from >= 0 && from !== to && from !== cur) {
+        promoted = s.queue.move(from, to);
+        if (promoted) voters.clear(); // a promotion consumes the votes
+      }
+    }
+    return { ok: true, votes: promoted ? 0 : votes, promoted };
   }
 
   /** Who has asked for the most this session (owner-side leaderboard/audit). */
@@ -1614,7 +1662,9 @@ export class Bridge {
     tracks: JamQueueTrack[];
   } {
     const snap = this.queue.getSnapshot();
+    const voteGid = this.sessions.primary?.guildId ?? this.fallback.guildId ?? '';
     const map = (t: {
+      uri?: string;
       name?: string;
       artists?: string[];
       album?: string;
@@ -1623,11 +1673,13 @@ export class Bridge {
       image?: string;
       source?: string;
     }): JamQueueTrack => ({
+      uri: t.uri ?? '',
       name: t.name || 'Unknown',
       artists: (t.artists ?? []).join(', '),
       album: t.album || '',
       addedBy: t.addedBy && !QUEUE_ORIGINS.has(t.addedBy) ? t.addedBy : '',
       durationMs: t.durationMs ?? 0,
+      votes: t.uri ? this.votesFor(voteGid, t.uri) : 0,
       image: t.image,
       source: t.source,
     });
