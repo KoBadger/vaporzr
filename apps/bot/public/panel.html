@@ -4055,7 +4055,8 @@
             toast('error', 'Pick a saved vibe');
             return;
           }
-          copyText(location.origin + '/jam?vibe=' + encodeURIComponent(name), 'Vibe link');
+          var base = jam.joinUrl || location.origin + jam.joinPath;
+          copyText(base + (base.indexOf('?') >= 0 ? '&' : '?') + 'vibe=' + encodeURIComponent(name), 'Vibe link');
         };
         el['btn-vibe-load'].onclick = function () {
           var name = el['vibe-list'].value;
