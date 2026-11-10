@@ -75,6 +75,21 @@ const ART_HOSTS = new Set(
 const artCache = new Map<string, { body: Buffer; type: string; at: number }>();
 const ART_TTL_MS = 6 * 60 * 60 * 1000;
 const ART_MAX_BYTES = 6 * 1024 * 1024;
+/** Total artwork bytes held in memory. 200 entries × 6 MB would be ~1.2 GB, so
+ *  the cache is bounded by bytes as well as by count. */
+const ART_CACHE_BYTES = 64 * 1024 * 1024;
+let artCacheBytes = 0;
+
+/** Evict oldest-first until both the entry and byte budgets fit. */
+function trimArtCache(): void {
+  while (artCache.size > 200 || (artCacheBytes > ART_CACHE_BYTES && artCache.size > 0)) {
+    const oldest = artCache.keys().next();
+    if (oldest.done) break;
+    const evicted = artCache.get(oldest.value);
+    if (evicted) artCacheBytes -= evicted.body.length;
+    artCache.delete(oldest.value);
+  }
+}
 
 async function serveArtwork(url: URL, res: http.ServerResponse): Promise<void> {
   const raw = url.searchParams.get('u') ?? '';
@@ -151,14 +166,25 @@ async function serveArtwork(url: URL, res: http.ServerResponse): Promise<void> {
       res.end('Artwork was not an image.');
       return;
     }
+    // Refuse an oversized body from its declared length BEFORE buffering it —
+    // arrayBuffer() would otherwise materialise the whole thing first.
+    const declared = Number(upstream.headers.get('content-length') ?? '');
+    if (Number.isFinite(declared) && declared > ART_MAX_BYTES) {
+      res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Artwork too large.');
+      return;
+    }
     const body = Buffer.from(await upstream.arrayBuffer());
     if (body.length === 0 || body.length > ART_MAX_BYTES) {
       res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' });
       res.end('Artwork too large.');
       return;
     }
-    if (artCache.size > 200) artCache.clear();
+    const previous = artCache.get(key);
+    if (previous) artCacheBytes -= previous.body.length;
     artCache.set(key, { body, type, at: Date.now() });
+    artCacheBytes += body.length;
+    trimArtCache();
     res.writeHead(200, {
       'Content-Type': type,
       'Cache-Control': 'public, max-age=86400',
@@ -403,6 +429,16 @@ export function hasShareAccess(req: http.IncomingMessage, url: URL, need: Access
   return isMasterPassword(cookieKey) || isMasterPassword(urlKey);
 }
 
+/** True when a control credential is configured at all.
+ *
+ *  `hasShareAccess` treats MASTER_PASSWORD as a live gate (an owner who only set
+ *  the human-memorable password still expects the panel locked). Guards written
+ *  as `if (config.shareKey && …)` skipped authentication entirely in that
+ *  deployment, so they must all ask the same question the gate asks. */
+function controlAuthRequired(): boolean {
+  return Boolean(config.shareKey || config.masterPassword);
+}
+
 /**
  * CSP + framing policy for the hand-written pages. Scripts stay inline (the
  * pages are single-file by design), but everything else is pinned to this
@@ -436,6 +472,16 @@ function sessionCookie(token: string, expiresAt: number, req: http.IncomingMessa
 function redirectStrippingCredentials(res: http.ServerResponse, pathname: string): void {
   res.writeHead(303, { Location: pathname, 'Cache-Control': 'no-store' });
   res.end();
+}
+
+/** decodeURIComponent that reports a malformed escape as null instead of
+ *  throwing a URIError out of the request handler (which becomes a 500). */
+function safeDecode(value: string): string | null {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return null;
+  }
 }
 
 function tooManyAttempts(res: http.ServerResponse, retryAfterMs: number): void {
@@ -665,6 +711,8 @@ const activityPairTries = new Map<string, { count: number; windowStart: number }
 
 function activityPairAllowed(ip: string): boolean {
   const now = Date.now();
+  // Bound the map: every distinct client address would otherwise stay forever.
+  if (activityPairTries.size > 2000) activityPairTries.clear();
   const entry = activityPairTries.get(ip);
   if (!entry || now - entry.windowStart > 60_000) {
     activityPairTries.set(ip, { count: 1, windowStart: now });
@@ -942,7 +990,9 @@ async function handleRoute(
     const forceHttps = /^https:/i.test(config.staticBaseUrl || '');
     const localHost = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(req.headers.host ?? '');
     if (forceHttps && !localHost && proto && proto !== 'https') {
-      res.writeHead(308, { Location: `https://${req.headers.host}${req.url ?? '/'}` });
+      // Use the validated host (line ~930), never the raw header: a spoofed Host
+      // otherwise turns this into an open redirect.
+      res.writeHead(308, { Location: `https://${host}${req.url ?? '/'}` });
       res.end();
       return;
     }
@@ -985,7 +1035,7 @@ async function handleRoute(
     // Access gate: the portal, panel, visualizer and listener all need a
     // session now. Static assets stay open (they hold no audio or state).
     const need = accessNeedFor(url.pathname);
-    if (need && config.shareKey) {
+    if (need && controlAuthRequired()) {
       if (isActivityFetch(req)) {
         // Discord's proxy asked for this path on behalf of the Activity iframe:
         // answer with the Activity page (open, frameable, guest socket).
@@ -1259,9 +1309,17 @@ async function handleRoute(
     // Activity pairing poll: /api/activity/pair/<CODE> (no credential - the
     // code is the credential, and it only ever yields a view invite).
     if (url.pathname.startsWith('/api/activity/pair/')) {
-      const code = decodeURIComponent(url.pathname.slice('/api/activity/pair/'.length)).toUpperCase();
+      const raw = safeDecode(url.pathname.slice('/api/activity/pair/'.length));
+      if (raw === null) {
+        res.writeHead(400, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ status: 'expired' }));
+        return;
+      }
+      const code = raw.toUpperCase();
       const pair = activityPairs.get(code);
       if (!pair || Date.now() - pair.createdAt > ACTIVITY_PAIR_TTL_MS) {
+        // Drop it instead of leaving a dead entry in a public-facing map.
+        activityPairs.delete(code);
         res.writeHead(404, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
         res.end(JSON.stringify({ status: 'expired' }));
         return;
@@ -1273,7 +1331,13 @@ async function handleRoute(
 
     // Official-video proxy: downloads on demand, then serves a seekable MP4.
     if (url.pathname.startsWith('/api/video/')) {
-      handleVideoProxy(req, res, decodeURIComponent(url.pathname.slice('/api/video/'.length)), url);
+      const id = safeDecode(url.pathname.slice('/api/video/'.length));
+      if (id === null) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'failed' }));
+        return;
+      }
+      handleVideoProxy(req, res, id, url);
       return;
     }
 
@@ -1673,7 +1737,7 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
 
       case '/api/stats': {
         // Same key gate as /api/token when a shared key is configured.
-        if (config.shareKey && !hasShareAccess(req, url)) {
+        if (controlAuthRequired() && !hasShareAccess(req, url)) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'unauthorized' }));
           return;
@@ -1694,7 +1758,7 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
       case '/api/vibes': {
         // Crowd/request sessions may read the saved-vibe names: the jam page
         // offers them as shareable links. They cannot save or load by control.
-        if (config.shareKey && !hasShareAccess(req, url) && !hasRequestAccess(req, url)) {
+        if (controlAuthRequired() && !hasShareAccess(req, url) && !hasRequestAccess(req, url)) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'unauthorized' }));
           return;
@@ -1730,6 +1794,14 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
           res.writeHead(503, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Could not allocate a code.' }));
           return;
+        }
+        // Drop expired codes: pairing is public, so the map must not be able to
+        // grow from repeated attempts.
+        if (activityPairs.size > 200) {
+          const now = Date.now();
+          for (const [existing, pair] of activityPairs) {
+            if (now - pair.createdAt > ACTIVITY_PAIR_TTL_MS) activityPairs.delete(existing);
+          }
         }
         activityPairs.set(code, { createdAt: Date.now() });
         res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
@@ -1897,7 +1969,7 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
       }
 
       case '/api/push/key': {
-        if (config.shareKey && !hasShareAccess(req, url)) {
+        if (controlAuthRequired() && !hasShareAccess(req, url)) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'unauthorized' }));
           return;
@@ -1913,7 +1985,7 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
           res.end();
           return;
         }
-        if (config.shareKey && !hasShareAccess(req, url)) {
+        if (controlAuthRequired() && !hasShareAccess(req, url)) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'unauthorized' }));
           return;
@@ -1939,7 +2011,7 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
           res.end();
           return;
         }
-        if (config.shareKey && !hasShareAccess(req, url)) {
+        if (controlAuthRequired() && !hasShareAccess(req, url)) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'unauthorized' }));
           return;
@@ -2000,7 +2072,7 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
           res.end();
           return;
         }
-        if (method !== 'GET' && !hasShareAccess(req, url, 'control')) {
+        if (!hasShareAccess(req, url, method === 'GET' ? 'view' : 'control')) {
           res.writeHead(403, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'forbidden' }));
           return;
@@ -2112,7 +2184,17 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
           'Content-Length': String(size),
           'Cache-Control': 'no-store',
         });
-        fs.createReadStream(file).pipe(res);
+        const fileStream = fs.createReadStream(file);
+        fileStream.on('error', () => {
+          // The file vanished between stat and read (or the disk stalled): end
+          // the response instead of leaving it hanging until the socket dies.
+          try {
+            res.end();
+          } catch {
+            /* client already gone */
+          }
+        });
+        fileStream.pipe(res);
         break;
       }
 

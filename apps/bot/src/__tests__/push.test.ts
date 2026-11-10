@@ -44,15 +44,15 @@ describe('push store', () => {
   it('generates a public key and de-dupes subscriptions', () => {
     expect(pushPublicKey()).toBe('test-pub');
     expect(pushSubscriptionCount()).toBe(0);
-    addPushSubscription(sub('e1'));
-    addPushSubscription(sub('e1'));
+    addPushSubscription(sub('https://push.example/e1'));
+    addPushSubscription(sub('https://push.example/e1'));
     expect(pushSubscriptionCount()).toBe(1);
-    removePushSubscription('e1');
+    removePushSubscription('https://push.example/e1');
     expect(pushSubscriptionCount()).toBe(0);
   });
 
   it('broadcasts and prunes gone (410) subscriptions', async () => {
-    addPushSubscription(sub('e2'));
+    addPushSubscription(sub('https://push.example/e2'));
     mocks.sendNotification.mockResolvedValueOnce(undefined);
     await pushBroadcast({ title: 'Vaporzr', body: 'hi' });
     expect(mocks.sendNotification).toHaveBeenCalledTimes(1);

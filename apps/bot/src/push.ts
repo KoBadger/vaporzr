@@ -67,7 +67,17 @@ export function pushPublicKey(): string {
 
 export function addPushSubscription(sub: PushSub): void {
   if (!sub?.endpoint || !sub.keys?.p256dh || !sub.keys?.auth) return;
+  // The endpoint is later POSTed to, so pin the scheme/host shape rather than
+  // trusting an arbitrary URL, and bound the store.
+  let parsed: URL;
+  try {
+    parsed = new URL(sub.endpoint);
+  } catch {
+    return;
+  }
+  if (parsed.protocol !== 'https:' || sub.endpoint.length > 2048) return;
   const list = loadSubs();
+  if (list.length >= 64) return;
   if (!list.some((s) => s.endpoint === sub.endpoint)) {
     list.push({ endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth } });
     saveSubs();
