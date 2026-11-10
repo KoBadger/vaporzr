@@ -773,6 +773,12 @@ function keyPrompt(res: http.ServerResponse, message?: string): void {
   res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8' });
   res.end(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Vaporzr - Access</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="This Vaporzr page is keyed. Ask the operator for a panel, visualizer or jam link.">
+<meta property="og:title" content="Vaporzr - Access">
+<meta property="og:description" content="This Vaporzr page is keyed. Ask the operator for a panel, visualizer or jam link.">
+<meta property="og:image" content="${config.staticBaseUrl || config.jamPublicBase}/ew-bg.jpg">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="icon" type="image/png" href="/favicon.png">
 <style>
   :root{color-scheme:dark}
@@ -1312,11 +1318,17 @@ async function handleRoute(
     // here but a friendly 404.
     if (url.pathname.startsWith('/j/')) {
       const token = resolveJamCode(url.pathname.slice(3));
+      // A shared vibe link keeps the vibe name across the invite exchange:
+      // /j/<code>?vibe=Name → /jam?invite=<token>&vibe=Name.
+      const vibe = (url.searchParams.get('vibe') ?? '').slice(0, 80);
+      const target = token
+        ? `/jam?invite=${encodeURIComponent(token)}${vibe ? `&vibe=${encodeURIComponent(vibe)}` : ''}`
+        : null;
       res.writeHead(token ? 200 : 404, {
         'Content-Type': 'text/html; charset=utf-8',
         'Cache-Control': 'no-store',
       });
-      res.end(jamHandoffHtml(token ? `/jam?invite=${encodeURIComponent(token)}` : null));
+      res.end(jamHandoffHtml(target));
       return;
     }
 
