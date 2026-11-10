@@ -1359,9 +1359,17 @@ async function handleRoute(
       case '/index.html': {
         // A Discord Activity launch arrives at the mapped root with ?instance_id=…
         // Serve the visualizer for that; the public portal for everyone else.
+        //
+        // `activityResponse` MUST be set before writeHead: the CSP/X-Frame-Options
+        // for this response are computed there, and an Activity page sent with the
+        // default `frame-ancestors 'none'` + `X-Frame-Options: DENY` is refused by
+        // Discord's iframe — which is exactly what "the Activity is a blank white
+        // screen" looked like. /activity sets the flag up front; this launch path
+        // is the one that did not.
         if (url.searchParams.has('instance_id')) {
           const page = activityHtml(origin);
           if (page) {
+            activityResponse = true;
             res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
             res.end(page);
             return;
