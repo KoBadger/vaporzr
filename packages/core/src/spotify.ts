@@ -1,5 +1,6 @@
 import { config } from '@vaporzr/core/config';
 import { tokenStore } from '@vaporzr/core/tokenStore';
+import { singleFlight } from '@vaporzr/core/limits';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -238,6 +239,18 @@ export async function getAccessToken(forceRefresh = false): Promise<string> {
   if (cachedAccessToken && Date.now() / 1000 < cachedExpiresAt - 60 && !forceRefresh) {
     return cachedAccessToken;
   }
+  // One refresh at a time for the whole process. Concurrent guild sessions used
+  // to refresh in parallel with the SAME refresh token, and Spotify can rotate
+  // it — so one of them saved a dead credential and every later call failed
+  // with "No Spotify account linked".
+  return singleFlight('spotify:access-token', refreshAccessToken);
+}
+
+/** The refresh itself; always runs inside the single-flight above. */
+async function refreshAccessToken(): Promise<string> {
+  // Re-check inside the flight: a caller that queued behind a refresh which
+  // just completed should take the new token instead of refreshing again.
+  if (cachedAccessToken && Date.now() / 1000 < cachedExpiresAt - 60) return cachedAccessToken;
 
   const stored = tokenStore.load();
   if (!stored?.refresh_token) {

@@ -1764,6 +1764,9 @@ export class DiscordBot {
     const before = guildRegistry().guilds.find((g) => g.id === guild.id);
     noteGuildLeave(guild.id, guild.name, guild.memberCount || before?.members || 0);
     console.log(`[guild] - ${guild.name} (${guild.id})`);
+    // The bot is gone from that server: drop its playback session so the voice
+    // manager, playback controller and their timers are not held forever.
+    this.sessions.drop(guild.id);
     void this.notifyOwner(
       `👋 **Removed from ${guild.name}** (\`${guild.id}\`)\n` +
         `${before ? `${before.members} members · added <t:${Math.floor(before.joinedAt / 1000)}:R>` : 'not in the registry'}`,

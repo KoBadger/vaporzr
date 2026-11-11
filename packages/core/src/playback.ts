@@ -577,11 +577,32 @@ export class PlaybackController {
     this.crossfadeTimer = setTimeout(
       () => {
         this.crossfadeTimer = null;
+        // The queue can be edited during the (up to several minute) wait. The
+        // planned handoff then belongs to a track that is no longer next, so
+        // degrade to a plain fade instead of mixing the wrong song in.
+        if (!this.nextIsStill(outgoingUri, next)) {
+          this.voice.fadeOutResource(xfadeMs);
+          return;
+        }
         void this.startCrossfade(outgoingUri, next, xfadeMs);
       },
       Math.min(plan.waitMs, 6 * 60 * 60 * 1000),
     );
     this.crossfadeTimer.unref?.();
+  }
+
+  /**
+   * True while the handoff this crossfade was planned for still exists: the
+   * same track is playing AND `next` is still the one right after it.
+   *
+   * Checking only the current track was not enough — reordering or removing the
+   * upcoming track leaves the current one unchanged while `next` becomes stale,
+   * and the blend then overlays a song that is no longer coming up.
+   */
+  private nextIsStill(outgoingUri: string | null, next: TrackInfo): boolean {
+    if (!outgoingUri || this.queue.getCurrentTrack()?.uri !== outgoingUri) return false;
+    const snapshot = this.queue.getSnapshot();
+    return snapshot.tracks[snapshot.currentIndex + 1]?.uri === next.uri;
   }
 
   /** The URL to decode the incoming head from, waiting briefly if the early
@@ -592,8 +613,9 @@ export class PlaybackController {
     let url = pick();
     for (let i = 0; i < 8 && !url; i++) {
       await new Promise((r) => setTimeout(r, 250));
-      // The track may have changed while we waited — never blend over the wrong song.
-      if (!outgoingUri || this.queue.getCurrentTrack()?.uri !== outgoingUri) return null;
+      // The queue may have changed while we waited — never blend over the wrong
+      // song, and never blend a track that stopped being next.
+      if (!this.nextIsStill(outgoingUri, next)) return null;
       url = pick();
     }
     return url ?? null;
@@ -632,8 +654,13 @@ export class PlaybackController {
       console.log(`[playback] crossfade skipped — could not decode the head of "${next.name}"`);
       return;
     }
-    // The track may have changed while decoding — don't mix over the wrong song.
-    if (!outgoingUri || this.queue.getCurrentTrack()?.uri !== outgoingUri) return;
+    // The queue may have changed while decoding — don't mix over the wrong song.
+    if (!this.nextIsStill(outgoingUri, next)) {
+      // The blend was already committed to by suppressing the outgoing tail
+      // fade, so hand over gracefully instead of cutting.
+      this.voice.fadeOutResource(xfadeMs);
+      return;
+    }
     this.voice.queueSfxPcm(fadeInPcm(head, xfadeMs));
     // Stretching consumed `xfadeMs * ratio` of the incoming track's native time.
     this.pendingXfadeSeekMs = Math.round(xfadeMs * ratio);

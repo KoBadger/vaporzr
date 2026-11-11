@@ -3,8 +3,10 @@
  *
  * The API is free and needs no key. A segment list is fetched once per video
  * and cached; playback skips a segment the first time the playhead enters it.
- * Failures are silent — a missing skip list must never stop a track.
+ * Failures are silent - a missing skip list must never stop a track.
  */
+
+import { TTLMap } from './limits.js';
 
 export interface SkipSegment {
   startMs: number;
@@ -41,8 +43,12 @@ export function parseSkipSegments(raw: unknown): SkipSegment[] {
   return out.sort((a, b) => a.startMs - b.startMs);
 }
 
-const cache = new Map<string, { at: number; segments: SkipSegment[] }>();
 const CACHE_MS = 6 * 60 * 60 * 1000;
+/**
+ * Bounded and self-expiring: one entry per distinct video id, and the map is
+ * capped so a long-running process does not hold every id it has ever seen.
+ */
+const cache = new TTLMap<string, { at: number; segments: SkipSegment[] }>(2000, CACHE_MS);
 
 /** Fetch (and cache) skip segments for a YouTube video id. Never throws. */
 export async function fetchSkipSegments(
@@ -52,7 +58,7 @@ export async function fetchSkipSegments(
   now = Date.now(),
 ): Promise<SkipSegment[]> {
   if (!/^[A-Za-z0-9_-]{6,}$/.test(videoId)) return [];
-  const hit = cache.get(videoId);
+  const hit = cache.get(videoId, now);
   if (hit && now - hit.at < CACHE_MS) return hit.segments;
   try {
     const url =
@@ -61,13 +67,13 @@ export async function fetchSkipSegments(
     if (!res.ok) {
       // 404 means "no segments for this video" — cache that too.
       if (res.status === 404) {
-        cache.set(videoId, { at: now, segments: [] });
+        cache.set(videoId, { at: now, segments: [] }, now);
         return [];
       }
       return hit?.segments ?? [];
     }
     const segments = parseSkipSegments(await res.json());
-    cache.set(videoId, { at: now, segments });
+    cache.set(videoId, { at: now, segments }, now);
     return segments;
   } catch {
     return hit?.segments ?? [];

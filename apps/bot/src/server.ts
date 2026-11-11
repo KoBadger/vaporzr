@@ -5,6 +5,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { fileURLToPath, domainToASCII } from 'node:url';
 import { config } from '@vaporzr/core/config';
+import { burst, TTLMap } from '@vaporzr/core/limits';
 import { clientIp, isLoopbackAddress } from './clientIp.js';
 import {
   activePlan,
@@ -732,7 +733,8 @@ const activityPairs = new Map<string, { createdAt: number; invite?: string }>();
 /** Rendered jam cards, keyed by join URL (bounded; an hour each). */
 const jamCardCache = new Map<string, { at: number; png: Buffer }>();
 /** Short-lived search results so type-ahead keystrokes don't hit Spotify each time. */
-const searchCache = new Map<string, { at: number; items: unknown[] }>();
+/** Type-ahead results, bounded and self-expiring (30s). */
+const searchCache = new TTLMap<string, { at: number; items: unknown[] }>(200, 30_000);
 const ACTIVITY_PAIR_TTL_MS = 5 * 60 * 1000;
 const ACTIVITY_INVITE_TTL_MS = 20 * 60 * 1000;
 const activityPairTries = new Map<string, { count: number; windowStart: number }>();
@@ -1372,6 +1374,13 @@ async function handleRoute(
     // Activity pairing poll: /api/activity/pair/<CODE> (no credential - the
     // code is the credential, and it only ever yields a view invite).
     if (url.pathname.startsWith('/api/activity/pair/')) {
+      // Unauthenticated and polled every ~2.5s by every open Activity; cap the
+      // rate so a script cannot enumerate pair codes at network speed.
+      if (!burst(`pairpoll:${clientIp(req)}`, 120, 60_000)) {
+        res.writeHead(429, { 'Content-Type': 'application/json', 'Retry-After': '5', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ status: 'pending' }));
+        return;
+      }
       const raw = safeDecode(url.pathname.slice('/api/activity/pair/'.length));
       if (raw === null) {
         res.writeHead(400, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
@@ -1458,6 +1467,12 @@ async function handleRoute(
     // attaching a file to the Discord post) avoids the undici FormData instance
     // mismatch that made Discord refuse the jam card, and the URL can be cached.
     if (url.pathname === '/jam-card.png') {
+      // Public and renders synchronously; cap it per client before any work.
+      if (!burst(`jamcard:${clientIp(req)}`, 20, 60_000)) {
+        res.writeHead(429, { 'Content-Type': 'text/plain; charset=utf-8', 'Retry-After': '30' });
+        res.end('Too many card requests.');
+        return;
+      }
       const raw = (url.searchParams.get('u') ?? '').slice(0, 500);
       let target: URL;
       try {
@@ -1479,6 +1494,16 @@ async function handleRoute(
       if (hit && Date.now() - hit.at < 60 * 60 * 1000) {
         png = hit.png;
       } else {
+        // Only OUR invites are renderable. The card is always drawn for a
+        // `/j/<code>` URL we minted, so anyone varying `?u=` used to pin the
+        // event loop rendering a 560x260 postcard per request. Cached cards are
+        // still served above, so a code that expires mid-hour is not a 404.
+        const jamCode = /^\/j\/([^/]+)\/?$/.exec(target.pathname)?.[1];
+        if (!jamCode || !resolveJamCode(jamCode)) {
+          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('No such jam card.');
+          return;
+        }
         try {
           png = renderJamCardPng(key);
         } catch {
@@ -2440,6 +2465,13 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
           res.end(JSON.stringify({ error: 'forbidden' }));
           return;
         }
+        // Each cache miss fans out to Spotify AND YouTube, so cap the rate per
+        // client instead of letting a view session drain the upstream quotas.
+        if (!burst(`search:${clientIp(req)}`, 60, 60_000)) {
+          res.writeHead(429, { 'Content-Type': 'application/json', 'Retry-After': '20' });
+          res.end(JSON.stringify({ error: 'Too many searches - try again in a moment.' }));
+          return;
+        }
         const bot = bridgeRef();
         if (!bot?.onSearch) {
           res.writeHead(503, { 'Content-Type': 'application/json' });
@@ -2463,7 +2495,6 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
         }
         try {
           const items = await bot.onSearch(q, limit);
-          if (searchCache.size > 200) searchCache.clear();
           searchCache.set(cacheKey, { at: Date.now(), items });
           res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
           res.end(JSON.stringify({ ok: true, items }));

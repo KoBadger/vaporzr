@@ -286,4 +286,37 @@ export class SessionManager {
   all(): Session[] {
     return [...this.sessions.values()];
   }
+
+  /**
+   * Forget a guild entirely — called when the bot is removed from a server.
+   *
+   * Without this, every guild the bot ever joined kept a VoiceManager and a
+   * PlaybackController (with their timers and caches) for the life of the
+   * process, so memory only ever grew.
+   */
+  drop(guildId: string): void {
+    const session = this.sessions.get(guildId);
+    if (!session) return;
+    const timer = this.saveTimers.get(guildId);
+    if (timer) {
+      clearTimeout(timer);
+      this.saveTimers.delete(guildId);
+    }
+    try {
+      session.playback.stopAll();
+    } catch {
+      /* already stopped */
+    }
+    try {
+      session.voice.leave();
+    } catch {
+      /* already disconnected */
+    }
+    this.sessions.delete(guildId);
+    if (this.primaryGuildId === guildId) {
+      this.primaryGuildId = null;
+      for (const cb of this.primaryHooks) cb(null);
+    }
+    console.log(`[vaporzr] dropped session for guild ${guildId}`);
+  }
 }
