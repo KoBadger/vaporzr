@@ -688,11 +688,13 @@ export class VoiceManager implements AudioTransport {
     }
 
     this.channelBitrate = channel ? current : null;
-    // Don't let a channel the bot can't raise (no Manage Channels) drag the
-    // encoder below libopus's 64 kbps default — encoding at 64k and letting
-    // Discord downmix to a lower channel sounds better than encoding at the
-    // channel's floor directly. (Pre-#60 the encoder ran at ~64k regardless.)
-    this.opusBitrate = Math.min(wanted, Math.max(current, 64_000));
+    // The channel's bitrate is a hard cap: without Manage Channels we cannot
+    // exceed it, and no client can. Encoding above it used to rely on Discord
+    // downmixing the excess, but on a channel already below libopus's floor
+    // (e.g. 32 kbps) the overshoot reads as packet loss rather than fidelity.
+    // Match the channel exactly: the listener gets what the channel allows,
+    // cleanly, and a raised or boosted channel still gets its full ceiling.
+    this.opusBitrate = Math.min(wanted, current);
     // A channel below its ceiling that we were not allowed to raise is the one
     // silent quality loss left: the listener hears the channel cap, not the
     // encoder. Say so once, with the number that fixes it.
