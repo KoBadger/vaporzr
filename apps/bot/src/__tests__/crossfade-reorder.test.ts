@@ -154,6 +154,29 @@ describe('crossfade handoff re-check', () => {
     expect(calls.fades).toEqual([2500]);
   });
 
+  it('does not mute the freshly started track when the outgoing ends mid-decode', async () => {
+    const { queue, controller, voice, calls } = setup();
+    let release: ((buf: Buffer | null) => void) | undefined;
+    (voice.decodeHeadPcm as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise<Buffer | null>((resolve) => (release = resolve)),
+    );
+
+    scheduleCrossfade(controller);
+    await vi.advanceTimersByTimeAsync(WAIT_MS); // timer fires, decode is in flight
+
+    // The outgoing track ends naturally while the head is still decoding; the
+    // queue advances to "b" and play() starts it. The blend then notices
+    // nextIsStill is false — but fading now would grab "b"'s resource and mute it.
+    queue.next();
+    release?.(Buffer.alloc(480 * 4));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(calls.blends).toEqual([]);
+    // The bug was exactly this fadeOutResource: it ramped the incoming track to
+    // silence. The handoff already happened, so nothing should be faded.
+    expect(calls.fades).toEqual([]);
+  });
+
   it('degrades when the queue changes while the resolver is still waiting', async () => {
     const { queue, controller, calls } = setup([track('a'), track('b', 'youtube'), track('c')]);
     // No cached stream for "b", so startCrossfade parks in resolveBlendUrl.
