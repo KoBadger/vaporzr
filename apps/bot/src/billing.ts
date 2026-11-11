@@ -199,12 +199,15 @@ export function deckLimitFor(guildId: string, ownerId = config.ownerId): 2 | 4 {
 }
 
 /** Paid capabilities that are not deck-count, and which plan unlocks each. */
-export type PaidFeature = 'recording' | 'themes' | 'lossless';
+export type PaidFeature = 'recording' | 'themes' | 'lossless' | 'analytics';
 
 const FEATURE_PLANS: Record<PaidFeature, BillingPlan[]> = {
   recording: ['plus', 'server'],
   themes: ['plus', 'server'],
   lossless: ['plus', 'server'],
+  // Analytics is the Server-plan dashboard only; a per-account Plus seat does
+  // not unlock it.
+  analytics: ['server'],
 };
 
 /**

@@ -129,6 +129,7 @@ import {
 import * as EW from '@vaporzr/core/endlesswave';
 import { playlistStore } from '@vaporzr/core/playlists';
 import { statsStore } from '@vaporzr/core/stats';
+import { analyticsStore } from '@vaporzr/core/analytics';
 import { trackKey } from '@vaporzr/core/stats';
 import { gamesStore, fitPercent, describeFit, pickRouletteWeighted, keyToQuery, explainFit } from '@vaporzr/core/games';
 import { packCategoryFields, chunkFieldsIntoEmbeds, aliasIndexFields } from './help.js';
@@ -1302,6 +1303,12 @@ export class DiscordBot {
             void this.syncVoiceStatus(s);
             if (this.moodOn.has(s.guildId)) void this.updateMood(s, st.track);
             this.stats.notePlayed(s.guildId ?? '', st.track.addedBy ?? 'unknown', st.track.artists);
+            // Analytics is credited once per distinct track, not on every
+            // pause/resume state tick.
+            if (s.lastAnalyticsUri !== st.track.uri) {
+              s.lastAnalyticsUri = st.track.uri;
+              analyticsStore.recordPlay(s.guildId ?? '');
+            }
             this.maybeAnnounceTts(s, st.track);
           }
           this.scheduleWaveTopUp(s);

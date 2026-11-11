@@ -61,6 +61,7 @@ import {
   type AccessScope,
 } from './access.js';
 import { statsStore } from '@vaporzr/core/stats';
+import { analyticsStore } from '@vaporzr/core/analytics';
 
 /** Pre-gzipped vendor assets — preset chunks are tens of MB of JS. */
 const vendorCache = new Map<string, { body: Buffer; gzip: boolean }>();
@@ -2039,6 +2040,44 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
           res.writeHead(502, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'Checkout failed.' }));
         }
+        break;
+      }
+
+      case '/api/analytics': {
+        // Server-plan dashboard: same control gate as the panel, plus the paid
+        // feature check. A jam/request key is not enough to read it.
+        if (controlAuthRequired() && !hasShareAccess(req, url)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'unauthorized' }));
+          return;
+        }
+        const gid = url.searchParams.get('guildId') || (bridgeRef()?.getPrimaryGuildId() ?? '');
+        if (!gid) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'No server selected.' }));
+          return;
+        }
+        if (!featureAllowed(gid, 'analytics')) {
+          res.writeHead(402, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Analytics requires the Server plan.', upgrade: true }));
+          return;
+        }
+        const summary = analyticsStore.summary(gid);
+        const body = JSON.stringify({
+          guildId: gid,
+          plan: activePlan(`guild:${gid}`),
+          plays: summary.plays,
+          hours: summary.hours,
+          peakHour: summary.peakHour,
+          lastPlayAt: summary.lastPlayAt,
+          totalQueued: statsStore.totalQueued(gid),
+          topRequesters: statsStore.topUsers(gid, 10),
+          topArtists: statsStore.topArtists(gid, 10),
+          topTracks: statsStore.historyTracks(gid, 10),
+          daily: statsStore.history(gid, 30),
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(body);
         break;
       }
 

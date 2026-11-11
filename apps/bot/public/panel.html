@@ -2301,6 +2301,25 @@
           <div id="stats-body" style="font-size: 12px; color: var(--muted)">Loading…</div>
         </div>
 
+        <!-- Server analytics. Rendered only for the Server plan; a 402 leaves a
+             short upgrade note instead of an empty card. -->
+        <div class="card collapsible" id="analytics-card" data-tab="more" style="display: none">
+          <div id="queue-info">
+            <span class="section-label">📈 ANALYTICS</span>
+            <span class="badge" id="analytics-badge">Server</span>
+            <button
+              id="btn-analytics-refresh"
+              class="icon"
+              data-tip="Refresh analytics"
+              style="height: 26px; min-width: 26px; font-size: 12px"
+            >
+              ↻
+            </button>
+          </div>
+          <div id="analytics-hours" class="stat-chart"></div>
+          <div id="analytics-body" style="font-size: 12px; color: var(--muted)">Loading…</div>
+        </div>
+
         <!-- Plan / billing. Hidden until /api/billing/status says billing is
              configured, so a deployment that never sold a plan shows nothing. -->
         <div class="card collapsible" id="plan-card" data-tab="more" style="display: none">
@@ -2691,6 +2710,11 @@
           'stats-body',
           'btn-stats-refresh',
           'stats-chart',
+          'analytics-card',
+          'analytics-badge',
+          'analytics-hours',
+          'analytics-body',
+          'btn-analytics-refresh',
           'vibe-name',
           'btn-vibe-save',
           'btn-vibe-load',
@@ -4339,6 +4363,78 @@
         el['btn-stats-refresh'].onclick = loadStats;
         loadStats();
         setInterval(loadStats, 60000);
+
+        /* ---------- Server analytics ---------- */
+        function renderAnalytics(d) {
+          el['analytics-card'].style.display = '';
+          var wrap = el['analytics-body'];
+          var chart = el['analytics-hours'];
+          wrap.innerHTML = '';
+          chart.innerHTML = '';
+          if (!d || !d.plays) {
+            wrap.textContent = 'No plays recorded yet. Analytics fills in as tracks play.';
+            return;
+          }
+          var hours = d.hours || [];
+          var max = 1;
+          for (var hi = 0; hi < hours.length; hi++) if ((hours[hi] || 0) > max) max = hours[hi];
+          for (var hh = 0; hh < hours.length; hh++) {
+            var bar = document.createElement('i');
+            var n = hours[hh] || 0;
+            bar.style.height = Math.max(2, Math.round((n / max) * 100)) + '%';
+            var hhLabel = (hh < 10 ? '0' : '') + hh + ':00 UTC';
+            bar.setAttribute('data-tip', hhLabel + ': ' + n + ' play' + (n === 1 ? '' : 's'));
+            chart.appendChild(bar);
+          }
+          var head = document.createElement('div');
+          head.style.cssText = 'font-size:11px;margin-bottom:6px';
+          head.textContent =
+            d.plays +
+            ' plays all-time · peak ' +
+            (d.peakHour == null ? '—' : (d.peakHour < 10 ? '0' : '') + d.peakHour + ':00 UTC');
+          wrap.appendChild(head);
+          if (d.topTracks && d.topTracks.length) {
+            var t = document.createElement('div');
+            t.className = 'section-label';
+            t.style.cssText = 'font-size:10px;margin-top:8px';
+            t.textContent = 'TOP TRACKS';
+            wrap.appendChild(t);
+            d.topTracks.forEach(function (row) {
+              var line = document.createElement('div');
+              line.className = 'stat-row';
+              var name = document.createElement('span');
+              name.textContent = row[0];
+              var val = document.createElement('b');
+              val.textContent = String(row[1]);
+              line.appendChild(name);
+              line.appendChild(val);
+              wrap.appendChild(line);
+            });
+          }
+        }
+        function loadAnalytics() {
+          fetch('/api/analytics')
+            .then(function (r) {
+              if (r.status === 402) {
+                el['analytics-card'].style.display = '';
+                el['analytics-hours'].innerHTML = '';
+                el['analytics-body'].textContent = 'Analytics is included with the Server plan.';
+                return null;
+              }
+              return r.ok ? r.json() : null;
+            })
+            .then(function (d) {
+              if (d) renderAnalytics(d);
+              else if (!el['analytics-body'].textContent) el['analytics-body'].textContent = 'Analytics unavailable.';
+            })
+            .catch(function () {
+              el['analytics-card'].style.display = '';
+              el['analytics-body'].textContent = 'Analytics unavailable.';
+            });
+        }
+        el['btn-analytics-refresh'].onclick = loadAnalytics;
+        loadAnalytics();
+        setInterval(loadAnalytics, 60000);
 
         /* ---------- vibes (saved queues) ---------- */
         var vibeXfade = {};
