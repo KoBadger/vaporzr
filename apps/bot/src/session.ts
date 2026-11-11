@@ -29,6 +29,8 @@ export class Session {
   readonly voice: VoiceManager;
   readonly playback: PlaybackController;
   endlessWave = EW.createState();
+  /** Last track credited to the analytics store, to dedupe pause/resume ticks. */
+  lastAnalyticsUri: string | null = null;
 
   constructor(
     readonly guildId: string,
