@@ -207,4 +207,15 @@ jobs:
               fi
               exit 1
             fi
-            docker exec vaporzr node -e "$HEALTH_CMD" || true
+            # The gate above only proves *something* answers /health. Assert the
+            # build serving traffic is the one we just started: a stale container
+            # (or an old process still holding the port) used to pass green while
+            # the previous build kept serving.
+            SHORT=$(printf '%s' "$SHA" | cut -c1-7)
+            BUILD_CMD="const h=require('http');h.get('http://127.0.0.1:'+(process.env.PORT||4876)+'/health',s=>{let b='';s.on('data',d=>b+=d);s.on('end',()=>{try{const j=JSON.parse(b);console.log('health:',b);process.exit(String(j.build||'').slice(0,7)==='$SHORT'?0:1)}catch{process.exit(1)}})})"
+            if ! docker exec vaporzr node -e "$BUILD_CMD"; then
+              echo "ERROR: /health build does not match $SHORT ($SHA) — the old build is still serving."
+              docker logs --tail 60 vaporzr || true
+              exit 1
+            fi
+            echo "Deployed $SHORT and verified by /health."

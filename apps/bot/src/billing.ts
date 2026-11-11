@@ -186,7 +186,47 @@ export async function createCheckoutSession(req: CheckoutRequest): Promise<{ url
   if (!res.ok || !body.url || !body.id) {
     throw new Error(body.error?.message ?? `Stripe checkout failed (HTTP ${res.status}).`);
   }
-  return { url: body.url, id: body.id };
+  return { id: body.id, url: body.url };
+}
+
+export interface PortalRequest {
+  subject: BillingSubject;
+  /** Where Stripe sends the customer back to, e.g. https://www.vaporzr.app */
+  origin: string;
+}
+
+/**
+ * Create a Stripe billing-portal session so a customer can swap a card or
+ * cancel without emailing the owner.
+ *
+ * The portal is keyed on the Stripe customer, which only exists once a
+ * subscription does — a subject with no `customerId` has never paid, so there
+ * is nothing to manage and we say so rather than opening an empty portal.
+ */
+export async function createPortalSession(req: PortalRequest): Promise<{ url: string }> {
+  if (!billingEnabled()) throw new Error('Billing is not configured.');
+  const entry = entitlementFor(req.subject);
+  if (!entry?.customerId) throw new Error('No subscription to manage.');
+  const base = req.origin.replace(/\/+$/, '');
+
+  const form = new URLSearchParams();
+  form.set('customer', entry.customerId);
+  form.set('return_url', `${base}/panel?billing=portal`);
+
+  const res = await fetch('https://api.stripe.com/v1/billing_portal/sessions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.stripeSecretKey}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: form.toString(),
+    signal: AbortSignal.timeout(15_000),
+  });
+  const body = (await res.json().catch(() => ({}))) as { url?: string; error?: { message?: string } };
+  if (!res.ok || !body.url) {
+    throw new Error(body.error?.message ?? `Stripe portal failed (HTTP ${res.status}).`);
+  }
+  return { url: body.url };
 }
 
 /* ------------------------------------------------------------------ */

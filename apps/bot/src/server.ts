@@ -12,6 +12,7 @@ import {
   applyBillingEvent,
   billingEnabled,
   createCheckoutSession,
+  createPortalSession,
   deckLimitFor,
   entitlementFor,
   mapStripeEvent,
@@ -1906,8 +1907,53 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
             status: record?.status ?? null,
             currentPeriodEnd: record?.currentPeriodEnd ?? null,
             deckLimit: deckLimitFor(gid),
+            // The panel only offers "manage subscription" when Stripe has a
+            // customer to open the portal on.
+            hasCustomer: Boolean(record?.customerId),
           }),
         );
+        break;
+      }
+
+      case '/api/billing/portal': {
+        if (req.method !== 'POST') {
+          res.writeHead(405);
+          res.end();
+          return;
+        }
+        if (!hasShareAccess(req, url, 'control')) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'forbidden' }));
+          return;
+        }
+        if (!billingEnabled()) {
+          res.writeHead(503, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Billing is not configured yet.' }));
+          return;
+        }
+        const body = (await readJsonBody(req)) as { guildId?: string } | null;
+        const gid = body?.guildId || bridgeRef()?.getPrimaryGuildId() || '';
+        if (!gid) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'No server to manage.' }));
+          return;
+        }
+        const origin = config.staticBaseUrl || config.jamPublicBase;
+        if (!origin) {
+          res.writeHead(503, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Public base URL is not configured.' }));
+          return;
+        }
+        try {
+          const session = await createPortalSession({ subject: `guild:${gid}`, origin });
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          res.end(JSON.stringify({ ok: true, url: session.url }));
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Could not open the billing portal.';
+          // "No subscription to manage" is a state problem, not an upstream one.
+          res.writeHead(message.includes('No subscription') ? 409 : 502, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: message }));
+        }
         break;
       }
 
