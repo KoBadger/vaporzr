@@ -2301,6 +2301,24 @@
           <div id="stats-body" style="font-size: 12px; color: var(--muted)">Loading…</div>
         </div>
 
+        <!-- Plan / billing. Hidden until /api/billing/status says billing is
+             configured, so a deployment that never sold a plan shows nothing. -->
+        <div class="card collapsible" id="plan-card" data-tab="more" style="display: none">
+          <div id="queue-info">
+            <span class="section-label">💳 PLAN</span>
+            <span class="badge" id="plan-badge">Free</span>
+          </div>
+          <div id="plan-body" style="font-size: 12px; color: var(--muted); margin-top: 6px">Loading…</div>
+          <div class="mrow" style="margin-top: 8px">
+            <button id="plan-upgrade" style="display: none" data-tip="Unlock four decks and the Server plan features">
+              ⬆ Upgrade to Server
+            </button>
+            <button id="plan-manage" style="display: none" data-tip="Change card or cancel in Stripe">
+              Manage subscription
+            </button>
+          </div>
+        </div>
+
         <!-- Request moderation -->
         <div class="card collapsible" id="requests-card" data-tab="more">
           <div id="queue-info">
@@ -2849,6 +2867,102 @@
             }, 320);
           }, 3400);
         }
+
+        /* ---------- plan ---------- */
+        // One /api/billing/status call paints the card: plan, decks, renewal, and
+        // whichever of the two buttons applies. With billing unconfigured the
+        // card stays hidden — there is nothing to sell and nothing to manage.
+        var planInfo = null;
+        var planGuildId = null;
+        function paintPlan(info) {
+          var card = $('plan-card');
+          if (!card || !info) return;
+          if (!info.enabled) {
+            card.style.display = 'none';
+            return;
+          }
+          planInfo = info;
+          card.style.display = '';
+          var plan = info.plan === 'server' ? 'Server' : info.plan === 'plus' ? 'Plus' : 'Free';
+          var badge = $('plan-badge');
+          if (badge) badge.textContent = plan;
+          var bits = [info.deckLimit + ' deck' + (info.deckLimit === 1 ? '' : 's')];
+          if (info.status) bits.push(info.status.replace(/_/g, ' '));
+          if (info.currentPeriodEnd) bits.push('renews ' + new Date(info.currentPeriodEnd).toLocaleDateString());
+          var body = $('plan-body');
+          if (body) body.textContent = plan + ' plan · ' + bits.join(' · ');
+          var upgrade = $('plan-upgrade');
+          if (upgrade) upgrade.style.display = info.plan === 'server' ? 'none' : '';
+          var manage = $('plan-manage');
+          if (manage) manage.style.display = info.hasCustomer ? '' : 'none';
+        }
+        function refreshPlan() {
+          if (GUEST || !currentGuildId) return;
+          // The panel repaints on every snapshot; only re-ask when the guild changes.
+          if (currentGuildId === planGuildId) return;
+          planGuildId = currentGuildId;
+          fetch('/api/billing/status?guildId=' + encodeURIComponent(currentGuildId), { credentials: 'same-origin' })
+            .then(function (res) {
+              return res.ok ? res.json() : null;
+            })
+            .then(paintPlan)
+            .catch(function () {
+              /* A billing outage hides the card; it must never block the mix. */
+            });
+        }
+        function billingPost(path, payload) {
+          return fetch(path, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          }).then(function (res) {
+            return res
+              .json()
+              .catch(function () {
+                return {};
+              })
+              .then(function (data) {
+                return { ok: res.ok, data: data };
+              });
+          });
+        }
+        (function bindPlanButtons() {
+          var upgrade = $('plan-upgrade');
+          if (upgrade)
+            upgrade.onclick = function () {
+              if (!currentGuildId) return;
+              upgrade.disabled = true;
+              billingPost('/api/billing/checkout', { plan: 'server', guildId: currentGuildId })
+                .then(function (out) {
+                  if (out.ok && out.data.url) window.location.href = out.data.url;
+                  else toast('error', out.data.error || 'Could not start checkout.');
+                })
+                .catch(function () {
+                  toast('error', 'Checkout is unreachable.');
+                })
+                .then(function () {
+                  upgrade.disabled = false;
+                });
+            };
+          var manage = $('plan-manage');
+          if (manage)
+            manage.onclick = function () {
+              if (!currentGuildId) return;
+              manage.disabled = true;
+              billingPost('/api/billing/portal', { guildId: currentGuildId })
+                .then(function (out) {
+                  if (out.ok && out.data.url) window.location.href = out.data.url;
+                  else toast('error', out.data.error || 'Could not open the billing portal.');
+                })
+                .catch(function () {
+                  toast('error', 'The billing portal is unreachable.');
+                })
+                .then(function () {
+                  manage.disabled = false;
+                });
+            };
+        })();
 
         /* ---------- theme ---------- */
         function applyTheme(t, silent) {
@@ -3743,6 +3857,7 @@
                 render();
                 renderDj();
                 renderWave();
+                refreshPlan();
                 break;
               case 'state:update':
                 // Another server's update must never repaint the one on screen.
