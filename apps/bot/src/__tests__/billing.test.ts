@@ -7,6 +7,7 @@ import { config } from '@vaporzr/core/config';
 import {
   activePlan,
   applyBillingEvent,
+  createPortalSession,
   deckLimitFor,
   entitlementFor,
   grantEntitlement,
@@ -192,5 +193,76 @@ describe('deckLimitFor', () => {
     config.ownerId = 'owner-1';
     grantEntitlement('user:owner-1', { plan: 'plus', status: 'active' });
     expect(deckLimitFor('somebody-else')).toBe(4);
+  });
+});
+
+describe('createPortalSession', () => {
+  const original = {
+    key: config.stripeSecretKey,
+    plus: config.stripePricePlus,
+    dataDir: config.dataDir,
+    fetch: globalThis.fetch,
+  };
+  let tmp = '';
+
+  beforeAll(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vz-portal-'));
+    config.dataDir = tmp;
+    config.stripeSecretKey = 'sk_test';
+    config.stripePricePlus = 'price_plus';
+  });
+
+  afterAll(() => {
+    config.stripeSecretKey = original.key;
+    config.stripePricePlus = original.plus;
+    config.dataDir = original.dataDir;
+    globalThis.fetch = original.fetch;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('opens the portal against the customer Stripe already knows', async () => {
+    grantEntitlement('guild:portal', { plan: 'server', status: 'active', customerId: 'cus_123' });
+    let seenUrl = '';
+    let seenBody = '';
+    globalThis.fetch = (async (url: string, init: RequestInit) => {
+      seenUrl = url;
+      seenBody = String(init.body);
+      return new Response(JSON.stringify({ url: 'https://billing.stripe.com/p/session_abc' }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const session = await createPortalSession({ subject: 'guild:portal', origin: 'https://www.vaporzr.app/' });
+
+    expect(session.url).toBe('https://billing.stripe.com/p/session_abc');
+    expect(seenUrl).toBe('https://api.stripe.com/v1/billing_portal/sessions');
+    const form = new URLSearchParams(seenBody);
+    expect(form.get('customer')).toBe('cus_123');
+    // The trailing slash on the origin must not become a double slash.
+    expect(form.get('return_url')).toBe('https://www.vaporzr.app/panel?billing=portal');
+  });
+
+  it('refuses a subject that has never paid, without calling Stripe', async () => {
+    grantEntitlement('guild:never-paid', { plan: 'server', status: 'active' });
+    let called = false;
+    globalThis.fetch = (async () => {
+      called = true;
+      return new Response('{}', { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await expect(createPortalSession({ subject: 'guild:never-paid', origin: 'https://x' })).rejects.toThrow(
+      /No subscription/,
+    );
+    expect(called).toBe(false);
+  });
+
+  it('surfaces the Stripe message when the portal call fails', async () => {
+    grantEntitlement('guild:broken', { plan: 'server', status: 'active', customerId: 'cus_9' });
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ error: { message: 'No such customer' } }), {
+        status: 400,
+      })) as unknown as typeof fetch;
+
+    await expect(createPortalSession({ subject: 'guild:broken', origin: 'https://x' })).rejects.toThrow(
+      /No such customer/,
+    );
   });
 });

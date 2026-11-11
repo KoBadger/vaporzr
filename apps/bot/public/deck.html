@@ -453,6 +453,32 @@
         --deck: var(--b);
         --deck-tint: #f59e0b;
       }
+      /* Bank 2 on a plan that only covers A/B. The card stays in place so the
+         layout does not reflow when a plan is bought, but every interaction is
+         intercepted and replaced with one explanation. */
+      .deck.locked {
+        opacity: 0.42;
+        filter: grayscale(0.55);
+        cursor: not-allowed;
+      }
+      .deck.locked .deck-lock {
+        position: absolute;
+        inset: 0;
+        z-index: 4;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: var(--radius);
+        background: rgba(8, 8, 18, 0.35);
+        color: #fde68a;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        text-align: center;
+        padding: 12px;
+        line-height: 1.6;
+      }
       .deck::before {
         /* front-panel LED strip */
         content: '';
@@ -3278,6 +3304,50 @@
           clone(a, 'c');
           clone(b, 'd');
         })();
+
+        /* ---- second bank gating ---- */
+        // C/D exist on every deployment, but Free only covers A/B. Ask once what
+        // this guild is entitled to and mark the locked pair up front, instead of
+        // letting someone load a deck that the server will refuse for a reason
+        // the page never explained. With billing off the limit is 4, so nothing
+        // is locked on a deployment that never sold a plan.
+        var deckLimit = 4;
+        function lockDeck(card, planName) {
+          if (card.classList.contains('locked')) return;
+          card.classList.add('locked');
+          card.setAttribute('aria-disabled', 'true');
+          var badge = document.createElement('div');
+          badge.className = 'deck-lock';
+          badge.textContent = planName + ' plan — upgrade to unlock';
+          card.appendChild(badge);
+          card.addEventListener(
+            'click',
+            function (ev) {
+              if (deckLimit >= 4) return;
+              ev.preventDefault();
+              ev.stopPropagation();
+              toast('warn', 'Decks C and D are part of the Server plan. Ask the server owner to upgrade.');
+            },
+            true,
+          );
+        }
+        function applyDeckLimit(info) {
+          if (!info || typeof info.deckLimit !== 'number') return;
+          deckLimit = info.deckLimit;
+          if (deckLimit >= 4) return;
+          ['c', 'd'].forEach(function (id) {
+            var card = el('.deck[data-deck="' + id + '"]');
+            if (card) lockDeck(card, 'Server');
+          });
+        }
+        fetch('/api/billing/status', { credentials: 'same-origin' })
+          .then(function (res) {
+            return res.ok ? res.json() : null;
+          })
+          .then(applyDeckLimit)
+          .catch(function () {
+            /* A billing outage must never hide decks someone may own. */
+          });
         function focusDeck(id) {
           focusId = id;
           all('.deck').forEach(function (card) {
