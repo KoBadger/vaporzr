@@ -132,6 +132,34 @@ export function deckLimitFor(guildId: string, ownerId = config.ownerId): 2 | 4 {
   return 2;
 }
 
+/** Paid capabilities that are not deck-count, and which plan unlocks each. */
+export type PaidFeature = 'recording' | 'themes' | 'lossless';
+
+const FEATURE_PLANS: Record<PaidFeature, BillingPlan[]> = {
+  recording: ['plus', 'server'],
+  themes: ['plus', 'server'],
+  lossless: ['plus', 'server'],
+};
+
+/**
+ * Whether a guild may use a paid feature.
+ *
+ * Server covers everything. Plus is bought per account, but the surfaces that
+ * expose these features are the owner's (panel, /deck), so Plus is honoured for
+ * the owner's account — the same rule `deckLimitFor` uses. With billing
+ * disabled nothing is gated: a deployment that never sold a plan keeps every
+ * feature.
+ */
+export function featureAllowed(guildId: string, feature: PaidFeature, ownerId = config.ownerId): boolean {
+  if (!billingEnabled()) return true;
+  const plans = FEATURE_PLANS[feature];
+  // An unknown feature must not start refusing work it used to do.
+  if (!plans || plans.length === 0) return true;
+  if (plans.includes('server') && activePlan(`guild:${guildId}`) === 'server') return true;
+  if (plans.includes('plus') && ownerId && activePlan(`user:${ownerId}`) === 'plus') return true;
+  return false;
+}
+
 /* ------------------------------------------------------------------ */
 /* Checkout                                                            */
 /* ------------------------------------------------------------------ */

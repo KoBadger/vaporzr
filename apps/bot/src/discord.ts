@@ -108,7 +108,7 @@ import {
 import { Session, SessionManager, type RestoredPlayingInfo } from './session.js';
 import { fetchLyrics, type LyricsResult, type SyncedLine } from '@vaporzr/core/lyrics';
 import { PermissionsManager } from './permissions.js';
-import { billingEnabled, createCheckoutSession, deckLimitFor } from './billing.js';
+import { billingEnabled, createCheckoutSession, deckLimitFor, featureAllowed } from './billing.js';
 import { analyzer } from '@vaporzr/core/analyzer';
 import { vizTunnel } from './tunnel.js';
 import { renderPanelIconPng, PANEL_ICON_FALLBACKS } from './panelIcons.js';
@@ -10649,6 +10649,11 @@ export class DiscordBot {
       }
       case 'rec':
       case 'record': {
+        // Set recording writes a full-length file and publishes it — a paid
+        // feature, so refuse before any work starts rather than after.
+        if (!featureAllowed(gid, 'recording')) {
+          return 'Set recording is part of Vaporzr Plus — run `/upgrade` in Discord to unlock it.';
+        }
         if (/^(stop|off|end)$/i.test(value)) return (await decks.recStop()).message;
         return decks.recStart().message;
       }

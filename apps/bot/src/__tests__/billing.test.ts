@@ -10,6 +10,7 @@ import {
   createPortalSession,
   deckLimitFor,
   entitlementFor,
+  featureAllowed,
   grantEntitlement,
   mapStripeEvent,
   revokeEntitlement,
@@ -193,6 +194,48 @@ describe('deckLimitFor', () => {
     config.ownerId = 'owner-1';
     grantEntitlement('user:owner-1', { plan: 'plus', status: 'active' });
     expect(deckLimitFor('somebody-else')).toBe(4);
+  });
+});
+
+describe('featureAllowed', () => {
+  const original = {
+    key: config.stripeSecretKey,
+    plus: config.stripePricePlus,
+    owner: config.ownerId,
+  };
+
+  afterAll(() => {
+    config.stripeSecretKey = original.key;
+    config.stripePricePlus = original.plus;
+    config.ownerId = original.owner;
+  });
+
+  it('leaves every paid feature on while billing is disabled', () => {
+    config.stripeSecretKey = '';
+    expect(featureAllowed('nobody', 'recording')).toBe(true);
+  });
+
+  it('refuses a free guild once billing is on', () => {
+    config.stripeSecretKey = 'sk_test';
+    config.stripePricePlus = 'price_plus';
+    config.ownerId = '';
+    expect(featureAllowed('free-2', 'recording')).toBe(false);
+  });
+
+  it('allows a Server guild', () => {
+    grantEntitlement('guild:server-2', { plan: 'server', status: 'active' });
+    expect(featureAllowed('server-2', 'recording')).toBe(true);
+  });
+
+  it("allows the owner's Plus account", () => {
+    config.ownerId = 'owner-2';
+    grantEntitlement('user:owner-2', { plan: 'plus', status: 'active' });
+    expect(featureAllowed('another-guild', 'themes')).toBe(true);
+  });
+
+  it('does not refuse an unknown feature', () => {
+    // A typo or a future feature must not silently block work that used to run.
+    expect(featureAllowed('free-2', 'nonsense' as never)).toBe(true);
   });
 });
 
