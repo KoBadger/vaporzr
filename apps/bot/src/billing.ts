@@ -116,6 +116,22 @@ export function activeSubjects(now = Date.now()): { subject: string; plan: Billi
   return out;
 }
 
+/**
+ * How many live decks a guild may use.
+ *
+ * Free covers A/B; Server covers all four, and so does the owner's Plus (the
+ * panel is the owner's surface — a per-user plan has no seat of its own there).
+ * With billing disabled every deck stays available: the paywall only means
+ * something once it can actually be bought, and switching it on by default would
+ * take four decks away from a deployment that never sold them.
+ */
+export function deckLimitFor(guildId: string, ownerId = config.ownerId): 2 | 4 {
+  if (!billingEnabled()) return 4;
+  if (activePlan(`guild:${guildId}`) === 'server') return 4;
+  if (ownerId && activePlan(`user:${ownerId}`) === 'plus') return 4;
+  return 2;
+}
+
 /* ------------------------------------------------------------------ */
 /* Checkout                                                            */
 /* ------------------------------------------------------------------ */

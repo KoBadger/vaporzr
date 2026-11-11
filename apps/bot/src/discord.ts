@@ -108,7 +108,7 @@ import {
 import { Session, SessionManager, type RestoredPlayingInfo } from './session.js';
 import { fetchLyrics, type LyricsResult, type SyncedLine } from '@vaporzr/core/lyrics';
 import { PermissionsManager } from './permissions.js';
-import { billingEnabled, createCheckoutSession } from './billing.js';
+import { billingEnabled, createCheckoutSession, deckLimitFor } from './billing.js';
 import { analyzer } from '@vaporzr/core/analyzer';
 import { vizTunnel } from './tunnel.js';
 import { renderPanelIconPng, PANEL_ICON_FALLBACKS } from './panelIcons.js';
@@ -116,6 +116,7 @@ import { jamJoinLinks, type Bridge } from './bridge.js';
 import { DeckController } from './decks.js';
 import { guildRegistry, noteGuildJoin, noteGuildLeave, noteGuildsSeen } from './guildRegistry.js';
 import {
+  DECK_IDS,
   isDeckId,
   type DeckEq,
   type DeckId,
@@ -1443,6 +1444,13 @@ export class DiscordBot {
   ): Promise<void> {
     const gid = guildId ?? this.bridge.getPrimaryGuildId() ?? '';
     if (!gid) return;
+    // Deck paywall: Free covers A/B, Plus/Server unlock C/D. Checked here because
+    // every deck action (socket path included) funnels through this method.
+    const requestedDeck = ('deck' in msg && msg.deck ? msg.deck : 'a') as DeckId;
+    if (DECK_IDS.indexOf(requestedDeck) >= deckLimitFor(gid)) {
+      this.bridge.notice('error', `Deck ${requestedDeck.toUpperCase()} needs Vaporzr Plus — run /upgrade in Discord.`);
+      return;
+    }
     const decks = this.deckFor(gid);
     const report = (r: { ok: boolean; message: string }): void => {
       this.bridge.notice(r.ok ? 'success' : 'error', r.message);

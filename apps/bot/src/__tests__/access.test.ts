@@ -8,6 +8,7 @@ import {
   clearAuthFailures,
   consumeInvite,
   describeUserAgent,
+  inspectInvite,
   listAccess,
   maskIp,
   mintInvite,
@@ -252,5 +253,37 @@ describe('tailnet-only access', () => {
     expect(webAccessAllowed('vaporzr.duckdns.org')).toBe(false);
     expect(webAccessAllowed('8.8.8.8')).toBe(false);
     expect(webAccessAllowed(undefined)).toBe(false);
+  });
+});
+
+describe('inspectInvite (read-only)', () => {
+  // The jam page's API calls carry ?invite= with no cookie. Consuming on every
+  // one of those minted a fresh session each time, so access.json grew a row per
+  // request. Reusable invites are now inspected, not traded.
+  it('reports a reusable invite without consuming it or minting a session', () => {
+    const before = listAccess().sessions.length;
+    const { token } = mintInvite('request', 'jam card', 60_000, Date.now(), 0);
+    expect(inspectInvite(token)).toMatchObject({ scope: 'request', reusable: true });
+    expect(inspectInvite(token)).toMatchObject({ scope: 'request', reusable: true });
+    expect(listAccess().sessions.length).toBe(before);
+    expect(listAccess().invites.length).toBe(1);
+  });
+
+  it('marks a device link as not reusable', () => {
+    const { token } = mintInvite('control', 'panel link', 60_000, Date.now(), 1);
+    expect(inspectInvite(token)).toMatchObject({ scope: 'control', reusable: false });
+  });
+
+  it('returns null for unknown and expired tokens', () => {
+    const now = Date.now();
+    const { token } = mintInvite('request', 'old', 1_000, now, 0);
+    expect(inspectInvite(token, now + 2_000)).toBeNull();
+    expect(inspectInvite('not-a-real-token')).toBeNull();
+  });
+
+  it('leaves single-use consumption working exactly once', () => {
+    const { token } = mintInvite('request', 'device', 60_000, Date.now(), 1);
+    expect(consumeInvite(token)).not.toBeNull();
+    expect(consumeInvite(token)).toBeNull();
   });
 });
