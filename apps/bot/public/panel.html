@@ -2854,10 +2854,20 @@
               inp.focus();
               return;
             }
-            // Remember the key the same way the /key give link does, then reload
-            // so the socket reconnects authenticated (green dot, live controls).
-            document.cookie = 'vz_key=' + encodeURIComponent(v) + '; path=/; max-age=31536000; SameSite=Lax';
-            location.reload();
+            // Use the server's normal key exchange instead of writing the legacy
+            // `vz_key` cookie by hand. The server validates the key, mints a
+            // `vz_sess` session and redirects back without the key. Writing the
+            // legacy cookie worked only on devices where the page gate happened
+            // to re-read it; in a webview / private window / third-party-cookie
+            // context the reload came back still in guest mode.
+            try {
+              var u = new URL(location.href);
+              u.searchParams.set('key', v);
+              location.href = u.pathname + '?' + u.searchParams.toString();
+            } catch (e) {
+              document.cookie = 'vz_key=' + encodeURIComponent(v) + '; path=/; max-age=31536000; SameSite=Lax';
+              location.reload();
+            }
           };
           b.appendChild(btn);
           inp.addEventListener('keydown', function (e) {
