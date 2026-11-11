@@ -478,8 +478,11 @@ export class DeckMixer {
     slot.state.positionMs = seekMs;
     slot.gainNow = 1;
     slot.fadeFrames = Math.round(this.sampleRate * 0.05);
-    this.spawnDecoder(slot, seekMs);
+    // Only a deck that immediately plays needs a decoder. Cueing a track used to
+    // spawn ffmpeg anyway: it filled the ring, blocked on the buffer cap, and sat
+    // there for as long as the cue existed, with no tick running to consume it.
     slot.state.playing = Boolean(opts.play);
+    if (slot.state.playing) this.spawnDecoder(slot, seekMs);
     if (slot.state.playing) this.startTick();
     this.emit();
   }
@@ -487,6 +490,12 @@ export class DeckMixer {
   play(id?: DeckId): void {
     for (const slot of id ? [this.slot(id)] : this.allSlots()) {
       if (!slot.state.source || slot.state.ended) continue;
+      // A cued deck has no decoder yet (see load): start it at the cue point.
+      if (!slot.proc && !slot.procEnded) {
+        slot.baseMs = slot.state.positionMs;
+        slot.consumedFrames = 0;
+        this.spawnDecoder(slot, Math.round(slot.state.positionMs));
+      }
       slot.state.playing = true;
     }
     if (this.allSlots().some((s) => s.state.playing)) this.startTick();
@@ -523,7 +532,9 @@ export class DeckMixer {
     }
     this.killDecoder(slot);
     slot.fadeFrames = Math.round(this.sampleRate * 0.04);
-    this.spawnDecoder(slot, target);
+    // Seeking a cued deck only moves the cue: spawning a decoder here would
+    // block an ffmpeg on the buffer cap for a track that is not playing.
+    if (slot.state.playing) this.spawnDecoder(slot, target);
     this.emit();
   }
 
@@ -549,7 +560,8 @@ export class DeckMixer {
     this.resetLoopCache(slot);
     this.killDecoder(slot);
     slot.fadeFrames = Math.round(this.sampleRate * 0.04);
-    this.spawnDecoder(slot, pos);
+    // Same as seek: a cued deck just carries the new rate into play().
+    if (slot.state.playing) this.spawnDecoder(slot, pos);
     this.emit();
   }
 
@@ -898,6 +910,11 @@ export class DeckMixer {
     });
     proc.on('error', (err) => {
       console.warn(`[deck:${slot.id}] decoder error: ${err.message}`);
+      // A spawn/exec failure never emits 'exit', so without this the deck stayed
+      // "playing" forever and the ticker spun over an empty ring.
+      if (slot.proc !== proc) return;
+      slot.proc = null;
+      slot.procEnded = true;
     });
     proc.on('exit', () => {
       if (slot.proc === proc) {
