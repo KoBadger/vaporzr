@@ -144,6 +144,8 @@ export class VoiceManager implements AudioTransport {
   private raiseError: string | null = null;
   /** The guild's boost tier when the bitrate was negotiated. */
   private boostTier: number | null = null;
+  /** Told once per join when the channel caps quality below what the guild allows. */
+  private onQualityWarning?: (q: { channelKbps: number; ceilingKbps: number }) => void;
   /** Warn once, not per track, when the native encoder is missing. */
   private opusFallbackWarned = false;
 
@@ -199,6 +201,15 @@ export class VoiceManager implements AudioTransport {
 
   setPcmTap(cb: ((data: Buffer) => void) | null): void {
     this.pcmTap = cb;
+  }
+
+  /**
+   * Called once per join when the channel could not be raised to the guild's
+   * ceiling. That is the one quality problem a listener cannot diagnose from
+   * inside Discord — the bot sounds worse and nothing says why.
+   */
+  setOnQualityWarning(cb: ((q: { channelKbps: number; ceilingKbps: number }) => void) | null): void {
+    this.onQualityWarning = cb ?? undefined;
   }
 
   /** Session audio FX (nightcore/slowed/bass) applied to the next stream. */
@@ -682,6 +693,15 @@ export class VoiceManager implements AudioTransport {
     // Discord downmix to a lower channel sounds better than encoding at the
     // channel's floor directly. (Pre-#60 the encoder ran at ~64k regardless.)
     this.opusBitrate = Math.min(wanted, Math.max(current, 64_000));
+    // A channel below its ceiling that we were not allowed to raise is the one
+    // silent quality loss left: the listener hears the channel cap, not the
+    // encoder. Say so once, with the number that fixes it.
+    if (this.raiseError && channel && current < wanted) {
+      this.onQualityWarning?.({
+        channelKbps: Math.round(current / 1000),
+        ceilingKbps: Math.round(wanted / 1000),
+      });
+    }
     if (config.voiceOpusEncoder !== 'off') {
       console.log(
         `[voice] opus target ${Math.round(this.opusBitrate / 1000)} kbps ` +
