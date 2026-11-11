@@ -34,6 +34,7 @@ import { vizTunnel } from './tunnel.js';
 import { secretEquals, keyFromCookieHeader, masterPasswordEquals } from './secretCompare.js';
 import { handleVideoProxy } from './videoProxy.js';
 import { verifyVideoToken } from './videoToken.js';
+import { fallbackOpusModule, opusPlan } from './opusStream.js';
 import { renderJamCardPng } from './jamCardArt.js';
 import { resolveJamCode } from './jamLinks.js';
 import {
@@ -282,6 +283,12 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
       // instead of only surfacing per-command hours later.
       const spotifyCooldownSec = spotifyCooldownRemainingSec();
       const spotifyApiStatus = spotifyCooldownSec > 0 ? 'rate-limited' : 'healthy';
+      // Audio quality is otherwise invisible from outside: the native-Opus
+      // fallback (~64 kbps) and a channel that never got raised both sound worse
+      // and look identical in the logs. Report the numbers we encode with.
+      const audioHost = all.find((s) => s.voice.isJoined()) ?? all[0];
+      const quality = audioHost?.voice.opusStatus();
+      const plan = opusPlan();
       const body = JSON.stringify({
         ok: true,
         uptimeSec: Math.round(process.uptime()),
@@ -308,6 +315,17 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
         },
         cache: {
           entries: spotifyCacheSize(),
+        },
+        // bits/s, and the module that produced them. `module: null` means no
+        // stream has started yet since boot.
+        audio: {
+          encoderKbps: quality?.encoder ? Math.round(quality.encoder / 1000) : null,
+          channelKbps: quality?.channel ? Math.round(quality.channel / 1000) : null,
+          module: plan?.module ?? null,
+          // What a raw-PCM stream would use instead. `opusscript` at the same
+          // bitrate is audibly worse, and this is the only way to see it.
+          fallback: plan ? null : fallbackOpusModule(),
+          fec: plan?.fec ?? null,
         },
       });
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
