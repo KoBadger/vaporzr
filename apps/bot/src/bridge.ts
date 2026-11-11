@@ -45,6 +45,7 @@ import { playlistStore } from '@vaporzr/core/playlists';
 import { getCrossfadeMs, setCrossfadeMs } from './crossfadeStore.js';
 import { getJamPolicy, setJamPolicy, type JamPolicy } from './jamPolicy.js';
 import { codeFor } from './jamLinks.js';
+import { featureAllowed } from './billing.js';
 
 /** The jam page's guest URL: built from the LOW-privilege request key, not the
  *  share key — a jam link grants exactly "add a song" and nothing else.
@@ -1089,6 +1090,15 @@ export class Bridge {
         if (msg.themeId) {
           const t = themeById(msg.themeId);
           if (t) {
+            // Themes are a paid feature. With billing disabled featureAllowed()
+            // always says yes, so a deployment that never sold a plan is
+            // unchanged; with it on, a free guild gets one clear refusal rather
+            // than a silent no-op.
+            const guildId = this.getPrimaryGuildId();
+            if (guildId && !featureAllowed(guildId, 'themes')) {
+              this.notice('error', 'Themes are part of Vaporzr Plus — run /upgrade in Discord to unlock them.');
+              break;
+            }
             this.setTheme(t);
             console.log(`[bridge] theme set to "${t.name}" via panel`);
           }
