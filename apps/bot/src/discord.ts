@@ -1551,9 +1551,23 @@ export class DiscordBot {
           report(decks.lock(msg.enabled === false ? null : deck));
           break;
         case 'rec-start':
+          if (!featureAllowed(gid, 'recording')) {
+            report({
+              ok: false,
+              message: 'Set recording is part of Vaporzr Plus — run /upgrade in Discord to unlock it.',
+            });
+            break;
+          }
           report(decks.recStart());
           break;
         case 'rec-stop': {
+          if (!featureAllowed(gid, 'recording')) {
+            report({
+              ok: false,
+              message: 'Set recording is part of Vaporzr Plus — run /upgrade in Discord to unlock it.',
+            });
+            break;
+          }
           const saved = await decks.recStop();
           report(saved);
           break;
