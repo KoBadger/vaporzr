@@ -23,6 +23,7 @@
     "viz:check": "node scripts/check-viz-syntax.mjs"
   },
   "devDependencies": {
+    "@vitest/coverage-v8": "^4.1.12",
     "prettier": "^3.9.10"
   },
   "engines": {

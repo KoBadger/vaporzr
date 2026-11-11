@@ -44,11 +44,11 @@ jobs:
 
       - name: Unit tests (bot)
         working-directory: apps/bot
-        run: npm test
+        run: npm run test:coverage
 
       - name: Unit tests (core)
         working-directory: packages/core
-        run: npm test
+        run: npm run test:coverage
 
   # The bot's audio stack depends on native Opus, and newer Node ABIs have no
   # upstream prebuild. The root postinstall stages the ABI-agnostic Node 22
