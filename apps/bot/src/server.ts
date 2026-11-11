@@ -286,7 +286,10 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
       // Audio quality is otherwise invisible from outside: the native-Opus
       // fallback (~64 kbps) and a channel that never got raised both sound worse
       // and look identical in the logs. Report the numbers we encode with.
-      const audioHost = all.find((s) => s.voice.isJoined()) ?? all[0];
+      const audioHost =
+        all.find((s) => s.queue.getState().playing && s.voice.isJoined()) ??
+        all.find((s) => s.voice.isJoined()) ??
+        all[0];
       const quality = audioHost?.voice.opusStatus();
       const plan = opusPlan();
       const body = JSON.stringify({
@@ -326,6 +329,11 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
           // bitrate is audibly worse, and this is the only way to see it.
           fallback: plan ? null : fallbackOpusModule(),
           fec: plan?.fec ?? null,
+          // A channel below its tier ceiling that we could not raise is the other
+          // way quality drops silently: the name of the failure says why, and the
+          // tier says what it should have been.
+          boostTier: quality?.boostTier ?? null,
+          raiseError: quality?.raiseError ?? null,
         },
       });
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });

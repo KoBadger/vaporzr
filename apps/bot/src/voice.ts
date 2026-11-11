@@ -140,6 +140,10 @@ export class VoiceManager implements AudioTransport {
   private opusBitrate = 96_000;
   /** The channel's bitrate as last observed (null = never negotiated). */
   private channelBitrate: number | null = null;
+  /** Why the last attempt to raise the channel bitrate failed, if it did. */
+  private raiseError: string | null = null;
+  /** The guild's boost tier when the bitrate was negotiated. */
+  private boostTier: number | null = null;
   /** Warn once, not per track, when the native encoder is missing. */
   private opusFallbackWarned = false;
 
@@ -652,6 +656,8 @@ export class VoiceManager implements AudioTransport {
     const ceiling = maxVoiceBitrate(channel?.guild?.premiumTier ?? 0);
     const wanted = config.voiceOpusBitrate > 0 ? Math.min(config.voiceOpusBitrate, maxVoiceBitrate(3)) : ceiling;
     let current = channel ? channel.bitrate : Math.min(wanted, 96_000);
+    this.raiseError = null;
+    this.boostTier = channel?.guild?.premiumTier ?? null;
 
     if (channel && config.voiceRaiseChannelBitrate && current < wanted) {
       const before = current;
@@ -662,6 +668,7 @@ export class VoiceManager implements AudioTransport {
       } catch (err) {
         // Missing Manage Channels is normal on a server you don't administer;
         // encoding at the channel's existing cap is the correct fallback.
+        this.raiseError = err instanceof Error ? err.message : String(err);
         console.warn(
           `[voice] could not raise channel bitrate to ${Math.round(wanted / 1000)} kbps ` +
             `(${err instanceof Error ? err.message : String(err)}) - using the channel's current cap`,
@@ -703,9 +710,19 @@ export class VoiceManager implements AudioTransport {
     return createAudioResource(pcm, { inputType: StreamType.Raw, inlineVolume: true });
   }
 
-  /** Encoder and channel bitrate in bits/s, for /diag. */
-  opusStatus(): { encoder: number; channel: number | null } {
-    return { encoder: this.opusBitrate, channel: this.channelBitrate };
+  /** Encoder and channel bitrate in bits/s, for /diag and /health. */
+  opusStatus(): {
+    encoder: number;
+    channel: number | null;
+    boostTier: number | null;
+    raiseError: string | null;
+  } {
+    return {
+      encoder: this.opusBitrate,
+      channel: this.channelBitrate,
+      boostTier: this.boostTier,
+      raiseError: this.raiseError,
+    };
   }
 
   /** Create a fresh streaming resource. Safe to call repeatedly. */
