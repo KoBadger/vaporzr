@@ -135,6 +135,10 @@ let preloaded: { video: HTMLVideoElement; uri: string } | null = null;
 let loopbackGain: GainNode | null = null;
 let sensitivityGain: GainNode | null = null;
 let currentSensitivity = 1.0;
+/** A sensitivity the user picked HERE. Once set it wins over the server's
+ *  broadcasts, mirroring the web visualizer's `vzSens` override — otherwise a
+ *  guest's slider change is snapped straight back by the next broadcast. */
+let sensOverride: number | null = null;
 /** Latest mood palette from the bot (V@mood), or null for the static theme. */
 let moodPalette: { hue: number; sat: number; light: number } | null = null;
 let bridgePcmActive = false;
@@ -187,7 +191,7 @@ const client = new WsClient({
       // player sat on its own defaults until someone happened to change them,
       // which is part of why it looked different from the web visualizer.
       if (msg.theme) applyTheme(msg.theme);
-      if (typeof msg.sensitivity === 'number') applySensitivity(msg.sensitivity);
+      if (typeof msg.sensitivity === 'number' && sensOverride == null) applySensitivity(msg.sensitivity);
       // A snapshot only ever AUTO-ENABLES the scene (EW is on) — same rule as
       // the web visualizer: only a live 'endlesswave' broadcast may turn it off.
       if (msg.endlesswaveMode) setWaveMode(msg.endlesswaveMode);
@@ -214,7 +218,7 @@ const client = new WsClient({
       remoteBars = msg.bars;
       remoteBarsAt = Date.now();
     } else if (msg.type === 'visuals:sensitivity') {
-      applySensitivity(msg.multiplier);
+      if (sensOverride == null) applySensitivity(msg.multiplier);
     } else if (msg.type === 'visuals:mood') {
       // Mood-reactive palette (V@mood). The web visualizer has always honoured
       // this; the player never handled it, so its colours stayed static.
@@ -543,6 +547,10 @@ function setWaveMode(mode: 'off' | 'basic' | 'smart'): void {
 // ---- Controls overlay ----
 
 let latestState: PlaybackState = emptyState();
+/** Local receipt time of `latestState`, for extrapolating position. The bot's
+ *  `updatedAt` is stamped on ITS clock, so subtracting it from OUR clock breaks
+ *  for a remote bot (freezes when the bot is ahead, races when behind). */
+let latestStateAt = 0;
 
 /** The queue cursor the bridge broadcasts — just enough for the up-next line. */
 interface QueueLite {
@@ -603,7 +611,7 @@ function updateControls(): void {
   const max = Math.max(1, Math.round(durMs / 1000));
   if (!ctrlSeek.matches(':active')) {
     let pos = st.positionMs || 0;
-    if (st.playing) pos += Math.max(0, Date.now() - (st.updatedAt || Date.now()));
+    if (st.playing) pos += Math.max(0, Date.now() - (latestStateAt || Date.now()));
     ctrlSeek.value = String(Math.min(max, Math.round(pos / 1000)));
   }
   ctrlTime.textContent = `${fmtTime(Number(ctrlSeek.value) * 1000)} / ${fmtTime(durMs)}`;
@@ -930,7 +938,15 @@ function wireControls(): void {
     e.stopPropagation();
     togglePresetPicker();
   });
-  sensSlider.addEventListener('change', () => sendCmd('sensitivity', { sensitivity: Number(sensSlider.value) }));
+  // The slider must act locally: a guest player's `cmd sensitivity` is dropped
+  // by the bridge (only `preset` is let through), so relying on the echo meant
+  // the analyser gain/smoothing never changed and the toggle did nothing.
+  sensSlider.addEventListener('input', () => {
+    const v = Number(sensSlider.value);
+    sensOverride = v;
+    applySensitivity(v);
+    sendCmd('sensitivity', { sensitivity: v });
+  });
   presetSearch.addEventListener('input', () => renderPresetList(presetSearch.value));
   // Click-away closes the browser (but not a click on its own toggle).
   document.addEventListener('click', (e) => {
@@ -1114,6 +1130,7 @@ function setPipTitle(title: string): void {
 
 function handleState(state: PlaybackState): void {
   latestState = state;
+  latestStateAt = Date.now();
   updateControls();
   if (OVERLAY) updateOverlayIdle(state.playing);
   const idle = !state.playing;
@@ -2265,7 +2282,13 @@ function init(): void {
     }
     try {
       const saved = localStorage.getItem('vaporzr.sensitivity');
-      if (saved) applySensitivity(Number(saved));
+      if (saved) {
+        const v = Number(saved);
+        if (Number.isFinite(v) && v >= 0.5 && v <= 1.5) {
+          sensOverride = v;
+          applySensitivity(v);
+        }
+      }
     } catch {}
     try {
       const pc = localStorage.getItem('vaporzr.presetCycle');

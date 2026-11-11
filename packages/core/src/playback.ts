@@ -638,7 +638,13 @@ export class PlaybackController {
       // sequential fade: ramp the outgoing volume to zero over xfadeMs so the
       // handoff isn't a hard cut, and the next track fades in when play() starts.
       console.log(`[playback] crossfade: sequential fade for "${next.name}" (no blend stream)`);
-      this.voice.fadeOutResource(xfadeMs);
+      // `resolveBlendUrl` returns null both when the stream never appears AND when
+      // the outgoing track ended while we waited. Fading after a natural advance
+      // would grab the freshly started incoming resource and mute it — only fade
+      // while the outgoing track is still the current one.
+      if (this.queue.getCurrentTrack()?.uri === outgoingUri) {
+        this.voice.fadeOutResource(xfadeMs);
+      }
       return;
     }
     if (!outgoingUri) return;
@@ -656,9 +662,15 @@ export class PlaybackController {
     }
     // The queue may have changed while decoding — don't mix over the wrong song.
     if (!this.nextIsStill(outgoingUri, next)) {
-      // The blend was already committed to by suppressing the outgoing tail
-      // fade, so hand over gracefully instead of cutting.
-      this.voice.fadeOutResource(xfadeMs);
+      // `nextIsStill` is false for two reasons: the upcoming track changed while
+      // the outgoing still plays (degrade to a sequential fade), OR the outgoing
+      // ended and the queue advanced (the handoff already happened). Fading in
+      // that second case would grab the freshly started incoming resource and
+      // mute it — the "song cuts out, pause, next song" bug. Only fade while the
+      // outgoing track is still the current one.
+      if (this.queue.getCurrentTrack()?.uri === outgoingUri) {
+        this.voice.fadeOutResource(xfadeMs);
+      }
       return;
     }
     this.voice.queueSfxPcm(fadeInPcm(head, xfadeMs));
