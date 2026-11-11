@@ -482,6 +482,16 @@ export class Bridge {
         // pill was carrying names over from the previous one.
         if (gid === this.sessions.guildId && joined) this.resetJamPresence();
       });
+      // A channel we cannot raise caps what every listener hears. Say it in the
+      // panel once per join, with the number that fixes it, instead of leaving
+      // someone to wonder why the bot sounds worse in this server.
+      s.voice.setOnQualityWarning((q) => {
+        this.notice(
+          'info',
+          `This voice channel is ${q.channelKbps} kbps but the server allows ${q.ceilingKbps} kbps. ` +
+            'Give Vaporzr "Manage Channels", or raise the channel bitrate in its settings, to hear it properly.',
+        );
+      });
       onQueueChanged();
       onStateChanged(q.getState());
       this.queueSubs.set(gid, () => {
