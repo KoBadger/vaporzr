@@ -36,6 +36,23 @@ npm run dev -w @vaporzr/bot
 
 The bot serves its panel/visualizer on `http://localhost:4876`. For links that work from other devices, see **Secure links** below.
 
+## Running the bot (per platform)
+
+Background/process control is scripted per platform — the Windows and POSIX scripts share the same
+`start | stop | restart | status | logs` contract, and both treat the listening socket on **4876**
+(never a stale pid file) as the source of truth:
+
+| Task | Windows | Linux / macOS |
+|---|---|---|
+| Manage the bot | `bot.bat start` / `.\bot.ps1 status` | `./bot.sh start` (`status`, `stop`, `restart`, `logs`) |
+| Visualizer (broadcast) | `Start Visualizer.cmd` | `./start-visualizer.sh` |
+| Keep the machine reachable | `.\stay_awake.ps1` (pins AC power settings) | `./stay_awake.sh` (holds a sleep inhibitor; `--check` previews) |
+| Docker build | `scripts\docker-build.ps1` | `docker build -f apps/bot/Dockerfile -t vaporzr-bot .` |
+
+`bot.sh` discovers the bot's PIDs with `lsof` (macOS and most Linux), then `ss`, then `fuser` — add `lsof`
+or `iproute2` if your distro ships neither. The scripts do not install a boot service: on Linux point a
+systemd unit at `./bot.sh start`, on macOS a LaunchAgent (the `stay_awake.sh` header has the same note).
+
 ## Development
 
 ```bash
