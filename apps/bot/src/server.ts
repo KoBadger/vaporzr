@@ -62,6 +62,7 @@ import {
 } from './access.js';
 import { statsStore } from '@vaporzr/core/stats';
 import { analyticsStore } from '@vaporzr/core/analytics';
+import { domainStore } from '@vaporzr/core/domains';
 
 /** Pre-gzipped vendor assets — preset chunks are tens of MB of JS. */
 const vendorCache = new Map<string, { body: Buffer; gzip: boolean }>();
@@ -915,9 +916,17 @@ function pruneUploads(maxAgeDays = 30): void {
 }
 
 function keyPrompt(res: http.ServerResponse, message?: string): void {
-  res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8' });
+  // 200, not 401: this is a normal login page. A 401 makes some browsers,
+  // embedded webviews and edge proxies treat the response as a transport error
+  // and never render the form, so submitting the key looked like "nothing
+  // happens". The page is never cacheable.
+  res.writeHead(200, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Cache-Control': 'no-store',
+  });
   res.end(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Vaporzr - Access</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
 <meta name="description" content="This Vaporzr page is keyed. Ask the operator for a panel, visualizer or jam link.">
 <meta property="og:title" content="Vaporzr - Access">
 <meta property="og:description" content="This Vaporzr page is keyed. Ask the operator for a panel, visualizer or jam link.">
@@ -939,18 +948,34 @@ function keyPrompt(res: http.ServerResponse, message?: string): void {
   input:focus{outline:none;border-color:#2c5a50}
   button{width:100%;padding:11px 14px;border-radius:9px;border:1px solid #2c5a50;background:linear-gradient(180deg,#1b3733,#132520);
          color:#d9fff4;font-weight:600;cursor:pointer}
+  button:disabled{opacity:.6;cursor:wait}
   .err{color:#f2777a;font-size:12.5px;margin-top:10px}
   .fine{color:#5f6b80;font-size:11.5px;margin-top:14px;line-height:1.45}
 </style>
 </head><body>
-<form method="GET">
+<form method="GET" id="key-form">
   <h1>VAPORZR <span>/ access</span></h1>
   <p>Enter the share key, or an invite link's code</p>
-  <input name="key" placeholder="key or invite" autofocus autocomplete="off" spellcheck="false">
-  <button>Enter</button>
+  <input name="key" id="key-input" placeholder="key or invite" autofocus autocomplete="off" spellcheck="false">
+  <button id="key-submit">Enter</button>
   ${message ? `<div class="err">${message}</div>` : ''}
   <div class="fine">Invites from <b>/key give</b> work once and expire on their own.<br>The owner key is in your bot's .env (SHARE_KEY).</div>
 </form>
+<script>
+  (function () {
+    var form = document.getElementById('key-form');
+    var btn = document.getElementById('key-submit');
+    var input = document.getElementById('key-input');
+    form.addEventListener('submit', function () {
+      // Give immediate feedback: a slow redirect otherwise looks like the
+      // button did nothing, which is exactly how this page was reported.
+      if (!input.value.trim()) return;
+      btn.disabled = true;
+      btn.textContent = 'Checking…';
+      form.submit();
+    });
+  })();
+</script>
 </body></html>`);
 }
 /**
@@ -1060,6 +1085,10 @@ async function handleRoute(
   const rawHost = req.headers.host ?? '';
   const host = /^[a-z0-9.-]+(:\d{1,5})?$/i.test(rawHost) ? rawHost : `localhost:${config.port}`;
   const origin = `https://${host}`;
+  // A custom white-label host routes API defaults to the guild that claimed it.
+  // Explicit ?guildId= / body.guildId still wins at each call site.
+  const defaultGuildId = (): string =>
+    domainStore.guildForHost(req.headers.host) || bridgeRef()?.getPrimaryGuildId() || '';
   try {
     // Set when this response body is the Activity page (framing rules differ).
     let activityResponse = url.pathname.startsWith('/activity');
@@ -1929,7 +1958,7 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
           res.end(JSON.stringify({ error: 'forbidden' }));
           return;
         }
-        const gid = url.searchParams.get('guildId') || (bridgeRef()?.getPrimaryGuildId() ?? '');
+        const gid = url.searchParams.get('guildId') || defaultGuildId();
         const subject = `guild:${gid}`;
         const record = entitlementFor(subject);
         res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
@@ -1969,7 +1998,7 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
           return;
         }
         const body = (await readJsonBody(req)) as { guildId?: string } | null;
-        const gid = body?.guildId || bridgeRef()?.getPrimaryGuildId() || '';
+        const gid = body?.guildId || defaultGuildId();
         if (!gid) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'No server to manage.' }));
@@ -2019,7 +2048,7 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
           res.end(JSON.stringify({ error: 'Use /upgrade in Discord for the Plus plan.' }));
           return;
         }
-        const gid = body.guildId || bridgeRef()?.getPrimaryGuildId() || '';
+        const gid = body.guildId || defaultGuildId();
         if (!gid) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'No server to bill.' }));
@@ -2051,7 +2080,7 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
           res.end(JSON.stringify({ error: 'unauthorized' }));
           return;
         }
-        const gid = url.searchParams.get('guildId') || (bridgeRef()?.getPrimaryGuildId() ?? '');
+        const gid = url.searchParams.get('guildId') || defaultGuildId();
         if (!gid) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'No server selected.' }));
@@ -2081,6 +2110,111 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
         break;
       }
 
+      case '/api/analytics': {
+        // Server-plan dashboard: same control gate as the panel, plus the paid
+        // feature check. A jam/request key is not enough to read it.
+        if (controlAuthRequired() && !hasShareAccess(req, url)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'unauthorized' }));
+          return;
+        }
+        const gid = url.searchParams.get('guildId') || defaultGuildId();
+        if (!gid) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'No server selected.' }));
+          return;
+        }
+        if (!featureAllowed(gid, 'analytics')) {
+          res.writeHead(402, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Analytics requires the Server plan.', upgrade: true }));
+          return;
+        }
+        const summary = analyticsStore.summary(gid);
+        const body = JSON.stringify({
+          guildId: gid,
+          plan: activePlan(`guild:${gid}`),
+          plays: summary.plays,
+          hours: summary.hours,
+          peakHour: summary.peakHour,
+          lastPlayAt: summary.lastPlayAt,
+          totalQueued: statsStore.totalQueued(gid),
+          topRequesters: statsStore.topUsers(gid, 10),
+          topArtists: statsStore.topArtists(gid, 10),
+          topTracks: statsStore.historyTracks(gid, 10),
+          daily: statsStore.history(gid, 30),
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(body);
+        break;
+      }
+
+      case '/api/domain': {
+        if (controlAuthRequired() && !hasShareAccess(req, url)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'unauthorized' }));
+          return;
+        }
+        const gid = url.searchParams.get('guildId') || defaultGuildId();
+        if (!gid) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'No server selected.' }));
+          return;
+        }
+        if (!featureAllowed(gid, 'whitelabel')) {
+          res.writeHead(402, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'White‑label domains require the Server plan.', upgrade: true }));
+          return;
+        }
+        if (req.method === 'GET') {
+          const host = domainStore.hostFor(gid);
+          const base = host ? `https://${host}` : null;
+          const body = JSON.stringify({ guildId: gid, domain: host, base });
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          res.end(body);
+          break;
+        }
+        if (req.method === 'POST') {
+          try {
+            const data = (await readJsonBody(req)) as any;
+            const host = data?.host;
+            if (!host) {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'Missing host in request body.' }));
+              return;
+            }
+            if (!host) {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'Missing host in request body.' }));
+              return;
+            }
+            const result = domainStore.set(gid, host);
+            if ('error' in result) {
+              const status = result.error.includes('already used') ? 409 : 400;
+              res.writeHead(status, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: result.error }));
+              return;
+            }
+            const resp = { guildId: gid, domain: result.host, base: `https://${result.host}` };
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(resp));
+            return;
+          } catch {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid request body.' }));
+            return;
+          }
+        }
+        if (req.method === 'DELETE') {
+          const ok = domainStore.clear(gid);
+          res.writeHead(ok ? 200 : 404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ guildId: gid, cleared: ok }));
+          return;
+        }
+        res.writeHead(405, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Method not allowed.' }));
+        break;
+      }
+
       case '/api/stats': {
         // Same key gate as /api/token when a shared key is configured.
         if (controlAuthRequired() && !hasShareAccess(req, url)) {
@@ -2088,7 +2222,7 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
           res.end(JSON.stringify({ error: 'unauthorized' }));
           return;
         }
-        const gid = url.searchParams.get('guildId') || (bridgeRef()?.getPrimaryGuildId() ?? '');
+        const gid = url.searchParams.get('guildId') || defaultGuildId();
         const body = JSON.stringify({
           guildId: gid,
           totalQueued: gid ? statsStore.totalQueued(gid) : 0,
@@ -2109,7 +2243,7 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
           res.end(JSON.stringify({ error: 'unauthorized' }));
           return;
         }
-        const gid = url.searchParams.get('guildId') || (bridgeRef()?.getPrimaryGuildId() ?? '');
+        const gid = url.searchParams.get('guildId') || defaultGuildId();
         const vibes = gid
           ? playlistStore.list(gid).map((p) => ({
               name: p.name,
