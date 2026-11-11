@@ -137,10 +137,23 @@ jobs:
             SHA="${{ steps.sha.outputs.sha || env.DEPLOY_SHA }}"
             echo "Deploying ${{ env.IMAGE }}:$SHA"
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            # Abort before touching the running container if the tag does not exist
-            # (a typo'd rollback sha changes nothing).
+            # Free space BEFORE pulling. A layer extraction that runs out of disk
+            # fails the whole pull ("no space left on device" while unpacking), and
+            # pruning afterwards is too late. Nothing here can remove the image the
+            # running container is using, so prod keeps serving throughout.
+            echo "disk before: $(df -h /var/lib/docker 2>/dev/null | tail -1 || df -h / | tail -1)"
+            docker container prune -f >/dev/null 2>&1 || true
+            docker image prune -f >/dev/null 2>&1 || true
+            docker builder prune -af >/dev/null 2>&1 || true
+            # Keep only the two newest bot tags. Each is ~1.4 GB, and the six-deep
+            # retention this replaces is what filled the volume.
+            docker images ${{ env.IMAGE }} --format '{{.ID}}' | tail -n +3 | xargs -r docker rmi -f >/dev/null 2>&1 || true
+            echo "disk after prune: $(df -h /var/lib/docker 2>/dev/null | tail -1 || df -h / | tail -1)"
+            # Abort before touching the running container if the pull fails: either
+            # the tag is missing (a typo'd rollback sha changes nothing) or the disk
+            # is still full, and in both cases prod must keep serving.
             docker pull ${{ env.IMAGE }}:$SHA || {
-              echo "ERROR: ${{ env.IMAGE }}:$SHA not found in GHCR — nothing was changed."; exit 1; }
+              echo "ERROR: could not pull ${{ env.IMAGE }}:$SHA — see the error above (missing tag or no disk space). Nothing was changed."; exit 1; }
 
             # YouTube PO-token provider (host loopback :4416). Persists across
             # deploys; start it here if the VPS was rebuilt from scratch.
@@ -181,11 +194,9 @@ jobs:
             docker rm vaporzr || true
             start_container ${{ env.IMAGE }}:$SHA
             docker image prune -f
-            # Keep the 6 newest bot images (current + a few rollback targets);
-            # the VPS disk fills fast at ~1.4 GB per tag otherwise.
-            docker images --format '{{.ID}} {{.CreatedAt}}' ${{ env.IMAGE }} \
-              | sort -k2 -r | tail -n +7 | awk '{print $1}' | sort -u \
-              | xargs -r docker rmi -f >/dev/null 2>&1 || true
+            # The 6-deep retention this replaces (now handled before the pull)
+            # trimmed the bot tags but never the build cache or dangling layers,
+            # which is what actually filled the volume.
             # Health gate: the container needs a few seconds to log in and bind.
             # Require a 200 from /health within 60s, else restore the previous
             # image and fail the run — a broken deploy is never left serving.
