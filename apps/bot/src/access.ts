@@ -188,8 +188,32 @@ export function mintInvite(
   return { token, invite: visible };
 }
 
-/** Trade an invite for a session. Returns null if unknown, expired or exhausted. */
-export function consumeInvite(token: string, now = Date.now()): { token: string; session: AccessSession } | null {
+/**
+ * Look at an invite WITHOUT consuming it.
+ *
+ * `consumeInvite` increments the use count and mints a session every time it is
+ * called. That is right for a page load (the session goes into a cookie) but
+ * wrong for an API request that merely carries `?invite=`: a reusable jam invite
+ * minted a brand-new session on every call, so `access.json` grew one row per
+ * request. Callers check reusable invites through this, and only trade single-use
+ * links for a session.
+ */
+export function inspectInvite(
+  token: string,
+  now = Date.now(),
+): { scope: AccessScope; reusable: boolean; expiresAt: number } | null {
+  if (!token) return null;
+  const data = load(now);
+  const hash = hashToken(token);
+  const invite = data.invites.find((i) => i.tokenHash === hash);
+  if (!invite || invite.expiresAt <= now) return null;
+  return { scope: invite.scope, reusable: invite.maxUses === 0, expiresAt: invite.expiresAt };
+}
+
+/** Trade an invite for a session. Returns null if unknown, expired or exhausted. */ export function consumeInvite(
+  token: string,
+  now = Date.now(),
+): { token: string; session: AccessSession } | null {
   if (!token) return null;
   const data = load(now);
   const hash = hashToken(token);

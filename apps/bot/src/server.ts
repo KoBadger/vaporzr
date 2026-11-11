@@ -12,6 +12,7 @@ import {
   applyBillingEvent,
   billingEnabled,
   createCheckoutSession,
+  deckLimitFor,
   entitlementFor,
   mapStripeEvent,
   verifyStripeSignature,
@@ -38,6 +39,7 @@ import {
   INVITE_TTL_MS,
   OWNER_LINK_TTL_MS,
   consumeInvite,
+  inspectInvite,
   mintInvite,
   mintSession,
   noteAuthFailure,
@@ -624,6 +626,11 @@ function hasRequestAccess(req: http.IncomingMessage, url: URL): boolean {
   }
   const inviteToken = url.searchParams.get('invite');
   if (inviteToken) {
+    // Reusable invites (jam cards) are checked, not traded: consuming one here
+    // minted a new session on every cookie-less API call. Single-use links still
+    // burn exactly once.
+    const info = inspectInvite(inviteToken);
+    if (info?.reusable) return scopeSatisfies(info.scope, 'request');
     const used = consumeInvite(inviteToken);
     if (used && scopeSatisfies(used.session.scope, 'request')) return true;
   }
@@ -763,18 +770,13 @@ function newPairCode(): string {
   return '';
 }
 
-/** Global throttle for the public request endpoint (8 requests / minute). */
-let requestWindowStart = 0;
-let requestCount = 0;
-function requestGate(): boolean {
-  const now = Date.now();
-  if (now - requestWindowStart > 60_000) {
-    requestWindowStart = now;
-    requestCount = 0;
-  }
-  if (requestCount >= 8) return false;
-  requestCount++;
-  return true;
+/** Per-client throttle for the public request endpoints (8 requests / minute).
+ *
+ *  It used to be one global counter, so a single busy guest starved every other
+ *  guest in the room (and the counter incremented before input validation).
+ */
+function requestGate(req: http.IncomingMessage): boolean {
+  return burst(`request:${clientIp(req)}`, 8, 60_000);
 }
 
 /**
@@ -1071,6 +1073,17 @@ async function handleRoute(
     // discordsays proxy, which by design differs from our host.
     const pairEndpoint = url.pathname === '/api/activity/pair';
     if (!pairEndpoint && req.method && req.method !== 'GET' && req.method !== 'HEAD') {
+      // `Origin` is optional (some clients omit it), so also honour
+      // Sec-Fetch-Site, which browsers always send. Only a request that CARRIES
+      // our cookie can be CSRF'd; token-bearing callers (the desktop app) and
+      // server-to-server posts (Stripe) have no ambient credential to abuse.
+      const site = String(req.headers['sec-fetch-site'] ?? '').toLowerCase();
+      const carriesCookie = /(?:^|;\s*)vz_/.test(req.headers.cookie ?? '');
+      if (carriesCookie && site && site !== 'same-origin' && site !== 'none') {
+        res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Cross-site request refused.');
+        return;
+      }
       const originHeader = req.headers.origin;
       if (originHeader) {
         let oh = '';
@@ -1892,6 +1905,7 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
             plan: activePlan(subject),
             status: record?.status ?? null,
             currentPeriodEnd: record?.currentPeriodEnd ?? null,
+            deckLimit: deckLimitFor(gid),
           }),
         );
         break;
@@ -2582,7 +2596,7 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
           res.end(JSON.stringify({ error: 'forbidden' }));
           return;
         }
-        if (!requestGate()) {
+        if (!requestGate(req)) {
           res.writeHead(429, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Too many votes — try again shortly.' }));
           return;
@@ -2679,7 +2693,7 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
           res.end(JSON.stringify({ error: 'forbidden' }));
           return;
         }
-        if (!requestGate()) {
+        if (!requestGate(req)) {
           res.writeHead(429, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Too many requests — try again shortly.' }));
           return;
@@ -2714,7 +2728,7 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
           res.end(JSON.stringify({ error: 'bot offline' }));
           return;
         }
-        if (!requestGate()) {
+        if (!requestGate(req)) {
           res.writeHead(429, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Too many requests — try again shortly.' }));
           return;

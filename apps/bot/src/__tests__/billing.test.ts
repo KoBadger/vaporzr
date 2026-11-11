@@ -7,6 +7,7 @@ import { config } from '@vaporzr/core/config';
 import {
   activePlan,
   applyBillingEvent,
+  deckLimitFor,
   entitlementFor,
   grantEntitlement,
   mapStripeEvent,
@@ -151,5 +152,45 @@ describe('entitlement store', () => {
     applyBillingEvent({ kind: 'revoke', subject: 'guild:1' });
     expect(activePlan('guild:1')).toBeNull();
     revokeEntitlement('guild:1'); // idempotent
+  });
+});
+
+describe('deckLimitFor', () => {
+  const original = {
+    key: config.stripeSecretKey,
+    plus: config.stripePricePlus,
+    server: config.stripePriceServer,
+    owner: config.ownerId,
+  };
+
+  afterAll(() => {
+    config.stripeSecretKey = original.key;
+    config.stripePricePlus = original.plus;
+    config.stripePriceServer = original.server;
+    config.ownerId = original.owner;
+  });
+
+  it('leaves all four decks available while billing is disabled', () => {
+    // Enforcement must not take decks away from a deployment that never sold them.
+    config.stripeSecretKey = '';
+    expect(deckLimitFor('free')).toBe(4);
+  });
+
+  it('limits a free guild to two decks once billing is on', () => {
+    config.stripeSecretKey = 'sk_test';
+    config.stripePricePlus = 'price_plus';
+    config.ownerId = '';
+    expect(deckLimitFor('free')).toBe(2);
+  });
+
+  it('gives a Server guild all four decks', () => {
+    grantEntitlement('guild:paid', { plan: 'server', status: 'active' });
+    expect(deckLimitFor('paid')).toBe(4);
+  });
+
+  it("gives the owner's account four decks with Plus", () => {
+    config.ownerId = 'owner-1';
+    grantEntitlement('user:owner-1', { plan: 'plus', status: 'active' });
+    expect(deckLimitFor('somebody-else')).toBe(4);
   });
 });
