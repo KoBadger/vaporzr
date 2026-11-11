@@ -3334,11 +3334,29 @@
         function applyDeckLimit(info) {
           if (!info || typeof info.deckLimit !== 'number') return;
           deckLimit = info.deckLimit;
+          // Recording is its own paid feature: lock the REC control up front so a
+          // free guild sees why instead of clicking into a server refusal.
+          if (info.recording === false) lockRecording();
           if (deckLimit >= 4) return;
           ['c', 'd'].forEach(function (id) {
             var card = el('.deck[data-deck="' + id + '"]');
             if (card) lockDeck(card, 'Server');
           });
+        }
+        function lockRecording() {
+          var btn = el('#btn-rec');
+          if (!btn || btn.classList.contains('locked')) return;
+          btn.classList.add('locked');
+          btn.setAttribute('aria-disabled', 'true');
+          btn.addEventListener(
+            'click',
+            function (ev) {
+              ev.preventDefault();
+              ev.stopPropagation();
+              toast('warn', 'Set recording is part of Vaporzr Plus — upgrade to record your set.');
+            },
+            true,
+          );
         }
         fetch('/api/billing/status', { credentials: 'same-origin' })
           .then(function (res) {

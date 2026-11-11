@@ -15,6 +15,7 @@ import {
   createPortalSession,
   deckLimitFor,
   entitlementFor,
+  featureAllowed,
   mapStripeEvent,
   verifyStripeSignature,
 } from './billing.js';
@@ -1942,6 +1943,9 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
             // The panel only offers "manage subscription" when Stripe has a
             // customer to open the portal on.
             hasCustomer: Boolean(record?.customerId),
+            // Recording is its own paid feature, so the deck page can lock the
+            // REC control up front instead of letting a free guild hit a refusal.
+            recording: featureAllowed(gid, 'recording'),
           }),
         );
         break;
