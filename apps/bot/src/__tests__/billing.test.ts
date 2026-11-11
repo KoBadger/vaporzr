@@ -7,13 +7,16 @@ import { config } from '@vaporzr/core/config';
 import {
   activePlan,
   applyBillingEvent,
+  clearDeckSeat,
   createPortalSession,
   deckLimitFor,
+  deckSeatFor,
   entitlementFor,
   featureAllowed,
   grantEntitlement,
   mapStripeEvent,
   revokeEntitlement,
+  setDeckSeat,
   verifyStripeSignature,
 } from '../billing.js';
 
@@ -236,6 +239,59 @@ describe('featureAllowed', () => {
   it('does not refuse an unknown feature', () => {
     // A typo or a future feature must not silently block work that used to run.
     expect(featureAllowed('free-2', 'nonsense' as never)).toBe(true);
+  });
+});
+
+describe('deck seats', () => {
+  const original = { key: config.stripeSecretKey, plus: config.stripePricePlus, owner: config.ownerId };
+
+  afterAll(() => {
+    config.stripeSecretKey = original.key;
+    config.stripePricePlus = original.plus;
+    config.ownerId = original.owner;
+  });
+
+  it('does nothing while billing is off', () => {
+    config.stripeSecretKey = '';
+    config.ownerId = '';
+    setDeckSeat('seat-guild-off', 'nobody');
+    expect(deckLimitFor('seat-guild-off')).toBe(4);
+    clearDeckSeat('seat-guild-off');
+  });
+
+  it('ignores a seat held by an account without Plus', () => {
+    config.stripeSecretKey = 'sk_test';
+    config.stripePricePlus = 'price_plus';
+    config.ownerId = '';
+    setDeckSeat('seat-guild-free', 'free-user');
+    expect(deckSeatFor('seat-guild-free')).toBe('free-user');
+    expect(deckLimitFor('seat-guild-free')).toBe(2);
+  });
+
+  it('unlocks the second bank for a seated Plus account', () => {
+    grantEntitlement('user:seat-plus', { plan: 'plus', status: 'active' });
+    setDeckSeat('seat-guild-plus', 'seat-plus');
+    expect(deckLimitFor('seat-guild-plus')).toBe(4);
+  });
+
+  it('frees the seat without cleanup when the subscription lapses', () => {
+    // A cancelled plan keeps working until its paid period ends, then stops.
+    grantEntitlement('user:seat-lapsed', { plan: 'plus', status: 'canceled', currentPeriodEnd: Date.now() - 1 });
+    setDeckSeat('seat-guild-lapsed', 'seat-lapsed');
+    // The seat record is still there; it just stops counting.
+    expect(deckSeatFor('seat-guild-lapsed')).toBe('seat-lapsed');
+    expect(deckLimitFor('seat-guild-lapsed')).toBe(2);
+  });
+
+  it('replaces and clears a seat', () => {
+    grantEntitlement('user:seat-a', { plan: 'plus', status: 'active' });
+    grantEntitlement('user:seat-b', { plan: 'plus', status: 'active' });
+    setDeckSeat('seat-guild-swap', 'seat-a');
+    setDeckSeat('seat-guild-swap', 'seat-b');
+    expect(deckSeatFor('seat-guild-swap')).toBe('seat-b');
+    clearDeckSeat('seat-guild-swap');
+    expect(deckSeatFor('seat-guild-swap')).toBeNull();
+    expect(deckLimitFor('seat-guild-swap')).toBe(2);
   });
 });
 

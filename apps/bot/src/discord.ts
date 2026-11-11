@@ -109,6 +109,7 @@ import { Session, SessionManager, type RestoredPlayingInfo } from './session.js'
 import { fetchLyrics, type LyricsResult, type SyncedLine } from '@vaporzr/core/lyrics';
 import { PermissionsManager } from './permissions.js';
 import { billingEnabled, createCheckoutSession, deckLimitFor, featureAllowed } from './billing.js';
+import { activePlan, clearDeckSeat, deckSeatFor, setDeckSeat } from './billing.js';
 import { analyzer } from '@vaporzr/core/analyzer';
 import { vizTunnel } from './tunnel.js';
 import { renderPanelIconPng, PANEL_ICON_FALLBACKS } from './panelIcons.js';
@@ -4893,7 +4894,7 @@ export class DiscordBot {
 
         case 'deck': {
           if (!canUse('deck')) return void (await deny());
-          await message.reply(await this.deckCommandText(message.guildId ?? '', args));
+          await message.reply(await this.deckCommandText(message.guildId ?? '', args, message.author.id));
           break;
         }
 
@@ -10536,7 +10537,7 @@ export class DiscordBot {
    * the `/deck` page (faders and EQ need a UI); this covers loading and the
    * transport so a set can be driven from chat or a phone.
    */
-  private async deckCommandText(gid: string, raw: string): Promise<string> {
+  private async deckCommandText(gid: string, raw: string, userId = ''): Promise<string> {
     const decks = this.deckFor(gid);
     const trimmed = raw.trim();
     const [sub = 'status', ...rest] = trimmed.split(/\s+/);
@@ -10647,10 +10648,25 @@ export class DiscordBot {
         if (!st.sync && master === null) return decks.lock('a').message;
         return decks.lock(master).message;
       }
+      case 'seat': {
+        // Plus is bought per account and decks are enforced per guild; the panel
+        // has no Discord identity to match them up, so the binding happens here.
+        if (!billingEnabled())
+          return 'Billing is not configured on this deployment — all four decks are already available.';
+        if (!gid || !userId) return 'Run this inside a server so I know which decks to unlock.';
+        if (/^(off|clear|none|release)$/i.test(value)) {
+          if (deckSeatFor(gid) !== userId) return "Only the account holding this server's seat can release it.";
+          clearDeckSeat(gid);
+          return 'Deck seat released. This server is back to two decks (A/B).';
+        }
+        if (activePlan(`user:${userId}`) !== 'plus') {
+          return 'A deck seat needs Vaporzr Plus on your account — run `/upgrade` in Discord first.';
+        }
+        setDeckSeat(gid, userId);
+        return 'Decks C and D are unlocked in this server while your Plus is active. `V@deck seat off` releases it.';
+      }
       case 'rec':
       case 'record': {
-        // Set recording writes a full-length file and publishes it — a paid
-        // feature, so refuse before any work starts rather than after.
         if (!featureAllowed(gid, 'recording')) {
           return 'Set recording is part of Vaporzr Plus — run `/upgrade` in Discord to unlock it.';
         }

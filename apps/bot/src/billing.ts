@@ -106,6 +106,68 @@ export function revokeEntitlement(subject: BillingSubject): void {
   save();
 }
 
+/* ------------------------------------------------------------------ */
+/* Deck seats                                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A Plus subscriber may bind their account to one server's decks.
+ *
+ * Plus is bought per account while decks are enforced per guild, and the panel
+ * has no Discord identity to match the two up — so the binding is made in
+ * Discord, where the user id is known, and stored here. The seat is only worth
+ * anything while that account's Plus is active: every read re-checks
+ * `activePlan`, so a lapsed subscription frees the seat with no cleanup job.
+ */
+interface DeckSeat {
+  userId: string;
+  at: number;
+}
+
+function seatsFile(): string {
+  return path.join(config.dataDir, 'deck-seats.json');
+}
+
+let seatCache: Record<string, DeckSeat> | null = null;
+
+function loadSeats(): Record<string, DeckSeat> {
+  if (seatCache) return seatCache;
+  try {
+    const raw = JSON.parse(fs.readFileSync(seatsFile(), 'utf8')) as unknown;
+    seatCache = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, DeckSeat>) : {};
+  } catch {
+    seatCache = {};
+  }
+  return seatCache;
+}
+
+function saveSeats(): void {
+  try {
+    writeJsonAtomicSync(seatsFile(), seatCache ?? {});
+  } catch (err) {
+    console.warn('[billing] could not persist deck seats:', err instanceof Error ? err.message : err);
+  }
+}
+
+/** The account currently holding this guild's seat, if any. */
+export function deckSeatFor(guildId: string): string | null {
+  return loadSeats()[guildId]?.userId ?? null;
+}
+
+/** Bind a guild's decks to one account. One seat per guild; it replaces any other. */
+export function setDeckSeat(guildId: string, userId: string): void {
+  if (!guildId || !userId) return;
+  loadSeats()[guildId] = { userId, at: Date.now() };
+  saveSeats();
+}
+
+export function clearDeckSeat(guildId: string): void {
+  const store = loadSeats();
+  if (!(guildId in store)) return;
+  delete store[guildId];
+  saveSeats();
+}
+
 /** All subjects with a currently active plan (for /api/billing/status "all"). */
 export function activeSubjects(now = Date.now()): { subject: string; plan: BillingPlan }[] {
   const out: { subject: string; plan: BillingPlan }[] = [];
@@ -129,6 +191,10 @@ export function deckLimitFor(guildId: string, ownerId = config.ownerId): 2 | 4 {
   if (!billingEnabled()) return 4;
   if (activePlan(`guild:${guildId}`) === 'server') return 4;
   if (ownerId && activePlan(`user:${ownerId}`) === 'plus') return 4;
+  // A seated Plus account unlocks this guild's second bank. Re-checked on every
+  // read, so the seat lapses with the subscription.
+  const seat = deckSeatFor(guildId);
+  if (seat && activePlan(`user:${seat}`) === 'plus') return 4;
   return 2;
 }
 
