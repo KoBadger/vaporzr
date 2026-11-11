@@ -334,6 +334,26 @@
         border-color: #6a5cff;
         color: #fff;
       }
+      .q-skip {
+        flex: 0 0 auto;
+        margin-top: 8px;
+        align-self: flex-start;
+        padding: 6px 10px;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 166, 106, 0.3);
+        background: rgba(255, 120, 60, 0.12);
+        color: #ffb07c;
+        font-size: 11px;
+        cursor: pointer;
+      }
+      .q-skip:disabled {
+        opacity: 0.55;
+        cursor: default;
+      }
+      .q-skip:hover:not(:disabled) {
+        border-color: #ff9a5c;
+        color: #fff;
+      }
       .q-num {
         width: 16px;
         flex: 0 0 16px;
@@ -904,6 +924,41 @@
             });
         });
 
+        // Skip the current track. Same trust level as an upvote: a guest name, no
+        // Discord identity. The server turns one name into one vote, and the host
+        // or DJ links skip outright.
+        qNow.addEventListener('click', function (e) {
+          var btn = e.target && e.target.closest ? e.target.closest('.q-skip') : null;
+          if (!btn || btn.disabled) return;
+          btn.disabled = true;
+          fetch('/api/jam/skip-vote', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: (who.value || '').trim() }),
+          })
+            .then(function (r) {
+              return r.json();
+            })
+            .then(function (d) {
+              if (d && d.ok) {
+                if (d.skipped) {
+                  say('⏭ Skipped by crowd vote.', 'ok');
+                  pollQueue();
+                } else {
+                  btn.disabled = false;
+                  btn.textContent = 'Skip (' + d.votes + '/' + d.needed + ')';
+                }
+              } else {
+                say((d && d.error) || 'Skip failed.', 'err');
+                btn.disabled = false;
+              }
+            })
+            .catch(function () {
+              say('Skip failed — try again.', 'err');
+              btn.disabled = false;
+            });
+        });
+
         function renderQueue(d) {
           var now = d && d.playing,
             tracks = (d && d.tracks) || [];
@@ -947,6 +1002,7 @@
                   (dur > 0 ? fmtMs(dur) : '') +
                   '</span></div>'
                 : '') +
+              (playingNow ? '<button class="q-skip" id="q-skip">Skip this song</button>' : '') +
               '</div>' +
               '</div>'
             : '';

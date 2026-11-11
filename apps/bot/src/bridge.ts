@@ -47,6 +47,7 @@ import { getJamPolicy, setJamPolicy, type JamPolicy } from './jamPolicy.js';
 import { codeFor } from './jamLinks.js';
 import { featureAllowed } from './billing.js';
 import { mintVideoToken } from './videoToken.js';
+import { CrowdVote } from './crowdSkip.js';
 
 /** The jam page's guest URL: built from the LOW-privilege request key, not the
  *  share key — a jam link grants exactly "add a song" and nothing else.
@@ -166,6 +167,8 @@ export class Bridge {
   private requestStats = new Map<string, Map<string, { count: number; last: number }>>();
   /** Per-guild track upvotes: uri → set of guest names (one vote each). */
   private trackVotes = new Map<string, Map<string, Set<string>>>();
+  /** One crowd skip vote, reset on track change and consumed on success. */
+  private readonly crowdSkip = new CrowdVote(() => this.presence().count);
   private panels = new Set<Client>();
   private visualizers = new Set<Client>();
   private lastState: PlaybackState = emptyState();
@@ -774,6 +777,22 @@ export class Bridge {
       case 'state:request':
         this.sendSnapshot(socket);
         break;
+      case 'skipvote': {
+        // A jam guest asks to skip. The host and DJ links skip outright; a guest
+        // needs a majority of the room (the CrowdVote handles dedup and reset).
+        const isHost = this.scopeOf(socket) !== 'guest';
+        const client = this.clientOf(socket);
+        const result = this.voteToSkip(client?.name, isHost);
+        if (result.ok) {
+          this.broadcast({
+            type: 'jam:skipvote',
+            votes: result.votes,
+            needed: result.needed,
+            guildId: client?.guildId,
+          });
+        }
+        break;
+      }
       case 'deck:load':
       case 'deck:control':
         // Decks change what the whole channel hears — control scope only, and
@@ -1425,6 +1444,29 @@ export class Bridge {
   private votesFor(guildId: string, uri: string): number {
     if (!this.trackVotes) this.trackVotes = new Map();
     return this.trackVotes.get(guildId)?.get(uri)?.size ?? 0;
+  }
+
+  /**
+   * A crowd "skip" vote. The host and DJ links skip outright; a guest needs a
+   * majority of the room (floored at two), keyed like the upvotes and reset when
+   * the track changes. Returns the live tally for the progress broadcast.
+   */
+  voteToSkip(who?: string, isHost = false): { ok: boolean; votes: number; needed: number; skipped: boolean } {
+    const s = this.sessions.primary ?? this.fallback;
+    const gid = s.guildId ?? '';
+    if (!gid) return { ok: false, votes: 0, needed: 0, skipped: false };
+    if (isHost) {
+      s.playback.next();
+      return { ok: true, votes: 1, needed: 1, skipped: true };
+    }
+    const track = s.queue.getCurrentTrack();
+    if (!track) return { ok: false, votes: 0, needed: 0, skipped: false };
+    const result = this.crowdSkip.vote(who ?? 'guest', track.uri);
+    if (result.skipped) {
+      s.playback.next();
+      this.notice('info', `Skipped by crowd vote (${result.votes}/${result.needed}).`);
+    }
+    return { ok: true, votes: result.votes, needed: result.needed, skipped: result.skipped };
   }
 
   /** Upvote a queued track. Three distinct guests move it to play next. */

@@ -397,6 +397,8 @@ export type InboundMessage =
     }
   /** Ask for the current deck state (sent on connect). */
   | { type: 'deck:request'; guildId?: string }
+  /** A jam guest asks to skip the current track (see CrowdVote). */
+  | { type: 'skipvote' }
   | CommandMessage;
 
 export type OutboundMessage =
@@ -442,6 +444,8 @@ export type OutboundMessage =
       joinUrl?: string;
     }
   | { type: 'queue:update'; queue: QueueSnapshot; guildId?: string }
+  /** Live tally of a crowd skip vote, for the jam page's progress. */
+  | { type: 'jam:skipvote'; votes: number; needed: number; guildId?: string }
   | { type: 'perm:update'; permissions: PermissionSnapshot }
   | { type: 'dj:update'; enabled: boolean }
   | { type: 'visuals:frame'; data: string; guildId?: string }
