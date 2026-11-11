@@ -33,6 +33,7 @@ import { PermissionsManager } from './permissions.js';
 import { vizTunnel } from './tunnel.js';
 import { secretEquals, keyFromCookieHeader, masterPasswordEquals } from './secretCompare.js';
 import { handleVideoProxy } from './videoProxy.js';
+import { verifyVideoToken } from './videoToken.js';
 import { renderJamCardPng } from './jamCardArt.js';
 import { resolveJamCode } from './jamLinks.js';
 import {
@@ -1473,7 +1474,12 @@ async function handleRoute(
         res.end(JSON.stringify({ status: 'failed' }));
         return;
       }
-      handleVideoProxy(req, res, id, url, bridgeRef()?.videoAllowList() ?? new Set());
+      const allowed = new Set(bridgeRef()?.videoAllowList() ?? []);
+      // The Activity iframe cannot carry a cookie, so a token bound to this id
+      // rides in the playback state instead. A valid one grants exactly this
+      // id; without a secret the allowlist above is the only path.
+      if (verifyVideoToken(id, url.searchParams.get('t'))) allowed.add(id);
+      handleVideoProxy(req, res, id, url, allowed);
       return;
     }
 

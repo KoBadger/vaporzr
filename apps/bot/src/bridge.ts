@@ -46,6 +46,7 @@ import { getCrossfadeMs, setCrossfadeMs } from './crossfadeStore.js';
 import { getJamPolicy, setJamPolicy, type JamPolicy } from './jamPolicy.js';
 import { codeFor } from './jamLinks.js';
 import { featureAllowed } from './billing.js';
+import { mintVideoToken } from './videoToken.js';
 
 /** The jam page's guest URL: built from the LOW-privilege request key, not the
  *  share key — a jam link grants exactly "add a song" and nothing else.
@@ -1777,7 +1778,15 @@ export class Bridge {
     const same = !!state.track?.uri && this.trackVideo.uri === state.track.uri;
     const id = same ? this.trackVideo.id : null;
     if (!id) return state;
-    return { ...state, videoId: id, videoOfficial: same ? this.trackVideo.official : false };
+    return {
+      ...state,
+      videoId: id,
+      videoOfficial: same ? this.trackVideo.official : false,
+      // A grant the media route can check without a cookie (the Activity iframe
+      // has none). Null when no secret is configured, so the field is simply
+      // absent and the server falls back to its current-track allowlist.
+      videoToken: mintVideoToken(id) ?? undefined,
+    };
   }
 
   /** Push live-deck state to every control surface (panels filter by guild). */

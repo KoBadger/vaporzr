@@ -46,6 +46,13 @@ export interface PlaybackState {
   videoId?: string | null;
   /** True when that video is a label/artist upload, not a fan re-upload. */
   videoOfficial?: boolean;
+  /**
+   * Short-lived grant for `/api/video/<videoId>`: the media route cannot use a
+   * cookie (the Activity iframe has none), so the token rides here instead.
+   * Absent when no secret is configured, in which case the route falls back to
+   * its current-track allowlist.
+   */
+  videoToken?: string;
   /** Session tempo factor (1 = normal; 1.25 = Nightcore; 0.85 = slowed). */
   speed?: number;
   /** Bass-boost gain in dB (0 = off). */

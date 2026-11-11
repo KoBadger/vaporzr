@@ -2738,17 +2738,18 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
   var videoEl=document.getElementById('video-el');
   var videoNow={id:null,src:'',startedAt:0,offset:0,timer:null};
   var VIDEO_WAIT_TRIES=120;
-  function beginVideo(id,target){
+  function beginVideo(id,target,token){
     if(videoNow.timer)clearTimeout(videoNow.timer);
     var tries=0;
+    var grant=token?('&t='+encodeURIComponent(token)):'';
     function poll(){
       if(videoNow.id!==id)return;
-      fetch('/api/video/'+encodeURIComponent(id)+'?check=1',{credentials:'same-origin'})
+      fetch('/api/video/'+encodeURIComponent(id)+'?check=1'+grant,{credentials:'same-origin'})
         .then(function(r){return r.json()})
         .then(function(d){
           if(videoNow.id!==id)return;
           if(d&&d.status==='ready'){
-            videoNow.src='/api/video/'+encodeURIComponent(id);
+            videoNow.src='/api/video/'+encodeURIComponent(id)+'?t='+encodeURIComponent(token||'');
             videoNow.startedAt=Date.now();videoNow.offset=target;
             videoEl.src=videoNow.src;
             try{videoEl.currentTime=target}catch(e){}
@@ -2789,7 +2790,7 @@ body.mini #preset-lib,body.mini .sens-wrap{display:none}
       try{videoEl.load()}catch(e){}
       videoEl.poster='https://i.ytimg.com/vi/'+encodeURIComponent(id)+'/hqdefault.jpg';
       videoPanel.classList.add('loading');
-      beginVideo(id,target);
+      beginVideo(id,target,st.videoToken);
     }else if(videoNow.src){
       var clock=videoNow.startedAt?(Date.now()-videoNow.startedAt)/1000+videoNow.offset:0;
       if(Math.abs(clock-target)>2.5){try{videoEl.currentTime=target}catch(e){};videoNow.startedAt=Date.now();videoNow.offset=target}
