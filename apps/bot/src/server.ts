@@ -2686,6 +2686,31 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
         break;
       }
 
+      case '/api/jam/skip-vote': {
+        // Same trust level as an upvote: a guest name, no Discord identity. The
+        // host and DJ links skip outright; a guest needs a majority of the room.
+        if (req.method !== 'POST') {
+          res.writeHead(405);
+          res.end();
+          return;
+        }
+        if (!hasRequestAccess(req, url)) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'forbidden' }));
+          return;
+        }
+        if (!requestGate(req)) {
+          res.writeHead(429, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Too many votes — try again shortly.' }));
+          return;
+        }
+        const body = (await readJsonBody(req)) as { name?: string } | null;
+        const result = bridgeRef()?.voteToSkip(body?.name);
+        res.writeHead(result?.ok ? 200 : 400, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify(result ?? { error: 'bot offline' }));
+        break;
+      }
+
       case '/api/jam/requests': {
         if (!hasShareAccess(req, url, 'control')) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
