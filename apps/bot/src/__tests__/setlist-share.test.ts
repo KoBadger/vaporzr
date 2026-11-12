@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { SetlistShareStore } from '@vaporzr/core/setlistShare';
-import { renderSetlistPage, setlistViewFromShare } from '../setlistPage.js';
+import { TapeStore } from '@vaporzr/core/tape';
+import { renderSetlistPage, setlistViewFromShare, setlistViewFromTape } from '../setlistPage.js';
 
 const track = (name: string, artists = 'Aphex Twin') => ({
   uri: `spotify:track:${name}`,
@@ -12,6 +13,18 @@ const track = (name: string, artists = 'Aphex Twin') => ({
   album: 'Selected Ambient Works',
   durationMs: 180_000,
   addedBy: 'host',
+  addedAt: 0,
+});
+
+/** A tape entry needs the real TrackInfo shape (artists is an array). */
+const tapeTrack = (name: string) => ({
+  uri: `spotify:track:${name}`,
+  name,
+  artists: ['Aphex Twin'],
+  album: 'Selected Ambient Works',
+  durationMs: 180_000,
+  addedBy: 'host',
+  addedAt: 0,
 });
 
 describe('SetlistShareStore', () => {
@@ -103,5 +116,64 @@ describe('renderSetlistPage', () => {
     expect(html).not.toContain('<script>alert(1)</script>');
     expect(html).not.toContain('<img src=x');
     expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
+  });
+});
+
+describe('setlistViewFromTape', () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vz-tape-view-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('renders a rolling tape as a sealed/rolling setlist', () => {
+    const store = new TapeStore(tmp);
+    store.start('g1', { startedBy: 'dj', name: 'Friday' });
+    store.noteTrack('g1', tapeTrack('Xtal'));
+    store.noteTrack('g1', tapeTrack('Tha'));
+    store.noteTrack('g1', tapeTrack('Xtal')); // a repeat, still one entry
+
+    const tape = store.active('g1');
+    expect(tape).not.toBeNull();
+
+    const html = renderSetlistPage({
+      origin: 'https://www.vaporzr.app',
+      view: setlistViewFromTape(tape!),
+      canonicalUrl: 'https://www.vaporzr.app/tape/g1',
+    });
+
+    expect(html).toContain('rolling');
+    expect(html).toContain('2 songs');
+    expect(html).toContain('started by dj');
+    expect(html).not.toContain('link expires');
+  });
+
+  it('marks a sealed tape as sealed rather than rolling', () => {
+    const store = new TapeStore(tmp);
+    store.start('g1', { startedBy: 'dj', name: 'Late' });
+    store.noteTrack('g1', tapeTrack('Xtal'));
+    const sealed = store.stop('g1', Date.now() + 1_000);
+
+    const html = renderSetlistPage({
+      origin: 'https://www.vaporzr.app',
+      view: setlistViewFromTape(sealed!),
+    });
+
+    expect(html).toContain('sealed');
+    expect(html).not.toContain('rolling');
+  });
+
+  it('renders an empty tape without inventing rows', () => {
+    const store = new TapeStore(tmp);
+    store.start('g1', { startedBy: 'dj', name: 'Empty' });
+    const tape = store.active('g1');
+
+    const html = renderSetlistPage({ origin: 'https://x.test', view: setlistViewFromTape(tape!) });
+    expect(html).toContain('0 songs');
+    expect(html).toContain('Nothing has been recorded on this tape yet.');
   });
 });

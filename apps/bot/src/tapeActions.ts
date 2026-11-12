@@ -194,10 +194,13 @@ export async function runTapeCommand(
   }
 
   if (sub === 'stop') {
+    // `stop()` clears the active tape even when it was empty, so decide the
+    // message before sealing — otherwise an empty set reports "no tape".
+    const wasRolling = deps.tapes.active(guildId) !== null;
     const sealed = deps.tapes.stop(guildId, deps.now());
     if (!sealed) {
       return {
-        content: deps.tapes.active(guildId)
+        content: wasRolling
           ? 'The tape was rolling but nothing played into it — nothing to keep.'
           : 'No tape is rolling. `/tape start` begins one.',
         ephemeral: true,
