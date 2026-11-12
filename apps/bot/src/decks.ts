@@ -46,6 +46,12 @@ export interface DeckControllerOptions {
   uploadRecording?: (file: string, name: string) => Promise<string | null>;
   /** Waveform peaks for a newly loaded track (drawn on the deck page). */
   onWaveform?: (deck: DeckId, peaks: number[], durationMs: number) => void;
+  /**
+   * Master-mix PCM for browser monitoring (rehearsal, or cueing in a tab).
+   * The bridge decides whether anyone is subscribed before paying for the
+   * base64 conversion, so this is cheap when nobody is listening.
+   */
+  onMonitor?: (pcm: Buffer) => void;
 }
 
 export interface DeckActionResult {
@@ -144,6 +150,9 @@ export class DeckController {
       sink: (pcm) => {
         // A set recording taps the master mix, engaged or not.
         this.tapRecording(pcm);
+        // Browser monitors (rehearsal/cue) tap the same mix. No-op when the
+        // bridge has no deckpcm subscribers.
+        this.opts.onMonitor?.(pcm);
         if (!this.engaged) return true;
         // A live set is never "idle" — without this the voice layer's
         // auto-leave countdown fires mid-mix and the bot drops out.
@@ -165,7 +174,14 @@ export class DeckController {
     const base = this.mixer.state();
     const samples = this.samplePadNames();
     for (const slot of [base.a, base.b, base.c, base.d]) slot.samples = samples;
-    return { ...base, sync, record: { ...this.record } };
+    return {
+      ...base,
+      sync,
+      record: { ...this.record },
+      // No voice link means there is nowhere to broadcast; the deck page can
+      // still monitor the mix in its own tab (rehearsal).
+      rehearsal: !this.opts.voice.isConnectionReady(),
+    };
   }
 
   isEngaged(): boolean {
@@ -677,6 +693,9 @@ export class DeckController {
     const pcm = await this.samplePcm(path.join(config.dataDir, 'samples', file));
     if (!pcm) return { ok: false, message: `Couldn't decode ${path.basename(file)}.` };
     this.opts.voice.queueSfxPcm(pcm);
+    // Pads bypass the mixer, so feed monitors directly or a rehearsal room
+    // would see the pad light up in silence.
+    this.opts.onMonitor?.(pcm);
     return { ok: true, message: `▶ ${path.basename(file).replace(/\.[^.]+$/, '')}` };
   }
 

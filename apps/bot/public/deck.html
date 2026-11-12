@@ -15,6 +15,7 @@
     />
     <meta property="og:site_name" content="Vaporzr" />
     <meta property="og:image" content="{{ORIGIN}}/ew-bg.jpg" />
+    <meta name="rehearsal" content="{{REHEARSAL}}" />
     <meta property="og:image:width" content="1280" />
     <meta property="og:image:height" content="720" />
     <meta property="og:image:alt" content="Vaporzr live decks" />
@@ -1409,6 +1410,32 @@
         letter-spacing: 0.16em;
         text-transform: uppercase;
         color: var(--dim);
+      }
+      .monitor-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      #monitor {
+        font: 700 9px/1 inherit;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        padding: 5px 9px;
+        border-radius: 6px;
+        border: 1px solid var(--line-soft);
+        background: #0a0a16;
+        color: var(--dim);
+        cursor: pointer;
+      }
+      #monitor.on {
+        color: #06121a;
+        background: var(--a);
+        border-color: transparent;
+      }
+      #monitor.warn {
+        color: #ffcf7a;
+        border-color: rgba(255, 207, 122, 0.45);
       }
       .hints {
         font-size: 11px;
@@ -2911,7 +2938,15 @@
         </div>
 
         <div class="mixer-foot">
-          <span id="engine">engine idle</span>
+          <div class="monitor-row">
+            <span id="engine">engine idle</span>
+            <button
+              id="monitor"
+              data-tip="Hear the deck mix in this tab. Needed when the bot is not in a voice channel; mute Vaporzr in Discord first if you are in one."
+            >
+              🔊 Monitor
+            </button>
+          </div>
           <div class="midi-row pro-only">
             <span>MIDI OUT</span>
             <select id="midi-out" aria-label="MIDI output port">
@@ -3237,6 +3272,13 @@
         var scrub = null;
         /** Guild this page is looking at; deck broadcasts from other servers are ignored. */
         var viewGuildId = null;
+        /**
+         * Browser monitor: the deck master mix arrives over the socket as
+         * base64 48 kHz stereo Int16 PCM (the `deckpcm` channel).
+         */
+        var monitor = { ctx: null, gain: null, running: false, nextTime: 0 };
+        var MONITOR_RATE = 48000;
+        var MONITOR_CHANNELS = 2;
         /** MIDI access + outgoing clock state (Traktor/Serato bridge). */
         var midi = { access: null, clockTimer: null, bpm: 120 };
         var FX = [
@@ -4172,10 +4214,15 @@
             return state[id] && state[id].playing;
           });
           el('#engine').textContent = active
-            ? 'live — feeding the voice channel'
-            : state.active
-              ? 'cued'
-              : 'engine idle';
+            ? state.rehearsal
+              ? 'live — rehearsal (this tab)'
+              : 'live — feeding the voice channel'
+            : state.rehearsal
+              ? 'rehearsal — no voice link'
+              : state.active
+                ? 'cued'
+                : 'engine idle';
+          monitorPaint();
           // Keep an outgoing MIDI clock locked to the decks' tempo.
           var clockBpm = rightDeck().bpm || leftDeck().bpm || 120;
           if (Math.abs(clockBpm - midi.bpm) > 0.5) {
@@ -4187,6 +4234,108 @@
           }
         }
 
+        /* ---------- browser monitor (rehearsal / cueing a tab) ---------- */
+
+        function ensureMonitorGraph() {
+          if (monitor.ctx) return true;
+          var AC = window.AudioContext || window.webkitAudioContext;
+          if (!AC) return false;
+          monitor.ctx = new AC({ sampleRate: MONITOR_RATE, latencyHint: 'playback' });
+          // A limiter, like the listener page: the deck master is already
+          // limited, but a quiet laptop speaker plus a hot mix still clips.
+          var limiter = monitor.ctx.createDynamicsCompressor();
+          limiter.threshold.value = -6;
+          limiter.knee.value = 0;
+          limiter.ratio.value = 20;
+          limiter.attack.value = 0.003;
+          limiter.release.value = 0.25;
+          monitor.gain = monitor.ctx.createGain();
+          monitor.gain.gain.value = 0.85;
+          monitor.gain.connect(limiter);
+          limiter.connect(monitor.ctx.destination);
+          return true;
+        }
+
+        function monitorPaint() {
+          var btn = el('#monitor');
+          if (!btn) return;
+          btn.classList.toggle('on', monitor.running);
+          btn.textContent = monitor.running ? '🔊 Listening' : '🔊 Monitor';
+          btn.classList.toggle('warn', monitor.running && state && !state.rehearsal);
+          btn.setAttribute(
+            'data-tip',
+            monitor.running && state && !state.rehearsal
+              ? 'Monitoring in this tab. You are also in a voice channel — mute Vaporzr in Discord to avoid hearing the mix twice.'
+              : 'Hear the deck mix in this tab. Needed when the bot is not in a voice channel.',
+          );
+        }
+
+        function startMonitor() {
+          if (!ensureMonitorGraph() || !monitor.ctx) {
+            toast('error', 'This browser has no WebAudio — monitoring is unavailable.');
+            return;
+          }
+          monitor.ctx.resume();
+          monitor.nextTime = monitor.ctx.currentTime + 0.12;
+          monitor.running = true;
+          monitorPaint();
+        }
+
+        function stopMonitor() {
+          monitor.running = false;
+          monitorPaint();
+        }
+
+        function toggleMonitor() {
+          if (monitor.running) stopMonitor();
+          else startMonitor();
+        }
+
+        /** True when this page was served as a rehearsal room (mix heard
+         *  locally, no voice link). */
+        function isRehearsalRoom() {
+          var m = document.querySelector('meta[name="rehearsal"]');
+          return m && m.getAttribute('content') === '1';
+        }
+
+        /** Auto-start when the room is a rehearsal and the user just pressed
+         *  play/load — that click is the gesture the browser needs. */
+        function rehearsalMonitor() {
+          if (state && state.rehearsal && !monitor.running) startMonitor();
+        }
+
+        /** base64 -> Int16 PCM -> scheduled WebAudio buffer. */
+        function monitorPlay(b64) {
+          if (!monitor.ctx) return;
+          var bin = atob(b64);
+          var n = bin.length;
+          var bytes = new Uint8Array(n);
+          for (var i = 0; i < n; i++) bytes[i] = bin.charCodeAt(i);
+          var pcm = new Int16Array(bytes.buffer, 0, Math.floor(n / 2));
+          var frames = Math.floor(pcm.length / MONITOR_CHANNELS);
+          if (!frames) return;
+
+          var buf = monitor.ctx.createBuffer(MONITOR_CHANNELS, frames, MONITOR_RATE);
+          var L = buf.getChannelData(0);
+          var R = buf.getChannelData(1);
+          for (var f = 0; f < frames; f++) {
+            L[f] = pcm[f * MONITOR_CHANNELS] / 32768;
+            R[f] = pcm[f * MONITOR_CHANNELS + 1] / 32768;
+          }
+
+          var now = monitor.ctx.currentTime;
+          // Underrun, or backlog from a stall: realign instead of letting the
+          // latency grow until the mix is seconds behind the platters.
+          if (monitor.nextTime < now + 0.03 || monitor.nextTime > now + 1.2) {
+            monitor.nextTime = now + 0.12;
+          }
+          var src = monitor.ctx.createBufferSource();
+          src.buffer = buf;
+          src.connect(monitor.gain);
+          src.start(monitor.nextTime);
+          monitor.nextTime += frames / MONITOR_RATE;
+        }
+
         function connect() {
           var loc = location;
           var url = (loc.protocol === 'https:' ? 'wss://' : 'ws://') + loc.host + '/ws';
@@ -4195,8 +4344,12 @@
             el('#conn').classList.add('on');
             el('#status').textContent = 'connected';
             send({ type: 'hello', role: 'panel', name: 'deck-page' });
-            send({ type: 'panel:subscribe', channels: ['state'] });
+            send({ type: 'panel:subscribe', channels: ['state', 'deckpcm'] });
             send({ type: 'deck:request' });
+            // A rehearsal room is opened by a person in the same tab: the
+            // gesture that opened the page is enough for WebAudio, so start
+            // the monitor as soon as the socket is up.
+            if (isRehearsalRoom()) startMonitor();
           };
           ws.onclose = function () {
             el('#conn').classList.remove('on');
@@ -4218,6 +4371,10 @@
               state = msg.state;
               localClock.at = Date.now();
               paint();
+              // A rehearsal room hears the mix locally. Start the monitor the
+              // moment the bot reports it has no voice link, so the first play
+              // is audible without the user having to click anything.
+              if (state.rehearsal && !monitor.running) startMonitor();
             } else if (msg.type === 'deck:waveform') {
               if (viewGuildId && msg.guildId && msg.guildId !== viewGuildId) return;
               waves[msg.deck] = msg.peaks;
@@ -4229,6 +4386,11 @@
               if (viewGuildId) send({ type: 'deck:request', guildId: viewGuildId });
             } else if (msg.type === 'panel:notice') {
               toast(msg.level, msg.text);
+            } else if (msg.type === 'audio:pcm') {
+              // Deck-mix monitor. Filter by guild like the state pushes so a
+              // busy server cannot bleed into the deck page you are watching.
+              if (viewGuildId && msg.guildId && msg.guildId !== viewGuildId) return;
+              if (monitor.running && msg.data) monitorPlay(msg.data);
             }
           };
         }
@@ -4788,21 +4950,27 @@
           function deckToggle(id) {
             if (!state) return;
             if (state[id].ended) {
+              rehearsalMonitor();
               control('seek', { deck: id, positionMs: 0 });
               control('play', { deck: id });
             } else {
-              control(state[id].playing ? 'pause' : 'play', { deck: id });
+              var willPlay = !state[id].playing;
+              if (willPlay) rehearsalMonitor();
+              control(willPlay ? 'play' : 'pause', { deck: id });
             }
           }
+          el('#monitor').onclick = toggleMonitor;
           all('.deck').forEach(function (root) {
             var id = root.getAttribute('data-deck');
             el('[data-role="load"]', root).onclick = function () {
               var q = el('[data-role="query"]', root).value.trim();
               if (!q) return;
+              rehearsalMonitor();
               send({ type: 'deck:load', deck: id, query: q });
               el('[data-role="query"]', root).value = '';
             };
             wireSongSuggest(el('[data-role="query"]', root), function (it) {
+              rehearsalMonitor();
               send({ type: 'deck:load', deck: id, query: it.uri || it.title + ' ' + it.artist });
               el('[data-role="query"]', root).value = '';
               toast('info', 'Deck ' + id.toUpperCase() + ' ← ' + it.title);
@@ -4983,7 +5151,7 @@
             lastSamplesKey = '';
             if (viewGuildId) {
               send({ type: 'cmd', command: 'switchGuild', guildId: viewGuildId });
-              send({ type: 'panel:subscribe', channels: ['state'], guildId: viewGuildId });
+              send({ type: 'panel:subscribe', channels: ['state', 'deckpcm'], guildId: viewGuildId });
               send({ type: 'deck:request', guildId: viewGuildId });
             }
             var sel = e.target;
@@ -5012,6 +5180,7 @@
             control(state.record && state.record.active ? 'rec-stop' : 'rec-start');
           };
           el('#btn-play').onclick = function () {
+            rehearsalMonitor();
             control('play');
           };
           el('#btn-pause').onclick = function () {

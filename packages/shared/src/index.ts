@@ -181,6 +181,11 @@ export interface DeckMixerState {
   /** Filled in by the controller; the mixer itself is sync-agnostic. */
   sync?: DeckSyncState | null;
   record?: DeckRecordState;
+  /**
+   * True when the bot has no voice connection: the mixer still runs, but the
+   * only place it can be heard is a browser monitor (the deck page's tab).
+   */
+  rehearsal?: boolean;
 }
 
 /** Deck actions a control surface may drive. */
@@ -353,7 +358,7 @@ export type InboundMessage =
   /** A visualizer reporting which preset it just moved to. */
   | { type: 'visuals:preset'; name: string; index?: number; total?: number; guildId?: string }
   | { type: 'state:request' }
-  | { type: 'panel:subscribe'; channels: Array<'state' | 'queue' | 'visuals' | 'pcm'>; guildId?: string }
+  | { type: 'panel:subscribe'; channels: Array<'state' | 'queue' | 'visuals' | 'pcm' | 'deckpcm'>; guildId?: string }
   /**
    * Self-reported roster for the jam. The Discord Activity can list who is
    * connected to its instance, which is the only source of REAL names — every
