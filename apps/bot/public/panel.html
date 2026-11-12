@@ -2253,6 +2253,7 @@
                 <button data-q="jump">Jump to current</button>
                 <button data-q="dedupe">Remove duplicates</button>
                 <button data-q="vibe">Save as vibe</button>
+                <button data-q="share">Share setlist link</button>
                 <button data-q="clear">Clear queue</button>
               </div>
             </div>
@@ -4123,6 +4124,26 @@
                 var row = document.querySelector('#queue li.current');
                 if (row) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
               } else if (a === 'vibe' && el['btn-vibe-save']) el['btn-vibe-save'].click();
+              else if (a === 'share') {
+                // A setlist link is a frozen queue, not a live view: copy it
+                // once and let the host paste it into chat.
+                fetch('/api/setlist', { method: 'POST' })
+                  .then(function (r) {
+                    return r.json().then(function (j) {
+                      return { ok: r.ok, body: j };
+                    });
+                  })
+                  .then(function (out) {
+                    if (!out.ok) {
+                      toast('error', (out.body && out.body.error) || 'Could not share the setlist.');
+                      return;
+                    }
+                    copyText(out.body.url, 'Setlist link');
+                  })
+                  .catch(function () {
+                    toast('error', 'Could not share the setlist.');
+                  });
+              }
               qclose();
             };
           });

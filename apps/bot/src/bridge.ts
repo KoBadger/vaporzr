@@ -1783,6 +1783,45 @@ export class Bridge {
     };
   }
 
+  /**
+   * The whole queue, in order, for a shared setlist snapshot.
+   *
+   * `jamQueue()` is a *view*: it starts after the current track and stops at 30
+   * rows because that is what a phone can show. A setlist share is a record of
+   * the room's plan, so it needs the current track and the tail as well.
+   */
+  setlistSnapshot(): {
+    guildId: string;
+    nowPlaying: number;
+    tracks: {
+      uri: string;
+      name: string;
+      artists: string;
+      album: string;
+      durationMs: number;
+      addedBy: string;
+      image?: string;
+      source?: string;
+    }[];
+  } {
+    const snap = this.queue.getSnapshot();
+    const gid = this.sessions.primary?.guildId ?? this.fallback?.guildId ?? '';
+    return {
+      guildId: gid,
+      nowPlaying: snap.currentIndex >= 0 ? snap.currentIndex : -1,
+      tracks: snap.tracks.map((t) => ({
+        uri: t.uri ?? '',
+        name: t.name || 'Unknown',
+        artists: (t.artists ?? []).join(', '),
+        album: t.album || '',
+        durationMs: t.durationMs ?? 0,
+        addedBy: t.addedBy && !QUEUE_ORIGINS.has(t.addedBy) ? t.addedBy : '',
+        image: t.image,
+        source: t.source,
+      })),
+    };
+  }
+
   private primaryGuildId: string | null = null;
 
   /** Cut-off for jam attribution, reset when the bot joins a voice channel, so
