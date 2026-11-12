@@ -447,6 +447,10 @@ function accessNeedFor(pathname: string): AccessScope | null {
   if (pathname === '/panel' || pathname === '/panel.html') return 'dj';
   // Decks change what the whole voice channel hears — same gate as the panel.
   if (pathname === '/deck' || pathname === '/deck.html' || pathname === '/decks') return 'control';
+  // A rehearsal room is the same deck page, but the mix is heard through the
+  // browser monitor, not a voice channel. Same control gate: it can still
+  // change what the mix is.
+  if (pathname === '/rehearsal' || pathname === '/rehearsal.html') return 'control';
   // `/` is the public portal. The old status page moved to /status.
   if (pathname === '/status') return 'view';
   if (pathname === '/viz' || pathname === '/viz.html') return 'view';
@@ -1920,12 +1924,35 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
           const file = fs
             .readFileSync(path.join(__dirname, '..', 'public', 'deck.html'), 'utf8')
             .replace(/\{\{ORIGIN\}\}/g, origin)
-            .replace(/\{\{BUILD\}\}/g, build);
+            .replace(/\{\{BUILD\}\}/g, build)
+            .replace(/\{\{REHEARSAL\}\}/g, '0');
           res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
           res.end(file);
         } catch {
           res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
           res.end('Deck page not found.');
+        }
+        break;
+      }
+
+      case '/rehearsal':
+      case '/rehearsal.html': {
+        // A rehearsal room is the deck page with the monitor on by default and
+        // no expectation of a voice link. It is the same HTML — the flag is
+        // sent down the same control channel — but the page advertises that
+        // the mix is heard locally, not broadcast.
+        try {
+          const build = (process.env.VAPORZR_BUILD ?? 'dev').slice(0, 7);
+          const file = fs
+            .readFileSync(path.join(__dirname, '..', 'public', 'deck.html'), 'utf8')
+            .replace(/\{\{ORIGIN\}\}/g, origin)
+            .replace(/\{\{BUILD\}\}/g, build)
+            .replace(/\{\{REHEARSAL\}\}/g, '1');
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+          res.end(file);
+        } catch {
+          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('Rehearsal page not found.');
         }
         break;
       }

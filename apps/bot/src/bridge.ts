@@ -145,6 +145,8 @@ interface Client {
   subscribedVisuals: boolean;
   /** Panels that want raw PCM (browser-side MilkDrop/analyser rendering). */
   subscribedPcm: boolean;
+  /** Panels that want the deck master mix (the deck page's monitor tab). */
+  subscribedDeckPcm: boolean;
   /** Guild this client is interested in (undefined = primary / all). */
   guildId?: string;
   /** Names this client reports for the jam (the Activity lists its instance). */
@@ -541,6 +543,7 @@ export class Bridge {
         name: msg.name ?? '',
         subscribedVisuals: false,
         subscribedPcm: false,
+        subscribedDeckPcm: false,
         guildId: msg.guildId || undefined,
       };
       if (msg.role === 'visualizer') {
@@ -750,6 +753,7 @@ export class Bridge {
         if (client) {
           client.subscribedVisuals = msg.channels.includes('visuals');
           client.subscribedPcm = msg.channels.includes('pcm');
+          client.subscribedDeckPcm = msg.channels.includes('deckpcm');
           if (msg.guildId) client.guildId = msg.guildId;
           const gid = client.guildId;
           this.sendToSocket(socket, {
@@ -1892,6 +1896,24 @@ export class Bridge {
   /** Push a freshly decoded waveform to the deck page. */
   broadcastDeckWaveform(guildId: string, deck: DeckId, peaks: number[], durationMs: number): void {
     this.broadcastPanels({ type: 'deck:waveform', deck, peaks, durationMs, guildId });
+  }
+
+  /**
+   * Deck master-mix PCM to browser monitors.
+   *
+   * Kept separate from the playback PCM tap: a visualizer asking for `pcm`
+   * wants the queue's audio for bars, and should not suddenly receive deck
+   * output. Only pages that explicitly ask for `deckpcm` (the deck monitor)
+   * get this, and the base64 work is skipped when nobody is listening.
+   */
+  broadcastDeckPcm(guildId: string, pcm: Buffer): void {
+    const targets = [...this.panels].filter(
+      (p) =>
+        p.subscribedDeckPcm && this.scopeOf(p.socket) !== 'guest' && (!guildId || !p.guildId || p.guildId === guildId),
+    );
+    if (!targets.length) return;
+    const msg: OutboundMessage = { type: 'audio:pcm', guildId, data: pcm.toString('base64'), ts: Date.now() };
+    for (const panel of targets) this.sendToSocket(panel.socket, msg);
   }
 
   /**

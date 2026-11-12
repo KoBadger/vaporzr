@@ -1417,6 +1417,7 @@ export class DiscordBot {
         // `V@r` picks up exactly where the set interrupted it.
         pauseQueue: () => s.playback.pause(),
         onState: (state) => this.bridge.broadcastDeck(state, guildId),
+        onMonitor: (pcm) => this.bridge.broadcastDeckPcm(guildId, pcm),
         uploadRecording: async (file, name) => {
           const channel = await this.panelShareChannel(guildId);
           if (!channel) return null;
@@ -1468,9 +1469,11 @@ export class DiscordBot {
     };
 
     if (msg.type === 'deck:load') {
-      if (!this.sessionFor(gid).voice.isConnectionReady() && !(await this.joinWhereListenersAre())) {
-        report({ ok: false, message: 'Join a voice channel first — I need somewhere to spin.' });
-        return;
+      // Rehearsal: a load is useful with no voice connection. Try to join
+      // wherever listeners are; if nobody is around the mixer still decodes,
+      // and the deck page hears it through its own monitor tab.
+      if (!this.sessionFor(gid).voice.isConnectionReady()) {
+        await this.joinWhereListenersAre();
       }
       report(await decks.load(msg.deck, msg.query));
     } else {
@@ -10591,10 +10594,12 @@ export class DiscordBot {
           query = value;
         }
         if (!query) return 'Usage: `V@deck a <song or link>` / `V@deck b <song or link>`.';
-        if (!this.sessionFor(gid).voice.isConnectionReady() && !(await this.joinWhereListenersAre())) {
-          return 'Join a voice channel first (`V@j`), then load a deck.';
-        }
-        return (await decks.load(target, query)).message;
+        // No voice channel is no longer a hard stop: the deck can be cued for
+        // rehearsal and heard through the /deck page's monitor.
+        if (!this.sessionFor(gid).voice.isConnectionReady()) await this.joinWhereListenersAre();
+        const loaded = await decks.load(target, query);
+        const rehearsal = !this.sessionFor(gid).voice.isConnectionReady();
+        return loaded.message + (loaded.ok && rehearsal ? ' (rehearsal — monitor on /deck to hear it)' : '');
       }
       case 'play':
       case 'go':
