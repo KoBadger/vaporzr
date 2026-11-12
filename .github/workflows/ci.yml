@@ -19,7 +19,11 @@ env:
 
 jobs:
   typecheck-and-test:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
 
@@ -56,8 +60,15 @@ jobs:
   # script fails - so this job is the only place that exercises "clean install
   # on a Node without prebuilts, from the lockfile". The failure it guards
   # against is silent: install succeeds, voice quietly drops to 64 kbps.
+  #
+  # It runs on macOS too: opus + ffmpeg-static ship separate darwin binaries,
+  # so "works on ubuntu" does not imply "works on macOS".
   audio-stack:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
 
@@ -75,3 +86,28 @@ jobs:
       - name: Encoder boots
         working-directory: apps/bot
         run: node -e "require('@discordjs/opus'); console.log('native opus loads')"
+
+  # The POSIX process / visualizer / sleep helpers (bot.sh, start-visualizer.sh,
+  # stay_awake.sh) are Linux + macOS only; Windows keeps the .ps1/.cmd/.bat trio.
+  launchers:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Syntax-check POSIX launchers
+        run: |
+          for f in bot.sh start-visualizer.sh stay_awake.sh; do
+            echo "bash -n $f"; bash -n "$f"
+          done
+
+      - name: stay_awake.sh detects the platform without acting
+        run: ./stay_awake.sh --check
+
+      - name: bot.sh status is safe when nothing is running
+        run: |
+          ./bot.sh status
+          test ! -f bot.pid   # reporting must not write a pid file
