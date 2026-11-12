@@ -64,7 +64,8 @@ import { statsStore } from '@vaporzr/core/stats';
 import { analyticsStore } from '@vaporzr/core/analytics';
 import { domainStore } from '@vaporzr/core/domains';
 import { setlistShares } from '@vaporzr/core/setlistShare';
-import { renderSetlistPage, setlistViewFromShare } from './setlistPage.js';
+import { tapes as globalTapes } from '@vaporzr/core/tape';
+import { renderSetlistPage, setlistViewFromShare, setlistViewFromTape } from './setlistPage.js';
 
 /** Pre-gzipped vendor assets — preset chunks are tens of MB of JS. */
 const vendorCache = new Map<string, { body: Buffer; gzip: boolean }>();
@@ -1674,6 +1675,56 @@ async function handleRoute(
           origin: shareOrigin,
           view: setlistViewFromShare(share),
           canonicalUrl: `${shareOrigin}/setlist/${share.id}`,
+        }),
+      );
+      return;
+    }
+
+    if (url.pathname.startsWith('/tape/')) {
+      // Tape-backed setlist: `/tape/<guildId>` for the rolling/last tape, or
+      // `/tape/<guildId>/<tapeId>` for a specific one.
+      //
+      // Unlike `/setlist/<id>`, the path here is a guild snowflake rather than a
+      // random capability, so it is gated to a control or view session instead
+      // of being open to anyone with the link.
+      const allowed = !controlAuthRequired() || hasRequestAccess(req, url) || hasShareAccess(req, url, 'view');
+      if (!allowed) {
+        res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end('This setlist is keyed. Open the panel from Discord to view it.');
+        return;
+      }
+      const parts = url.pathname.split('/').filter(Boolean); // ['tape', gid?, tapeId?]
+      const gid = (url.searchParams.get('guildId') || parts[1] || defaultGuildId() || '').trim();
+      const tapeId = (url.searchParams.get('tape') || parts[2] || '').trim();
+      if (!gid) {
+        res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end('No server selected.');
+        return;
+      }
+      const tape = tapeId ? globalTapes.get(gid, tapeId) : globalTapes.latest(gid);
+      if (!tape) {
+        res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end(
+          '<!doctype html><meta charset="utf-8"><title>Setlist not found</title>' +
+            '<meta name="robots" content="noindex">' +
+            '<body style="font:15px system-ui;background:#080a12;color:#e9edf6;padding:40px">' +
+            '<h1>Setlist not found</h1><p>No tape has been recorded for this server yet. ' +
+            'Use <b>/tape start</b> in Discord to begin one.</p></body>',
+        );
+        return;
+      }
+      const publicBase = (config.staticBaseUrl || config.jamPublicBase || '').replace(/\/+$/, '');
+      const shareOrigin = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(host) && publicBase ? publicBase : origin;
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'X-Robots-Tag': 'noindex',
+      });
+      res.end(
+        renderSetlistPage({
+          origin: shareOrigin,
+          view: setlistViewFromTape(tape),
+          canonicalUrl: `${shareOrigin}/tape/${gid}${tapeId ? `/${tapeId}` : ''}`,
         }),
       );
       return;

@@ -240,7 +240,7 @@ export function renderSetlistPage({ origin, view, canonicalUrl }: SetlistPageInp
     ${view.startedBy ? `<span class="chip">started by ${esc(view.startedBy)}</span>` : ''}
     ${view.expiresAt ? `<span class="chip">link expires ${esc(fmtDate(view.expiresAt))}</span>` : ''}
   </div>
-  ${songCount ? `<ol>${rows}</ol>` : `<div class="empty">Nothing queued in this room yet.</div>`}
+  ${songCount ? `<ol>${rows}</ol>` : `<div class="empty">${isQueue ? 'Nothing queued in this room yet.' : 'Nothing has been recorded on this tape yet.'}</div>`}
   <footer>
     Kept by <a href="${esc(origin)}">Vaporzr</a> ·
     ${

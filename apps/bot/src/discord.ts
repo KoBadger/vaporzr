@@ -130,6 +130,8 @@ import * as EW from '@vaporzr/core/endlesswave';
 import { playlistStore } from '@vaporzr/core/playlists';
 import { statsStore } from '@vaporzr/core/stats';
 import { analyticsStore } from '@vaporzr/core/analytics';
+import { tapes as globalTapes } from '@vaporzr/core/tape';
+import { runTapeCommand } from './tapeActions.js';
 import { trackKey } from '@vaporzr/core/stats';
 import { gamesStore, fitPercent, describeFit, pickRouletteWeighted, keyToQuery, explainFit } from '@vaporzr/core/games';
 import { packCategoryFields, chunkFieldsIntoEmbeds, aliasIndexFields } from './help.js';
@@ -793,6 +795,104 @@ const COMMANDS = [
     .addStringOption((o) =>
       o.setName('message').setDescription('What to ask or say to Amok (or "reset")').setRequired(true),
     ),
+  new SlashCommandBuilder()
+    .setName('tape')
+    .setDescription('Session tape — record what the room hears, then save/export it')
+    .addSubcommand((sc) =>
+      sc
+        .setName('start')
+        .setDescription('Start recording everything this room hears')
+        .addStringOption((o) =>
+          o.setName('name').setDescription('Optional name for the tape (defaults to date/time)').setRequired(false),
+        ),
+    )
+    .addSubcommand((sc) => sc.setName('stop').setDescription('Seal the rolling tape'))
+    .addSubcommand((sc) => sc.setName('status').setDescription('Show the current tape status'))
+    .addSubcommand((sc) => sc.setName('list').setDescription("List this server's tapes"))
+    .addSubcommand((sc) =>
+      sc
+        .setName('save')
+        .setDescription('Save the latest tape as a playlist (use /load <name> to play it)')
+        .addStringOption((o) =>
+          o.setName('name').setDescription('Playlist name (defaults to the tape name)').setRequired(false),
+        )
+        .addStringOption((o) =>
+          o
+            .setName('mode')
+            .setDescription('Order: time (as played), flow, arc, key, sonic')
+            .setRequired(false)
+            .addChoices(
+              { name: 'time — as it played', value: 'time' },
+              { name: 'flow — flowing transitions', value: 'flow' },
+              { name: 'arc — warm-up/peak/wind-down', value: 'arc' },
+              { name: 'key — harmonic key mixing', value: 'key' },
+              { name: 'sonic — audio similarity', value: 'sonic' },
+            ),
+        ),
+    )
+    .addSubcommand((sc) =>
+      sc
+        .setName('export')
+        .setDescription('Export the latest tape as M3U8, CSV, Markdown, or all')
+        .addStringOption((o) =>
+          o
+            .setName('format')
+            .setDescription('File format (default all)')
+            .setRequired(false)
+            .addChoices(
+              { name: 'all — M3U8 + CSV + Markdown', value: 'all' },
+              { name: 'm3u8', value: 'm3u' },
+              { name: 'csv', value: 'csv' },
+              { name: 'markdown', value: 'md' },
+            ),
+        )
+        .addStringOption((o) =>
+          o
+            .setName('mode')
+            .setDescription('Order: time (as played), flow, arc, key, sonic')
+            .setRequired(false)
+            .addChoices(
+              { name: 'time — as it played', value: 'time' },
+              { name: 'flow — flowing transitions', value: 'flow' },
+              { name: 'arc — warm-up/peak/wind-down', value: 'arc' },
+              { name: 'key — harmonic key mixing', value: 'key' },
+              { name: 'sonic — audio similarity', value: 'sonic' },
+            ),
+        ),
+    )
+    .addSubcommand((sc) =>
+      sc
+        .setName('spotify')
+        .setDescription('Create a Spotify playlist from the latest tape')
+        .addStringOption((o) =>
+          o.setName('name').setDescription('Playlist name (defaults to the tape name)').setRequired(false),
+        )
+        .addStringOption((o) =>
+          o
+            .setName('mode')
+            .setDescription('Order: time (as played), flow, arc, key, sonic')
+            .setRequired(false)
+            .addChoices(
+              { name: 'time — as it played', value: 'time' },
+              { name: 'flow — flowing transitions', value: 'flow' },
+              { name: 'arc — warm-up/peak/wind-down', value: 'arc' },
+              { name: 'key — harmonic key mixing', value: 'key' },
+              { name: 'sonic — audio similarity', value: 'sonic' },
+            ),
+        )
+        .addBooleanOption((o) =>
+          o.setName('public').setDescription('Make the Spotify playlist public (default off)').setRequired(false),
+        ),
+    )
+    .addSubcommand((sc) =>
+      sc
+        .setName('delete')
+        .setDescription('Delete a tape by id (see /tape list)')
+        .addStringOption((o) =>
+          o.setName('id').setDescription('Tape id from /tape list').setRequired(true).setMaxLength(40),
+        ),
+    )
+    .addSubcommand((sc) => sc.setName('now').setDescription('What is on the tape right now (the last thing it heard)')),
 ];
 
 function fmtMs(ms: number): string {
@@ -1309,6 +1409,12 @@ export class DiscordBot {
               s.lastAnalyticsUri = st.track.uri;
               analyticsStore.recordPlay(s.guildId ?? '');
             }
+            // The tape is the transcript of what the room actually heard.
+            // noteTrack dedupes internally, so a pause/resume of the same
+            // track does not double-record it.
+            globalTapes.noteTrack(s.guildId ?? '', st.track, {
+              addedBy: st.track.addedBy ?? 'unknown',
+            });
             this.maybeAnnounceTts(s, st.track);
           }
           this.scheduleWaveTopUp(s);
@@ -2704,6 +2810,49 @@ export class DiscordBot {
       case 'viz': {
         const admin = this.isAdminMember(interaction.user.id, interaction.guild, interaction.member);
         await interaction.reply({ embeds: [this.vizEmbed(admin)], flags: MessageFlags.Ephemeral });
+        break;
+      }
+
+      case 'tape': {
+        if (!interaction.inGuild()) {
+          await interaction.reply({ content: 'Must be used inside a server.', flags: MessageFlags.Ephemeral });
+          return;
+        }
+        const sub = interaction.options.getSubcommand();
+        const guildId = interaction.guildId!;
+        const reply = await runTapeCommand({
+          sub,
+          guildId,
+          username: interaction.user.username,
+          name: interaction.options.getString('name') ?? undefined,
+          format: interaction.options.getString('format') ?? undefined,
+          mode: interaction.options.getString('mode') ?? undefined,
+          isPublic: interaction.options.getBoolean('public') ?? undefined,
+        });
+        if (!reply) {
+          // `ears` needs the live voice connection, which is not implemented here.
+          await interaction.reply({ content: 'That subcommand is not available yet.', flags: MessageFlags.Ephemeral });
+          break;
+        }
+        const files = (reply.files ?? []).map((f) => ({
+          attachment: f.data,
+          name: f.name,
+          description: f.description,
+        }));
+        // Point at the server-rendered setlist for the rolling tape, so the
+        // reply is a link people can actually open rather than just a count.
+        const publicBase = (config.staticBaseUrl || config.jamPublicBase || '').replace(/\/+$/, '');
+        const wantsLink = sub === 'status' || sub === 'stop' || sub === 'start';
+        const content = wantsLink && publicBase ? `${reply.content}\n${publicBase}/tape/${guildId}` : reply.content;
+        if (reply.ephemeral) {
+          await interaction.reply({
+            content,
+            files,
+            flags: MessageFlags.Ephemeral,
+          });
+        } else {
+          await interaction.reply({ content, files });
+        }
         break;
       }
 
