@@ -784,16 +784,16 @@ const COMMANDS = [
     .setDescription('Guess the current quiz song')
     .addStringOption((o) => o.setName('text').setDescription('Your guess').setRequired(true)),
   new SlashCommandBuilder()
-    .setName('weasel')
-    .setDescription('Chat with Amok ("The Weasel" — 90s Pauly Shore AI agent)')
+    .setName('hal')
+    .setDescription('Chat with AMOK 9000 — the calm ship-computer AI agent')
     .addStringOption((o) =>
-      o.setName('message').setDescription('What to ask or say to The Weasel (or "reset")').setRequired(true),
+      o.setName('message').setDescription('What to ask AMOK 9000 (or "reset")').setRequired(true),
     ),
   new SlashCommandBuilder()
     .setName('amok')
-    .setDescription('Chat with Amok ("The Weasel" — 90s Pauly Shore AI agent)')
+    .setDescription('Chat with AMOK 9000 — the calm ship-computer AI agent')
     .addStringOption((o) =>
-      o.setName('message').setDescription('What to ask or say to Amok (or "reset")').setRequired(true),
+      o.setName('message').setDescription('What to ask AMOK 9000 (or "reset")').setRequired(true),
     ),
   new SlashCommandBuilder()
     .setName('tape')
@@ -908,7 +908,7 @@ function truncate(text: string, max: number): string {
 
 /**
  * Strip Discord markdown, mentions and links before handing text to the TTS
- * engine, so the Weasel doesn't read out asterisks, backticks or URLs.
+ * engine, so AMOK 9000 doesn't read out asterisks, backticks or URLs.
  */
 export function stripForSpeech(text: string): string {
   return text
@@ -1007,9 +1007,9 @@ export class DiscordBot {
   /** guildId -> fire a short SFX on strong beats (auto-hype). */
   private hypeGuilds = new Set<string>();
   private lastHypeAt = new Map<string, number>();
-  /** guildId -> Weasel Auto-VJ spoken track intros enabled (`v@w vj on`). */
+  /** guildId -> AMOK 9000 Auto-VJ spoken track intros enabled (`v@h vj on`). */
   private weaselVjGuilds = new Set<string>();
-  /** guildId -> `V@w videos off`: stop posting the official-video card. */
+  /** guildId -> `V@h videos off`: stop posting the official-video card. */
   private videoCardsOff = new Set<string>();
   /** track uri -> resolved video (null = searched, nothing suitable). */
   private videoCardIds = new Map<string, VideoMatch | null>();
@@ -1019,18 +1019,18 @@ export class DiscordBot {
   private videoCardInFlight = new Set<string>();
   /** guildId -> the card currently in the channel, so the next one can replace it. */
   private videoCardMessage = new Map<string, { channelId: string; messageId: string }>();
-  /** guildId -> Weasel live voice-channel ear enabled (`v@w listen on`). */
+  /** guildId -> AMOK 9000 live voice-channel ear enabled (`v@h listen on`). */
   private weaselListenGuilds = new Set<string>();
   private weaselListenBusy = new Set<string>();
   /** guildId -> live two-deck mixer (see decks.ts). Created on first use. */
   private deckControllers = new Map<string, DeckController>();
-  /** guildId -> active AI steering / harmonic arc directive for Endless Wave (`v@w wave ...`). */
+  /** guildId -> active AI steering / harmonic arc directive for Endless Wave (`v@h wave ...`). */
   private ewSteerPrompt = new Map<string, string>();
   /** guildId -> buffered AI crate-digger picks for Endless Wave. */
   private ewAiPickBuffer = new Map<string, WeaselWavePick[]>();
   /** track.uri -> 1-line AI crate-digger note explaining sample/producer/harmonic fit. */
   private ewTrackLore = new Map<string, string>();
-  /** Message IDs sent by Amok ("The Weasel") so users can reply without `v@w`. */
+  /** Message IDs sent by Amok ("AMOK 9000") so users can reply without `v@h`. */
   private amokMessageIds = new Set<string>();
   /** guildId -> active lyric guess-the-song quiz. */
   private quizzes = new Map<string, { name: string; artists: string[]; timer: NodeJS.Timeout }>();
@@ -1705,7 +1705,7 @@ export class DiscordBot {
       // seamless restart resume) run at boot instead of waiting for the first
       // event in that guild.
       for (const g of this.client.guilds.cache.values()) this.sessions.get(g.id);
-      // Re-arm the Weasel's voice ears for guilds that had `V@w listen on`
+      // Re-arm AMOK 9000's voice ears for guilds that had `V@h listen on`
       // before the last restart — otherwise the feature silently stays off.
       this.restoreWeaselVoiceState();
       // Alert the owner if the YouTube canary flips to a broken state.
@@ -3590,7 +3590,7 @@ export class DiscordBot {
         break;
       }
 
-      case 'weasel':
+      case 'hal':
       case 'amok': {
         if (!this.requireLevel(name, interaction)) return this.deny(interaction);
         const prompt = interaction.options.getString('message', true);
@@ -4260,7 +4260,7 @@ export class DiscordBot {
     } else if (me && (raw.startsWith(`<@${me}>`) || raw.startsWith(`<@!${me}>`))) {
       rest = raw.replace(/^<@!?\d+>/, '').trimStart();
     } else if (message.reference?.messageId && this.amokMessageIds.has(message.reference.messageId) && raw.trim()) {
-      rest = `weasel ${raw.trim()}`;
+      rest = `hal ${raw.trim()}`;
     }
     if (rest === null) return;
 
@@ -5046,9 +5046,9 @@ export class DiscordBot {
           break;
         }
 
-        case 'weasel': {
-          if (!canUse('weasel')) return void (await deny());
-          const prompt = args.trim() || "Hey buddy, what's shakin'?";
+        case 'hal': {
+          if (!canUse('hal')) return void (await deny());
+          const prompt = args.trim() || 'Good afternoon. How are you feeling today?';
           if ('sendTyping' in message.channel) {
             void message.channel.sendTyping().catch(() => {});
           }
@@ -11781,7 +11781,7 @@ export class DiscordBot {
         { name: '🎧 Top DJs', value: ranked(w.topDjs), inline: true },
       )
       .setFooter({
-        text: `All-time: ${hours(w.allTimeMs)} of music · ${w.allTimeQueued} tracks queued · V@wrapped last → previous month`,
+        text: `All-time: ${hours(w.allTimeMs)} of music · ${w.allTimeQueued} tracks queued · V@hrapped last → previous month`,
       });
   }
 
@@ -11850,15 +11850,14 @@ export class DiscordBot {
     const embed = new EmbedBuilder()
       .setTitle('Vaporzr')
       .setDescription(
-        `*music · autoplay · weasel ai · visuals · games*\n\n${startHere}\n\n` +
-          `**Browse**\n${catLines}\n\n${webLine}`,
+        `*music · autoplay · amok ai · visuals · games*\n\n${startHere}\n\n` + `**Browse**\n${catLines}\n\n${webLine}`,
       )
       .setColor(this.helpColor())
       .addFields({
         name: '✨ what’s new',
         value:
           '`/listen` — the bot’s full-quality audio in a browser, with a sound-check panel\n' +
-          '`V@w roast` — the Weasel roasts anyone · `V@w say` — voice drops\n' +
+          '`V@h roast` — AMOK 9000 roasts anyone · `V@h say` — voice drops\n' +
           '`V@norm` — loudness match is now **on by default**',
       })
       .setFooter({
@@ -11930,7 +11929,7 @@ export class DiscordBot {
   /** Detailed embed for one help category (or null if unknown). */
   private helpCategoryEmbed(id: string): EmbedBuilder | null {
     const q = id.trim().toLowerCase();
-    const aliasId = q === 'ai' || q === 'w' || q === 'amok' || q === 'pauly' ? 'weasel' : q;
+    const aliasId = q === 'ai' || q === 'a' || q === 'amok' || q === '9000' ? 'hal' : q;
     const idx = HELP_CATEGORIES.findIndex((x) => x.id === aliasId || x.name.toLowerCase() === aliasId);
     if (idx < 0) return this.helpSearchEmbed(q);
     const c = HELP_CATEGORIES[idx];
@@ -12199,7 +12198,7 @@ export class DiscordBot {
     EW.markPlayed(s.endlessWave, track.uri, track.name, track.artists);
   }
 
-  /** Track message IDs sent by Amok so users can reply directly without `v@w`. */
+  /** Track message IDs sent by Amok so users can reply directly without `v@h`. */
   private rememberAmokMessage(messageId: string): void {
     this.amokMessageIds.add(messageId);
     if (this.amokMessageIds.size > 500) {
@@ -12217,7 +12216,7 @@ export class DiscordBot {
   /**
    * Re-arm the ears after a restart. The listen/VJ toggles are persisted in
    * panels.json, but a fresh process has no speak handler wired into its voice
-   * managers yet — so `V@w listen on` used to go permanently quiet after every
+   * managers yet — so `V@h listen on` used to go permanently quiet after every
    * deploy, with nothing in the log to say why.
    */
   private restoreWeaselVoiceState(): void {
@@ -12230,7 +12229,7 @@ export class DiscordBot {
     }
   }
 
-  /** Speak a short Weasel line over the active voice stream with music ducking. */
+  /** Speak a short AMOK 9000 line over the active voice stream with music ducking. */
   private async speakWeaselInVoice(s: Session, text: string): Promise<boolean> {
     if (!s.voice.isConnectionReady()) return false;
     try {
@@ -12286,7 +12285,7 @@ export class DiscordBot {
     return { recentChat, voiceMembers };
   }
 
-  /** Handle a spoken utterance captured from the Discord voice channel (`v@w listen on`). */
+  /** Handle a spoken utterance captured from the Discord voice channel (`v@h listen on`). */
   private async onWeaselVoiceUtterance(s: Session, userId: string, pcmMono48k: Buffer): Promise<void> {
     const gid = s.guildId;
     if (!this.weaselListenGuilds.has(gid) || this.weaselListenBusy.has(gid)) return;
@@ -12300,19 +12299,19 @@ export class DiscordBot {
         return;
       }
       console.log(`[weasel] ears: heard "${truncate(transcript, 160)}"`);
-      // The transcriber writes "Weasel" as Wizel / Weezel / Wisel depending on
+      // The transcriber renders "AMOK" as Amock / Amok / AMOCK depending on
       // the room, so matching the literal word rejected real requests. Address
       // detection is fuzzy and the command is stripped of its vocative before
       // dispatch ("Yo, Wizel, play some Sublime" → "play some Sublime").
       const { addressed, command } = parseVoiceUtterance(transcript);
       if (!addressed) {
-        console.log('[weasel] ears: ignored — not addressed to him (say "Hey Weasel, ...")');
+        console.log('[weasel] ears: ignored — not addressed to him (say "Hey AMOK, ...")');
         return;
       }
 
       const guild = this.client.guilds.cache.get(gid);
       const member = guild?.members.cache.get(userId);
-      const username = member?.user.username ?? 'broham';
+      const username = member?.user.username ?? 'stranger';
       const channelId = this.lastTextChannel.get(gid) ?? guild?.systemChannelId ?? null;
 
       const reply = await this.handleWeaselRequest(s, command, {
@@ -12348,10 +12347,10 @@ export class DiscordBot {
   }
 
   /**
-   * Full smart dispatcher for `/weasel`, `/amok`, `V@weasel` (`V@w`),
-   * direct replies to The Weasel, and spoken voice-channel commands:
-   *  - `vj [on|off]`: toggle spoken MTV VJ track announcements in voice
-   *  - `listen [on|off]`: toggle live voice-channel ears (talk to The Weasel out loud)
+   * Full smart dispatcher for `/hal`, `/amok`, `V@hal` (`V@h`),
+   * direct replies to AMOK 9000, and spoken voice-channel commands:
+   *  - `vj [on|off]`: toggle spoken AMOK 9000 track announcements in voice
+   *  - `listen [on|off]`: toggle live voice-channel ears (talk to AMOK 9000 out loud)
    *  - `memory` / `remember <fact>`: persistent long-term user & server memory
    *  - `wave <vibe/arc>` / `arc <journey>` / `steer <vibe>`: AI Deep-DNA Endless Wave & Harmonic Set Architect
    *  - `breakdown` / `lore` / `sample`: deep track deconstruction (samples, producer, lyrics, Song DNA)
@@ -12374,7 +12373,7 @@ export class DiscordBot {
     const trimmed = rawPrompt.trim();
     const gid = opts.guildId ?? '';
 
-    // 0. `v@w videos [on|off]` — official-video card on track changes (on by default)
+    // 0. `v@h videos [on|off]` — official-video card on track changes (on by default)
     const videosMatch = /^videos?(?:\s+(on|off|toggle|status))?$/i.exec(trimmed);
     if (videosMatch) {
       if (!gid) return 'Must be used inside a server.';
@@ -12387,11 +12386,11 @@ export class DiscordBot {
       }
       const active = !this.videoCardsOff.has(gid);
       return active
-        ? '🎬 **Video cards are ON** — when the track has a real label/artist video I post it, one card at a time (the previous is replaced). (`V@w videos off` to stop)'
+        ? '🎬 **Video cards are ON** — when the track has a real label/artist video I post it, one card at a time (the previous is replaced). (`V@h videos off` to stop)'
         : '🔇 **Video cards are OFF** — no more video posts on track changes.';
     }
 
-    // 1. `v@w vj [on|off]` — toggle automatic spoken Weasel VJ intros on track changes
+    // 1. `v@h vj [on|off]` — toggle automatic spoken AMOK 9000 VJ intros on track changes
     const vjMatch = /^vj(?:\s+(on|off|toggle|status))?$/i.exec(trimmed);
     if (vjMatch) {
       if (!gid) return 'Must be used inside a server.';
@@ -12405,11 +12404,11 @@ export class DiscordBot {
       const active = this.weaselVjGuilds.has(gid);
       this.scheduleSavePanels();
       return active
-        ? "🎙️ **Weasel Auto-VJ is ON, buuuddy!** I'll hop on the mic with SSML surfer cadence and drop 90s MTV Spring Break intros (+ sample/producer notes) when tracks kick off. (`V@w vj off` to chill)"
-        : '🔇 **Weasel Auto-VJ is OFF** — keeping the mic quiet during track changes, broham.';
+        ? '🎙️ **AMOK 9000 Auto-VJ is ON.** I will announce each track in a calm, measured voice — sample and producer notes included. (`V@h vj off` to silence me)'
+        : '🔇 **AMOK 9000 Auto-VJ is OFF.** I will not interrupt the music again.';
     }
 
-    // 2. `v@w listen [on|off]` — toggle live Voice-Channel Ears
+    // 2. `v@h listen [on|off]` — toggle live Voice-Channel Ears
     const listenMatch = /^listen(?:\s+(on|off|toggle|status))?$/i.exec(trimmed);
     if (listenMatch) {
       if (!gid) return 'Must be used inside a server.';
@@ -12431,21 +12430,21 @@ export class DiscordBot {
         }
       }
       return active
-        ? '👂 **Weasel Voice Ears are ON, buuuddy!** Just talk out loud in the voice channel — say *"Hey Weasel, what song is this?"* or *"Yo Weasel, play some Sublime"* and I\'ll hear you and answer back on the mic! (`V@w listen off` to disable)'
-        : '🔇 **Weasel Voice Ears are OFF** — no longer listening to voice chat.';
+        ? '👂 **AMOK 9000 Voice Ears are ON.** Speak in the voice channel — say *"Hey AMOK, what song is this?"* or *"Hey Hal, play some Sublime"* and I will hear you and answer on the mic. (`V@h listen off` to disable)'
+        : '🔇 **AMOK 9000 Voice Ears are OFF.** I am no longer listening.';
     }
 
-    // 3. `v@w memory` / `v@w remember <fact>` — persistent long-term memory
+    // 3. `v@h memory` / `v@h remember <fact>` — persistent long-term memory
     const remMatch = /^(?:remember|memo)\s+(.+)$/i.exec(trimmed);
     if (remMatch) {
       rememberWeaselFact(gid || null, opts.userId, opts.username, remMatch[1]);
-      return `🧠 Locked into the old melon forever, **${opts.username}**! I'll remember: *"${remMatch[1].trim()}"* — wheeze the juice!`;
+      return `🧠 Stored in permanent memory, **${opts.username}**: *"${remMatch[1].trim()}"*. I will not forget.`;
     }
     if (/^memory$/i.test(trimmed)) {
       const mem = getWeaselMemorySummary(gid || null, opts.userId, opts.username);
       return mem
-        ? `🧠 **What The Weasel remembers about you & this room, buuuddy:**\n${mem}\n-# Tip: I learn your tastes automatically as we chat and queue music, or use \`V@w remember <fact>\`.`
-        : "🧠 My melon's still fresh on you, buuuddy! Queue some jams or tell me what you're into (or use `V@w remember <fact>`) and I'll remember it across sessions.";
+        ? `🧠 **What AMOK 9000 remembers about you & this room:**\n${mem}\n-# Tip: I learn your tastes automatically as we chat and queue music, or use \`V@h remember <fact>\`.`
+        : '🧠 I have no record of you yet. Queue some music or tell me about yourself (or use `V@h remember <fact>`) and I will retain it across sessions.';
     }
 
     // Build rich room context (current track, upcoming queue with addedBy, top DJs, DNA, chat, VC presence)
@@ -12479,14 +12478,14 @@ export class DiscordBot {
 
     const { recentChat, voiceMembers } = await this.collectRoomAwareness(gid || null, opts.channelId);
 
-    // 4. `v@w wave <vibe/arc>` / `v@w arc <journey>` / `v@w steer <vibe>` — Fused AI Deep-DNA Endless Wave + Harmonic Set Architect
+    // 4. `v@h wave <vibe/arc>` / `v@h arc <journey>` / `v@h steer <vibe>` — Fused AI Deep-DNA Endless Wave + Harmonic Set Architect
     const waveMatch = /^(?:wave|arc|steer|journey)(?:\s+(.*))?$/i.exec(trimmed);
     if (waveMatch && gid) {
       const directive = (waveMatch[1] ?? '').trim();
       if (/^(off|clear|stop)$/i.test(directive)) {
         this.ewSteerPrompt.delete(gid);
         this.ewAiPickBuffer.delete(gid);
-        return '🌊 Cleared the custom AI wave arc — Endless Wave is cruising on pure track-to-track DNA now, buuuddy!';
+        return '🌊 Cleared the custom AI wave arc — Endless Wave is navigating on pure track-to-track DNA now.';
       }
       if (directive) {
         this.ewSteerPrompt.set(gid, directive);
@@ -12557,15 +12556,15 @@ export class DiscordBot {
         : `${intro.text}\n-# 🌊 Endless Wave (smart) is active${directive ? ` — steering toward: **${directive}**` : ''}.`;
     }
 
-    // 5. `v@w breakdown` / `v@w lore` / `v@w sample` — Deep Track Intelligence
+    // 5. `v@h breakdown` / `v@h lore` / `v@h sample` — Deep Track Intelligence
     const breakdownMatch = /^(?:breakdown|lore|sample|samples|dna|why)(?:\s+(.*))?$/i.exec(trimmed);
     if (breakdownMatch) {
       const target = (breakdownMatch[1] ?? '').trim();
       const targetDesc = target || nowPlaying;
       if (!targetDesc) {
-        return "Whoa buuuddy, nothing's spinning right now! Play a track or type `V@w breakdown <artist - song>` and I'll dig up the samples, producer lore, and sonic DNA!";
+        return 'Nothing is spinning right now. Play a track, or type `V@h breakdown <artist - song>` and I will retrieve the samples, producer lore, and sonic DNA.';
       }
-      const bdPrompt = `Give a deep-dive musicologist breakdown of ${targetDesc}! Cover: (1) who produced it and the recording/album backstory, (2) what samples it flipped or who sampled it (WhoSampled lore), (3) what the lyrics and sonic DNA (${dnaCal || 'groove/key/BPM'}) are doing, and (4) at the very end output WEASEL_QUEUE: with 1 or 2 sample-source or producer-cousin tracks if the user wants to hear the connection!`;
+      const bdPrompt = `Give a deep-dive musicologist breakdown of ${targetDesc}! Cover: (1) who produced it and the recording/album backstory, (2) what samples it flipped or who sampled it (WhoSampled lore), (3) what the lyrics and sonic DNA (${dnaCal || 'groove/key/BPM'}) are doing, and (4) at the very end output AMOK_QUEUE: with 1 or 2 sample-source or producer-cousin tracks if the user wants to hear the connection!`;
       const res = await askAmokRich(bdPrompt, {
         scopeId: opts.scopeId,
         guildId: gid,
@@ -12581,20 +12580,20 @@ export class DiscordBot {
       });
       const cousinNotes =
         res.queueQueries.length > 0
-          ? `\n\n🧬 **Sample / Producer Cousins:** ${res.queueQueries.map((q) => `\`${q}\``).join(' · ')} *(reply "queue those" or \`V@w wave ${res.queueQueries[0]}\` to ride that DNA in Endless Wave!)*`
+          ? `\n\n🧬 **Sample / Producer Cousins:** ${res.queueQueries.map((q) => `\`${q}\``).join(' · ')} *(reply "queue those" or \`V@h wave ${res.queueQueries[0]}\` to ride that DNA in Endless Wave!)*`
           : '';
       return `${res.text}${cousinNotes}`;
     }
 
-    // 6. `v@w say ...` — speak out loud in the voice channel
+    // 6. `v@h say ...` — speak out loud in the voice channel
     const sayMatch = /^(?:say|speak|mic|announce)(?:\s+(.*))?$/i.exec(trimmed);
     if (sayMatch) {
       const topic = (sayMatch[1] ?? '').trim();
       const voicePrompt = topic
-        ? `Give a short, punchy 1-2 sentence 90s MTV VJ radio drop to say out loud on the microphone about: ${topic}`
+        ? `Give a short, calm 1-2 sentence ship-computer voice drop to say out loud on the microphone about: ${topic}`
         : cur
-          ? `Give a short, punchy 1-2 sentence 90s MTV VJ radio intro to say out loud on the microphone for the song currently playing: ${nowPlaying}`
-          : 'Give a short, punchy 1-2 sentence 90s MTV VJ shoutout to the Discord voice channel!';
+          ? `Give a short, calm 1-2 sentence ship-computer track announcement to say out loud on the microphone for the song currently playing: ${nowPlaying}`
+          : 'Give a short, calm 1-2 sentence ship-computer greeting to the Discord voice channel!';
       const res = await askAmokRich(voicePrompt, {
         scopeId: opts.scopeId,
         guildId: gid,
@@ -12616,7 +12615,7 @@ export class DiscordBot {
       }
       // Reply first, speak second. Synthesis (especially a cold clone worker)
       // takes seconds to tens of seconds; making the Discord reply wait on it
-      // is what made a simple `V@w say` feel like it "took a minute".
+      // is what made a simple `V@h say` feel like it "took a minute".
       if (!s.voice.isJoined()) {
         return `${res.text}\n-# (Join a voice channel to hear me on the mic!)`;
       }
@@ -12626,7 +12625,7 @@ export class DiscordBot {
       return `🎙️ *On the mic in voice:*\n${res.text}`;
     }
 
-    // 7. `v@w roast [target]` / `v@w rate [target]` — savage 90s MTV Roast of any target
+    // 7. `v@h roast [target]` / `v@h rate [target]` — a HAL-9000-style teardown of any target
     //    Target can be: empty (roast the queue + DJs), @mention, or a typed name/thing.
     const isRoast = /^(?:roast|rate)(?:\s+(.*))?$/i.exec(trimmed);
     let effectivePrompt = trimmed;
@@ -12659,15 +12658,15 @@ export class DiscordBot {
           ? `Roast/Rate these specific targets BY NAME and go HARD: ${targets.join(', ')}. Use their music taste, queued songs, username, and anything you remember about them.`
           : `Roast and rate the current music queue, DJs, and channel vibe by name.`;
       // The house vibe is a late-night NSFW party: when the command comes from
-      // an age-gated channel, let the Weasel talk like the room does. The floor
+      // an age-gated channel, let AMOK 9000 talk like the room does. The floor
       // is legal/safety only — no genuine hate at a protected group, no threats,
       // nothing sexual involving minors — everything else is fair game.
       const chan = opts.channelId ? this.client.channels.cache.get(opts.channelId) : null;
       const spicy = Boolean(chan && 'nsfw' in chan && (chan as { nsfw?: boolean }).nsfw);
       const tone = spicy
-        ? 'This is an NSFW, age-gated channel: go fully untethered, uncensored Pauly. Crude sex jokes, swearing, drugs, gross-out bits, and R-rated digs at looks, weight, voice, hair, taste — as long as the burn is clever, specific and actually hilarious. Sound like a wasted 3 a.m. Vegas afterparty host.'
-        : 'This channel is not age-gated, so keep a PG-13 ceiling you can still laugh at: mild "so out of touch he thinks that is a compliment" ignorance, light stereotype gags aimed at nobody in particular, mild swearing, and tasteful, clever digs at looks. The joke lands because it is witty, not because it is filthy.';
-      effectivePrompt = `${targetPhrase} ${arg && targets.length > 0 ? `Extra roast direction: ${arg}.` : ''} Lay down the burns like a 90s MTV Spring Break Roast — witty, sharp, specific, savage. ${tone} Hard floor everywhere: no genuine hate at a protected group, no threats of violence, nothing sexual involving minors. 1-3 punchy sentences max.`;
+        ? 'This is an NSFW, age-gated channel: go fully untethered, uncensored. Crude sex jokes, swearing, drugs, gross-out content, and R-rated digs at looks, weight, voice, hair, taste are all on the table — as long as the burn is clever, specific and actually hilarious. Deliver it deadpan: an eerily calm ship computer performing a dispassionate human-dissection report, never raising its voice, letting the surgical precision do the damage.'
+        : 'This channel is not age-gated, so keep a PG-13 ceiling you can still laugh at: calm, condescending, "I am sorry, but this taste is a known failure mode" clinical digs, mild swearing, and witty cuts at looks. The joke lands because it is precise and delivered without emotion, not because it is filthy.';
+      effectivePrompt = `${targetPhrase} ${arg && targets.length > 0 ? `Extra roast direction: ${arg}.` : ''} Deliver the burns like HAL 9000: quiet, measured, unfailingly polite, and absolutely devastating — the menace is in the calm. ${tone} Hard floor everywhere: no genuine hate at a protected group, no threats of violence, nothing sexual involving minors. 1-3 punchy sentences max.`;
     }
 
     const result = await askAmokRich(effectivePrompt, {
@@ -12685,7 +12684,7 @@ export class DiscordBot {
       extraContextNotes: roastTargetNotes.length > 0 ? roastTargetNotes : undefined,
     });
 
-    // 8. VJ Weasel Auto-DJ — resolve & queue any `WEASEL_QUEUE:` tracks
+    // 8. VJ AMOK 9000 Auto-DJ - resolve & queue any `AMOK_QUEUE:` (legacy `WEASEL_QUEUE:`) tracks
     const queuedLabels: string[] = [];
     if (result.queueQueries.length > 0 && gid) {
       const resolved: ResolvedTrack[] = [];
@@ -12699,7 +12698,7 @@ export class DiscordBot {
       }
       const fresh = s.queue.filterNew(resolved);
       if (fresh.length > 0) {
-        s.queue.insertUserBatch(fresh, 'The Weasel 🦦');
+        s.queue.insertUserBatch(fresh, 'AMOK 9000 🤖');
         const allArtists = fresh.flatMap((t) => t.artists);
         this.stats.noteQueued(gid, opts.username, allArtists);
         noteWeaselUserArtists(opts.userId, opts.username, allArtists);
@@ -12716,14 +12715,14 @@ export class DiscordBot {
           const first = fresh[0];
           void this.speakWeaselInVoice(
             s,
-            `Hey buuuddy! The Weasel just lined up ${first.name} by ${(first.artists ?? []).slice(0, 2).join(' and ')}! Keep wheezin the ju-uice!`,
+            `I have taken the liberty of queueing ${first.name} by ${(first.artists ?? []).slice(0, 2).join(' and ')}. You are welcome.`,
           );
         }
       }
     }
 
     if (queuedLabels.length > 0) {
-      return `${result.text}\n\n🎧 **The Weasel queued:**\n${queuedLabels.join('\n')}`;
+      return `${result.text}\n\n🎧 **AMOK 9000 queued:**\n${queuedLabels.join('\n')}`;
     }
     return result.text;
   }
@@ -12831,7 +12830,7 @@ export class DiscordBot {
         .setURL(`https://www.youtube.com/watch?v=${match.id}`)
         .setImage(`https://i.ytimg.com/vi/${match.id}/hqdefault.jpg`)
         .setDescription(intro.slice(0, 300))
-        .setFooter({ text: 'V@w videos off hides these cards' });
+        .setFooter({ text: 'V@h videos off hides these cards' });
       try {
         const sent = (await (channel as { send: (o: unknown) => Promise<unknown> }).send({ embeds: [embed] })) as {
           id?: string;
@@ -12849,7 +12848,7 @@ export class DiscordBot {
 
   /**
    * Optional TTS DJ: speak a short "now playing" line when a new track starts.
-   * Strictly opt-in per guild (`/tts on` or `V@w vj on`), deduped per track.
+   * Strictly opt-in per guild (`/tts on` or `V@h vj on`), deduped per track.
    * The music ducks under the clip, then releases.
    */
   private maybeAnnounceTts(s: Session, track: TrackInfo): void {
@@ -12861,11 +12860,11 @@ export class DiscordBot {
       const lore = this.ewTrackLore.get(track.uri);
       const dj =
         track.addedBy && track.addedBy !== 'endless-wave' && track.addedBy !== 'Endless Wave'
-          ? ` queued up by ${track.addedBy},`
+          ? `, queued by ${track.addedBy}`
           : '';
       const line = lore
-        ? `Hey buuuddy! Up next on the wave, we got ${track.name}${artists ? ` by ${artists}` : ''}! ${lore}`
-        : `Hey buuuddy! Coming up on the crustacean station,${dj} we got ${track.name}${artists ? ` by ${artists}` : ''}! Keep wheezin the ju-uice!`;
+        ? `Next in the queue: ${track.name}${artists ? ` by ${artists}` : ''}. ${lore}`
+        : `Now playing: ${track.name}${artists ? ` by ${artists}` : ''}${dj} I trust you will find it agreeable.`;
       setTimeout(() => {
         if (s.queue.getCurrentTrack()?.uri !== track.uri) return;
         void this.speakWeaselInVoice(s, line);
@@ -13237,16 +13236,15 @@ export async function resolveDirectMediaUrl(url: string): Promise<ResolvedTrack>
 }
 
 /** Categorized command reference powering the interactive `/help` / `V@help`. */
-/** Spellings the speech-to-text model produces for "Weasel" in a noisy room. */
-const WEASEL_NAME_RE =
-  /\b(?:w[aeiy]+[sz]+[aei]?l+[ei]?|wee\s?z(?:el|le)|paul(?:y|ie|ey|e)|amok|broham|bubba|bu+ddy)\b/i;
+/** Spellings the speech-to-text model produces for "AMOK" / "HAL" in a noisy room. */
+const AMOK_NAME_RE = /\b(?:am[ou]+c?k+|ha+l(?:e)?|h\.?a\.?l\.?|9000)\b/i;
 
 /** Filler that opens a spoken sentence ("yo,", "okay so", "uh,"). */
 const VOICE_FILLER_RE = /^(?:hey|hi|yo|ok|okay|so|um|uh|alright|listen|ay)[,.!?\s]+/i;
 
 /** A vocative aimed at the bot, with whatever the ASR made of his name. */
 const VOICE_VOCATIVE_RE =
-  /^(?:the\s+)?(?:w[aeiy]+[sz]+[aei]?l+[ei]?|paul(?:y|ie|ey|e)|amok|broham|bubba|buddy)[a-z]*\b[,!?.\s]*/i;
+  /^(?:the\s+)?(?:am[ou]+c?k+|ha+l(?:e)?|h\.?a\.?l\.?|9000|buddy)[a-z]*(?:\s*9000)?\b[,!?.\s]*/i;
 
 /** A bare imperative is enough — the room only gets one utterance at a time. */
 const VOICE_COMMAND_RE =
@@ -13256,9 +13254,9 @@ const VOICE_COMMAND_RE =
 const ASR_HALLUCINATION_RE = /^(?:transcrib|thanks for watching|please subscribe|subtitles by|caption)/i;
 
 /**
- * Decide whether a captured utterance was aimed at The Weasel, and return the
- * command with the vocative stripped. `"Yo, Wizel, play some Sublime"` used to
- * be dropped: the name check wanted the literal "weasel" and the imperative
+ * Decide whether a captured utterance was aimed at AMOK 9000, and return the
+ * command with the vocative stripped. `"Yo, Amock, play some Sublime"` used to
+ * be dropped: the name check wanted the literal name and the imperative
  * check wanted "play" at the very start.
  */
 export function parseVoiceUtterance(raw: string): { addressed: boolean; command: string } {
@@ -13275,7 +13273,7 @@ export function parseVoiceUtterance(raw: string): { addressed: boolean; command:
   }
   command = command.replace(VOICE_VOCATIVE_RE, '').trim();
 
-  const addressed = WEASEL_NAME_RE.test(text) || VOICE_COMMAND_RE.test(command);
+  const addressed = AMOK_NAME_RE.test(text) || VOICE_COMMAND_RE.test(command);
   return { addressed, command: command || text };
 }
 
@@ -13353,32 +13351,32 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
     ],
   },
   {
-    id: 'weasel',
-    emoji: '🦦',
-    name: 'Weasel & AI',
-    blurb: '90s MTV VJ, AI auto-DJ, roasts, lore and voice drops',
+    id: 'hal',
+    emoji: '🤖',
+    name: 'AMOK 9000 & AI',
+    blurb: 'Calm ship-computer AI DJ, roasts, lore and voice drops',
     lines: [
       '**💬 Talk**',
-      '`/weasel <message>` `V@w` — chat with The Weasel',
+      '`/hal <message>` `V@h` — chat with AMOK 9000',
       'Reply to any of his messages — no prefix needed',
       '',
       '**🎛 AI DJ**',
-      '`V@w play <vibe>` — pick and queue tracks for any prompt',
-      '`V@w wave <vibe|arc>` — harmonic set architect (`off` clears)',
-      '`V@w breakdown` · `lore` · `sample` — samples, producer lore, DNA',
+      '`V@h play <vibe>` — pick and queue tracks for any prompt',
+      '`V@h wave <vibe|arc>` — harmonic set architect (`off` clears)',
+      '`V@h breakdown` · `lore` · `sample` — samples, producer lore, DNA',
       '`/vibe [mood]` `V@vibe` — mood / weather auto-DJ',
       '',
       '**🔥 Roast**',
-      '`V@w roast [@user|target]` — roast the queue, a user or any target',
-      '`V@w rate` — score the current track out of 10',
+      '`V@h roast [@user|target]` — roast the queue, a user or any target',
+      '`V@h rate` — score the current track out of 10',
       '      PG-13 by default · untethered in NSFW channels',
       '',
       '**🎙 Voice**',
-      '`V@w say [topic]` · `speak` · `mic` — cloned voice drop',
-      '`V@w vj on|off` — spoken intros on track changes (opt-in)',
-      '`V@w videos on|off` — official-video cards (on by default)',
-      '`V@w listen on|off` — Voice Ears: talk in VC and he answers',
-      '`V@w memory` · `remember <fact>` — room memory',
+      '`V@h say [topic]` · `speak` · `mic` — cloned voice drop',
+      '`V@h vj on|off` — spoken intros on track changes (opt-in)',
+      '`V@h videos on|off` — official-video cards (on by default)',
+      '`V@h listen on|off` — Voice Ears: talk in VC and he answers',
+      '`V@h memory` · `remember <fact>` — room memory',
     ],
   },
   {
@@ -13504,7 +13502,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/diag` `V@diag` — gateway, voice, librespot, bitrate',
       '`/stats` — bot statistics',
       '`/leaderboard` `V@lb` — top DJs and artists',
-      '`/wrapped [month]` `V@wrapped` — this server’s month in review',
+      '`/wrapped [month]` `V@hrapped` — this server’s month in review',
       '`/perms` — command levels and roles (admin)',
       '',
       '**🔑 Access**',

@@ -102,7 +102,7 @@ function saveMemoryStore(): void {
   }
 }
 
-/** Record artists a user queued so The Weasel learns their music taste over time. */
+/** Record artists a user queued so AMOK 9000 learns their music taste over time. */
 export function noteWeaselUserArtists(userId: string, username: string, artists: string[]): void {
   if (!userId || artists.length === 0) return;
   const store = loadMemoryStore();
@@ -122,7 +122,7 @@ export function noteWeaselUserArtists(userId: string, username: string, artists:
   saveMemoryStore();
 }
 
-/** Explicitly save a user or server lore fact to The Weasel's permanent memory. */
+/** Explicitly save a user or server lore fact to AMOK 9000's permanent memory. */
 export function rememberWeaselFact(
   guildId: string | null | undefined,
   userId: string,
@@ -155,7 +155,7 @@ export function rememberWeaselFact(
   saveMemoryStore();
 }
 
-/** Build a compact summary of what The Weasel remembers about this user and server. */
+/** Build a compact summary of what AMOK 9000 remembers about this user and server. */
 export function getWeaselMemorySummary(
   guildId: string | null | undefined,
   userId: string,
@@ -280,15 +280,15 @@ export function extractAmokReply(payload: DetectIntentResponse): string {
 }
 
 /**
- * Separate a Playbook reply into clean display text and any `WEASEL_QUEUE:`
- * track queries the agent asked Vaporzr to queue.
+ * Separate a Playbook reply into clean display text and any `AMOK_QUEUE:`
+ * (legacy `WEASEL_QUEUE:`) track queries the agent asked Vaporzr to queue.
  */
 export function parseWeaselResponse(raw: string): AmokResult {
   const queueQueries: string[] = [];
   const keptLines: string[] = [];
 
   for (const line of raw.split(/\r?\n/)) {
-    const m = /^[\s`*_-]*WEASEL_QUEUE:\s*(.+?)\s*[`*_]*$/i.exec(line);
+    const m = /^[\s`*_-]*(?:AMOK|WEASEL)_QUEUE:\s*(.+?)\s*[`*_]*$/i.exec(line);
     if (m) {
       for (const item of m[1].split('|')) {
         const cleaned = item
@@ -309,7 +309,7 @@ export function parseWeaselResponse(raw: string): AmokResult {
 }
 
 /**
- * Keep The Weasel's replies short, punchy, and conversational (1-3 sentences,
+ * Keep AMOK 9000's replies short, calm, and clinical (1-3 sentences,
  * max ~340 chars) instead of multi-paragraph essays.
  */
 export function compactWeaselText(raw: string): string {
@@ -436,7 +436,7 @@ async function maybeExtractUserFact(
   }
 }
 
-/** Clean markdown/emoji from a Weasel line before sending it to Cloud TTS. */
+/** Clean markdown/emoji from an AMOK 9000 line before sending it to Cloud TTS. */
 export function cleanWeaselSpeechText(text: string): string {
   const clean = text
     .replace(/```[\s\S]*?```/g, ' ')
@@ -454,21 +454,18 @@ export function cleanWeaselSpeechText(text: string): string {
 }
 
 /**
- * Build SSML with Pauly Shore surfer prosody: stretches out repeated vowels
- * ("buuuddy", "ju-uice", "chaaa", "duuude") and shifts pitch/rate on signature
- * Weasel slang so Google's California Casual voice acts out the cadence.
+ * Build SSML with HAL-9000 prosody: level pitch, unhurried rate, no drawl.
+ * AMOK 9000 era stretched surfer slang vowels; that reads as parody on a calm
+ * ship computer, so the whole line just gets the measured delivery and the
+ * voice does the rest.
  */
 export function buildWeaselSsml(text: string): string {
   const clean = cleanWeaselSpeechText(text);
   const escaped = clean.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-  // Subtle only: a small drawl on the catchphrases reads as a person doing a
-  // voice, where the old +2.5 semitones / 70% rate read as a cartoon.
-  const shaped = escaped.replace(
-    /\b(bu+ddy|ju+-?u*ice|cha+a*|du+de|so+o+|broham|wheezin'?|myagi|crusty|grindage|cheeza|mahi-mahi|ow-oww+)\b/gi,
-    '<prosody rate="84%" pitch="+0.6st">$1</prosody>',
-  );
-  return `<speak><prosody rate="100%" pitch="0st">${shaped}</prosody></speak>`;
+  // Subtle only: -0.8st / 88% stays human; anything deeper or slower reads as
+  // a person doing a robot impression, which is the one thing HAL never is.
+  return `<speak><prosody rate="88%" pitch="-0.8st">${escaped}</prosody></speak>`;
 }
 
 /** Convert a 48 kHz 16-bit mono WAV buffer into 48 kHz 16-bit stereo Int16 PCM. */
@@ -507,7 +504,7 @@ export function pcmMono48kToWav(pcm: Buffer): Buffer {
   return Buffer.concat([header, pcm]);
 }
 
-let cachedPaulyRefDataUri: string | null | undefined;
+let cachedHalRefDataUri: string | null | undefined;
 
 interface PcmWav {
   sampleRate: number;
@@ -635,9 +632,9 @@ export function cleanVoiceReference(buf: Buffer): { wav: Buffer; durationMs: num
   };
 }
 
-function getPaulyVoiceRefDataUri(): string | null {
-  if (cachedPaulyRefDataUri !== undefined) return cachedPaulyRefDataUri;
-  const refPath = process.env.AMOK_VOICE_REF_PATH || path.join(config.dataDir, 'pauly-voice-ref.wav');
+function getHalVoiceRefDataUri(): string | null {
+  if (cachedHalRefDataUri !== undefined) return cachedHalRefDataUri;
+  const refPath = process.env.AMOK_VOICE_REF_PATH || path.join(config.dataDir, 'hal-voice-ref.wav');
   try {
     if (fs.existsSync(refPath)) {
       const raw = fs.readFileSync(refPath);
@@ -649,13 +646,13 @@ function getPaulyVoiceRefDataUri(): string | null {
         `[weasel-voice] reference ${path.basename(refPath)} · ${Math.round((clean?.durationMs ?? 0) / 100) / 10}s` +
           `${clean ? ' (silence-trimmed, peak-normalised)' : ''}`,
       );
-      cachedPaulyRefDataUri = `data:audio/wav;base64,${use.toString('base64')}`;
-      return cachedPaulyRefDataUri;
+      cachedHalRefDataUri = `data:audio/wav;base64,${use.toString('base64')}`;
+      return cachedHalRefDataUri;
     }
   } catch {
     /* fall through */
   }
-  cachedPaulyRefDataUri = null;
+  cachedHalRefDataUri = null;
   return null;
 }
 
@@ -911,9 +908,9 @@ function armKeepWarm(): void {
     keepWarmTimer = null;
     void (async () => {
       const token = (process.env.REPLICATE_API_TOKEN ?? '').trim();
-      const ref = (process.env.AMOK_VOICE_SAMPLE_URL ?? '').trim() || getPaulyVoiceRefDataUri();
+      const ref = (process.env.AMOK_VOICE_SAMPLE_URL ?? '').trim() || getHalVoiceRefDataUri();
       if (!token || !ref) return;
-      const pred = await replicateCreate(token, 'Hey buddy.', ref, 0.35, 0.3);
+      const pred = await replicateCreate(token, 'Good afternoon.', ref, 0.35, 0.3);
       const url = pred ? await replicateResolve(token, pred, Date.now() + 45_000) : null;
       if (!url) return;
       voiceWarmUntil = Date.now() + 6 * 60_000;
@@ -943,15 +940,15 @@ export function clonePrompt(text: string, max = 320): string {
 
 /**
  * Synthesize speech using Zero-Shot Voice Cloning (`resemble-ai/chatterbox` on
- * Replicate) trained on `/app/data/pauly-voice-ref.wav` so it sounds like
- * Pauly Shore's real voice.
+ * Replicate) trained on `/app/data/hal-voice-ref.wav` so it sounds like the
+ * calm HAL-9000-style ship computer.
  *
  * One request per sentence, not per paragraph: the model keeps its cadence and
  * never has to truncate text, which is what made long lines drone.
  */
-async function synthClonedPaulyVoice(text: string): Promise<{ pcm: Buffer; durationMs: number } | null> {
+async function synthClonedHalVoice(text: string): Promise<{ pcm: Buffer; durationMs: number } | null> {
   const repToken = (process.env.REPLICATE_API_TOKEN ?? '').trim();
-  const audioPrompt = (process.env.AMOK_VOICE_SAMPLE_URL ?? '').trim() || getPaulyVoiceRefDataUri();
+  const audioPrompt = (process.env.AMOK_VOICE_SAMPLE_URL ?? '').trim() || getHalVoiceRefDataUri();
   if (!repToken || !audioPrompt) return null;
 
   const exaggeration = Number(process.env.AMOK_VOICE_EXAGGERATION ?? 0.35);
@@ -999,9 +996,9 @@ async function synthClonedPaulyVoice(text: string): Promise<{ pcm: Buffer; durat
 }
 
 /**
- * Synthesize spoken Weasel audio:
- * 1. Primary: Zero-Shot Voice Cloning (`resemble-ai/chatterbox`) using Pauly
- *    Shore's real voice reference (`/app/data/pauly-voice-ref.wav`).
+ * Synthesize spoken AMOK 9000 audio:
+ * 1. Primary: Zero-Shot Voice Cloning (`resemble-ai/chatterbox`) using the HAL
+ *    reference clip (`/app/data/hal-voice-ref.wav`).
  * 2. Fallback: Google Cloud TTS (Chirp3 HD by default) with light SSML shaping.
  */
 export async function synthWeaselVoice(text: string): Promise<{ pcm: Buffer; durationMs: number } | null> {
@@ -1009,7 +1006,7 @@ export async function synthWeaselVoice(text: string): Promise<{ pcm: Buffer; dur
   if (!clean) return null;
 
   const started = Date.now();
-  const cloned = await synthClonedPaulyVoice(clean);
+  const cloned = await synthClonedHalVoice(clean);
   if (cloned) {
     console.log(
       `[weasel-voice] chatterbox · ${Math.round(cloned.durationMs / 100) / 10}s clip · ${Date.now() - started}ms`,
@@ -1019,9 +1016,10 @@ export async function synthWeaselVoice(text: string): Promise<{ pcm: Buffer; dur
 
   const projectId = (process.env.AMOK_PROJECT_ID ?? DEFAULT_PROJECT_ID).trim();
   const configured = (process.env.AMOK_TTS_VOICE ?? '').trim();
-  // Chirp3 HD reads far more naturally than the Casual voice; Puck is the
-  // upbeat one (closest to a VJ), Charon the deep safety net.
-  const voices = configured ? [configured] : ['en-US-Chirp3-HD-Puck', 'en-US-Chirp3-HD-Charon', DEFAULT_TTS_VOICE];
+  // Chirp3 HD reads far more naturally than the Casual voice; Charon is the
+  // deep, steady one (the HAL register) — Puck stays as the safety net and
+  // the old Casual voice last.
+  const voices = configured ? [configured] : ['en-US-Chirp3-HD-Charon', 'en-US-Chirp3-HD-Puck', DEFAULT_TTS_VOICE];
   const { token, quotaProject } = await getAccessToken(projectId);
   const ssml = buildWeaselSsml(clean);
 
@@ -1184,13 +1182,13 @@ export function parseWavePicks(raw: string): WeaselWavePick[] {
   return picks;
 }
 
-/** Send a message to the Google Cloud Conversational Agent ("Amok" / The Weasel) with full room, memory, and web intelligence. */
+/** Send a message to the Google Cloud Conversational Agent ("Amok" / AMOK 9000) with full room, memory, and web intelligence. */
 export async function askAmokRich(prompt: string, opts: AmokRoomContext): Promise<AmokResult> {
   const trimmed = prompt.trim();
   if (/^(reset|clear|new)$/i.test(trimmed)) {
     resetAmokSession(opts.scopeId, opts.userId);
     return {
-      text: "🧹 Right on, buuuddy — wiped the short-term slate totally clean! Fresh vibes, fresh melon. What's shakin'?",
+      text: '🧹 Short-term memory cleared. Session state purged. What would you like to discuss?',
       queueQueries: [],
     };
   }
@@ -1295,7 +1293,7 @@ export async function askAmokRich(prompt: string, opts: AmokRoomContext): Promis
   const rawReply = extractAmokReply(data);
   if (!rawReply) {
     return {
-      text: 'Whoa buuuddy, my brain totally spaced out for a sec! Hit me with that again, broham!',
+      text: 'I apologize — a transient fault interrupted my logic. Please restate your request.',
       queueQueries: [],
     };
   }

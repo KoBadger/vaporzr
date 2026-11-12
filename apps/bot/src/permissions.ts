@@ -102,7 +102,7 @@ const DEFAULT_COMMAND_LEVELS: Record<string, PermissionLevel> = {
   crossfade: 'user',
   sleep: 'user',
   diag: 'user',
-  weasel: 'user',
+  hal: 'user',
   amok: 'user',
 };
 

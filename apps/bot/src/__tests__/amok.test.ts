@@ -1,7 +1,7 @@
 import { rmSync } from 'node:fs';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 
-// The Weasel's memory store persists to config.dataDir/weasel-memory.json, and
+// AMOK 9000's memory store persists to config.dataDir/weasel-memory.json, and
 // this file writes to it. Point DATA_DIR at a throwaway directory BEFORE
 // ../amok.js (and the config it imports) is evaluated — otherwise the artist
 // counters accumulate across runs and the second `npm test` on one machine fails
@@ -43,15 +43,13 @@ afterAll(() => {
   else process.env.DATA_DIR = g.__amokPrevDataDir;
 });
 
-describe('Amok ("The Weasel") Discord integration', () => {
-  it('registers V@weasel, V@amok, V@pauly, and V@w aliases', () => {
-    expect(V_ALIASES.weasel).toBe('weasel');
-    expect(V_ALIASES.amok).toBe('weasel');
-    expect(V_ALIASES.pauly).toBe('weasel');
-    expect(V_ALIASES.w).toBe('weasel');
-    expect(V_DISPATCH_ALIASES.amok).toBe('weasel');
-    expect(V_DISPATCH_ALIASES.pauly).toBe('weasel');
-    expect(V_DISPATCH_ALIASES.w).toBe('weasel');
+describe('Amok ("AMOK 9000") Discord integration', () => {
+  it('registers V@hal, V@amok and V@a aliases', () => {
+    expect(V_ALIASES.hal).toBe('hal');
+    expect(V_ALIASES.amok).toBe('hal');
+    expect(V_ALIASES.a).toBe('hal');
+    expect(V_DISPATCH_ALIASES.amok).toBe('hal');
+    expect(V_DISPATCH_ALIASES.a).toBe('hal');
   });
 
   it('builds stable session IDs and rotates them on reset', () => {
@@ -68,27 +66,30 @@ describe('Amok ("The Weasel") Discord integration', () => {
     const reply = extractAmokReply({
       queryResult: {
         responseMessages: [
-          { text: { text: ["Hey buuuddy! What's shakin'?"] } },
-          { text: { text: ['Keep wheezin the juice!'] } },
+          { text: { text: ['Good afternoon. How are you feeling today?'] } },
+          { text: { text: ['I trust the answer will be agreeable.'] } },
         ],
       },
     });
-    expect(reply).toBe("Hey buuuddy! What's shakin'?\n\nKeep wheezin the juice!");
+    expect(reply).toBe('Good afternoon. How are you feeling today?\n\nI trust the answer will be agreeable.');
   });
 
-  it('parses WEASEL_QUEUE lines into clean display text and track queries', () => {
+  it('parses AMOK_QUEUE (and legacy WEASEL_QUEUE) lines into clean display text and track queries', () => {
     const raw = [
-      'Hey buuuddy! Here are three righteous skate punk tracks!',
+      'I have made a curatorial selection for you.',
       '',
-      '`WEASEL_QUEUE: Pennywise - Bro Hymn | Bad Religion - 21st Century (Digital Boy) | NOFX - Linoleum`',
+      '`AMOK_QUEUE: Pennywise - Bro Hymn | Bad Religion - 21st Century (Digital Boy) | NOFX - Linoleum`',
     ].join('\n');
     const parsed = parseWeaselResponse(raw);
-    expect(parsed.text).toBe('Hey buuuddy! Here are three righteous skate punk tracks!');
+    expect(parsed.text).toBe('I have made a curatorial selection for you.');
     expect(parsed.queueQueries).toEqual([
       'Pennywise - Bro Hymn',
       'Bad Religion - 21st Century (Digital Boy)',
       'NOFX - Linoleum',
     ]);
+
+    const legacy = parseWeaselResponse('`WEASEL_QUEUE: Sublime - Santeria`');
+    expect(legacy.queueQueries).toEqual(['Sublime - Santeria']);
   });
 
   it('parses WAVE_PICK lines for AI Deep-DNA Endless Wave crate-digging', () => {
@@ -111,10 +112,10 @@ describe('Amok ("The Weasel") Discord integration', () => {
 
   it('splits a line into speakable sentences so clones never truncate', () => {
     const chunks = splitWeaselSpeech(
-      'Sup buuuddy! This is the Weasel, coming at you live. We got a long one here — really long, with a clause that keeps going and going and going past the limit so the splitter has to break it somewhere sensible.',
+      'Good afternoon. This is AMOK 9000, operational and listening. We have a long one here — really long, with a clause that keeps going and going and going past the limit so the splitter has to break it somewhere sensible.',
     );
     expect(chunks.length).toBeGreaterThan(2);
-    expect(chunks[0]).toBe('Sup buuuddy!');
+    expect(chunks[0]).toBe('Good afternoon.');
     expect(chunks.every((c) => c.length <= 190)).toBe(true);
     expect(chunks.join(' ')).toContain('sensible');
   });
@@ -123,14 +124,15 @@ describe('Amok ("The Weasel") Discord integration', () => {
     expect(shouldGroundOnWeb('what is the weather in LA today?')).toBe(true);
     expect(shouldGroundOnWeb('who won the game last night?')).toBe(true);
     expect(shouldGroundOnWeb('what sample did this song flip?')).toBe(true);
-    expect(shouldGroundOnWeb('hey buddy how are you')).toBe(false);
+    expect(shouldGroundOnWeb('hey amok how are you')).toBe(false);
   });
 
-  it('shapes surfer SSML prosody and converts 48 kHz mono WAV/PCM buffers', () => {
-    expect(cleanWeaselSpeechText('Hey **buuuddy**! `wheeze` https://example.com')).toBe('Hey buuuddy! wheeze');
-    const ssml = buildWeaselSsml('Hey buuuddy! Keep wheezin the ju-uice!');
-    expect(ssml).toContain('<prosody rate="84%" pitch="+0.6st">buuuddy</prosody>');
-    expect(ssml).toContain('<prosody rate="84%" pitch="+0.6st">ju-uice</prosody>');
+  it('shapes HAL prosody and converts 48 kHz mono WAV/PCM buffers', () => {
+    expect(cleanWeaselSpeechText('Hey **AMOK**! `wheeze` https://example.com')).toBe('Hey AMOK! wheeze');
+    const ssml = buildWeaselSsml('I am afraid I cannot do that.');
+    expect(ssml).toContain('<prosody rate="88%" pitch="-0.8st">I am afraid I cannot do that.</prosody>');
+    // No surfer slang stretching left in the pipeline.
+    expect(ssml).not.toContain('<prosody rate="84%"');
 
     const pcm = Buffer.alloc(4);
     pcm.writeInt16LE(1000, 0);
@@ -147,7 +149,7 @@ describe('Amok ("The Weasel") Discord integration', () => {
   });
 
   it('builds one clone prompt of whole sentences', () => {
-    expect(clonePrompt('Hey buuuddy! Keep it short.')).toBe('Hey buuuddy! Keep it short.');
+    expect(clonePrompt('Good afternoon. Keep it short.')).toBe('Good afternoon. Keep it short.');
     const long = Array.from({ length: 12 }, (_, i) => `Sentence number ${i} is here.`).join(' ');
     const prompt = clonePrompt(long);
     expect(prompt.length).toBeLessThanOrEqual(320);
