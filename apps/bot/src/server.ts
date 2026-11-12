@@ -63,6 +63,8 @@ import {
 import { statsStore } from '@vaporzr/core/stats';
 import { analyticsStore } from '@vaporzr/core/analytics';
 import { domainStore } from '@vaporzr/core/domains';
+import { setlistShares } from '@vaporzr/core/setlistShare';
+import { renderSetlistPage, setlistViewFromShare } from './setlistPage.js';
 
 /** Pre-gzipped vendor assets — preset chunks are tens of MB of JS. */
 const vendorCache = new Map<string, { body: Buffer; gzip: boolean }>();
@@ -1633,6 +1635,46 @@ async function handleRoute(
       return;
     }
 
+    // Shared setlist page: `/setlist/<id>`.
+    //
+    // The id IS the capability. Shares are 64-bit random, so this route needs
+    // no key: that is what lets Discord's unfurler, a text-only reader, or
+    // somebody opening the link cold see the whole set. Expired ids fall
+    // through to a friendly 404 instead of leaking what used to be there.
+    if (url.pathname === '/setlist' || url.pathname.startsWith('/setlist/')) {
+      const parts = url.pathname.split('/').filter(Boolean); // ['setlist', id?]
+      const id = (parts[1] ?? url.searchParams.get('id') ?? '').trim();
+      const share = id ? setlistShares.get(id) : null;
+      if (!share) {
+        res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end(
+          '<!doctype html><meta charset="utf-8"><title>Setlist not found</title>' +
+            '<meta name="robots" content="noindex">' +
+            '<body style="font:15px system-ui;background:#080a12;color:#e9edf6;padding:40px">' +
+            '<h1>Setlist not found</h1><p>This link has expired or was never shared. ' +
+            'Setlist links last a week; ask the host for a fresh one.</p></body>',
+        );
+        return;
+      }
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'X-Robots-Tag': 'noindex',
+      });
+      // A share made from a loopback panel should not hand out a localhost
+      // link; prefer the configured public base in that case.
+      const publicBase = (config.staticBaseUrl || config.jamPublicBase || '').replace(/\/+$/, '');
+      const shareOrigin = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(host) && publicBase ? publicBase : origin;
+      res.end(
+        renderSetlistPage({
+          origin: shareOrigin,
+          view: setlistViewFromShare(share),
+          canonicalUrl: `${shareOrigin}/setlist/${share.id}`,
+        }),
+      );
+      return;
+    }
+
     switch (url.pathname) {
       case '/':
       case '/index.html': {
@@ -2110,41 +2152,49 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
         break;
       }
 
-      case '/api/analytics': {
-        // Server-plan dashboard: same control gate as the panel, plus the paid
-        // feature check. A jam/request key is not enough to read it.
+      case '/api/setlist': {
+        // Freeze the room queue into a shareable link. Control session only:
+        // this exposes the whole queue, not just the public jam window.
+        if (req.method !== 'POST') {
+          res.writeHead(405, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Method not allowed.' }));
+          return;
+        }
         if (controlAuthRequired() && !hasShareAccess(req, url)) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'unauthorized' }));
           return;
         }
-        const gid = url.searchParams.get('guildId') || defaultGuildId();
-        if (!gid) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'No server selected.' }));
+        const bot = bridgeRef();
+        if (!bot) {
+          res.writeHead(503, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'The bot is not connected yet.' }));
           return;
         }
-        if (!featureAllowed(gid, 'analytics')) {
-          res.writeHead(402, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Analytics requires the Server plan.', upgrade: true }));
+        const snapshot = bot.setlistSnapshot();
+        if (!snapshot.tracks.length) {
+          res.writeHead(409, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Nothing is queued to share yet.' }));
           return;
         }
-        const summary = analyticsStore.summary(gid);
-        const body = JSON.stringify({
-          guildId: gid,
-          plan: activePlan(`guild:${gid}`),
-          plays: summary.plays,
-          hours: summary.hours,
-          peakHour: summary.peakHour,
-          lastPlayAt: summary.lastPlayAt,
-          totalQueued: statsStore.totalQueued(gid),
-          topRequesters: statsStore.topUsers(gid, 10),
-          topArtists: statsStore.topArtists(gid, 10),
-          topTracks: statsStore.historyTracks(gid, 10),
-          daily: statsStore.history(gid, 30),
+        const share = setlistShares.create({
+          guildId: snapshot.guildId || defaultGuildId() || '',
+          tracks: snapshot.tracks,
+          nowPlaying: snapshot.nowPlaying,
         });
+        const sharePath = `/setlist/${share.id}`;
+        const publicBase = (config.staticBaseUrl || config.jamPublicBase || '').replace(/\/+$/, '');
+        const shareOrigin = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(host) && publicBase ? publicBase : origin;
         res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-        res.end(body);
+        res.end(
+          JSON.stringify({
+            id: share.id,
+            path: sharePath,
+            url: `${shareOrigin}${sharePath}`,
+            tracks: share.tracks.length,
+            expiresAt: share.expiresAt,
+          }),
+        );
         break;
       }
 
