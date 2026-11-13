@@ -2323,7 +2323,7 @@
 
         <!-- AI provider. Owner-level configuration: swapping the model here takes
              effect on the next message, with no redeploy and no container restart. -->
-        <div class="card collapsible" id="amok-card" data-tab="more" style="display: none">
+        <div class="card collapsible" id="amok-card" data-tab="more">
           <div id="queue-info">
             <span class="section-label">🤖 AMOK 9000</span>
             <span class="badge" id="amok-badge">—</span>
@@ -4536,13 +4536,17 @@
           el['amok-status'].textContent = bits.join(' · ');
         }
         function loadAmok() {
-          fetch('/api/amok')
+          fetch('/api/amok', { credentials: 'same-origin' })
             .then(function (r) {
+              if (r.status === 401 || r.status === 403) {
+                el['amok-status'].textContent = 'Open this panel with the control key to manage the AI provider.';
+                return null;
+              }
               return r.ok ? r.json() : null;
             })
             .then(function (d) {
               if (d) renderAmok(d);
-              else el['amok-status'].textContent = 'AI settings unavailable.';
+              else if (!el['amok-status'].textContent) el['amok-status'].textContent = 'AI settings unavailable.';
             })
             .catch(function () {
               el['amok-status'].textContent = 'AI settings unavailable.';

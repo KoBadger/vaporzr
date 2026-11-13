@@ -982,19 +982,28 @@ function keyPrompt(res: http.ServerResponse, message?: string): void {
     var form = document.getElementById('key-form');
     var btn = document.getElementById('key-submit');
     var input = document.getElementById('key-input');
-    // Submit to the bare pathname so a stale ?key= from an earlier attempt
-    // cannot leak into the new request and shadow the value just typed.
-    form.action = location.pathname;
+    /**
+     * Navigate explicitly instead of relying on form submission.
+     *
+     * The default action lost the navigation on some browsers once the submit
+     * button was disabled, which is the "I typed the key and nothing happened"
+     * report. location.assign cannot be cancelled by that; the form markup is
+     * only there so the page still works with JavaScript disabled.
+     */
+    function go() {
+      var value = (input.value || '').trim();
+      if (!value) {
+        input.focus();
+        return;
+      }
+      var url = location.pathname + '?key=' + encodeURIComponent(value);
+      btn.disabled = true;
+      btn.textContent = 'Checking…';
+      location.assign(url);
+    }
     form.addEventListener('submit', function (e) {
-      if (!input.value.trim()) { e.preventDefault(); return; }
-      // Disable after the browser has started the navigation, otherwise some
-      // browsers treat the disabled submit button as "no submitter" and cancel
-      // the form submission entirely — which is exactly the "nothing happens"
-      // symptom.
-      setTimeout(function () {
-        btn.disabled = true;
-        btn.textContent = 'Checking…';
-      }, 0);
+      e.preventDefault();
+      go();
     });
   })();
 </script>
