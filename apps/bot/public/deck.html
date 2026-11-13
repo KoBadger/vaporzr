@@ -336,6 +336,38 @@
         position: sticky;
         top: 12px;
       }
+      /* Two-deck mode: the classic A | mixer | B rig. The C/D cards stay in
+         the DOM (their audio keeps running) and the mixer's second bank of
+         trims hides, so nothing on screen is dead. */
+      body.two-decks .rig {
+        grid-template-columns: minmax(300px, 1fr) minmax(320px, 400px) minmax(300px, 1fr);
+        grid-template-areas: 'a mixer b';
+      }
+      body.two-decks .rig .deck.c,
+      body.two-decks .rig .deck.d,
+      body.two-decks #mid-chans,
+      body.two-decks #mid-chans-label,
+      body.two-decks #deck-rail .dr-chip[data-deck='c'],
+      body.two-decks #deck-rail .dr-chip[data-deck='d'] {
+        display: none;
+      }
+      @media (max-width: 1180px) {
+        body.two-decks .rig {
+          grid-template-columns: 1fr 1fr;
+          grid-template-areas:
+            'a b'
+            'mixer mixer';
+        }
+      }
+      @media (max-width: 760px) {
+        body.two-decks .rig {
+          grid-template-columns: 1fr;
+          grid-template-areas:
+            'a'
+            'b'
+            'mixer';
+        }
+      }
       @media (max-width: 1180px) {
         .rig {
           grid-template-columns: 1fr 1fr;
@@ -1960,6 +1992,54 @@
         color: #04121a;
         font-weight: 800;
       }
+      /* ---------- keyboard shortcut sheet ---------- */
+      .keys-card {
+        width: min(660px, 100%);
+      }
+      .keys-card .ks-cols {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0 16px;
+      }
+      .ks-group {
+        padding: 9px 0 4px;
+        border-top: 1px solid var(--line-soft);
+      }
+      .ks-group h3 {
+        margin: 0 0 6px;
+        font: 800 9px/1 var(--mono);
+        letter-spacing: 0.14em;
+        color: var(--dim-2);
+      }
+      .ks-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 3px 6px;
+        padding: 2px 0;
+      }
+      .tut-card kbd {
+        justify-self: start;
+        padding: 2px 6px;
+        border-radius: 5px;
+        border: 1px solid rgba(140, 160, 255, 0.32);
+        border-bottom-width: 2px;
+        background: #0b0d1c;
+        color: #dfe6ff;
+        font: 700 10px/1.35 var(--mono);
+        white-space: nowrap;
+      }
+      .ks-row span {
+        flex: 1 1 130px;
+        font-size: 11px;
+        line-height: 1.45;
+        color: #b9c4f5;
+      }
+      @media (max-width: 560px) {
+        .keys-card .ks-cols {
+          grid-template-columns: 1fr;
+        }
+      }
       @media (max-width: 520px) {
         .mode-switch {
           order: 2;
@@ -2705,7 +2785,11 @@
         <button id="mode-pro" aria-pressed="true" title="Full CDJ layout">PRO</button>
       </div>
       <button class="fn" id="btn-browse" title="Track browser (press /)"><span class="led"></span>BROWSE</button>
+      <button class="fn" id="btn-keys" title="Keyboard shortcuts (press ?)">KEYS</button>
       <button class="fn pro-only" id="btn-range" title="Pitch fader range"><span class="lbl">±8%</span></button>
+      <button class="fn pro-only" id="btn-decks" title="Show two decks or all four">
+        <span class="lbl">2 DECKS</span>
+      </button>
       <button class="fn help-btn" id="btn-help" title="How to mix (short guide)" aria-label="How to mix">?</button>
       <span class="spacer"></span>
       <button class="fn" id="btn-sync"><span class="led"></span>SYNC</button>
@@ -3078,8 +3162,8 @@
         </div>
 
         <div class="mid-extra" id="mid-extra">
-          <div class="block-label">CHANNELS C · D <span class="muted">line level</span></div>
-          <div class="mini-chans">
+          <div class="block-label" id="mid-chans-label">CHANNELS C · D <span class="muted">line level</span></div>
+          <div class="mini-chans" id="mid-chans">
             <label class="mini-chan">
               <span>C</span>
               <input type="range" min="0" max="100" step="1" value="100" data-chan-gain="c" aria-label="Trim deck C" />
@@ -3424,6 +3508,56 @@
         <div class="tut-actions">
           <button class="primary" id="tut-start">Start mixing</button>
           <button id="tut-pro">Open Pro view</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="tut" id="keys" role="dialog" aria-modal="true" aria-labelledby="keys-title">
+      <div class="tut-card keys-card">
+        <h2 id="keys-title">KEYBOARD SHORTCUTS</h2>
+        <p class="lead">
+          Everything here has a button too — these are just the fast hands. Press
+          <kbd>?</kbd> any time to bring this back.
+        </p>
+        <div class="ks-cols">
+          <div class="ks-group">
+            <h3>TRANSPORT</h3>
+            <div class="ks-row"><kbd>Space</kbd><span>Play or pause every deck</span></div>
+            <div class="ks-row"><kbd>A</kbd><kbd>B</kbd><span>Play or pause the left or right deck</span></div>
+            <div class="ks-row"><kbd>C</kbd><kbd>D</kbd><span>Focus and play/pause deck C or D</span></div>
+            <div class="ks-row"><kbd>S</kbd><span>Sync the focused deck to the master</span></div>
+            <div class="ks-row"><kbd>L</kbd><span>Lock the follower deck to the master</span></div>
+            <div class="ks-row"><kbd>←</kbd><kbd>→</kbd><span>Move the crossfader in 4% steps</span></div>
+          </div>
+          <div class="ks-group">
+            <h3>FOCUSED DECK</h3>
+            <div class="ks-row"><kbd>1</kbd>–<kbd>8</kbd><span>Set or jump hot cue 1–8</span></div>
+            <div class="ks-row">
+              <kbd>Q W E R T Y U I</kbd>
+              <span>Riser · Reverse · Drop · Boom · Zap · Horn · Clap · 3-2-1</span>
+            </div>
+          </div>
+          <div class="ks-group">
+            <h3>BROWSER</h3>
+            <div class="ks-row"><kbd>/</kbd><span>Open the track browser</span></div>
+            <div class="ks-row"><kbd>Enter</kbd><span>Load the first result into the left deck</span></div>
+            <div class="ks-row"><kbd>Esc</kbd><span>Close the browser, this sheet, or the tutorial</span></div>
+          </div>
+          <div class="ks-group">
+            <h3>THIS PAGE</h3>
+            <div class="ks-row"><kbd>?</kbd><span>Show this shortcut sheet</span></div>
+            <div class="ks-row">
+              <kbd>Drag</kbd>
+              <span>Scrub the platter, drag a track onto a deck card, or drop a file on the pads</span>
+            </div>
+            <div class="ks-row">
+              <kbd>Hold</kbd>
+              <span>Hold a hot cue pad to clear it</span>
+            </div>
+          </div>
+        </div>
+        <div class="tut-actions">
+          <button class="primary" id="keys-close">Got it</button>
         </div>
       </div>
     </div>
@@ -4751,6 +4885,33 @@
           });
           document.addEventListener('keydown', function (e) {
             if (e.key === 'Escape' && el('#tut').classList.contains('show')) closeTutorial();
+          });
+
+          /* ----- keyboard shortcut sheet -----
+             The deck is driven from the keyboard (space, A–D, S, L, 1–8, Q–I,
+             /), and none of that was discoverable without reading the source.
+             ? opens the sheet, the KEYS button in the header does the same. */
+          function openKeys() {
+            el('#keys').classList.add('show');
+            el('#keys-close').focus();
+          }
+          function closeKeys() {
+            el('#keys').classList.remove('show');
+          }
+          el('#btn-keys').onclick = openKeys;
+          el('#keys-close').onclick = closeKeys;
+          el('#keys').addEventListener('click', function (e) {
+            if (e.target === el('#keys')) closeKeys();
+          });
+          document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape' && el('#keys').classList.contains('show')) closeKeys();
+            var tag = document.activeElement && document.activeElement.tagName;
+            var typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+            if (e.key === '?' && !typing && !e.metaKey && !e.ctrlKey && !e.altKey) {
+              e.preventDefault();
+              if (el('#keys').classList.contains('show')) closeKeys();
+              else openKeys();
+            }
           });
           if (params.get('tutorial') === '1' || (params.get('tutorial') !== '0' && firstVisit && startMode !== 'pro')) {
             openTutorial();
@@ -6092,6 +6253,43 @@
               applyRange();
             };
             applyRange();
+          })();
+
+          /* ---- 2 ↔ 4 deck layout -------------------------------------------
+             Four decks is the default because the rig supports it, but plenty
+             of sets only need A and B: the second bank doubles the scrolling
+             and shrinks the platters on a laptop. C and D keep running either
+             way — this is a view toggle, not a mixer change. */
+          (function () {
+            var btn = el('#btn-decks');
+            if (!btn) return;
+            var lbl = el('.lbl', btn) || btn;
+            var count = 4;
+            try {
+              count = localStorage.getItem('vz-deck-count') === '2' ? 2 : 4;
+            } catch (e) {
+              /* private mode */
+            }
+            function applyDeckLayout() {
+              document.body.classList.toggle('two-decks', count === 2);
+              lbl.textContent = count === 2 ? '2 DECKS' : '4 DECKS';
+              btn.setAttribute('aria-pressed', count === 2 ? 'true' : 'false');
+              // Focus cannot sit on a hidden deck: fall back to A so the quick
+              // actions and the shout-out box still have a target.
+              if (count === 2 && (focusId === 'c' || focusId === 'd')) focusDeck('a');
+              if (state) drawOverlap();
+            }
+            btn.onclick = function () {
+              count = count === 2 ? 4 : 2;
+              try {
+                localStorage.setItem('vz-deck-count', String(count));
+              } catch (e) {
+                /* private mode */
+              }
+              applyDeckLayout();
+              toast('info', count === 2 ? 'Two-deck view — C and D keep playing.' : 'Four-deck view.');
+            };
+            applyDeckLayout();
           })();
 
           setInterval(function () {
