@@ -9,6 +9,7 @@ import { burst, TTLMap } from '@vaporzr/core/limits';
 import { clientIp, isLoopbackAddress } from './clientIp.js';
 import {
   activePlan,
+  annualAvailable,
   applyBillingEvent,
   billingEnabled,
   createCheckoutSession,
@@ -62,6 +63,8 @@ import {
 } from './access.js';
 import { statsStore } from '@vaporzr/core/stats';
 import { analyticsStore } from '@vaporzr/core/analytics';
+import { amokProviderChain } from './amokProvider.js';
+import { amokSettingsStatus, clearAmokSettings, saveAmokSettings } from './amokSettings.js';
 import { domainStore } from '@vaporzr/core/domains';
 import { setlistShares } from '@vaporzr/core/setlistShare';
 import { tapes as globalTapes } from '@vaporzr/core/tape';
@@ -317,6 +320,12 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
         publicBase: config.staticBaseUrl || null,
         cookieAgeDays: cookieAgeDays(),
         push: pushSubscriptionCount(),
+        // Which AI provider AMOK will reach for, and whether one is configured
+        // at all. Names only — never the key or its hint.
+        ai: {
+          chain: amokProviderChain(),
+          ready: amokProviderChain().length > 0,
+        },
         memory: {
           heapUsedMb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
           heapTotalMb: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
@@ -2102,6 +2111,12 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
             // Recording is its own paid feature, so the deck page can lock the
             // REC control up front instead of letting a free guild hit a refusal.
             recording: featureAllowed(gid, 'recording'),
+            // Spoken AMOK replies cost per second of audio, so the panel shows
+            // them as a plan feature rather than a promise it cannot keep.
+            amokVoice: featureAllowed(gid, 'amokVoice'),
+            // Annual price ids are optional; the UI hides the option when absent.
+            annual: annualAvailable('server'),
+            trialDays: Number.isFinite(config.stripeTrialDays) ? Math.max(0, config.stripeTrialDays) : 7,
           }),
         );
         break;
@@ -2165,13 +2180,19 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
           res.end(JSON.stringify({ error: 'Billing is not configured yet.' }));
           return;
         }
-        const body = (await readJsonBody(req)) as { plan?: string; guildId?: string } | null;
+        const body = (await readJsonBody(req)) as { plan?: string; guildId?: string; interval?: string } | null;
         // The panel has no Discord user identity, so it can only buy the server
         // plan it is currently looking at. Per-account Plus is bought from
         // Discord with /upgrade, where the user id is known.
         if (body?.plan !== 'server') {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Use /upgrade in Discord for the Plus plan.' }));
+          return;
+        }
+        const interval = body?.interval === 'year' ? 'year' : 'month';
+        if (interval === 'year' && !annualAvailable('server')) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Annual billing is not configured.' }));
           return;
         }
         const gid = body.guildId || defaultGuildId();
@@ -2187,7 +2208,7 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
           return;
         }
         try {
-          const session = await createCheckoutSession({ plan: 'server', subject: `guild:${gid}`, origin });
+          const session = await createCheckoutSession({ plan: 'server', subject: `guild:${gid}`, origin, interval });
           res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
           res.end(JSON.stringify({ ok: true, url: session.url }));
         } catch (err) {
@@ -2279,6 +2300,66 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
             expiresAt: share.expiresAt,
           }),
         );
+        break;
+      }
+
+      case '/api/amok': {
+        // The AI provider is owner-level configuration: it spends money and it
+        // holds a bearer key, so a jam guest must never reach it.
+        if (controlAuthRequired() && !hasShareAccess(req, url)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'unauthorized' }));
+          return;
+        }
+        if (req.method === 'GET') {
+          const body = JSON.stringify({
+            ...amokSettingsStatus(),
+            chain: amokProviderChain(),
+            ready: amokProviderChain().length > 0,
+          });
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          res.end(body);
+          break;
+        }
+        if (req.method === 'POST') {
+          type AmokPatch = { provider?: string; apiKey?: string; model?: string; fallback?: string };
+          let payload: AmokPatch | null = null;
+          try {
+            const raw = await readJsonBody(req);
+            payload = raw && typeof raw === 'object' ? (raw as AmokPatch) : null;
+          } catch {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid request body.' }));
+            return;
+          }
+          const saved = saveAmokSettings({
+            provider: payload?.provider,
+            apiKey: payload?.apiKey,
+            model: payload?.model,
+            fallback: payload?.fallback,
+          });
+          if (!saved.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: saved.error }));
+            return;
+          }
+          // Saving is intended to take effect immediately: the settings cache is
+          // updated in place, so the next chat turn builds a fresh chain.
+          const chain = amokProviderChain();
+          console.log(`[amok] provider settings updated — chain: ${chain.join(' → ') || '(none)'}`);
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          res.end(JSON.stringify({ ok: true, ...amokSettingsStatus(), chain, ready: chain.length > 0 }));
+          break;
+        }
+        if (req.method === 'DELETE') {
+          clearAmokSettings();
+          const chain = amokProviderChain();
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          res.end(JSON.stringify({ ok: true, ...amokSettingsStatus(), chain, ready: chain.length > 0 }));
+          break;
+        }
+        res.writeHead(405, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Method not allowed.' }));
         break;
       }
 

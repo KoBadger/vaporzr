@@ -39,11 +39,25 @@ const GRACE_MS = 3 * 24 * 60 * 60 * 1000;
 const SIGNATURE_TOLERANCE_SEC = 300;
 
 export function billingEnabled(): boolean {
-  return Boolean(config.stripeSecretKey && (config.stripePricePlus || config.stripePriceServer));
+  return Boolean(
+    config.stripeSecretKey &&
+    (config.stripePricePlus || config.stripePriceServer || config.stripePricePlusYear || config.stripePriceServerYear),
+  );
 }
 
-export function priceIdFor(plan: BillingPlan): string {
+/** Which billing cadence a checkout is for. Entitlements ignore it. */
+export type BillingInterval = 'month' | 'year';
+
+export function priceIdFor(plan: BillingPlan, interval: BillingInterval = 'month'): string {
+  if (interval === 'year') {
+    return plan === 'plus' ? config.stripePricePlusYear : config.stripePriceServerYear;
+  }
   return plan === 'plus' ? config.stripePricePlus : config.stripePriceServer;
+}
+
+/** Whether a yearly price exists for this plan, so the UI can offer it. */
+export function annualAvailable(plan: BillingPlan): boolean {
+  return Boolean(priceIdFor(plan, 'year'));
 }
 
 function storeFile(): string {
@@ -199,12 +213,16 @@ export function deckLimitFor(guildId: string, ownerId = config.ownerId): 2 | 4 {
 }
 
 /** Paid capabilities that are not deck-count, and which plan unlocks each. */
-export type PaidFeature = 'recording' | 'themes' | 'lossless' | 'analytics' | 'whitelabel';
+export type PaidFeature = 'recording' | 'themes' | 'lossless' | 'analytics' | 'whitelabel' | 'amokVoice';
 
 const FEATURE_PLANS: Record<PaidFeature, BillingPlan[]> = {
   recording: ['plus', 'server'],
   themes: ['plus', 'server'],
   lossless: ['plus', 'server'],
+  // Spoken replies cost money per second of generated audio, so this is the one
+  // gate that is aligned with the actual bill rather than with a feature list.
+  // Text chat stays free.
+  amokVoice: ['plus', 'server'],
   // Analytics and the custom-domain white-label are Server-plan dashboard
   // features only; a per-account Plus seat does not unlock them.
   analytics: ['server'],
@@ -240,6 +258,8 @@ export interface CheckoutRequest {
   /** Public origin for the success/cancel redirects, e.g. https://www.vaporzr.app */
   origin: string;
   email?: string;
+  /** Defaults to monthly. Entitlements are the same either way. */
+  interval?: BillingInterval;
 }
 
 /**
@@ -251,8 +271,15 @@ export interface CheckoutRequest {
  */
 export async function createCheckoutSession(req: CheckoutRequest): Promise<{ url: string; id: string }> {
   if (!billingEnabled()) throw new Error('Billing is not configured.');
-  const price = priceIdFor(req.plan);
-  if (!price) throw new Error(`No Stripe price configured for the ${req.plan} plan.`);
+  const interval: BillingInterval = req.interval === 'year' ? 'year' : 'month';
+  const price = priceIdFor(req.plan, interval);
+  if (!price) {
+    throw new Error(
+      interval === 'year'
+        ? `No annual Stripe price is configured for the ${req.plan} plan.`
+        : `No Stripe price configured for the ${req.plan} plan.`,
+    );
+  }
   const base = req.origin.replace(/\/+$/, '');
 
   const form = new URLSearchParams();
@@ -263,9 +290,18 @@ export async function createCheckoutSession(req: CheckoutRequest): Promise<{ url
   form.set('cancel_url', `${base}/?billing=cancel`);
   form.set('client_reference_id', req.subject);
   form.set('allow_promotion_codes', 'true');
+  // A trial converts roughly twice as often as a bare price, and Stripe already
+  // reports `trialing` in the webhook, which `activePlan` treats as entitled.
+  const trialDays = Number.isFinite(config.stripeTrialDays) ? Math.max(0, Math.floor(config.stripeTrialDays)) : 7;
+  if (trialDays > 0 && interval === 'month') {
+    // Only on monthly: a trial on an annual plan just delays the first big charge.
+    form.set('subscription_data[trial_period_days]', String(trialDays));
+  }
   form.set('metadata[plan]', req.plan);
+  form.set('metadata[interval]', interval);
   form.set('metadata[subject]', req.subject);
   form.set('subscription_data[metadata][plan]', req.plan);
+  form.set('subscription_data[metadata][interval]', interval);
   form.set('subscription_data[metadata][subject]', req.subject);
   if (req.email) form.set('customer_email', req.email);
 

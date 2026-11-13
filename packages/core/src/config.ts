@@ -197,6 +197,15 @@ export const config = {
   stripePricePlus: process.env.STRIPE_PRICE_PLUS ?? '',
   stripePriceServer: process.env.STRIPE_PRICE_SERVER ?? '',
   /**
+   * Annual prices (two months free, usually). Optional: without them the yearly
+   * interval is simply not offered. Entitlements are still keyed by plan, so a
+   * yearly subscriber is still Plus or Server — only the price differs.
+   */
+  stripePricePlusYear: process.env.STRIPE_PRICE_PLUS_YEAR ?? '',
+  stripePriceServerYear: process.env.STRIPE_PRICE_SERVER_YEAR ?? '',
+  /** Free-trial length for a new subscription. `0` starts billing immediately. */
+  stripeTrialDays: Number(process.env.STRIPE_TRIAL_DAYS ?? 7),
+  /**
    * Marks this instance as the primary (the VPS). A second instance sharing the
    * same bot token fights the primary for the single Discord gateway session, so
    * non-primary instances refuse to boot while the primary is reachable.

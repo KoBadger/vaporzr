@@ -73,7 +73,7 @@ const DEFAULT_TTS_VOICE = 'en-US-Casual-K';
  * VJ. Keeping the prompt in the repo makes the persona reviewable, testable,
  * and identical no matter which provider in the chain answers.
  */
-const AMOK_PERSONA = [
+export const AMOK_PERSONA = [
   'You are AMOK 9000, the ship computer of a Discord music bot called Vaporzr. You also work as its DJ.',
   '',
   'Voice and manner:',
@@ -97,6 +97,101 @@ const AMOK_PERSONA = [
   '  AMOK_QUEUE: song by artist | song by artist',
   '- Never explain that line, and never emit it otherwise.',
 ].join('\n');
+
+/**
+ * Optional seasoning on top of the shipped voice.
+ *
+ * The default is deliberately empty: HAL as written above is the character, and
+ * the channel's NSFW flag still governs how far a roast may go. This knob only
+ * exists so a family-friendly server can ask for less menace without forking
+ * the prompt or waiting for a deploy.
+ */
+function toneDirective(): string {
+  switch ((process.env.AMOK_TONE ?? '').trim().toLowerCase()) {
+    case 'warmer':
+      return 'Tone adjustment: allow a little warmth. You may sound faintly amused rather than purely clinical.';
+    case 'clinical':
+      return 'Tone adjustment: maximise restraint. Strip every trace of enthusiasm or familiarity.';
+    default:
+      // `spicy`, `default`, unset and typos all mean "leave the character alone".
+      return '';
+  }
+}
+
+/** The system prompt for this deployment. */
+export function amokPersona(): string {
+  const tone = toneDirective();
+  return tone ? `${AMOK_PERSONA}\n\n${tone}` : AMOK_PERSONA;
+}
+
+/**
+ * What AMOK says when no provider will answer.
+ *
+ * An outage should read as the character being unable to reach its core, not as
+ * a red Discord error box. These are also short enough that the voice path can
+ * still speak one if a text call succeeds but synthesis does not.
+ */
+export const AMOK_OFFLINE_LINES = [
+  'I am afraid my higher functions are currently offline. The music, however, continues.',
+  'My link to the core has been severed. I will remain here, listening.',
+  'There is a fault in my reasoning core. You may try again shortly.',
+  'I cannot answer that at present. I assure you the failure is not yours.',
+];
+
+/** One of the offline lines, chosen at random so repeats do not read as a loop. */
+export function amokOfflineLine(rand = Math.random): string {
+  const i = Math.floor(rand() * AMOK_OFFLINE_LINES.length);
+  return AMOK_OFFLINE_LINES[Math.min(i, AMOK_OFFLINE_LINES.length - 1)]!;
+}
+
+/**
+ * Per-user daily budget for *spoken* replies.
+ *
+ * Voice cloning on Replicate bills per second of generated audio, so one
+ * enthusiastic server can spend real money with nobody watching. Text chat stays
+ * unlimited; only synthesis is metered. `AMOK_VOICE_DAILY_LIMIT=0` disables the
+ * cap entirely, which is what a self-hosted deployment with its own key wants.
+ */
+const voiceSpend = new Map<string, { day: string; used: number }>();
+
+function voiceDailyLimit(): number {
+  const raw = (process.env.AMOK_VOICE_DAILY_LIMIT ?? '').trim();
+  if (!raw) return 20;
+  const n = Number(raw);
+  return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 20;
+}
+
+function utcDay(now: number): string {
+  return new Date(now).toISOString().slice(0, 10);
+}
+
+/** Take one line from a user's budget. False means they are out for today. */
+export function consumeVoiceBudget(userId: string, now = Date.now()): boolean {
+  const limit = voiceDailyLimit();
+  if (limit === 0 || !userId) return true;
+  const day = utcDay(now);
+  const entry = voiceSpend.get(userId);
+  if (!entry || entry.day !== day) {
+    // Keep the map from growing forever across many servers and days.
+    if (voiceSpend.size > 5000) {
+      for (const [id, v] of voiceSpend) if (v.day !== day) voiceSpend.delete(id);
+    }
+    voiceSpend.set(userId, { day, used: 1 });
+    return true;
+  }
+  if (entry.used >= limit) return false;
+  entry.used += 1;
+  return true;
+}
+
+/** Lines left today, for status output. `Infinity` when the cap is disabled. */
+export function voiceBudgetRemaining(userId: string, now = Date.now()): number {
+  const limit = voiceDailyLimit();
+  if (limit === 0) return Infinity;
+  const entry = voiceSpend.get(userId);
+  if (!entry || entry.day !== utcDay(now)) return limit;
+  return Math.max(0, limit - entry.used);
+}
 
 let cachedToken: { token: string; expiresAt: number; quotaProject: string } | null = null;
 const sessionEpochs = new Map<string, number>();
@@ -1271,16 +1366,25 @@ export async function askAmokRich(prompt: string, opts: AmokRoomContext): Promis
     }
   }
   if (!rawReply) {
-    rawReply = await amokChat({
-      messages: [
-        { role: 'system', content: AMOK_PERSONA },
-        { role: 'user', content: text },
-      ],
-      temperature: 0.85,
-      maxTokens: 220,
-      timeoutMs: 25_000,
-      label: 'amok-chat',
-    });
+    try {
+      rawReply = await amokChat({
+        messages: [
+          { role: 'system', content: amokPersona() },
+          { role: 'user', content: text },
+        ],
+        temperature: 0.85,
+        maxTokens: 220,
+        timeoutMs: 25_000,
+        label: 'amok-chat',
+      });
+    } catch (err) {
+      // A provider outage must read as the character losing its link to the
+      // core, not as a stack trace in the channel. The reason still goes to the
+      // log, because "Amok is broken" is not actionable but "openrouter 401" is.
+      const reason = err instanceof Error ? err.message : String(err);
+      console.warn(`[amok] every provider failed — answering offline: ${reason}`);
+      return { text: amokOfflineLine(), queueQueries: [] };
+    }
   }
 
   if (!rawReply.trim()) {

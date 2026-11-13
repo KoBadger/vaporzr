@@ -19,9 +19,16 @@
  *   AMOK_API_KEY    key for the primary provider (else the vendor's own var)
  *   AMOK_FALLBACK   comma-separated providers to try in order
  *
+ * Any of those may instead be set from the panel, which writes
+ * `config.dataDir/amok-ai.json`. Environment wins when present, so a deployment
+ * that manages its own config stays authoritative; the panel is for everyone who
+ * should not have to SSH in to rotate a key.
+ *
  * Nothing here imports `amok.ts`; the Vertex/Dialogflow adapter is registered
  * from there instead, which keeps the two modules acyclic.
  */
+
+import { amokSettings } from './amokSettings.js';
 
 export type AmokProviderName = 'openrouter' | 'openai' | 'anthropic' | 'groq' | 'google' | 'vertex';
 
@@ -65,6 +72,29 @@ function env(name: string): string {
   return (process.env[name] ?? '').trim();
 }
 
+/**
+ * Env first, then the settings the panel saved.
+ *
+ * Only the four AMOK_* keys the panel controls resolve this way. Vendor keys
+ * (`OPENROUTER_API_KEY` and friends) stay environment-only: the panel never
+ * asks for them, so there is nothing to fall back to.
+ */
+function setting(name: 'AMOK_PROVIDER' | 'AMOK_MODEL' | 'AMOK_API_KEY' | 'AMOK_FALLBACK'): string {
+  const fromEnv = env(name);
+  if (fromEnv) return fromEnv;
+  const saved = amokSettings();
+  switch (name) {
+    case 'AMOK_PROVIDER':
+      return saved.provider ?? '';
+    case 'AMOK_MODEL':
+      return saved.model ?? '';
+    case 'AMOK_API_KEY':
+      return saved.apiKey ?? '';
+    case 'AMOK_FALLBACK':
+      return saved.fallback ?? '';
+  }
+}
+
 /** A vendor's own key. Says nothing about any other vendor. */
 function vendorKey(name: string): string {
   switch (name) {
@@ -91,8 +121,8 @@ function vendorKey(name: string): string {
  * chain believe an OpenRouter fallback is usable.
  */
 function keyFor(name: string): string {
-  const explicit = (env('AMOK_PROVIDER') || '').toLowerCase();
-  const generic = name === explicit ? env('AMOK_API_KEY') : '';
+  const explicit = (setting('AMOK_PROVIDER') || '').toLowerCase();
+  const generic = name === explicit ? setting('AMOK_API_KEY') : '';
   return generic || vendorKey(name);
 }
 
@@ -110,12 +140,12 @@ const DEFAULT_MODELS: Record<string, string> = {
 };
 
 function modelFor(name: string, override?: string): string {
-  return (override ?? env('AMOK_MODEL') ?? '').trim() || DEFAULT_MODELS[name] || DEFAULT_MODELS.openai;
+  return (override ?? setting('AMOK_MODEL') ?? '').trim() || DEFAULT_MODELS[name] || DEFAULT_MODELS.openai;
 }
 
 /** Providers with credentials, in the order they should be tried. */
 export function amokProviderChain(): string[] {
-  const primary = (env('AMOK_PROVIDER') || '').toLowerCase();
+  const primary = (setting('AMOK_PROVIDER') || '').toLowerCase();
   // With no explicit choice, prefer a non-Google vendor: the usual reason to
   // be reading this file is that Google is the thing that broke.
   const fallbackDefault = vendorKey('openrouter') ? 'openrouter' : 'vertex,google';
@@ -132,7 +162,7 @@ export function amokProviderChain(): string[] {
     if (keyFor(n)) chain.push(n);
   };
   push(primary || fallbackDefault);
-  for (const name of (env('AMOK_FALLBACK') || fallbackDefault).split(',')) push(name);
+  for (const name of (setting('AMOK_FALLBACK') || fallbackDefault).split(',')) push(name);
   return chain;
 }
 

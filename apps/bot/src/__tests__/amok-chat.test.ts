@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { askAmokRich } from '../amok.js';
+import { AMOK_OFFLINE_LINES, askAmokRich } from '../amok.js';
+
+// Settings persist to config.dataDir; keep this file's view of it a temp dir so
+// a key saved from a local panel cannot change what these tests observe.
+vi.hoisted(() => {
+  const g = globalThis as { __amokChatPrevDataDir?: string };
+  const base = process.env.TEMP || process.env.TMPDIR || '/tmp';
+  g.__amokChatPrevDataDir = process.env.DATA_DIR;
+  process.env.DATA_DIR = `${base}/vaporzr-amok-chat-test-${process.pid}`;
+});
 
 // End-to-end shape of one chat turn: which URL is called, what the persona
 // looks like on the wire, and whether a dead primary actually falls through to
@@ -102,13 +111,15 @@ describe('askAmokRich on the OpenRouter chain', () => {
     expect(urls[1]).toContain('api.openai.com');
   });
 
-  it('reports which providers failed when every one of them errors', async () => {
+  it('answers in character when every provider fails', async () => {
     process.env.AMOK_PROVIDER = 'openrouter';
     process.env.OPENROUTER_API_KEY = 'sk-or-test';
     vi.stubGlobal('fetch', async () => new Response('nope', { status: 500 }));
 
-    // The message has to name the provider and the status: "something went
-    // wrong" is not actionable at 2am, and a bare 500 does not say whose.
-    await expect(askAmokRich('anyone home', { scopeId: 'g1', userId: 'u1' })).rejects.toThrow(/openrouter: HTTP 500/);
+    // A provider outage must not surface as a stack trace in the channel.
+    const result = await askAmokRich('anyone home', { scopeId: 'g1', userId: 'u1' });
+
+    expect(AMOK_OFFLINE_LINES).toContain(result.text);
+    expect(result.queueQueries).toEqual([]);
   });
 });
