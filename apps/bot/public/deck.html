@@ -1639,6 +1639,120 @@
           animation: none !important;
         }
       }
+      /* ---------- centre column filler (four-deck layouts) ----------
+         With A/B above and C/D below, the mixer column is shorter than the two
+         deck rows. This strip uses that space for the controls a fourth deck
+         actually needs: C/D trims, the pair's waveforms on one axis, and the
+         quick actions that were previously only reachable by keyboard. */
+      .mid-extra {
+        display: grid;
+        gap: 9px;
+        padding-top: 12px;
+        border-top: 1px solid var(--line-soft);
+      }
+      .mini-chans {
+        display: grid;
+        gap: 5px;
+      }
+      .mini-chan {
+        display: grid;
+        grid-template-columns: 16px 1fr 32px;
+        align-items: center;
+        gap: 8px;
+        font: 700 10px/1 var(--mono);
+        letter-spacing: 0.08em;
+        color: var(--dim-2);
+      }
+      .mini-chan input[type='range'] {
+        width: 100%;
+        min-width: 0;
+      }
+      .mini-chan .mc-val {
+        text-align: right;
+        color: #b4bfff;
+        font-variant-numeric: tabular-nums;
+      }
+      .mid-btns {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 5px;
+      }
+      .mid-btns button {
+        font: 700 9px/1 inherit;
+        letter-spacing: 0.1em;
+        padding: 7px 3px;
+        border-radius: 6px;
+        border: 1px solid var(--line-soft);
+        background: #0a0a16;
+        color: var(--dim);
+        cursor: pointer;
+      }
+      .mid-btns button:hover {
+        color: #dfe6ff;
+        border-color: rgba(120, 140, 255, 0.45);
+      }
+      .mid-btns button.on {
+        background: rgba(34, 211, 238, 0.16);
+        border-color: rgba(34, 211, 238, 0.5);
+        color: #b9f4ff;
+      }
+      .overlap-wrap {
+        position: relative;
+      }
+      #overlap-wave {
+        display: block;
+        width: 100%;
+        height: 52px;
+        border-radius: 8px;
+        border: 1px solid var(--line-soft);
+        background: #07070f;
+      }
+      #overlap-legend {
+        display: flex;
+        gap: 10px;
+        margin-top: 3px;
+        font: 700 9px/1.5 var(--mono);
+        letter-spacing: 0.12em;
+        color: var(--dim-2);
+      }
+      #overlap-legend .lg-a {
+        color: var(--a);
+      }
+      #overlap-legend .lg-b {
+        color: var(--b);
+      }
+      .shout-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 6px;
+      }
+      .shout-row input {
+        min-width: 0;
+        padding: 7px 9px;
+        border-radius: 7px;
+        border: 1px solid var(--line-soft);
+        background: #08080f;
+        color: #e6e9f5;
+        font: 12px/1 inherit;
+      }
+      .shout-row input:focus {
+        outline: none;
+        border-color: rgba(255, 60, 172, 0.55);
+      }
+      .shout-row button {
+        padding: 0 11px;
+        border-radius: 7px;
+        border: 1px solid rgba(255, 60, 172, 0.5);
+        background: rgba(255, 60, 172, 0.16);
+        color: #ffd7ee;
+        font: 700 9px/1 inherit;
+        letter-spacing: 0.1em;
+        cursor: pointer;
+      }
+      .shout-row button:disabled {
+        opacity: 0.55;
+        cursor: wait;
+      }
       /* ---------- drop targets: samples and dropped tracks ---------- */
       .drop-hint {
         margin-top: 6px;
@@ -2962,6 +3076,61 @@
             <span class="kbd">Q-Y</span> FX
           </span>
         </div>
+
+        <div class="mid-extra" id="mid-extra">
+          <div class="block-label">CHANNELS C · D <span class="muted">line level</span></div>
+          <div class="mini-chans">
+            <label class="mini-chan">
+              <span>C</span>
+              <input type="range" min="0" max="100" step="1" value="100" data-chan-gain="c" aria-label="Trim deck C" />
+              <span class="mc-val" data-chan-val="c">100</span>
+            </label>
+            <label class="mini-chan">
+              <span>D</span>
+              <input type="range" min="0" max="100" step="1" value="100" data-chan-gain="d" aria-label="Trim deck D" />
+              <span class="mc-val" data-chan-val="d">100</span>
+            </label>
+          </div>
+
+          <div class="block-label">WAVEFORMS <span class="muted">focused pair</span></div>
+          <div class="overlap-wrap">
+            <canvas id="overlap-wave" height="52" aria-label="Both decks' waveforms on one timeline"></canvas>
+          </div>
+          <div id="overlap-legend">
+            <span class="lg-a">■ <span id="overlap-a">A</span></span>
+            <span class="lg-b">■ <span id="overlap-b">B</span></span>
+            <span id="overlap-note"></span>
+          </div>
+
+          <div class="block-label">QUICK</div>
+          <div class="mid-btns">
+            <button id="mid-quantize" data-mid="quantize" data-tip="Snap seeks, cue jumps and loops to the beat grid">
+              QUANTIZE
+            </button>
+            <button id="mid-jog" data-mid="jog" data-tip="Toggle the platter between vinyl scratch and CDJ bend">
+              JOG
+            </button>
+            <button id="mid-grid-down" data-mid="grid-" data-tip="Shift the beat grid 5 ms earlier">GRID −</button>
+            <button id="mid-grid-up" data-mid="grid+" data-tip="Shift the beat grid 5 ms later">GRID +</button>
+            <button data-mid="loop4" data-tip="Set a 4-beat loop on the focused deck">LOOP 4</button>
+            <button data-mid="loop8" data-tip="Set an 8-beat loop on the focused deck">LOOP 8</button>
+            <button data-mid="loop16" data-tip="Set a 16-beat loop on the focused deck">LOOP 16</button>
+            <button data-mid="loopoff" data-tip="Clear the loop">LOOP OFF</button>
+            <button data-mid="stop" data-tip="Stop every deck and hand the channel back to the queue">STOP ALL</button>
+          </div>
+
+          <div class="block-label">SHOUT OUT <span class="muted">spoken over the mix</span></div>
+          <div class="shout-row">
+            <input
+              id="shout-text"
+              maxlength="120"
+              placeholder="Say it over the music…"
+              autocomplete="off"
+              data-tip="AMOK 9000 reads this out over whatever is playing"
+            />
+            <button id="shout-send">📣 SAY</button>
+          </div>
+        </div>
       </section>
 
       <section class="deck b" data-deck="b">
@@ -3500,7 +3669,13 @@
               src.textContent = it.source || '';
               var time = document.createElement('span');
               time.className = 'ss-time';
-              time.textContent = it.durationMs ? fmt(it.durationMs) : '';
+              // Tempo and key next to the duration: deciding what to load next
+              // is a mixing decision, and it should not need a click first.
+              var metaBits = [];
+              if (it.bpm) metaBits.push(Math.round(it.bpm) + ' BPM');
+              if (it.key) metaBits.push(String(it.key));
+              if (it.durationMs) metaBits.push(fmt(it.durationMs));
+              time.textContent = metaBits.join(' · ');
               row.appendChild(title);
               row.appendChild(src);
               row.appendChild(artist);
@@ -3607,6 +3782,130 @@
               flushControl(key);
             });
           });
+        }
+
+        /* ---------- centre strip: C/D trims, paired waveforms, quick actions ---------- */
+
+        /** Partner deck for the waveform overlay: a↔b, c↔d. */
+        function overlayPartner(id) {
+          return id === 'a' ? 'b' : id === 'b' ? 'a' : id === 'c' ? 'd' : 'c';
+        }
+
+        /**
+         * Both waveforms on one time axis.
+         *
+         * Separate per-deck canvases tell you what each track looks like but not
+         * whether the drops line up, which is the whole job when beat-matching.
+         * Both lanes are scaled to the *longer* of the two durations, so a
+         * transient that looks aligned actually is aligned.
+         */
+        function drawOverlap() {
+          var cv = el('#overlap-wave');
+          if (!cv || !state) return;
+          if (!cv.width || cv.width < 2) cv.width = Math.max(120, Math.round(cv.clientWidth || 300));
+          var ctx = cv.getContext('2d');
+          var w = cv.width;
+          var h = cv.height;
+          ctx.clearRect(0, 0, w, h);
+
+          var a = focusId;
+          var b = overlayPartner(a);
+          var da = Math.max(1, (state[a] && state[a].durationMs) || 0);
+          var db = Math.max(1, (state[b] && state[b].durationMs) || 0);
+          var span = Math.max(da, db);
+          var usable = Math.max(0, w - 2);
+
+          function lane(id, color, top, height) {
+            var peaks = waves[id];
+            var dur = Math.max(1, (state[id] && state[id].durationMs) || 0);
+            var widthPx = Math.max(1, Math.round((dur / span) * usable));
+            ctx.fillStyle = color;
+            if (!peaks || peaks.length === 0) {
+              // Nothing decoded yet: a flat line still shows the track's length
+              // relative to its partner, which is most of the information.
+              ctx.globalAlpha = 0.22;
+              ctx.fillRect(1, top + height / 2 - 1, widthPx, 2);
+              ctx.globalAlpha = 1;
+            } else {
+              var step = widthPx / peaks.length;
+              var mid = top + height / 2;
+              for (var i = 0; i < peaks.length; i++) {
+                var amp = Math.max(0.03, Math.min(1, peaks[i] || 0));
+                var barH = Math.max(1, amp * (height / 2));
+                ctx.fillRect(1 + i * step, mid - barH, Math.max(1, step - 0.4), barH * 2);
+              }
+            }
+            var pos = (state[id] && state[id].positionMs) || 0;
+            var x = 1 + (Math.min(pos, dur) / span) * usable;
+            ctx.globalAlpha = 0.95;
+            ctx.fillRect(x, top, 1.5, height);
+            ctx.globalAlpha = 1;
+          }
+
+          var laneH = Math.max(10, h / 2 - 4);
+          lane(a, 'rgba(34, 211, 238, 0.85)', 3, laneH);
+          lane(b, 'rgba(255, 60, 172, 0.85)', h / 2 + 1, laneH);
+
+          var la = el('#overlap-a');
+          if (la) la.textContent = a.toUpperCase() + (state[a] && state[a].playing ? ' ▶' : '');
+          var lb = el('#overlap-b');
+          if (lb) lb.textContent = b.toUpperCase() + (state[b] && state[b].playing ? ' ▶' : '');
+          var note = el('#overlap-note');
+          if (note) {
+            var bits = [];
+            if (state[a] && state[a].bpm) bits.push(Math.round(state[a].bpm) + ' BPM');
+            if (state[a] && state[a].key) bits.push(String(state[a].key));
+            if (state[b] && state[b].bpm) bits.push('vs ' + Math.round(state[b].bpm) + ' BPM');
+            if (state[b] && state[b].key) bits.push(String(state[b].key));
+            note.textContent = bits.join(' ');
+          }
+        }
+
+        /** Keep the C/D channel strip and the quick buttons in step with the server. */
+        function paintMid() {
+          all('[data-chan-gain]').forEach(function (input) {
+            var id = input.getAttribute('data-chan-gain');
+            var slot = state && state[id];
+            if (!slot) return;
+            var v = Math.round(Math.max(0, Math.min(1, slot.gain)) * 100);
+            if (document.activeElement !== input) input.value = v;
+            var label = el('[data-chan-val="' + id + '"]');
+            if (label) label.textContent = String(v);
+          });
+          var q = el('#mid-quantize');
+          if (q && state) q.classList.toggle('on', !!(state[focusId] && state[focusId].quantize));
+          var j = el('#mid-jog');
+          if (j && state) {
+            var mode = (state[focusId] && state[focusId].jogMode) || 'vinyl';
+            j.textContent = 'JOG ' + mode.toUpperCase();
+            j.classList.toggle('on', mode === 'cdj');
+          }
+          drawOverlap();
+        }
+
+        /** One quick action, always aimed at the focused deck. */
+        function midAction(kind) {
+          if (!state) return;
+          var deck = focusId;
+          if (kind === 'quantize') {
+            control('quantize', { deck: deck, on: !(state[deck] && state[deck].quantize) });
+          } else if (kind === 'jog') {
+            control('jogMode', { deck: deck, mode: (state[deck] && state[deck].jogMode) === 'cdj' ? 'vinyl' : 'cdj' });
+          } else if (kind === 'grid-') {
+            control('beatgrid', { deck: deck, value: -5 });
+          } else if (kind === 'grid+') {
+            control('beatgrid', { deck: deck, value: 5 });
+          } else if (kind === 'loop4') {
+            control('loop-beats', { deck: deck, beats: 4 });
+          } else if (kind === 'loop8') {
+            control('loop-beats', { deck: deck, beats: 8 });
+          } else if (kind === 'loop16') {
+            control('loop-beats', { deck: deck, beats: 16 });
+          } else if (kind === 'loopoff') {
+            control('loop-clear', { deck: deck });
+          } else if (kind === 'stop') {
+            control('stop');
+          }
         }
 
         /* ---------- rotary knobs ----------
@@ -4101,6 +4400,7 @@
           if (thumbB) thumbB.classList.toggle('on', !!rightDeck().playing);
           var thumbX = el('#thumb-xfade');
           if (thumbX && document.activeElement !== thumbX) thumbX.value = Math.round(state.crossfader * 100);
+          paintMid();
           // Filter knobs mirror the server value.
           all('[data-filter]').forEach(function (input) {
             var fid = input.getAttribute('data-filter');
@@ -5211,6 +5511,86 @@
             controlThrottled('xfade', 'crossfader', { value: Number(e.target.value) / 100 });
           });
           flushOnRelease(thumbXfade, 'xfade');
+
+          /* ---- centre strip wiring: C/D trims, quick wins, shout-out ---- */
+          all('[data-chan-gain]').forEach(function (input) {
+            var id = input.getAttribute('data-chan-gain');
+            var key = 'midgain-' + id;
+            input.addEventListener('input', function () {
+              var v = Number(input.value) || 0;
+              var label = el('[data-chan-val="' + id + '"]');
+              if (label) label.textContent = String(Math.round(v));
+              controlThrottled(key, 'gain', { deck: id, value: v / 100 });
+            });
+            flushOnRelease(input, key);
+          });
+          all('[data-mid]').forEach(function (btn) {
+            btn.onclick = function () {
+              midAction(btn.getAttribute('data-mid'));
+            };
+          });
+          var shoutInput = el('#shout-text');
+          var shoutSend = el('#shout-send');
+          function sendShout() {
+            var text = (shoutInput.value || '').trim();
+            if (!text) {
+              shoutInput.focus();
+              return;
+            }
+            control('shout', { text: text });
+            shoutInput.value = '';
+          }
+          if (shoutSend) shoutSend.onclick = sendShout;
+          if (shoutInput) {
+            shoutInput.addEventListener('keydown', function (e) {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                sendShout();
+              }
+            });
+          }
+
+          /* Drop a link, a queue line or a pasted "Artist - Track" onto a deck
+             card to load it there. The deck page had file drops on the sample
+             bank but no way to aim a URL at a specific deck. */
+          all('.deck').forEach(function (root) {
+            var id = root.getAttribute('data-deck');
+            ['dragenter', 'dragover'].forEach(function (ev) {
+              root.addEventListener(ev, function (e) {
+                var types = (e.dataTransfer && e.dataTransfer.types) || [];
+                if (types.indexOf('text/plain') < 0 && types.indexOf('text/uri-list') < 0) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'copy';
+                root.classList.add('dropping');
+              });
+            });
+            root.addEventListener('dragleave', function () {
+              root.classList.remove('dropping');
+            });
+            root.addEventListener('drop', function (e) {
+              root.classList.remove('dropping');
+              var text = '';
+              try {
+                text = e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain') || '';
+              } catch (err) {
+                return;
+              }
+              // A pasted playlist arrives multi-line; the first usable line is
+              // what the person meant by dropping it here.
+              var line =
+                text
+                  .split(/[\r\n]+/)
+                  .map(function (s) {
+                    return s.trim();
+                  })
+                  .filter(Boolean)[0] || '';
+              if (!line || line.length > 400) return;
+              e.preventDefault();
+              rehearsalMonitor();
+              send({ type: 'deck:load', deck: id, query: line });
+              toast('info', 'Deck ' + String(id).toUpperCase() + ' ← ' + line.slice(0, 60));
+            });
+          });
 
           all('[data-role="wave"]').forEach(function (cv) {
             var id = cv.closest('.deck').getAttribute('data-deck');

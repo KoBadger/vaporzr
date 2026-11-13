@@ -1318,7 +1318,17 @@ export class DiscordBot {
         .trim();
       if (q.length < 2) return [];
       const want = Math.max(1, Math.min(10, Math.round(limit) || 6));
-      const out: Array<{ title: string; artist: string; durationMs: number; source: string; uri: string }> = [];
+      const out: Array<{
+        title: string;
+        artist: string;
+        durationMs: number;
+        source: string;
+        uri: string;
+        /** Track tempo, for the deck loader's BPM readout. */
+        bpm?: number | null;
+        /** Camelot key (e.g. `8A`), when Spotify knows the track's key. */
+        key?: string | null;
+      }> = [];
       const seen = new Set<string>();
       const push = (title: string, artist: string, durationMs: number, source: string, uri: string): void => {
         const key = `${title} — ${artist}`.toLowerCase();
@@ -1342,6 +1352,25 @@ export class DiscordBot {
           }
         } catch {
           /* leave whatever Spotify returned */
+        }
+      }
+      // BPM and key, so the deck loader can show tempo before a track is
+      // loaded. Spotify audio features only cover Spotify URIs, which is
+      // exactly what a picked result usually is; YouTube hits stay bare rather
+      // than guessing a number that would be wrong for the mix.
+      const ids = [...new Set(out.map((item) => extractSpotifyId(item.uri)).filter((id): id is string => Boolean(id)))];
+      if (ids.length > 0) {
+        try {
+          const features = await getAudioFeatures(ids);
+          for (const item of out) {
+            const id = extractSpotifyId(item.uri);
+            const f = id ? features.get(id) : undefined;
+            if (!f) continue;
+            if (typeof f.tempo === 'number' && f.tempo > 0) item.bpm = Math.round(f.tempo);
+            if (typeof f.key === 'number' && typeof f.mode === 'number') item.key = camelotKey(f.key, f.mode);
+          }
+        } catch {
+          /* features are a nicety; search must still answer without them */
         }
       }
       return out.slice(0, want);
@@ -1668,6 +1697,29 @@ export class DiscordBot {
         case 'lock':
           report(decks.lock(msg.enabled === false ? null : deck));
           break;
+        case 'shout': {
+          // A shout-out is spoken over whatever is playing. It is deliberately
+          // not metered against the caller's daily voice budget: a control
+          // session asking to say one line is a DJ action, not a chat request.
+          const line = String(msg.text ?? '')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 140);
+          if (!line) {
+            report({ ok: false, message: 'Type something to shout first.' });
+            break;
+          }
+          const sess = this.sessionFor(gid);
+          if (!sess.voice.isConnectionReady()) {
+            report({ ok: false, message: 'Not in a voice channel — there is nothing to shout into.' });
+            break;
+          }
+          void this.speakWeaselInVoice(sess, line).catch(() => {
+            /* a failed drop is already logged by the voice layer */
+          });
+          report({ ok: true, message: `📣 ${line}` });
+          break;
+        }
         case 'rec-start':
           if (!featureAllowed(gid, 'recording')) {
             report({
@@ -13631,6 +13683,21 @@ function renderCollage(inputs: string[], outPath: string): Promise<boolean> {
 
 function clamp01(v: number): number {
   return Math.max(0, Math.min(1, v));
+}
+
+/**
+ * Camelot wheel position for a Spotify pitch class + mode.
+ *
+ * DJs think in Camelot numbers ("8A", "12B"), not in C-sharp major, and the
+ * deck page already shows loaded tracks that way. Audio features give key as a
+ * pitch class 0–11 with mode 1 = major.
+ */
+function camelotKey(key: number, mode: number): string {
+  const minor = [5, 12, 7, 2, 9, 4, 11, 6, 1, 8, 3, 10];
+  const major = [8, 3, 10, 5, 12, 7, 2, 9, 4, 11, 6, 1];
+  const pc = ((Math.round(key) % 12) + 12) % 12;
+  const wheel = mode === 1 ? major[pc] : minor[pc];
+  return `${wheel}${mode === 1 ? 'B' : 'A'}`;
 }
 
 /** HSL (h 0-360, s/l 0-100) → 24-bit RGB int for Discord embed colors. */

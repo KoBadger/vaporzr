@@ -218,7 +218,9 @@ export type DeckAction =
   | 'sampleSwap'
   | 'jogMode'
   | 'quantize'
-  | 'beatgrid';
+  | 'beatgrid'
+  /** Announce a phrase over the mix, from the deck page's shout-out box. */
+  | 'shout';
 
 export interface GuildPermissions {
   roles: Record<PermissionLevel, string[]>;
@@ -398,6 +400,8 @@ export type InboundMessage =
       to?: number;
       /** Enable flag for 'lock' / 'loop-toggle'. */
       enabled?: boolean;
+      /** Phrase to announce for 'shout'. */
+      text?: string;
       guildId?: string;
     }
   /** Ask for the current deck state (sent on connect). */
