@@ -1819,6 +1819,12 @@ export class VoiceManager implements AudioTransport {
     if (!this.stream || this.paused) return true;
     if (!this.stream.writableEnded && this.stream.writable) {
       const ok = this.stream.write(data);
+      // The deck mixer feeds through here, and `queueSfxPcm` decides between
+      // "mix this over the music" and "stop the music and play it solo" by
+      // asking how long ago the last chunk arrived. Without this stamp a live
+      // set looked idle, so every sample and voice drop interrupted the decks
+      // instead of layering on top of them.
+      this.lastChunkAt = Date.now();
       this.chunksSinceLog++;
       this.bytesSinceLog += data.length;
       return ok;
