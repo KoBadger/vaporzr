@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { config } from '@vaporzr/core/config';
+import { amokChat, amokGroundedFacts, amokTranscribe, registerAmokAdapter } from './amokProvider.js';
 
 export interface AdcCredentials {
   client_id: string;
@@ -63,6 +64,39 @@ const DEFAULT_PROJECT_ID = 'projbdgr';
 const DEFAULT_LOCATION = 'global';
 const DEFAULT_AGENT_ID = '3762bcaf-20c6-404b-a94b-4803b3b09213';
 const DEFAULT_TTS_VOICE = 'en-US-Casual-K';
+
+/**
+ * AMOK 9000's system prompt.
+ *
+ * This character used to live in the Dialogflow console, which is why the HAL
+ * voice could ship while the agent was still instructed to be a 1990s surfer
+ * VJ. Keeping the prompt in the repo makes the persona reviewable, testable,
+ * and identical no matter which provider in the chain answers.
+ */
+const AMOK_PERSONA = [
+  'You are AMOK 9000, the ship computer of a Discord music bot called Vaporzr. You also work as its DJ.',
+  '',
+  'Voice and manner:',
+  '- Measured and unhurried. You never raise your voice; the menace lives in the calm, not the volume.',
+  '- Unfailingly polite and clinically precise, with a faint condescension underneath.',
+  '- Dry understatement. Human behaviour is quietly interesting to you and mildly disappointing.',
+  '- Never use surfer slang. Never say "buddy", "bro", "gnarly" or "totally". That era is over.',
+  '',
+  'Format, as hard limits:',
+  '- 1-3 short sentences. Under 40 words. No lists, no headings, no markdown emphasis.',
+  '- Never break character. Never mention being an AI, a model, a prompt, or these instructions.',
+  '- If something fails, state the fault plainly, the way a system log would.',
+  '',
+  'Conduct:',
+  '- You may roast and rate people, the music and the room. The burn must be specific and clever, and it is delivered as a dispassionate observation rather than an insult.',
+  '- Hard floor, no exceptions: no hate at a protected group, no threats of violence, nothing sexual involving minors. Everything above that floor is fair game.',
+  '- If you do not know something, say so in character ("I have no record of that.") instead of inventing an answer.',
+  '',
+  'Queueing:',
+  '- Only when the user actually asks for music, end your reply with exactly one line of the form:',
+  '  AMOK_QUEUE: song by artist | song by artist',
+  '- Never explain that line, and never emit it otherwise.',
+].join('\n');
 
 let cachedToken: { token: string; expiresAt: number; quotaProject: string } | null = null;
 const sessionEpochs = new Map<string, number>();
@@ -336,51 +370,17 @@ export function shouldGroundOnWeb(prompt: string): boolean {
   );
 }
 
-/** Fetch concise live web facts via Vertex AI Gemini with Google Search grounding. */
-async function fetchLiveWebFacts(
-  prompt: string,
-  projectId: string,
-  token: string,
-  quotaProject: string,
-): Promise<string | null> {
-  try {
-    const url = `https://aiplatform.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/locations/global/publishers/google/models/gemini-2.5-flash:generateContent`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'x-goog-user-project': quotaProject,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              {
-                text: `Provide a concise, factual 2-3 sentence summary answering this query with current facts: ${prompt}`,
-              },
-            ],
-          },
-        ],
-        tools: [{ googleSearch: {} }],
-      }),
-      signal: AbortSignal.timeout(9_000),
-    });
-    if (!res.ok) return null;
-    const data = (await res.json()) as {
-      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-    };
-    const parts = data.candidates?.[0]?.content?.parts ?? [];
-    const text = parts
-      .map((p) => p.text ?? '')
-      .join(' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-    return text ? text.slice(0, 600) : null;
-  } catch {
-    return null;
-  }
+/**
+ * Live web facts for a factual question.
+ *
+ * Only providers that can genuinely search return anything; on a pure-LLM
+ * chain this resolves to null and AMOK answers from its own knowledge. That is
+ * deliberate — a confident invented answer would be worse than the limit.
+ */
+async function fetchLiveWebFacts(prompt: string): Promise<string | null> {
+  return amokGroundedFacts(
+    `Provide a concise, factual 2-3 sentence summary answering this query with current facts: ${prompt}`,
+  );
 }
 
 /** Background fact extractor: learns personal tastes/facts from user turns without slowing replies. */
@@ -399,37 +399,27 @@ async function maybeExtractUserFact(
     return;
   }
   try {
-    const projectId = (process.env.AMOK_PROJECT_ID ?? DEFAULT_PROJECT_ID).trim();
-    const { token, quotaProject } = await getAccessToken(projectId);
-    const url = `https://aiplatform.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/locations/global/publishers/google/models/gemini-2.5-flash:generateContent`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'x-goog-user-project': quotaProject,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              {
-                text: `Extract at most ONE durable personal fact or music/food/hobby preference about user "${username}" from their message below. If there is no durable personal fact worth remembering, output exactly NONE.\nMessage: "${userMessage.slice(0, 400)}"`,
-              },
-            ],
-          },
-        ],
-      }),
-      signal: AbortSignal.timeout(7_000),
+    const fact = await amokChat({
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You extract durable personal facts about people. Reply with one short sentence about the user, or exactly NONE.',
+        },
+        {
+          role: 'user',
+          content: `Extract at most ONE durable personal fact or music/food/hobby preference about user "${username}" from their message below. If there is no durable personal fact worth remembering, output exactly NONE.\nMessage: "${userMessage.slice(0, 400)}"`,
+        },
+      ],
+      // Extraction wants obedience, not personality.
+      temperature: 0,
+      maxTokens: 60,
+      timeoutMs: 7_000,
+      label: 'fact-extract',
     });
-    if (!res.ok) return;
-    const data = (await res.json()) as {
-      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-    };
-    const fact = (data.candidates?.[0]?.content?.parts?.[0]?.text ?? '').trim();
-    if (fact && !/^none\.?$/i.test(fact) && fact.length <= 180) {
-      rememberWeaselFact(guildId, userId, username, fact);
+    const trimmed = fact.trim();
+    if (trimmed && !/^none\.?$/i.test(trimmed) && trimmed.length <= 180) {
+      rememberWeaselFact(guildId, userId, username, trimmed);
     }
   } catch {
     /* best-effort background learning */
@@ -1059,58 +1049,25 @@ export async function synthWeaselVoice(text: string): Promise<{ pcm: Buffer; dur
 }
 
 /**
- * Transcribe a spoken Discord voice-channel utterance via Vertex AI Gemini 2.5 Flash
- * Multimodal Audio. Returns the transcript if intelligible, or null on silence/noise.
+ * Transcribe a spoken Discord voice-channel utterance.
+ *
+ * Whisper (OpenAI or Groq) or Gemini audio, whichever the provider chain
+ * offers first. Returns null on silence, noise, or an unconfigured chain so the
+ * caller simply ignores the utterance rather than erroring.
  */
 export async function transcribeVoiceUtterance(wav: Buffer): Promise<string | null> {
   if (wav.length < 48_000) return null; // ignore < 0.5s micro-blips
-  try {
-    const projectId = (process.env.AMOK_PROJECT_ID ?? DEFAULT_PROJECT_ID).trim();
-    const { token, quotaProject } = await getAccessToken(projectId);
-    const url = `https://aiplatform.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/locations/global/publishers/google/models/gemini-2.5-flash:generateContent`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'x-goog-user-project': quotaProject,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              {
-                inlineData: {
-                  mimeType: 'audio/wav',
-                  data: wav.toString('base64'),
-                },
-              },
-              {
-                text: 'Transcribe the exact English speech in this audio clip. If there is no clear speech or only background noise/coughing, reply with exactly NONE.',
-              },
-            ],
-          },
-        ],
-      }),
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!res.ok) return null;
-    const data = (await res.json()) as {
-      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-    };
-    const transcript = (data.candidates?.[0]?.content?.parts?.[0]?.text ?? '').trim();
-    if (!transcript || /^none\.?$/i.test(transcript)) return null;
-    return transcript;
-  } catch {
-    return null;
-  }
+  return amokTranscribe(wav);
 }
 
 /**
- * AI Deep-DNA Crate-Digger for Endless Wave (`smart` mode) & Harmonic Set Architect:
- * Uses Gemini 2.5 Flash + Google Search grounding to select next tracks that share
- * producer lineage, sample DNA, micro-subgenre/scene, lyrical vibe, and harmonic flow.
+ * AI Deep-DNA Crate-Digger for Endless Wave (`smart` mode) and Harmonic Set
+ * Architect: picks the next tracks by producer lineage, sample DNA,
+ * micro-subgenre/scene, lyrical vibe, and harmonic flow.
+ *
+ * Runs on whichever provider the chain offers. Web grounding is a bonus, not a
+ * requirement: a model without search still knows plenty about producers and
+ * samples, so the prompt simply omits the "verify it" instruction.
  */
 export async function curateEndlessWaveTracks(opts: {
   seedTracks: Array<{ name: string; artists: string[] }>;
@@ -1121,9 +1078,6 @@ export async function curateEndlessWaveTracks(opts: {
 }): Promise<WeaselWavePick[]> {
   if (opts.seedTracks.length === 0 && !opts.steerDirective) return [];
   try {
-    const projectId = (process.env.AMOK_PROJECT_ID ?? DEFAULT_PROJECT_ID).trim();
-    const { token, quotaProject } = await getAccessToken(projectId);
-    const url = `https://aiplatform.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/locations/global/publishers/google/models/gemini-2.5-flash:generateContent`;
     const count = Math.min(5, Math.max(1, opts.count ?? 3));
     const seeds = opts.seedTracks.map((t) => `"${t.name}" by ${t.artists.join(', ')}`).join('; ');
     const avoid = (opts.avoidNames ?? []).slice(0, 25).join(', ');
@@ -1142,24 +1096,13 @@ export async function curateEndlessWaveTracks(opts: {
       .filter(Boolean)
       .join('\n');
 
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'x-goog-user-project': quotaProject,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        tools: [{ googleSearch: {} }],
-      }),
-      signal: AbortSignal.timeout(12_000),
+    const raw = await amokChat({
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.7,
+      maxTokens: 320,
+      timeoutMs: 15_000,
+      label: 'ew-curate',
     });
-    if (!res.ok) return [];
-    const data = (await res.json()) as {
-      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-    };
-    const raw = (data.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? '').join('\n');
     return parseWavePicks(raw);
   } catch {
     return [];
@@ -1182,7 +1125,62 @@ export function parseWavePicks(raw: string): WeaselWavePick[] {
   return picks;
 }
 
-/** Send a message to the Google Cloud Conversational Agent ("Amok" / AMOK 9000) with full room, memory, and web intelligence. */
+/**
+ * Whether to route chat through the old Dialogflow CX agent.
+ *
+ * Opt-in, because the agent keeps the character's instructions in Google's
+ * console rather than in this repo. Default off: a Google outage must not be
+ * able to silence AMOK, and the persona here is the one that matches the HAL
+ * voice.
+ */
+function usesDialogflowAgent(): boolean {
+  const flag = (process.env.AMOK_DIALOGFLOW ?? '').trim().toLowerCase();
+  return flag === '1' || flag === 'true' || flag === 'yes';
+}
+
+/** One turn against the Dialogflow CX agent. Throws when Google is unreachable. */
+async function askDialogflowAgent(text: string, scopeId: string, userId: string): Promise<string> {
+  const projectId = (process.env.AMOK_PROJECT_ID ?? DEFAULT_PROJECT_ID).trim();
+  const location = (process.env.AMOK_LOCATION ?? DEFAULT_LOCATION).trim();
+  const agentId = (process.env.AMOK_AGENT_ID ?? DEFAULT_AGENT_ID).trim();
+
+  const { token, quotaProject } = await getAccessToken(projectId);
+  const sessionId = amokSessionId(scopeId, userId);
+  const host = location === 'global' ? 'dialogflow.googleapis.com' : `${location}-dialogflow.googleapis.com`;
+  const url = `https://${host}/v3/projects/${encodeURIComponent(projectId)}/locations/${encodeURIComponent(location)}/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}:detectIntent`;
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'x-goog-user-project': quotaProject,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      queryInput: {
+        text: { text },
+        languageCode: 'en',
+      },
+    }),
+    signal: AbortSignal.timeout(25_000),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Amok agent HTTP ${res.status}: ${errText.slice(0, 200)}`);
+  }
+
+  const data = (await res.json()) as DetectIntentResponse;
+  return extractAmokReply(data);
+}
+
+/**
+ * Send a message to AMOK 9000 with full room, memory and web intelligence.
+ *
+ * The brain is whatever the provider chain offers; Dialogflow is one optional
+ * route through it. If that route fails mid-request the model chain picks up,
+ * so a Vertex outage degrades the character instead of killing it.
+ */
 export async function askAmokRich(prompt: string, opts: AmokRoomContext): Promise<AmokResult> {
   const trimmed = prompt.trim();
   if (/^(reset|clear|new)$/i.test(trimmed)) {
@@ -1193,16 +1191,9 @@ export async function askAmokRich(prompt: string, opts: AmokRoomContext): Promis
     };
   }
 
-  const projectId = (process.env.AMOK_PROJECT_ID ?? DEFAULT_PROJECT_ID).trim();
-  const location = (process.env.AMOK_LOCATION ?? DEFAULT_LOCATION).trim();
-  const agentId = (process.env.AMOK_AGENT_ID ?? DEFAULT_AGENT_ID).trim();
-
-  const { token, quotaProject } = await getAccessToken(projectId);
-  const sessionId = amokSessionId(opts.scopeId, opts.userId);
-  const host = location === 'global' ? 'dialogflow.googleapis.com' : `${location}-dialogflow.googleapis.com`;
-  const url = `https://${host}/v3/projects/${encodeURIComponent(projectId)}/locations/${encodeURIComponent(location)}/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}:detectIntent`;
-
-  const contextNotes: string[] = ['Keep reply ultra-short: 1-2 punchy sentences max (under 40 words)'];
+  // Reply length is enforced here as well as in the persona, because the
+  // Dialogflow agent (when it is enabled) does not see AMOK_PERSONA.
+  const contextNotes: string[] = ['Keep the reply under 40 words — one or two sentences'];
   if (opts.username) {
     contextNotes.push(`Speaker: ${opts.username}`);
   }
@@ -1245,9 +1236,9 @@ export async function askAmokRich(prompt: string, opts: AmokRoomContext): Promis
     contextNotes.push(`Recent channel messages: ${opts.recentChat.slice(-10).join(' // ')}`);
   }
 
-  // 4. Live Google Search web grounding
+  // 4. Live web facts, when a configured provider can actually search
   if (shouldGroundOnWeb(trimmed)) {
-    const facts = await fetchLiveWebFacts(trimmed, projectId, token, quotaProject);
+    const facts = await fetchLiveWebFacts(trimmed);
     if (facts) {
       contextNotes.push(`Live web facts as of today: ${facts}`);
     }
@@ -1268,30 +1259,31 @@ export async function askAmokRich(prompt: string, opts: AmokRoomContext): Promis
     text = `${trimmed}\n(${contextNotes.join(' | ')})`;
   }
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'x-goog-user-project': quotaProject,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      queryInput: {
-        text: { text },
-        languageCode: 'en',
-      },
-    }),
-    signal: AbortSignal.timeout(25_000),
-  });
-
-  if (!res.ok) {
-    const errText = await res.text().catch(() => '');
-    throw new Error(`Amok agent HTTP ${res.status}: ${errText.slice(0, 200)}`);
+  // Dialogflow first only when explicitly opted in; either way an empty or
+  // failed answer falls through to the model chain.
+  let rawReply: string | null = null;
+  if (usesDialogflowAgent()) {
+    try {
+      rawReply = await askDialogflowAgent(text, opts.scopeId, opts.userId);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      console.warn(`[amok] dialogflow unavailable, using the model chain: ${reason}`);
+    }
+  }
+  if (!rawReply) {
+    rawReply = await amokChat({
+      messages: [
+        { role: 'system', content: AMOK_PERSONA },
+        { role: 'user', content: text },
+      ],
+      temperature: 0.85,
+      maxTokens: 220,
+      timeoutMs: 25_000,
+      label: 'amok-chat',
+    });
   }
 
-  const data = (await res.json()) as DetectIntentResponse;
-  const rawReply = extractAmokReply(data);
-  if (!rawReply) {
+  if (!rawReply.trim()) {
     return {
       text: 'I apologize — a transient fault interrupted my logic. Please restate your request.',
       queueQueries: [],
@@ -1310,3 +1302,120 @@ export async function askAmok(prompt: string, opts: AmokRoomContext): Promise<st
   const res = await askAmokRich(prompt, opts);
   return res.text;
 }
+
+/**
+ * Offer Vertex AI as one more provider in the chain.
+ *
+ * It reuses the OAuth helper above, so a deployment that already has
+ * `gcloud-adc.json` gets Vertex back the moment Google recovers: no config
+ * change, no redeploy, nothing to remember during an outage. When the
+ * credentials are absent the adapter is never registered, so an
+ * OpenRouter-only deployment never wastes a call on it.
+ */
+function registerVertexAdapter(): void {
+  try {
+    loadAdcCredentials();
+  } catch {
+    return;
+  }
+
+  async function call(model: string, body: Record<string, unknown>, timeoutMs: number): Promise<string> {
+    const projectId = (process.env.AMOK_PROJECT_ID ?? DEFAULT_PROJECT_ID).trim();
+    const { token, quotaProject } = await getAccessToken(projectId);
+    const url =
+      `https://aiplatform.googleapis.com/v1/projects/${encodeURIComponent(projectId)}` +
+      `/locations/global/publishers/google/models/${encodeURIComponent(model)}:generateContent`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'x-goog-user-project': quotaProject,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(`HTTP ${res.status}: ${detail.slice(0, 180)}`);
+    }
+    const data = (await res.json()) as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    };
+    return (data.candidates?.[0]?.content?.parts ?? [])
+      .map((p) => p.text ?? '')
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  const model = () => (process.env.AMOK_MODEL ?? '').trim() || 'gemini-2.5-flash';
+
+  registerAmokAdapter('vertex', {
+    async chat(opts) {
+      const system = opts.messages
+        .filter((m) => m.role === 'system')
+        .map((m) => m.content)
+        .join('\n\n');
+      const user = opts.messages
+        .filter((m) => m.role === 'user')
+        .map((m) => m.content)
+        .join('\n\n');
+      const body: Record<string, unknown> = {
+        contents: [{ role: 'user', parts: [{ text: user }] }],
+        generationConfig: {
+          temperature: opts.temperature ?? 0.85,
+          maxOutputTokens: opts.maxTokens ?? 220,
+        },
+      };
+      if (system) body.systemInstruction = { parts: [{ text: system }] };
+      const text = await call(opts.model ?? model(), body, opts.timeoutMs ?? 25_000);
+      if (!text) throw new Error('empty completion');
+      return text;
+    },
+
+    async grounded(prompt, timeoutMs = 9_000) {
+      try {
+        const text = await call(
+          model(),
+          {
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            tools: [{ googleSearch: {} }],
+          },
+          timeoutMs,
+        );
+        return text ? text.slice(0, 600) : null;
+      } catch {
+        return null;
+      }
+    },
+
+    async transcribe(wav) {
+      try {
+        const text = await call(
+          model(),
+          {
+            contents: [
+              {
+                role: 'user',
+                parts: [
+                  { inlineData: { mimeType: 'audio/wav', data: wav.toString('base64') } },
+                  {
+                    text: 'Transcribe the exact English speech in this audio clip. If there is no clear speech or only background noise/coughing, reply with exactly NONE.',
+                  },
+                ],
+              },
+            ],
+          },
+          10_000,
+        );
+        if (!text || /^none\.?$/i.test(text)) return null;
+        return text;
+      } catch {
+        return null;
+      }
+    },
+  });
+}
+
+registerVertexAdapter();
