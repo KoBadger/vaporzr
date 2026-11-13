@@ -2321,6 +2321,50 @@
           <div id="analytics-body" style="font-size: 12px; color: var(--muted)">Loading…</div>
         </div>
 
+        <!-- AI provider. Owner-level configuration: swapping the model here takes
+             effect on the next message, with no redeploy and no container restart. -->
+        <div class="card collapsible" id="amok-card" data-tab="more" style="display: none">
+          <div id="queue-info">
+            <span class="section-label">🤖 AMOK 9000</span>
+            <span class="badge" id="amok-badge">—</span>
+            <button
+              id="btn-amok-refresh"
+              class="icon"
+              data-tip="Recheck the AI provider"
+              style="height: 26px; min-width: 26px; font-size: 12px"
+            >
+              ↻
+            </button>
+          </div>
+          <div id="amok-status" style="font-size: 12px; color: var(--muted); margin-bottom: 8px">Checking…</div>
+          <div style="display: flex; gap: 6px; flex-wrap: wrap">
+            <select id="amok-provider" style="min-width: 130px">
+              <option value="openrouter">OpenRouter</option>
+              <option value="openai">OpenAI</option>
+              <option value="anthropic">Anthropic</option>
+              <option value="groq">Groq</option>
+              <option value="google">Google AI Studio</option>
+              <option value="vertex">Vertex (Google ADC)</option>
+            </select>
+            <input
+              id="amok-key"
+              type="password"
+              placeholder="API key"
+              autocomplete="off"
+              spellcheck="false"
+              style="flex: 1; min-width: 160px"
+            />
+            <button id="btn-amok-save" class="primary" style="height: 30px; min-width: 64px">Save</button>
+          </div>
+          <div style="display: flex; gap: 6px; margin-top: 6px">
+            <input id="amok-model" placeholder="model (optional — blank uses the default)" style="flex: 1" />
+            <button id="btn-amok-clear" class="mini-btn">Clear</button>
+          </div>
+          <div style="font-size: 11px; color: var(--muted); margin-top: 6px">
+            Saved on the server, not in the deployment env. Leave the key blank to keep the current one.
+          </div>
+        </div>
+
         <!-- Plan / billing. Hidden until /api/billing/status says billing is
              configured, so a deployment that never sold a plan shows nothing. -->
         <div class="card collapsible" id="plan-card" data-tab="more" style="display: none">
@@ -2716,6 +2760,15 @@
           'analytics-hours',
           'analytics-body',
           'btn-analytics-refresh',
+          'amok-card',
+          'amok-badge',
+          'amok-status',
+          'amok-provider',
+          'amok-key',
+          'amok-model',
+          'btn-amok-save',
+          'btn-amok-clear',
+          'btn-amok-refresh',
           'vibe-name',
           'btn-vibe-save',
           'btn-vibe-load',
@@ -4466,6 +4519,83 @@
         el['btn-analytics-refresh'].onclick = loadAnalytics;
         loadAnalytics();
         setInterval(loadAnalytics, 60000);
+
+        /* ---------- AMOK 9000 provider ---------- */
+        function renderAmok(d) {
+          if (!d) return;
+          el['amok-card'].style.display = '';
+          var chain = d.chain || [];
+          el['amok-badge'].textContent = d.ready ? 'ready' : 'offline';
+          el['amok-badge'].className = 'badge' + (d.ready ? '' : ' warn');
+          if (d.provider) el['amok-provider'].value = d.provider;
+          el['amok-model'].value = d.model || '';
+          var bits = [];
+          bits.push(chain.length ? 'chain: ' + chain.join(' → ') : 'no provider configured — AMOK answers offline');
+          if (d.configured) bits.push('key ' + d.hint);
+          else if (chain.length && chain[0] === 'vertex') bits.push('using the server’s Google credentials');
+          el['amok-status'].textContent = bits.join(' · ');
+        }
+        function loadAmok() {
+          fetch('/api/amok')
+            .then(function (r) {
+              return r.ok ? r.json() : null;
+            })
+            .then(function (d) {
+              if (d) renderAmok(d);
+              else el['amok-status'].textContent = 'AI settings unavailable.';
+            })
+            .catch(function () {
+              el['amok-status'].textContent = 'AI settings unavailable.';
+            });
+        }
+        el['btn-amok-refresh'].onclick = loadAmok;
+        el['btn-amok-save'].onclick = function () {
+          var body = { provider: el['amok-provider'].value, model: el['amok-model'].value.trim() };
+          var key = el['amok-key'].value.trim();
+          // Blank means "keep the key already saved" — the field is masked and
+          // re-saving the form must not wipe a working credential.
+          if (key) body.apiKey = key;
+          fetch('/api/amok', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          })
+            .then(function (r) {
+              return r.json().then(function (d) {
+                return { ok: r.ok, d: d };
+              });
+            })
+            .then(function (res) {
+              if (!res.ok) {
+                toast('error', (res.d && res.d.error) || 'Could not save the AI provider.');
+                return;
+              }
+              el['amok-key'].value = '';
+              renderAmok(res.d);
+              toast(
+                res.d.ready ? 'ok' : 'warn',
+                res.d.ready
+                  ? 'AMOK 9000 is live on ' + (res.d.chain[0] || 'the new provider') + '.'
+                  : 'Saved, but no provider is ready yet — check the key.',
+              );
+            })
+            .catch(function () {
+              toast('error', 'Could not save the AI provider.');
+            });
+        };
+        el['btn-amok-clear'].onclick = function () {
+          fetch('/api/amok', { method: 'DELETE' })
+            .then(function (r) {
+              return r.json();
+            })
+            .then(function (d) {
+              el['amok-model'].value = '';
+              renderAmok(d);
+              toast('info', 'Cleared the saved AI provider.');
+            })
+            .catch(function () {});
+        };
+        loadAmok();
 
         /* ---------- vibes (saved queues) ---------- */
         var vibeXfade = {};

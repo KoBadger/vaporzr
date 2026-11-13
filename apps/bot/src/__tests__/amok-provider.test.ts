@@ -1,5 +1,18 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { amokChat, amokConfigured, amokGroundedFacts, amokProviderChain } from '../amokProvider.js';
+
+import { rmSync } from 'node:fs';
+
+// The provider settings live in config.dataDir/amok-ai.json. Point DATA_DIR at a
+// throwaway directory BEFORE the config module is evaluated, otherwise a key
+// saved from a dev panel would make "nothing configured" tests pass or fail
+// depending on whose machine they run on.
+vi.hoisted(() => {
+  const g = globalThis as { __amokProviderPrevDataDir?: string };
+  const base = process.env.TEMP || process.env.TMPDIR || '/tmp';
+  g.__amokProviderPrevDataDir = process.env.DATA_DIR;
+  process.env.DATA_DIR = `${base}/vaporzr-amok-provider-test-${process.pid}`;
+});
 
 // The chain is pure configuration logic: which providers exist and what order
 // they are tried in. No network here - these tests pin the decisions that
@@ -111,4 +124,15 @@ describe('amokGroundedFacts with no provider', () => {
   it('returns null so the caller answers from model knowledge', async () => {
     await expect(amokGroundedFacts('what is the weather')).resolves.toBeNull();
   });
+});
+
+afterAll(() => {
+  const g = globalThis as { __amokProviderPrevDataDir?: string };
+  try {
+    rmSync(process.env.DATA_DIR ?? '', { recursive: true, force: true });
+  } catch {
+    /* best effort */
+  }
+  if (g.__amokProviderPrevDataDir === undefined) delete process.env.DATA_DIR;
+  else process.env.DATA_DIR = g.__amokProviderPrevDataDir;
 });

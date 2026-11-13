@@ -150,6 +150,7 @@ import { editionBadge } from '@vaporzr/core/edition';
 import { buildJamInviteCard, type JamInviteInfo } from './jamInvite.js';
 import {
   askAmokRich,
+  consumeVoiceBudget,
   curateEndlessWaveTracks,
   getWeaselMemorySummary,
   noteWeaselUserArtists,
@@ -157,6 +158,7 @@ import {
   rememberWeaselFact,
   synthWeaselVoice,
   transcribeVoiceUtterance,
+  voiceBudgetRemaining,
   type WeaselWavePick,
 } from './amok.js';
 
@@ -12230,8 +12232,21 @@ export class DiscordBot {
   }
 
   /** Speak a short AMOK 9000 line over the active voice stream with music ducking. */
-  private async speakWeaselInVoice(s: Session, text: string): Promise<boolean> {
+  private async speakWeaselInVoice(s: Session, text: string, speakerId?: string): Promise<boolean> {
     if (!s.voice.isConnectionReady()) return false;
+    // Spoken replies are the only part of AMOK that costs per second, so they
+    // are the paid surface. Inert until billing is configured: featureAllowed
+    // returns true whenever Stripe is not set up.
+    if (!featureAllowed(s.guildId, 'amokVoice')) {
+      console.log('[amok] spoken replies are a paid feature — staying text-only here');
+      return false;
+    }
+    // Only user-requested lines are metered. Auto-VJ intros are bounded by track
+    // changes and would otherwise burn a listener's budget without them asking.
+    if (speakerId && !consumeVoiceBudget(speakerId)) {
+      console.log(`[amok] voice budget spent for ${speakerId} — text only`);
+      return false;
+    }
     try {
       const clip = await synthWeaselVoice(text);
       if (!clip || !s.voice.isConnectionReady()) return false;
@@ -12619,7 +12634,10 @@ export class DiscordBot {
       if (!s.voice.isJoined()) {
         return `${res.text}\n-# (Join a voice channel to hear me on the mic!)`;
       }
-      void this.speakWeaselInVoice(s, res.text).catch((err) => {
+      if (voiceBudgetRemaining(opts.userId) <= 0) {
+        return `${res.text}\n-# (Your spoken lines for today are used up, so this one stays text-only.)`;
+      }
+      void this.speakWeaselInVoice(s, res.text, opts.userId).catch((err) => {
         console.warn(`[weasel] voice drop failed: ${err instanceof Error ? err.message : err}`);
       });
       return `🎙️ *On the mic in voice:*\n${res.text}`;
@@ -12716,6 +12734,7 @@ export class DiscordBot {
           void this.speakWeaselInVoice(
             s,
             `I have taken the liberty of queueing ${first.name} by ${(first.artists ?? []).slice(0, 2).join(' and ')}. You are welcome.`,
+            opts.userId,
           );
         }
       }
