@@ -63,7 +63,7 @@ import {
 } from './access.js';
 import { statsStore } from '@vaporzr/core/stats';
 import { analyticsStore } from '@vaporzr/core/analytics';
-import { amokProviderChain } from './amokProvider.js';
+import { amokChat, amokProviderChain } from './amokProvider.js';
 import { amokSettingsStatus, clearAmokSettings, saveAmokSettings } from './amokSettings.js';
 import { domainStore } from '@vaporzr/core/domains';
 import { setlistShares } from '@vaporzr/core/setlistShare';
@@ -2369,6 +2369,55 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
         }
         res.writeHead(405, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Method not allowed.' }));
+        break;
+      }
+
+      case '/api/amok/test': {
+        // Live probe of the configured provider. Reading the settings back only
+        // says "a key exists"; this says whether it actually answers, which is
+        // the question somebody has after rotating one.
+        if (req.method !== 'POST') {
+          res.writeHead(405);
+          res.end();
+          return;
+        }
+        if (controlAuthRequired() && !hasShareAccess(req, url)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'unauthorized' }));
+          return;
+        }
+        const started = Date.now();
+        try {
+          const reply = await amokChat({
+            messages: [
+              { role: 'system', content: 'Answer with exactly one word.' },
+              { role: 'user', content: 'Are you operational? Reply with: operational' },
+            ],
+            temperature: 0,
+            maxTokens: 12,
+            timeoutMs: 20_000,
+            label: 'panel-test',
+          });
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          res.end(
+            JSON.stringify({
+              ok: true,
+              ms: Date.now() - started,
+              chain: amokProviderChain(),
+              text: reply.slice(0, 120),
+            }),
+          );
+        } catch (err) {
+          res.writeHead(502, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          res.end(
+            JSON.stringify({
+              ok: false,
+              ms: Date.now() - started,
+              chain: amokProviderChain(),
+              error: err instanceof Error ? err.message.slice(0, 400) : 'Provider test failed.',
+            }),
+          );
+        }
         break;
       }
 

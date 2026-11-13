@@ -102,3 +102,171 @@ export function aliasIndexFields(aliases: Record<string, string>, perGroup = 100
   flush();
   return fields.length > 0 ? fields : [{ name: 'Shortcuts', value: 'none' }];
 }
+
+/**
+ * One searchable help line, normalised out of a category's display text.
+ *
+ * Categories store prose with inline `code spans`, which is right for reading
+ * and wrong for searching. Rather than keep a second hand-maintained index that
+ * drifts, the search parses the same lines the menu renders.
+ */
+export interface HelpSearchInput {
+  id: string;
+  emoji: string;
+  name: string;
+  blurb: string;
+  lines: string[];
+}
+
+export interface HelpSuggestion {
+  /** Category this came from, shown next to the result. */
+  category: string;
+  emoji: string;
+  /** Command spellings, e.g. "`/play` `V@p`". Empty for a whole-category hit. */
+  commands: string;
+  /** Human description with the code spans removed. */
+  detail: string;
+  score: number;
+}
+
+const SEARCH_STOP_WORDS = new Set([
+  'a',
+  'an',
+  'the',
+  'to',
+  'for',
+  'how',
+  'do',
+  'does',
+  'i',
+  'my',
+  'me',
+  'of',
+  'and',
+  'or',
+  'with',
+  'in',
+  'on',
+  'it',
+  'is',
+  'are',
+  'can',
+  'you',
+  'your',
+  'vaporzr',
+  'bot',
+  'command',
+  'commands',
+  'please',
+  'help',
+  'that',
+  'this',
+  'what',
+  'where',
+  'when',
+]);
+
+function normalizeForSearch(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[`*_~]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Split one rendered help line into its commands and its description. */
+export function parseHelpLine(line: string): { commands: string[]; detail: string } | null {
+  const commands: string[] = [];
+  const codeRe = /`([^`]+)`/g;
+  let match: RegExpExecArray | null;
+  while ((match = codeRe.exec(line)) !== null) commands.push(match[1]!.trim());
+  // Headings like **Sound** carry no commands and are not searchable entries.
+  if (commands.length === 0) return null;
+  const detail = line
+    .replace(/`[^`]*`/g, '')
+    .replace(/[*_~]/g, '')
+    .replace(/^\s*[—–\-·:]\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return { commands, detail };
+}
+
+/**
+ * Rank help entries against what somebody typed.
+ *
+ * Returns between `min` and `max` suggestions: a search that matched one thing
+ * still offers nearby categories, because "nothing else found" is less useful
+ * than "here are the areas closest to that". It never returns the whole menu —
+ * the point is to shrink a ninety-command list to something readable.
+ */
+export function searchHelp(categories: HelpSearchInput[], query: string, min = 3, max = 10): HelpSuggestion[] {
+  const raw = query.trim();
+  if (!raw) return [];
+  const q = normalizeForSearch(raw);
+  if (!q) return [];
+  const words = q.split(' ').filter((w) => w.length > 1 && !SEARCH_STOP_WORDS.has(w));
+  const wantsCommand = raw.startsWith('/') || raw.startsWith('v@') || raw.startsWith('!');
+
+  const scored: HelpSuggestion[] = [];
+  const seen = new Set<string>();
+
+  for (const cat of categories) {
+    const catText = normalizeForSearch(`${cat.name} ${cat.blurb} ${cat.id}`);
+    let catScore = 0;
+    if (catText.includes(q)) catScore += 20;
+    for (const w of words) if (catText.includes(w)) catScore += 6;
+
+    for (const line of cat.lines) {
+      const parsed = parseHelpLine(line);
+      if (!parsed) continue;
+      const cmdText = normalizeForSearch(parsed.commands.join(' '));
+      const detailText = normalizeForSearch(parsed.detail);
+
+      let score = 0;
+      if (`${cmdText} ${detailText}`.includes(q)) score += 60;
+      if (wantsCommand && parsed.commands.some((c) => normalizeForSearch(c).startsWith(q))) score += 50;
+      for (const w of words) {
+        // A word inside the command is a stronger signal than one buried in the
+        // prose: searching "tape" should surface `/tape` before a line that
+        // merely mentions keeping a tape.
+        if (cmdText.includes(w)) score += 25;
+        else if (detailText.includes(w)) score += 12;
+      }
+      if (score === 0) continue;
+      score += catScore;
+
+      const key = `${parsed.commands.join('|')}::${parsed.detail}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      scored.push({
+        category: cat.name,
+        emoji: cat.emoji,
+        commands: parsed.commands.map((c) => `\`${c}\``).join(' '),
+        detail: parsed.detail,
+        score,
+      });
+    }
+  }
+
+  scored.sort((a, b) => b.score - a.score || a.detail.localeCompare(b.detail));
+  const results = scored.slice(0, max);
+
+  // Pad with the nearest categories so an answer is never one lonely hit.
+  if (results.length < min) {
+    const usedCats = new Set(results.map((r) => r.category));
+    for (const cat of categories) {
+      if (results.length >= min) break;
+      if (usedCats.has(cat.name)) continue;
+      usedCats.add(cat.name);
+      results.push({
+        category: cat.name,
+        emoji: cat.emoji,
+        commands: '',
+        detail: `${cat.name} — ${cat.blurb}`,
+        score: 0,
+      });
+    }
+  }
+
+  return results.slice(0, Math.max(min, Math.min(max, results.length)));
+}
