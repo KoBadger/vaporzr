@@ -546,13 +546,19 @@ export function cleanWeaselSpeechText(text: string): string {
  */
 export function buildWeaselSsml(text: string): string {
   const clean = cleanWeaselSpeechText(text);
-  const escaped = clean.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const escaped = clean
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    // HAL states one fact, lets it land, then states the next. A beat after a
+    // full stop is most of what makes a line sound like him rather than like a
+    // narrator reading over the top of it.
+    .replace(/([.!?])\s+/g, '$1<break time="140ms"/> ');
 
-  // Subtle only: -0.5st / 92% stays human; anything deeper or slower reads as
-  // a person doing a robot impression, which is the one thing HAL never is.
-  // The register was a shade lower and slower, which was right for a chat
-  // reply but made a shout-out drag under a 128 BPM track.
-  return `<speak><prosody rate="92%" pitch="-0.5st">${escaped}</prosody></speak>`;
+  // Deeper and slower than a broadcast read: HAL speaks below the music, not
+  // above it. -1.2 st / 90% is still a person; anything further reads as an
+  // impression of a robot, which he never is.
+  return `<speak><prosody rate="90%" pitch="-1.2st">${escaped}</prosody></speak>`;
 }
 
 /** Convert a 48 kHz 16-bit mono WAV buffer into 48 kHz 16-bit stereo Int16 PCM. */
@@ -819,7 +825,7 @@ function silenceStereo48k(ms: number): Buffer {
  * far below a music bed that was mastered to its own ceiling. -16 dBFS RMS
  * clears a ducked track while the ceiling below keeps it off the limiter.
  */
-const VOICE_DROP_RMS = 0.14;
+const VOICE_DROP_RMS = 0.2;
 /** Peak ceiling for a voice drop: ≈ -1 dBFS, just under clipping. */
 const VOICE_DROP_CEIL = 0.9;
 
@@ -837,12 +843,16 @@ export function softenWeaselPcm(pcm: Buffer): Buffer {
   const frames = Math.floor(pcm.length / 4);
   if (frames <= 0) return pcm;
   const sr = 48_000;
-  const hpA = Math.exp((-2 * Math.PI * 90) / sr);
+  const hpA = Math.exp((-2 * Math.PI * 120) / sr);
   const lpA = Math.exp((-2 * Math.PI * 6200) / sr);
   // Presence band: what sits above ~2.8 kHz. A drop made only of body and
   // rumble reads as muffled next to a loud track — this shelf gives the
   // consonants somewhere to land without going back to brittle.
   const presA = Math.exp((-2 * Math.PI * 2800) / sr);
+  // Mud band: the octave around 250-350 Hz is where a male voice fights a
+  // kick and a bassline. A small dip there is what makes a drop cut through
+  // instead of needing more level (which just makes it shout).
+  const mudA = Math.exp((-2 * Math.PI * 320) / sr);
   const att = Math.exp(-1 / (0.01 * sr));
   const rel = Math.exp(-1 / (0.2 * sr));
   const buf = new Float32Array(frames * 2);
@@ -854,6 +864,8 @@ export function softenWeaselPcm(pcm: Buffer): Buffer {
   let lpR = 0;
   let presL = 0;
   let presR = 0;
+  let mudL = 0;
+  let mudR = 0;
   let env = 0;
   let sumSq = 0;
   const threshold = 0.16;
@@ -870,9 +882,11 @@ export function softenWeaselPcm(pcm: Buffer): Buffer {
     lpR = lpA * lpR + (1 - lpA) * hpR;
     presL = presA * presL + (1 - presA) * lpL;
     presR = presA * presR + (1 - presA) * lpR;
-    // Keep the body, shave the sting, and lift what is left of the top end.
-    let ol = hpL * 0.55 + lpL * 0.45 + (lpL - presL) * 0.45;
-    let or = hpR * 0.55 + lpR * 0.45 + (lpR - presR) * 0.45;
+    mudL = mudA * mudL + (1 - mudA) * hpL;
+    mudR = mudA * mudR + (1 - mudA) * hpR;
+    // Keep the body, dip the mud, shave the sting, lift the presence.
+    let ol = hpL * 0.55 + lpL * 0.45 + (lpL - presL) * 0.45 - mudL * 0.28;
+    let or = hpR * 0.55 + lpR * 0.45 + (lpR - presR) * 0.45 - mudR * 0.28;
     const mag = Math.max(Math.abs(ol), Math.abs(or));
     const coeff = mag > env ? att : rel;
     env = coeff * env + (1 - coeff) * mag;

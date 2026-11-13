@@ -171,10 +171,11 @@ export class VoiceManager implements AudioTransport {
    * How far the music drops under an overlay or a live speaker.
    *
    * This used to be 0.25, which reads as "the track stopped and a voice played"
-   * rather than "the DJ talked over the record". 0.38 keeps the beat audible
-   * under a drop the way a club mixer's duck does.
+   * rather than "the DJ talked over the record". 0.30 (≈ −10.5 dB) keeps the
+   * kick and hats audible under a drop — enough bed that the voice sits *in* the
+   * mix, and enough room that a calm HAL reading is not buried by it.
    */
-  private duckFactor = 0.38;
+  private duckFactor = 0.3;
   /** Ramped version of duckFactor applied sample-by-sample; 1 = untouched. */
   private duckGain = 1;
   private duckRampTimer: ReturnType<typeof setInterval> | null = null;

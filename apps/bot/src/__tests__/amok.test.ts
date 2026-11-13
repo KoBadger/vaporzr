@@ -130,7 +130,9 @@ describe('Amok ("AMOK 9000") Discord integration', () => {
   it('shapes HAL prosody and converts 48 kHz mono WAV/PCM buffers', () => {
     expect(cleanWeaselSpeechText('Hey **AMOK**! `wheeze` https://example.com')).toBe('Hey AMOK! wheeze');
     const ssml = buildWeaselSsml('I am afraid I cannot do that.');
-    expect(ssml).toContain('<prosody rate="92%" pitch="-0.5st">I am afraid I cannot do that.</prosody>');
+    expect(ssml).toContain('<prosody rate="90%" pitch="-1.2st">I am afraid I cannot do that.</prosody>');
+    // Two sentences get a beat between them — HAL's pacing, not a narrator's.
+    expect(buildWeaselSsml('Open the pod bay doors. I cannot do that.')).toContain('doors.<break time="140ms"/>');
     // Still measured — nothing close to the stretched surfer delivery.
     expect(ssml).not.toContain('<prosody rate="84%"');
     expect(ssml).not.toContain('pitch="+');

@@ -360,6 +360,8 @@ export class DeckMixer {
   private readonly slots: Record<DeckId, SlotRuntime>;
   private crossfader = 0.5;
   private masterGain = 1;
+  /** Master-bus meter, dBFS. Smoothed so a 4 Hz push still reads like a VU. */
+  private masterLevelDb = -60;
   /** Master limiter gain, chasing 1 from below on release. */
   private limiterGain = 1;
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -436,6 +438,7 @@ export class DeckMixer {
       active: this.allSlots().some((s) => s.state.playing || Boolean(s.state.source)),
       crossfader: this.crossfader,
       masterGain: this.masterGain,
+      masterLevelDb: this.masterLevelDb,
       a: snap(this.slots.a),
       b: snap(this.slots.b),
       c: snap(this.slots.c),
@@ -1002,8 +1005,10 @@ export class DeckMixer {
     // attack / slow release keeps peaks under the ceiling without pumping on
     // normal material, and lets the trims be run hotter than the 0.9 headroom.
     let peak = 0;
+    let mixSq = 0;
     for (let i = 0; i < this.acc.length; i++) {
       const sample = this.acc[i]!;
+      mixSq += sample * sample;
       const abs = sample < 0 ? -sample : sample;
       if (abs > peak) peak = abs;
     }
@@ -1012,8 +1017,17 @@ export class DeckMixer {
     const target = peak > 0 && peak * base > ceiling ? ceiling / (peak * base) : 1;
     this.limiterGain = target < this.limiterGain ? target : this.limiterGain + (1 - this.limiterGain) * 0.05;
     floatToInt16(this.acc, this.out, base * this.limiterGain);
+
+    // Master meter reads what actually leaves the mixer, limiter included.
+    const outRms = Math.sqrt(mixSq / Math.max(1, this.acc.length)) * base * this.limiterGain;
+    const outDb = outRms > 1e-5 ? Math.max(-60, Math.min(0, 20 * Math.log10(outRms))) : -60;
+    this.masterLevelDb = outDb > this.masterLevelDb ? outDb : this.masterLevelDb + (outDb - this.masterLevelDb) * 0.3;
+
     const accepted = this.sink(this.out);
     if (!accepted) this.blocked = true;
+    // The UI needs positions and levels while a track plays; schedulePush
+    // coalesces these into ~4 pushes a second.
+    this.emit();
   }
 
   /** Sum one deck's PCM into the shared float accumulator, with EQ + gain. */
@@ -1035,6 +1049,7 @@ export class DeckMixer {
     let gain = start;
     const micro = slot.micro;
     const direct = Math.abs(micro - 1) < 1e-9 && Math.abs(slot.frac) < 1e-9;
+    let sumSq = 0;
 
     for (let i = 0; i < outFrames; i++) {
       let l = 0;
@@ -1083,10 +1098,20 @@ export class DeckMixer {
         r = applyBiquad(slot.filterCoefs, slot.filterState[1]!, r);
       }
       gain += step;
-      acc[i * 2] = acc[i * 2]! + l * gain;
-      acc[i * 2 + 1] = acc[i * 2 + 1]! + r * gain;
+      const sl = l * gain;
+      const sr2 = r * gain;
+      acc[i * 2] = acc[i * 2]! + sl;
+      acc[i * 2 + 1] = acc[i * 2 + 1]! + sr2;
+      sumSq += sl * sl + sr2 * sr2;
     }
     slot.gainNow = gain;
+
+    // Channel meter: post-fader RMS, fast attack and a slow release so the bar
+    // follows a kick without flickering on the 4 Hz state push.
+    const rms = Math.sqrt(sumSq / Math.max(1, outFrames * 2));
+    const db = rms > 1e-5 ? Math.max(-60, Math.min(0, 20 * Math.log10(rms))) : -60;
+    const prev = slot.state.levelDb ?? -60;
+    slot.state.levelDb = db > prev ? db : prev + (db - prev) * 0.3;
 
     // How many source frames that consumed, carrying the fraction to next time.
     let consumed: number;

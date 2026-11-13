@@ -150,6 +150,9 @@ export interface DeckSlotState {
   beatOffsetMs: number;
   /** Cue samples available to the pad bank (controller-provided). */
   samples?: string[];
+  /** Post-fader RMS of this deck in dBFS (-60..0), for the channel meter.
+   *  Optional: hand-built state (tests, replays) leaves it out. */
+  levelDb?: number;
 }
 
 /** Set-recording status surfaced to both control surfaces. */
@@ -181,6 +184,8 @@ export interface DeckMixerState {
   /** Filled in by the controller; the mixer itself is sync-agnostic. */
   sync?: DeckSyncState | null;
   record?: DeckRecordState;
+  /** Master bus RMS after trim and limiter, in dBFS (-60..0). */
+  masterLevelDb?: number;
   /**
    * True when the bot has no voice connection: the mixer still runs, but the
    * only place it can be heard is a browser monitor (the deck page's tab).
