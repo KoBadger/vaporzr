@@ -973,13 +973,19 @@ function keyPrompt(res: http.ServerResponse, message?: string): void {
     var form = document.getElementById('key-form');
     var btn = document.getElementById('key-submit');
     var input = document.getElementById('key-input');
-    form.addEventListener('submit', function () {
-      // Give immediate feedback: a slow redirect otherwise looks like the
-      // button did nothing, which is exactly how this page was reported.
-      if (!input.value.trim()) return;
-      btn.disabled = true;
-      btn.textContent = 'Checking…';
-      form.submit();
+    // Submit to the bare pathname so a stale ?key= from an earlier attempt
+    // cannot leak into the new request and shadow the value just typed.
+    form.action = location.pathname;
+    form.addEventListener('submit', function (e) {
+      if (!input.value.trim()) { e.preventDefault(); return; }
+      // Disable after the browser has started the navigation, otherwise some
+      // browsers treat the disabled submit button as "no submitter" and cancel
+      // the form submission entirely — which is exactly the "nothing happens"
+      // symptom.
+      setTimeout(function () {
+        btn.disabled = true;
+        btn.textContent = 'Checking…';
+      }, 0);
     });
   })();
 </script>
