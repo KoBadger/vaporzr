@@ -134,7 +134,7 @@ import { tapes as globalTapes } from '@vaporzr/core/tape';
 import { runTapeCommand } from './tapeActions.js';
 import { trackKey } from '@vaporzr/core/stats';
 import { gamesStore, fitPercent, describeFit, pickRouletteWeighted, keyToQuery, explainFit } from '@vaporzr/core/games';
-import { packCategoryFields, chunkFieldsIntoEmbeds, aliasIndexFields } from './help.js';
+import { packCategoryFields, chunkFieldsIntoEmbeds, aliasIndexFields, searchHelp } from './help.js';
 import { V_ALIASES, V_DISPATCH_ALIASES } from './aliases.js';
 import { buildSwapItems, swapLabel, trackQuery } from './swapItems.js';
 import { ttsEngine } from '@vaporzr/core/tts';
@@ -424,7 +424,7 @@ const COMMANDS = [
     .addStringOption((o) =>
       o
         .setName('topic')
-        .setDescription('Show everything at once, the V@ shortcut index, or one category')
+        .setDescription('A category, "all", "aliases" — or just type what you want to do and I will find it')
         .setRequired(false)
         .addChoices(
           { name: '📖 Everything (all commands)', value: 'all' },
@@ -5966,15 +5966,42 @@ export class DiscordBot {
             break;
           }
           const cat = args ? this.helpCategoryEmbed(args) : null;
-          if (args && !cat) {
-            await message.reply(
-              `Nothing called \`${args}\` here. Try a category: ${HELP_CATEGORIES.map((c) => `\`${c.id}\``).join(', ')} — or \`V@help all\`.`,
-            );
-          } else if (cat) {
+          if (cat) {
             await message.reply({ embeds: [cat], components: this.helpButtons() });
+          } else if (args) {
+            await message.reply(
+              `Nothing matched \`${args}\`. Try fewer words, or a category: ` +
+                `${HELP_CATEGORIES.map((c) => `\`${c.id}\``).join(', ')} — or \`V@help all\`.`,
+            );
           } else {
             await message.reply({ embeds: [this.helpEmbed()], components: this.helpButtons() });
           }
+          break;
+        }
+
+        case 'tape': {
+          // `/tape` has the full option set; the prefix form covers the common
+          // verbs so nobody has to remember that one command is slash-only.
+          if (!canUse('tape')) return void (await deny());
+          if (!message.guildId) return void (await message.reply('Tapes belong to a server — use this in one.'));
+          const bits = args.trim().split(/\s+/);
+          const sub = (bits.shift() ?? 'status').toLowerCase() || 'status';
+          const rest = bits.join(' ').trim();
+          const tapeReply = await runTapeCommand({
+            sub,
+            guildId: message.guildId,
+            username: message.author.username,
+            name: rest || undefined,
+          });
+          if (!tapeReply) {
+            return void (await message.reply('That tape action is not available here — try `/tape`.'));
+          }
+          const tapeFiles = (tapeReply.files ?? []).map((f) => ({
+            attachment: f.data,
+            name: f.name,
+            description: f.description,
+          }));
+          await message.reply({ content: tapeReply.content, files: tapeFiles });
           break;
         }
 
@@ -11945,38 +11972,33 @@ export class DiscordBot {
   }
 
   /**
-   * `V@help skip` — find a command by name instead of making someone read a
-   * whole category. Matching ignores the prefixes, so "skip", "/skip" and
-   * "V@s" all land on the same rows.
+   * `V@help skip` / `V@help how do I record a set` — find something by intent
+   * instead of making someone read ninety commands.
+   *
+   * The ranking lives in `searchHelp()` so it can be tested without Discord. It
+   * always returns between three and ten rows: a broad question still gets a
+   * short, readable list of plausible areas rather than the entire menu.
    */
   private helpSearchEmbed(query: string): EmbedBuilder | null {
-    const q = query
-      .replace(/^[/!]|^v@/i, '')
-      .trim()
-      .toLowerCase();
-    if (q.length < 2) return null;
-    const fields: Array<{ name: string; value: string }> = [];
-    let hits = 0;
-    for (const c of HELP_CATEGORIES) {
-      const rows = c.lines.filter((line) => line && line.toLowerCase().includes(q));
-      if (!rows.length) continue;
-      hits += rows.length;
-      fields.push({
-        name: `${c.emoji} ${c.name}`,
-        value: rows.slice(0, 6).join('\n'),
-      });
-      if (fields.length >= 5) break;
-    }
-    if (!fields.length) return null;
+    const clean = query.replace(/^[/!]|^v@/i, '').trim();
+    if (clean.length < 2) return null;
+    const results = searchHelp(HELP_CATEGORIES, clean, 3, 10);
+    if (results.length === 0) return null;
+
+    const fields = results.map((r) => ({
+      name: r.commands ? `${r.emoji} ${r.commands}`.slice(0, 256) : `${r.emoji} ${r.category}`,
+      value: (r.commands ? r.detail || '—' : `*${r.detail}*`).slice(0, 1024),
+    }));
+
     return new EmbedBuilder()
-      .setTitle(`🔎  ${query.trim()}`)
+      .setTitle(`🔎  ${clean}`)
       .setDescription(
-        `*${hits} match${hits === 1 ? '' : 'es'}* — commands that mention this. ` +
-          `Try \`V@help\` for the menu, or \`V@help all\` for the full list.`,
+        `*${results.length} suggestion${results.length === 1 ? '' : 's'}* — the closest matches first. ` +
+          'Refine it if nothing fits, or `V@help all` for everything.',
       )
       .setColor(this.helpColor())
       .addFields(...fields)
-      .setFooter({ text: 'V@help <category> — that whole section' });
+      .setFooter({ text: 'V@help <category> — that whole section · V@help <command> — one command' });
   }
 
   private statsEmbed(): EmbedBuilder {
@@ -13423,6 +13445,50 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
     ],
   },
   {
+    id: 'tape',
+    emoji: '📼',
+    name: 'Tape & setlists',
+    blurb: 'record what the room actually heard, then keep or share it',
+    lines: [
+      '**⏺ Record**',
+      '`/tape start [name]` `V@tape start` — start recording the room',
+      '`/tape stop` `V@tape stop` — seal the tape',
+      '`/tape status` `V@tape status` — is it rolling, and for how long',
+      '`/tape list` `V@tape list` — tapes kept in this server',
+      '`/tape now` `V@tape now` — the last thing it heard',
+      '',
+      '**💾 Keep it**',
+      '`/tape save [name] [mode]` — save as a playlist (`/load` plays it back)',
+      '`/tape export [format]` `V@tape export` — M3U8, CSV or Markdown files',
+      '`/tape spotify [name]` — create a real Spotify playlist',
+      '`/tape delete <id>` `V@tape delete <id>` — remove one',
+      '',
+      '**🔗 Share**',
+      '`/tape status` replies with a private page: `<base>/tape/<server id>`',
+      'Panel → Queue tools → **Share setlist link** — a frozen snapshot, expires in 7 days',
+      '',
+      'A tape is a transcript, not the queue: it records only what actually played, in order.',
+    ],
+  },
+  {
+    id: 'plans',
+    emoji: '💳',
+    name: 'Plans & billing',
+    blurb: 'what is free, what Plus and Server add, and how to pay',
+    lines: [
+      '**🎟 Tiers**',
+      '`Free` — one server, two decks (A/B), full queue, jam requests, AMOK in text',
+      '`Plus` `$5/mo` — four decks, recording, themes, lossless, AMOK spoken replies',
+      '`Server` `$19/mo` — five servers, white-label domain, analytics, API',
+      '',
+      '**💳 Buy or manage**',
+      '`/upgrade [plan]` — a Stripe checkout link (7-day trial on monthly)',
+      'Panel → More → **Plan** — current plan, billing portal, upgrades',
+      '`V@deck seat` — a Plus account can unlock decks C/D in a server it does not own',
+      'Panel → More → **AMOK 9000** — AI provider, model and key (owner)',
+    ],
+  },
+  {
     id: 'fx',
     emoji: '🎛️',
     name: 'FX & DJ',
@@ -13449,6 +13515,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '',
       '**🎛 Decks & mashups**',
       '`V@deck` — live two-deck mixer (`a <song>`, `sync`, `cross`)',
+      '`<base>/rehearsal` — decks with no voice channel; the mix plays in your tab',
       '`/mix <a> <b>` `V@mix` — crossfade two tracks',
       '`/mashup <a> <b>` `V@mashup` — tempo/key-matched blend',
       '`V@mashup list` · `remove` · `edit` · `clear` — mashup queue',
