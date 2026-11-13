@@ -1,5 +1,5 @@
 /**
- * Helpers for the Weasel's live voice-channel ears (`V@w listen on`).
+ * Helpers for AMOK 9000's live voice-channel ears (`V@h listen on`).
  *
  * Kept dependency-free so they can be unit-tested without a voice connection.
  */

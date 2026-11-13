@@ -139,10 +139,9 @@ export const V_ALIASES: Record<string, string> = {
   quiz: 'quiz',
   guess: 'guess',
   games: 'games',
-  weasel: 'weasel',
-  amok: 'weasel',
-  pauly: 'weasel',
-  w: 'weasel',
+  hal: 'hal',
+  amok: 'hal',
+  a: 'hal',
 };
 
 /** Aliases whose spelling has no `case` of its own in the prefix switch: each
@@ -173,7 +172,6 @@ export const V_DISPATCH_ALIASES: Record<string, string> = {
   dl: 'duel',
   roll: 'roulette',
   rl: 'roulette',
-  amok: 'weasel',
-  pauly: 'weasel',
-  w: 'weasel',
+  amok: 'hal',
+  a: 'hal',
 };
