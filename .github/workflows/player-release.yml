@@ -60,7 +60,7 @@ jobs:
           $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
           "$hash  Vaporzr-win32-x64.zip" | Out-File -FilePath "$zip.sha256" -Encoding ascii
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Vaporzr-win32-x64
           path: |
