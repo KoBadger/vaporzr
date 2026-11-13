@@ -13,7 +13,7 @@ import {
   type AccessScope,
 } from './access.js';
 import fs from 'node:fs/promises';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -114,8 +114,9 @@ import { analyzer } from '@vaporzr/core/analyzer';
 import { vizTunnel } from './tunnel.js';
 import { renderPanelIconPng, PANEL_ICON_FALLBACKS } from './panelIcons.js';
 import { jamJoinLinks, type Bridge } from './bridge.js';
-import { DeckController } from './decks.js';
-import { KaraokeNight, karaokeQueueText } from './karaoke.js';
+import { DeckController, stemsKeyFor } from './decks.js';
+import { writeJsonAtomicSync } from '@vaporzr/core/jsonFile';
+import { KaraokeNight, karaokeQueueText, stemBackendAvailable } from './karaoke.js';
 import { guildRegistry, noteGuildJoin, noteGuildLeave, noteGuildsSeen } from './guildRegistry.js';
 import {
   DECK_IDS,
@@ -124,6 +125,7 @@ import {
   type DeckId,
   type InboundMessage,
   type KaraokeLyricsPayload,
+  type KaraokeState,
   type PermissionLevel,
   type TrackInfo,
   type PlaybackState,
@@ -1598,8 +1600,10 @@ export class DiscordBot {
   private karaokeFor(guildId: string): KaraokeNight {
     let night = this.karaokeNights.get(guildId);
     if (!night) {
+      const decks = this.deckFor(guildId);
+      const deckLimit = deckLimitFor(guildId);
       night = new KaraokeNight({
-        decks: this.deckFor(guildId),
+        decks,
         onState: (state) => this.bridge.broadcastKaraokeQueue(state, guildId),
         announce: (text) => {
           // Titles are user-supplied: never let one ping the room.
@@ -1607,10 +1611,280 @@ export class DiscordBot {
             .then((ch) => ch?.send({ content: text, allowedMentions: { parse: [] } }))
             .catch(() => {});
         },
+        // Stems first: a queued song has the length of the previous singer's
+        // turn to become a real karaoke track. Only when a backend exists — a
+        // 29-minute local Demucs run per song would make the queue a liability.
+        prepare: stemBackendAvailable() ? (query) => this.prepareKaraokeStems(decks, query) : undefined,
+        // Resolving the next song while this one plays is the difference
+        // between a seamless handoff and a silent room.
+        prefetch: (query) => decks.warm(query),
+        // Karaoke must not be a way around the deck paywall.
+        deckAllowed: (deck) => DECK_IDS.indexOf(deck) < deckLimit,
+        onSave: (state) => this.saveKaraokeNight(guildId, state),
       });
       this.karaokeNights.set(guildId, night);
+      const saved = this.loadKaraokeNight(guildId);
+      if (saved) night.restore(saved);
     }
     return night;
+  }
+
+  /** One separation at a time: Demucs is CPU-bound and Replicate throttles creates. */
+  private stemPrepChain: Promise<unknown> = Promise.resolve();
+
+  /**
+   * Separate a queued song's stems ahead of its turn, into the same cache the
+   * deck reads (`data/stems/<key>`). Returns whether the song ended up with
+   * usable lanes.
+   */
+  private async prepareKaraokeStems(decks: DeckController, query: string): Promise<'ready' | 'none'> {
+    const run = this.stemPrepChain.then(async (): Promise<'ready' | 'none'> => {
+      const warmed = await decks.warm(query).catch(() => null);
+      if (!warmed) return 'none';
+      const key = stemsKeyFor(warmed.uri, warmed.file, warmed.name);
+      if (!key) return 'none';
+      const dir = path.join(config.dataDir, 'stems', key);
+      // Already separated (a mashup, or the last karaoke night): nothing to do.
+      if (existsSync(path.join(dir, 'vocals.mp3'))) return 'ready';
+      const cleanup: string[] = [];
+      try {
+        const out = await this.separateStems(warmed.file, key, cleanup);
+        return out ? 'ready' : 'none';
+      } finally {
+        for (const dir of cleanup) await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+      }
+    });
+    this.stemPrepChain = run.catch(() => {});
+    return run;
+  }
+
+  /** Persist the night so a deploy mid-set does not wipe the lineup. */
+  private saveKaraokeNight(guildId: string, state: KaraokeState): void {
+    const file = path.join(config.dataDir, 'karaoke', `${guildId}.json`);
+    try {
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeJsonAtomicSync(file, { savedAt: Date.now(), ...state });
+    } catch {
+      /* a missing lineup is not worth failing a turn over */
+    }
+  }
+
+  private loadKaraokeNight(guildId: string): KaraokeState | null {
+    const file = path.join(config.dataDir, 'karaoke', `${guildId}.json`);
+    try {
+      if (!existsSync(file)) return null;
+      const raw = JSON.parse(readFileSync(file, 'utf8')) as KaraokeState & { savedAt?: number };
+      // A night older than a day is not a night anyone is still at.
+      if (!raw.savedAt || Date.now() - raw.savedAt > 24 * 60 * 60 * 1000) return null;
+      if (!Array.isArray(raw.entries)) return null;
+      return raw;
+    } catch {
+      return null;
+    }
+  }
+
+  /* ------------------------------------------------------------- karaoke -- */
+
+  /**
+   * A view-scoped invite to the stage screen.
+   *
+   * The stage is a TV in the room: it needs to see the queue and the lyrics and
+   * to add songs, and nothing else. A view invite is exactly that, and it is
+   * multi-use so a reload mid-song does not lock the room out.
+   */
+  private karaokeStageUrl(guildId: string): string | null {
+    const base = (config.staticBaseUrl || config.jamPublicBase || '').replace(/\/+$/, '');
+    if (!base) return null;
+    const { token } = mintInvite('view', `karaoke ${guildId}`, 6 * 60 * 60 * 1000, Date.now(), 200);
+    return `${base}/karaoke?invite=${encodeURIComponent(token)}`;
+  }
+
+  /** True when something is already playing that karaoke would cut off. */
+  private karaokeBusy(guildId: string): boolean {
+    try {
+      if (this.sessionFor(guildId).queue.getState().playing) return true;
+      const slots = this.deckFor(guildId).state();
+      return DECK_IDS.some((d) => Boolean(slots[d]?.source) && !slots[d]?.ended);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * The one message that makes karaoke discoverable from Discord.
+   *
+   * Everything is behind a button: nobody should have to remember a URL, and
+   * the stage link carries its own view invite so the TV just works.
+   */
+  private karaokeCard(guildId: string): {
+    embeds: EmbedBuilder[];
+    components: ActionRowBuilder<ButtonBuilder>[];
+  } {
+    const night = this.karaokeFor(guildId);
+    const state = night.state();
+    const now = state.current
+      ? `**${state.current.singer}** — **${state.current.title}**${state.instrumental ? '' : ' (no instrumental)'}`
+      : 'Nobody on stage yet';
+    const waiting =
+      state.entries.length > 0
+        ? state.entries
+            .slice(0, 8)
+            .map((e, i) => {
+              const badge = e.id === state.current?.id ? '🎤' : `${i + 1}.`;
+              const note = e.stems === 'preparing' ? ' ⏳' : e.status === 'failed' ? ' ⚠️' : '';
+              return `${badge} **${e.singer}** — ${e.title}${note}`;
+            })
+            .join('\n')
+        : '*empty — be the first*';
+
+    const embed = new EmbedBuilder()
+      .setColor(0xf04ac0)
+      .setTitle(state.open ? '🎤 Karaoke is open' : '🎤 Karaoke')
+      .setDescription(
+        state.open
+          ? 'Add a song with the button below. Songs load on a deck with the vocal track dropped, and the lyrics go up on the karaoke screen.'
+          : 'Press **Start karaoke** to open the night. Anyone can add a song; the bot drops the vocals and keeps the instrumental.',
+      )
+      .addFields({ name: 'Up now', value: now, inline: false }, { name: 'Queue', value: waiting, inline: false })
+      .setFooter({
+        text: state.open
+          ? `Key ${state.transpose ? `${state.transpose > 0 ? '+' : ''}${state.transpose}` : 'original'} · stage deck ${(state.deck ?? 'a').toUpperCase()}`
+          : 'Karaoke needs separated stems for the instrumental.',
+      });
+
+    const primary = new ActionRowBuilder<ButtonBuilder>();
+    if (!state.open) {
+      primary.addComponents(
+        new ButtonBuilder().setCustomId('vz:k-start').setLabel('Start karaoke').setStyle(ButtonStyle.Success),
+      );
+    }
+    primary.addComponents(
+      new ButtonBuilder().setCustomId('vz:k-add').setLabel('Add a song').setEmoji('🎵').setStyle(ButtonStyle.Primary),
+    );
+    const stage = this.karaokeStageUrl(guildId);
+    if (stage) {
+      primary.addComponents(new ButtonBuilder().setLabel('Karaoke screen').setStyle(ButtonStyle.Link).setURL(stage));
+    }
+
+    const second = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder().setCustomId('vz:k-queue').setLabel('Queue').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('vz:k-key-down').setLabel('Key −').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('vz:k-key-up').setLabel('Key +').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('vz:k-skip').setLabel('Skip').setStyle(ButtonStyle.Secondary),
+    );
+    if (state.open) {
+      second.addComponents(
+        new ButtonBuilder().setCustomId('vz:k-close').setLabel('Close').setStyle(ButtonStyle.Danger),
+      );
+    }
+
+    return { embeds: [embed], components: [primary, second] };
+  }
+
+  /** Host action? Skip/close/key change have to be, but starting an empty room is not. */
+  private karaokeMayControl(interaction: ButtonInteraction): boolean {
+    const guild = interaction.guild;
+    const member = interaction.member;
+    if (!guild || !member || !('roles' in member)) return true;
+    return this.perms.can(
+      'dj',
+      guild,
+      member as unknown as { id: string; roles: { cache: ReadonlyMap<string, unknown> } },
+    );
+  }
+
+  private async handleKaraokeButton(interaction: ButtonInteraction): Promise<void> {
+    const guildId = interaction.guildId;
+    if (!guildId) {
+      await interaction.reply({ content: 'Karaoke needs a server.', flags: MessageFlags.Ephemeral }).catch(() => {});
+      return;
+    }
+    const night = this.karaokeFor(guildId);
+    const id = interaction.customId;
+
+    if (id === 'vz:k-add') {
+      const modal = new ModalBuilder().setCustomId('vz:k-addmodal').setTitle('Add a song');
+      modal.addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder()
+            .setCustomId('name')
+            .setLabel('Your name')
+            .setStyle(TextInputStyle.Short)
+            .setMaxLength(40)
+            .setRequired(true)
+            .setValue(interaction.user.username.slice(0, 40)),
+        ),
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder()
+            .setCustomId('song')
+            .setLabel('Song title or link')
+            .setStyle(TextInputStyle.Short)
+            .setMaxLength(120)
+            .setRequired(true),
+        ),
+      );
+      await interaction.showModal(modal).catch(() => {});
+      return;
+    }
+
+    if (id === 'vz:k-queue') {
+      await interaction
+        .reply({ content: karaokeQueueText(night.state()), flags: MessageFlags.Ephemeral })
+        .catch(() => {});
+      return;
+    }
+
+    if (id === 'vz:k-start') {
+      // Anyone may open karaoke in a quiet room; cutting off a set is a host
+      // decision, so that case needs the DJ permission.
+      if (!night.isOpen() && this.karaokeBusy(guildId) && !this.karaokeMayControl(interaction)) {
+        await interaction
+          .reply({
+            content: '🎵 Something is already playing. Ask a mod to hand the decks to karaoke.',
+            flags: MessageFlags.Ephemeral,
+          })
+          .catch(() => {});
+        return;
+      }
+      night.openNight();
+      await interaction.update(this.karaokeCard(guildId)).catch(() => {});
+      return;
+    }
+
+    if (id === 'vz:k-skip' || id === 'vz:k-close' || id === 'vz:k-key-down' || id === 'vz:k-key-up') {
+      if (!this.karaokeMayControl(interaction)) {
+        await interaction
+          .reply({ content: 'That one is for the host — a mod can press it.', flags: MessageFlags.Ephemeral })
+          .catch(() => {});
+        return;
+      }
+      if (id === 'vz:k-skip') night.skip();
+      else if (id === 'vz:k-close') night.closeNight();
+      else {
+        const step = id === 'vz:k-key-up' ? 1 : -1;
+        const slot = this.deckFor(guildId).state()[night.state().deck ?? 'a'];
+        night.setTranspose((slot.transpose ?? 0) + step);
+      }
+      await interaction.update(this.karaokeCard(guildId)).catch(() => {});
+    }
+  }
+
+  private async handleKaraokeModal(interaction: ModalSubmitInteraction): Promise<void> {
+    const guildId = interaction.guildId;
+    if (!guildId) return;
+    const name = interaction.fields.getTextInputValue('name').trim().slice(0, 40) || 'Singer';
+    const song = interaction.fields.getTextInputValue('song').trim().slice(0, 120);
+    if (!song) {
+      await interaction.reply({ content: 'Which song?', flags: MessageFlags.Ephemeral }).catch(() => {});
+      return;
+    }
+    const night = this.karaokeFor(guildId);
+    if (!night.isOpen()) night.openNight();
+    // A Discord user IS their identity here, which is what stops one person
+    // stacking the queue — unlike the stage screen, where the typed name is all
+    // we have.
+    const message = night.add(name, `discord:${interaction.user.id}`, song);
+    await interaction.reply({ content: message, flags: MessageFlags.Ephemeral }).catch(() => {});
   }
 
   /**
@@ -1770,14 +2044,19 @@ export class DiscordBot {
         case 'stemGain':
           quiet(decks.stemGain(deck, msg.lane ?? '', msg.value ?? 1));
           break;
+        case 'transpose':
+          // Key change: pitch only, so a singer can take the song down a couple
+          // of semitones without the mix changing speed.
+          quiet(decks.transpose(deck, msg.semitones ?? 0));
+          break;
         case 'karaoke': {
           // The sing queue, driven from the stage screen or the deck page.
           const night = this.karaokeFor(gid);
           const op = msg.op ?? 'open';
           if (op === 'add') {
             // A page has no Discord identity, so the name it sends IS the
-            // identity: same name = same singer, which is what keeps one person
-            // from queueing twice.
+            // identity — unless it also sends a browser id, which keeps two
+            // people called Sam apart and survives a rename.
             const singer =
               String(msg.singer ?? '')
                 .replace(/\s+/g, ' ')
@@ -1788,13 +2067,19 @@ export class DiscordBot {
               report({ ok: false, message: 'Which song? Give me a title or a link.' });
               break;
             }
-            report({ ok: true, message: night.add(singer, `web:${singer.toLowerCase()}`, title) });
+            const who = String(msg.singerId ?? '')
+              .replace(/[^\w:-]/g, '')
+              .slice(0, 40);
+            const key = who ? `web:${who}` : `web:${singer.toLowerCase()}`;
+            report({ ok: true, message: night.add(singer, key, title) });
             break;
           }
           if (op === 'skip') report({ ok: true, message: night.skip() });
           else if (op === 'clear') report({ ok: true, message: night.clear() });
           else if (op === 'remove') report({ ok: true, message: night.remove(String(msg.entryId ?? '')) });
           else if (op === 'list') report({ ok: true, message: karaokeQueueText(night.state()) });
+          else if (op === 'transpose') report({ ok: true, message: night.setTranspose(Number(msg.semitones ?? 0)) });
+          else if (op === 'deck') report({ ok: true, message: night.setDeck((msg.deck ?? 'a') as DeckId) });
           else if (op === 'close')
             report({ ok: true, message: night.closeNight().open ? 'Still open.' : 'Karaoke closed.' });
           else {
@@ -2189,6 +2474,8 @@ export class DiscordBot {
         await this.handleMashRepickClose(interaction);
       } else if (interaction.customId.startsWith('swap:')) {
         await this.handleSwapButton(interaction);
+      } else if (interaction.customId.startsWith('vz:k-')) {
+        await this.handleKaraokeButton(interaction);
       } else if (interaction.customId.startsWith('vzhelp:')) {
         const id = interaction.customId.slice('vzhelp:'.length);
         if (id === 'all') {
@@ -2261,6 +2548,10 @@ export class DiscordBot {
       return;
     }
     if (interaction.isModalSubmit()) {
+      if (interaction.customId === 'vz:k-addmodal') {
+        await this.handleKaraokeModal(interaction);
+        return;
+      }
       if (interaction.customId.startsWith('mashrepickmodal:')) {
         await this.handleMashRepickModal(interaction);
         return;
@@ -6039,7 +6330,18 @@ export class DiscordBot {
 
         case 'k':
         case 'karaoke': {
-          if (!canUse('lyrics')) return void (await deny());
+          if (!canUse('karaoke')) return void (await deny());
+          // Bare command = the karaoke card. Everything is behind a button so
+          // nobody has to remember a URL, and the stage link carries its own
+          // view invite. A query still means "lyrics for this song" below.
+          if (!args) {
+            if (!message.guildId) {
+              await message.reply('Karaoke needs a server.');
+              break;
+            }
+            await message.reply(this.karaokeCard(message.guildId));
+            break;
+          }
           const payload = await this.lyricsKaraokePayload(s, args || undefined);
           if ('error' in payload) await message.reply({ content: payload.error });
           else {
@@ -13715,7 +14017,8 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
     blurb: 'read along with the music',
     lines: [
       '`/lyrics [query]` `V@lyr` — lyrics for the current song',
-      '`/karaoke` `V@k` — live karaoke highlight mode',
+      '`/karaoke` `V@k` — the karaoke card: start a night, add a song, open the stage screen',
+      '`/karaoke <song>` — live karaoke highlight mode in chat',
       '`/jump <lyric>` `V@jump` — jump to a lyric line',
     ],
   },

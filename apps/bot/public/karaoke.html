@@ -685,6 +685,23 @@
             n.parentNode && n.parentNode.removeChild(n);
           }, 3200);
         }
+        /**
+         * A stable id for this browser, so "one song per singer" survives a
+         * rename and two people called Sam do not share a queue slot.
+         */
+        function singerId() {
+          try {
+            var id = localStorage.getItem('vz-karaoke-id');
+            if (!id) {
+              id = 'b' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+              localStorage.setItem('vz-karaoke-id', id);
+            }
+            return id;
+          } catch (e) {
+            return 'b' + Math.random().toString(36).slice(2, 10);
+          }
+        }
+
         function pickDeck() {
           if (!state) return;
           if (!state[deckId] || !state[deckId].source) {
@@ -760,6 +777,9 @@
           el('#deck-badge').textContent = 'Deck ' + deckId.toUpperCase() + ' · karaoke';
           el('#now-title').textContent = title || 'Waiting for the first singer…';
           var sub = artist ? artist : '—';
+          if (s && s.transpose) {
+            sub += ' · key ' + (s.transpose > 0 ? '+' : '') + s.transpose;
+          }
           if (s && s.stems && s.stems.lanes.indexOf('vocals') < 0) {
             sub += ' · no vocal lane on this one';
           }
@@ -866,11 +886,12 @@
             row.appendChild(n);
             row.appendChild(who);
             row.appendChild(what);
-            if (e.status === 'preparing' || e.status === 'failed') {
+            if (e.status === 'preparing' || e.status === 'failed' || e.stems === 'preparing') {
               var tag = document.createElement('span');
               tag.className = 'n';
-              tag.textContent = e.status === 'failed' ? '!' : '…';
-              tag.title = e.detail || '';
+              tag.textContent = e.status === 'failed' ? '!' : e.stems === 'preparing' ? '🎚' : '…';
+              tag.title =
+                e.detail || (e.stems === 'preparing' ? 'Separating the instrumental — ready by their turn' : '');
               row.appendChild(tag);
             }
             var rm = document.createElement('button');
@@ -1135,7 +1156,7 @@
           } catch (e) {
             /* ignore */
           }
-          control({ action: 'karaoke', op: 'add', singer: name, title: song });
+          control({ action: 'karaoke', op: 'add', singer: name, singerId: singerId(), title: song });
           el('#add-song').value = '';
         });
         el('#add-song').addEventListener('keydown', function (ev) {

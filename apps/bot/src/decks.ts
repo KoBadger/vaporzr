@@ -122,6 +122,22 @@ interface Recording {
   bytes: number;
 }
 
+/**
+ * Cache key for a track's separated stems.
+ *
+ * Matches the mashup game's key (`sha1(uri)`), so anything already separated
+ * for a mashup lights its lanes up on the decks for free — and the karaoke
+ * pre-separation job writes into exactly the directory `cachedStems` reads.
+ */
+export function stemsKeyFor(uri: string | undefined, file: string, name: string): string | null {
+  try {
+    const basis = uri || `${name}:${fs.statSync(file).size}`;
+    return createHash('sha1').update(basis).digest('hex').slice(0, 16);
+  } catch {
+    return null;
+  }
+}
+
 export class DeckController {
   private mixer: DeckMixer;
   private engaged = false;
@@ -135,6 +151,8 @@ export class DeckController {
   private record: DeckRecordState = { active: false, elapsedMs: 0, lastUrl: null, lastName: null };
   /** uri -> downloaded file, so re-loading a track doesn't re-download it. */
   private fileCache = new Map<string, string>();
+  /** query -> resolved track, so a prefetched karaoke turn skips the search. */
+  private resolved = new Map<string, ResolvedTrack>();
   /** One-shot pad bank: file path -> decoded 48 kHz stereo PCM. */
   private sampleCache = new Map<string, { pcm: Buffer; at: number }>();
   private sampleListCache: { items: SampleLibraryItem[]; at: number } | null = null;
@@ -194,8 +212,13 @@ export class DeckController {
   async load(deck: DeckId, query: string): Promise<DeckActionResult> {
     const q = query.trim();
     if (!q) return { ok: false, message: 'Give me something to load (a song name or a link).' };
-    const tracks = await this.opts.resolve(q).catch(() => [] as ResolvedTrack[]);
-    const track = tracks[0];
+    // A prefetched turn already resolved and downloaded this query.
+    let track = this.resolved.get(q);
+    if (!track) {
+      const tracks = await this.opts.resolve(q).catch(() => [] as ResolvedTrack[]);
+      track = tracks[0];
+      if (track) this.rememberResolved(q, track);
+    }
     if (!track) return { ok: false, message: `Couldn't find anything for "${q.slice(0, 60)}".` };
 
     let url = track.streamUrl;
@@ -224,6 +247,47 @@ export class DeckController {
   }
 
   /**
+   * Resolve and download a query **without cueing it**, and keep both results
+   * warm for the next `load()`.
+   *
+   * Karaoke needs this: a turn is loaded the moment the previous singer's song
+   * ends, and a cold yt-dlp resolve plus download is 3–10 s of a silent room
+   * staring at the person holding the microphone. Prefetching during the
+   * previous turn makes the handoff instant.
+   */
+  async warm(
+    query: string,
+  ): Promise<{ file: string; name: string; artist: string; durationMs: number; uri: string } | null> {
+    const q = query.trim();
+    if (!q) return null;
+    let track = this.resolved.get(q);
+    if (!track) {
+      const tracks = await this.opts.resolve(q).catch(() => [] as ResolvedTrack[]);
+      track = tracks[0];
+      if (!track) return null;
+      this.rememberResolved(q, track);
+    }
+    let url = track.streamUrl;
+    if (!url) url = await this.opts.resolveStream(track).catch(() => undefined);
+    if (!url) return null;
+    const file = await this.materialise(track, url);
+    if (!file) return null;
+    let durationMs = track.durationMs || 0;
+    if (!durationMs) durationMs = (await probeDuration(file).catch(() => null)) ?? 0;
+    return { file, name: track.name, artist: (track.artists ?? []).join(', '), durationMs, uri: track.uri };
+  }
+
+  /** Bounded so a long night of pre-resolving cannot grow without limit. */
+  private rememberResolved(query: string, track: ResolvedTrack): void {
+    this.resolved.set(query, track);
+    while (this.resolved.size > 24) {
+      const oldest = this.resolved.keys().next().value;
+      if (!oldest) break;
+      this.resolved.delete(oldest);
+    }
+  }
+
+  /**
    * Separated lanes for a track, when it has been through the stem cache.
    *
    * The key matches the mashup game's (`sha1(uri)`, 16 hex chars), so anything
@@ -236,15 +300,8 @@ export class DeckController {
     file: string,
     name: string,
   ): { lanes: string[]; files: string[] } | null {
-    let key: string;
-    try {
-      key = createHash('sha1')
-        .update(uri || `${name}:${fs.statSync(file).size}`)
-        .digest('hex')
-        .slice(0, 16);
-    } catch {
-      return null;
-    }
+    const key = stemsKeyFor(uri, file, name);
+    if (!key) return null;
     const dir = path.join(config.dataDir, 'stems', key);
     const pick = (lanes: string[], files: string[]): { lanes: string[]; files: string[] } | null => {
       const full = files.map((f) => path.join(dir, f));
@@ -256,8 +313,11 @@ export class DeckController {
     );
   }
 
-  /** Set one stem lane level on a deck (0 mutes it — the karaoke switch). */
-  stemGain(deck: DeckId, lane: string, value: number): DeckActionResult {
+  /** Set one stem lane level on a deck (0 mutes it — the karaoke switch). */ stemGain(
+    deck: DeckId,
+    lane: string,
+    value: number,
+  ): DeckActionResult {
     const before = this.mixer.state()[deck];
     if (!before.stems) {
       return { ok: false, message: `Deck ${deck.toUpperCase()} has no separated stems loaded.` };
@@ -268,6 +328,26 @@ export class DeckController {
     return {
       ok: true,
       message: `Deck ${deck.toUpperCase()} · ${lane}: ${gain === 0 ? 'muted' : Math.round(gain * 100) + '%'}.`,
+    };
+  }
+
+  /**
+   * Pitch a deck up or down in semitones. Karaoke's key change: the room keeps
+   * the tempo and the stem alignment, only the key moves.
+   */
+  transpose(deck: DeckId, semitones: number): DeckActionResult {
+    if (!this.mixer.state()[deck].source) {
+      return { ok: false, message: `Deck ${deck.toUpperCase()} is empty.` };
+    }
+    const st = Math.max(-6, Math.min(6, Math.round(Number.isFinite(semitones) ? semitones : 0)));
+    this.mixer.setTranspose(deck, st);
+    const now = this.mixer.state()[deck].transpose ?? 0;
+    return {
+      ok: true,
+      message:
+        now === 0
+          ? `Deck ${deck.toUpperCase()} at original key.`
+          : `Deck ${deck.toUpperCase()} ${now > 0 ? '+' : ''}${now} semitones.`,
     };
   }
 

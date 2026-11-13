@@ -135,6 +135,10 @@ export interface DeckSlotState {
   eq: DeckEq;
   /** Playback-rate factor (1 = normal). */
   tempo: number;
+  /** Pitch shift in semitones (-6..+6, 0 = original key). Pitch only: the
+   *  tempo and the stem alignment are untouched, so a singer can take the
+   *  song down a key without the mix changing speed. */
+  transpose?: number;
   /** Effective BPM (follows tempo changes). */
   bpm: number | null;
   /** Musical key of the loaded track as a Camelot code (e.g. `8A`), or null. */
@@ -217,6 +221,8 @@ export type DeckAction =
   | 'eq'
   | 'kill'
   | 'tempo'
+  /** Pitch shift in semitones for karaoke key changes. */
+  | 'transpose'
   | 'cue-set'
   | 'cue-jump'
   | 'cue-clear'
@@ -272,12 +278,18 @@ export interface KaraokeEntry {
   durationMs?: number;
   /** Deck this singer is on, while their turn is live. */
   deck?: DeckId | null;
+  /** How many times this turn has tried and failed to load. */
+  attempts?: number;
+  /** Stem readiness for this song: separated lanes make it a real karaoke turn. */
+  stems?: 'unknown' | 'preparing' | 'ready' | 'none';
   addedAt: number;
 }
 
 /** Karaoke night state, broadcast to every screen. */
 export interface KaraokeState {
   open: boolean;
+  /** Key change for the whole night, in semitones (0 = original key). */
+  transpose: number;
   /** True when the vocal lane is muted for the current turn. */
   instrumental: boolean;
   current: KaraokeEntry | null;
@@ -461,6 +473,8 @@ export type InboundMessage =
       positionMs?: number;
       /** Tempo factor for action 'tempo'. */
       tempo?: number;
+      /** Pitch shift in semitones for action 'transpose' (-6..6). */
+      semitones?: number;
       /** Hot-cue pad 1..8 for the cue actions. */
       slot?: number;
       /** Loop length in beats for 'loop-beats'. */
@@ -481,11 +495,24 @@ export type InboundMessage =
       /** Stem lane name for 'stemGain' (e.g. 'vocals', 'drums', 'music'). */
       lane?: string;
       /** Sub-action for 'karaoke': add | skip | clear | open | close | remove | list. */
-      op?: 'add' | 'skip' | 'clear' | 'open' | 'close' | 'remove' | 'list';
+      op?:
+        | 'add'
+        | 'skip'
+        | 'clear'
+        | 'open'
+        | 'close'
+        | 'remove'
+        | 'list'
+        /** Key change for the night, in `semitones`. */
+        | 'transpose'
+        /** Move the stage deck to `deck`. */
+        | 'deck';
       /** Entry id for karaoke 'remove'. */
       entryId?: string;
       /** Singer display name for karaoke 'add'. */
       singer?: string;
+      /** Stable per-person id for karaoke 'add' (a browser id, or a Discord user id). */
+      singerId?: string;
       /** Song title or link for karaoke 'add'. */
       title?: string;
       guildId?: string;

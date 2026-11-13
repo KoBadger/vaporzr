@@ -90,6 +90,50 @@
       /* storage blocked: start expanded */
     }
     if (wasHidden) hide();
+
+    // Karaoke: always available, never hidden behind the audio panel. It is a
+    // different page (the stage screen), so it opens in a second window rather
+    // than replacing the visualizer mid-song.
+    var karaoke = document.createElement('button');
+    karaoke.type = 'button';
+    karaoke.textContent = '🎤 Karaoke';
+    karaoke.setAttribute('aria-label', 'Open the karaoke screen');
+    karaoke.style.cssText =
+      'position:fixed;right:14px;bottom:14px;z-index:2147483000;padding:9px 15px;border-radius:999px;' +
+      'border:1px solid #5a2c4e;background:rgba(24,13,22,.94);color:#ff9ad8;font:600 12px/1 system-ui;' +
+      'letter-spacing:.06em;cursor:pointer;box-shadow:0 10px 30px rgba(0,0,0,.45)';
+    karaoke.onclick = openKaraoke;
+    document.body.appendChild(karaoke);
+  }
+
+  /**
+   * The stage screen, carrying whatever view invite this Activity already has.
+   * A paired Activity can therefore put karaoke on the TV without the room
+   * needing a key.
+   */
+  function karaokeUrl() {
+    var origin = (window.__VZ_STATE__ && window.__VZ_STATE__.origin) || location.origin;
+    var invite = null;
+    try {
+      var saved = JSON.parse(sessionStorage.getItem(STORE) || 'null');
+      if (saved && saved.token) invite = saved.token;
+    } catch (e) {
+      /* storage blocked: link without an invite, the key gate will ask */
+    }
+    return origin + '/karaoke' + (invite ? '?invite=' + encodeURIComponent(invite) : '');
+  }
+
+  function openKaraoke() {
+    var url = karaokeUrl();
+    var sdk = window.__VZ_SDK__;
+    if (sdk && sdk.commands && typeof sdk.commands.openExternalLink === 'function') {
+      Promise.resolve(sdk.commands.openExternalLink({ url: url })).catch(function () {
+        window.open(url, '_blank', 'noopener');
+      });
+      return;
+    }
+    var win = window.open(url, '_blank', 'noopener');
+    if (!win) location.href = url;
   }
 
   function hide() {

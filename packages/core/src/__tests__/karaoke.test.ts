@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   KARAOKE_MAX_ENTRIES,
+  KARAOKE_WIPE_MAX_MS,
   KaraokeQueue,
   activeKaraokeLine,
   activeKaraokeWord,
@@ -150,6 +151,38 @@ describe('karaoke timing', () => {
     );
     expect(activeKaraokeWord({ timeMs: 0, text: 'plain' }, 100)).toBe(-1);
     expect(karaokeWordProgress(undefined, 0, 100)).toBe(0);
+  });
+
+  it('caps the wipe so it does not crawl through an instrumental break', () => {
+    const gappy = [
+      { timeMs: 0, text: 'line' },
+      { timeMs: 12_000, text: 'after the solo' },
+    ];
+    // A 12 s gap is a rest, not a 12 s word: the highlight is done in 6 s.
+    expect(karaokeLineProgress(gappy, 0, 3000)).toBeCloseTo(0.5, 3);
+    expect(karaokeLineProgress(gappy, 0, KARAOKE_WIPE_MAX_MS)).toBe(1);
+    expect(karaokeLineProgress(gappy, 0, 9000)).toBe(1);
+  });
+
+  it('rebuilds a night from a saved snapshot', () => {
+    const q = new KaraokeQueue();
+    q.add({ singer: 'Ana', singerId: 'a', title: 'One', addedAt: 1 });
+    q.add({ singer: 'Ben', singerId: 'b', title: 'Two', addedAt: 2 });
+    const saved = q.state({ open: true, instrumental: false, deck: 'b', transpose: -2 });
+    expect(saved.transpose).toBe(-2);
+
+    const revived = new KaraokeQueue();
+    revived.restore(saved);
+    expect(revived.list().map((e) => e.title)).toEqual(['One', 'Two']);
+    // Nobody is on stage after a restart: the first singer is picked up by next().
+    expect(revived.current()).toBeNull();
+    expect(revived.next()?.title).toBe('One');
+  });
+
+  it('reports the night key in state', () => {
+    const q = new KaraokeQueue();
+    expect(q.state({ open: true, instrumental: false, transpose: 3 }).transpose).toBe(3);
+    expect(q.state({ open: true, instrumental: false }).transpose).toBe(0);
   });
 
   it('falls back to evenly spaced plain lyrics', () => {

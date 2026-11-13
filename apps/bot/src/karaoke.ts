@@ -1,5 +1,6 @@
 import type { DeckId, KaraokeEntry, KaraokeState } from '@vaporzr/shared';
 import { KaraokeQueue } from '@vaporzr/core/karaoke';
+import { replicateStemsEnabled } from '@vaporzr/core/stemSeparation';
 import type { DeckController } from './decks.js';
 
 /**
@@ -26,10 +27,36 @@ export interface KaraokeNightOptions {
   announce?: (text: string) => void;
   /** How often the end-of-turn watcher runs. */
   watchMs?: number;
+  /**
+   * Separate a queued song's stems ahead of its turn. Omitted when no stem
+   * backend is configured (see `stemBackendAvailable`), in which case a turn
+   * simply plays with the vocals still in.
+   */
+  prepare?: (query: string) => Promise<'ready' | 'none'>;
+  /** Resolve + download a query now, so its turn starts instantly. */
+  prefetch?: (query: string) => Promise<unknown>;
+  /** Deck entitlement check — karaoke must not be a way around the paywall. */
+  deckAllowed?: (deck: DeckId) => boolean;
+  /** Persist the night, so a deploy does not wipe the lineup. */
+  onSave?: (state: KaraokeState) => void;
 }
 
 /** A turn is over this long before the file ends, so the next load is ready. */
 const TURN_TAIL_MS = 2500;
+
+/**
+ * Is there a stem backend that can separate a song *before* its turn?
+ *
+ * Hosted Demucs is ~80 s per song, which a queue easily absorbs. The local CPU
+ * run is ~29 min per song, so it is only used when explicitly asked for: a
+ * preparation step that cannot finish in time is worse than none.
+ */
+export function stemBackendAvailable(): boolean {
+  return replicateStemsEnabled() || process.env.STEMS_LOCAL_DEMUCS === '1';
+}
+
+/** Two strikes: a dead link should not haunt the queue all night. */
+const MAX_ATTEMPTS = 2;
 
 export class KaraokeNight {
   private readonly opts: KaraokeNightOptions;
@@ -37,9 +64,12 @@ export class KaraokeNight {
   private open = false;
   private deck: DeckId;
   private instrumental = false;
+  private transpose = 0;
   private watch: ReturnType<typeof setInterval> | null = null;
   /** Guards against two loads in flight when a skip lands mid-prepare. */
   private loading = false;
+  /** Turn ids already sent for separation, so a re-render never re-queues one. */
+  private readonly preparing = new Set<string>();
 
   constructor(opts: KaraokeNightOptions) {
     this.opts = opts;
@@ -51,7 +81,12 @@ export class KaraokeNight {
   }
 
   state(): KaraokeState {
-    return this.queue.state({ open: this.open, instrumental: this.instrumental, deck: this.deck });
+    return this.queue.state({
+      open: this.open,
+      instrumental: this.instrumental,
+      deck: this.deck,
+      transpose: this.transpose,
+    });
   }
 
   openNight(): KaraokeState {
@@ -68,22 +103,49 @@ export class KaraokeNight {
     this.open = false;
     this.stopWatch();
     this.queue.clear();
+    this.preparing.clear();
     this.opts.announce?.('🎤 Karaoke is closed. Thanks for singing.');
+    this.push();
+    return this.state();
+  }
+
+  /**
+   * Bring a night back after a restart. The deck is empty and nothing is
+   * "on stage", so the queue resumes from the front.
+   */
+  restore(saved: KaraokeState): KaraokeState {
+    if (saved.entries.length === 0 && !saved.open) return this.state();
+    this.queue.restore(saved);
+    this.open = saved.open;
+    this.transpose = Math.max(-6, Math.min(6, Math.round(saved.transpose ?? 0)));
+    if (saved.deck && this.opts.deckAllowed?.(saved.deck) !== false) this.deck = saved.deck;
+    if (this.open) {
+      this.startWatch();
+      this.opts.announce?.(`🎤 Karaoke is back — ${saved.entries.length} in the queue.`);
+    }
     this.push();
     return this.state();
   }
 
   /** Queue a song for someone. Returns the room-facing message. */
   add(singer: string, singerId: string, query: string): string {
-    if (!this.open) return 'Karaoke is not running — the host can open it with `V@karaoke open`.';
+    if (!this.open) return 'Karaoke is not running — the host can open it with `V@karaoke`.';
     const result = this.queue.add({ singer, singerId, title: query });
     if (!result.ok) return result.message;
+    const entry = result.entry;
+    if (entry) {
+      // Stems first, in the background: a queued song has the length of the
+      // previous singer's turn to become a real karaoke track.
+      this.prepareStems(entry);
+      this.queue.update(entry.id, { stems: this.opts.prepare ? 'preparing' : 'unknown' });
+    }
     this.push();
     // An empty stage should not sit empty while people wait: if nothing is
     // loaded on the stage deck, this new song is up now. A deck that is already
     // playing is left alone, so queueing never hijacks a running set.
     const slot = this.opts.decks.state()[this.deck];
     if (!slot.source || slot.ended) void this.advance();
+    else if (entry) this.prefetchEntry(entry);
     return result.message;
   }
 
@@ -114,15 +176,33 @@ export class KaraokeNight {
 
   clear(): string {
     this.queue.clear();
+    this.preparing.clear();
     this.opts.decks.stop();
     this.push();
     return 'Sing queue cleared.';
   }
 
   /** Move the stage deck (the host's "play this on deck B" switch). */
-  setDeck(deck: DeckId): void {
+  setDeck(deck: DeckId): string {
+    if (this.opts.deckAllowed?.(deck) === false) {
+      return `Deck ${deck.toUpperCase()} needs a paid plan — karaoke stays on ${this.deck.toUpperCase()}.`;
+    }
     this.deck = deck;
     this.push();
+    return `Karaoke turns now load on deck ${deck.toUpperCase()}.`;
+  }
+
+  /**
+   * Key change for the night, in semitones. Applied to every turn after it is
+   * loaded, and carried into the next one.
+   */
+  setTranspose(semitones: number): string {
+    const st = Math.max(-6, Math.min(6, Math.round(Number.isFinite(semitones) ? semitones : 0)));
+    this.transpose = st;
+    const slot = this.opts.decks.state()[this.deck];
+    if (slot.source) this.opts.decks.transpose(this.deck, st);
+    this.push();
+    return st === 0 ? 'Karaoke back at the original key.' : `Karaoke key: ${st > 0 ? '+' : ''}${st} semitones.`;
   }
 
   /** Load the next turn, if the stage is free. */
@@ -140,15 +220,10 @@ export class KaraokeNight {
     this.queue.update(turn.id, { status: 'preparing', deck: this.deck, detail: 'loading' });
     this.push();
     try {
-      const result = await this.opts.decks.load(
-        this.deck,
-        turn.uri || `${turn.title}${turn.artist ? ` ${turn.artist}` : ''}`,
-      );
+      const query = turn.uri || `${turn.title}${turn.artist ? ` ${turn.artist}` : ''}`;
+      const result = await this.opts.decks.load(this.deck, query);
       if (!result.ok) {
-        this.queue.update(turn.id, { status: 'failed', detail: result.message });
-        this.opts.announce?.(`Couldn't load **${turn.title}** for ${turn.singer} — moving on.`);
-        this.queue.requeue(turn.id);
-        this.push();
+        this.fail(turn, result.message);
         return result.message;
       }
       const slot = this.opts.decks.state()[this.deck];
@@ -156,6 +231,7 @@ export class KaraokeNight {
       const vocals = stems ? stems.lanes.indexOf('vocals') : -1;
       this.instrumental = vocals >= 0;
       if (vocals >= 0) this.opts.decks.stemGain(this.deck, 'vocals', 0);
+      if (this.transpose !== 0) this.opts.decks.transpose(this.deck, this.transpose);
       const title = slot.source?.title ?? turn.title;
       const artist = slot.source?.artist ?? turn.artist;
       this.queue.update(turn.id, {
@@ -164,6 +240,8 @@ export class KaraokeNight {
         artist,
         deck: this.deck,
         durationMs: slot.durationMs || turn.durationMs,
+        stems: this.instrumental ? 'ready' : (turn.stems ?? 'none'),
+        attempts: 0,
         detail: this.instrumental ? undefined : 'no separated stems — vocals still audible',
       });
       this.opts.decks.play(this.deck);
@@ -172,12 +250,11 @@ export class KaraokeNight {
           (this.instrumental ? '' : '\n> ⚠️ No instrumental for this one — it plays with the vocals.'),
       );
       this.push();
+      this.prefetchNext();
       return result.message;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      this.queue.update(turn.id, { status: 'failed', detail: message });
-      this.opts.announce?.(`Karaoke load failed: ${message}`);
-      this.push();
+      this.fail(turn, message);
       return message;
     } finally {
       this.loading = false;
@@ -188,6 +265,59 @@ export class KaraokeNight {
   dispose(): void {
     this.stopWatch();
     this.open = false;
+  }
+
+  /**
+   * A turn that will not load is retried once — a link can be transient — and
+   * dropped on the second failure instead of resurfacing every rotation.
+   */
+  private fail(turn: KaraokeEntry, message: string): void {
+    const attempts = (turn.attempts ?? 0) + 1;
+    if (attempts >= MAX_ATTEMPTS) {
+      this.queue.remove(turn.id);
+      this.opts.announce?.(`Couldn't load **${turn.title}** for ${turn.singer} — dropped from the queue.`);
+    } else {
+      this.queue.update(turn.id, { status: 'failed', attempts, detail: message });
+      this.opts.announce?.(`Couldn't load **${turn.title}** for ${turn.singer} — moving on.`);
+    }
+    this.push();
+    // Keep the night rolling after the finally block clears `loading`.
+    setTimeout(() => {
+      if (this.open) void this.advance();
+    }, 500).unref?.();
+  }
+
+  /** Warm the following turn while this one plays. */
+  private prefetchNext(): void {
+    const cur = this.queue.current();
+    const next = this.queue.list().find((e) => e.id !== cur?.id);
+    if (next) this.prefetchEntry(next);
+  }
+
+  /** Resolve and download one entry now, so its turn does not wait on the network. */
+  private prefetchEntry(entry: KaraokeEntry): void {
+    if (!this.opts.prefetch) return;
+    const query = entry.uri || `${entry.title}${entry.artist ? ` ${entry.artist}` : ''}`;
+    void this.opts.prefetch(query).catch(() => {});
+  }
+
+  /** Background separation: a queued song becomes a karaoke song while it waits. */
+  private prepareStems(entry: KaraokeEntry): void {
+    const prepare = this.opts.prepare;
+    if (!prepare || this.preparing.has(entry.id)) return;
+    this.preparing.add(entry.id);
+    const query = entry.uri || `${entry.title}${entry.artist ? ` ${entry.artist}` : ''}`;
+    void prepare(query)
+      .then((outcome) => {
+        if (this.queue.current()?.id === entry.id) return;
+        this.queue.update(entry.id, { stems: outcome });
+        this.push();
+      })
+      .catch(() => {
+        this.queue.update(entry.id, { stems: 'none' });
+        this.push();
+      })
+      .finally(() => this.preparing.delete(entry.id));
   }
 
   private startWatch(): void {
@@ -223,7 +353,9 @@ export class KaraokeNight {
   }
 
   private push(): void {
-    this.opts.onState(this.state());
+    const state = this.state();
+    this.opts.onState(state);
+    this.opts.onSave?.(state);
   }
 }
 
@@ -233,7 +365,8 @@ export function karaokeQueueText(state: KaraokeState, max = 10): string {
   const lines = state.entries.slice(0, max).map((e: KaraokeEntry, i: number) => {
     const badge = e.id === state.current?.id ? '🎤' : `${i + 1}.`;
     const artist = e.artist ? ` — ${e.artist}` : '';
-    const note = e.status === 'failed' ? ' (failed — will be skipped)' : '';
+    const note =
+      e.status === 'failed' ? ' (will be skipped)' : e.stems === 'preparing' ? ' (preparing instrumental…)' : '';
     return `${badge} **${e.singer}**: ${e.title}${artist}${note}`;
   });
   const rest = state.entries.length - max;

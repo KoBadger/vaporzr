@@ -3300,7 +3300,7 @@
             </div>
           </div>
 
-          <div class="block-label">QUICK</div>
+          <div class="block-label">QUICK <span class="muted" id="mid-key"></span></div>
           <div class="mid-btns">
             <button id="mid-quantize" data-mid="quantize" data-tip="Snap seeks, cue jumps and loops to the beat grid">
               QUANTIZE
@@ -3315,6 +3315,13 @@
             <button data-mid="loop16" data-tip="Set a 16-beat loop on the focused deck">LOOP 16</button>
             <button data-mid="loopoff" data-tip="Clear the loop">LOOP OFF</button>
             <button data-mid="stop" data-tip="Stop every deck and hand the channel back to the queue">STOP ALL</button>
+            <button
+              data-mid="semi-down"
+              data-tip="Pitch the track down a semitone — the karaoke key change. Tempo and stems stay put"
+            >
+              KEY −
+            </button>
+            <button data-mid="semi-up" data-tip="Pitch the track up a semitone">KEY +</button>
             <button
               id="mid-karaoke"
               data-mid="karaoke"
@@ -4256,6 +4263,11 @@
             var ki = ks ? ks.lanes.indexOf('vocals') : -1;
             kar.classList.toggle('on', ki >= 0 && ks.gains[ki] === 0);
           }
+          var keyTag = el('#mid-key');
+          if (keyTag && state) {
+            var semiNow = (state[focusId] && state[focusId].transpose) || 0;
+            keyTag.textContent = semiNow ? '· key ' + (semiNow > 0 ? '+' : '') + semiNow : '';
+          }
           drawOverlap();
           sampleMeters();
           paintStems();
@@ -4283,6 +4295,12 @@
             control('loop-clear', { deck: deck });
           } else if (kind === 'stop') {
             control('stop');
+          } else if (kind === 'semi-down' || kind === 'semi-up') {
+            // Key change: pitch only. The mixer restarts the decoder at the same
+            // playhead, so the tempo, the beat grid and the stem alignment are
+            // untouched — a singer can take the song down two semitones.
+            var semi = (state[deck] && state[deck].transpose) || 0;
+            control('transpose', { deck: deck, semitones: semi + (kind === 'semi-up' ? 1 : -1) });
           } else if (kind === 'karaoke') {
             // Karaoke is not a separate audio path: it is the vocal lane at
             // zero. The instrumental already exists as the other lanes, so the

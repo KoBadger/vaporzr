@@ -18,6 +18,7 @@ interface FakeDeck {
   stop: ReturnType<typeof vi.fn>;
   play: ReturnType<typeof vi.fn>;
   stemGain: ReturnType<typeof vi.fn>;
+  transpose: ReturnType<typeof vi.fn>;
   state: () => DeckMixerState;
 }
 
@@ -29,6 +30,7 @@ function fakeDecks(): { decks: DeckController; deck: FakeDeck; slot: Record<stri
     stop: vi.fn(),
     play: vi.fn(),
     stemGain: vi.fn(),
+    transpose: vi.fn(),
     state: () => ({ a: slot, b: slot, c: slot, d: slot }) as unknown as DeckMixerState,
   };
   return { decks: deck as unknown as DeckController, deck, slot };
@@ -148,5 +150,104 @@ describe('karaoke night', () => {
     const night = new KaraokeNight({ decks, onState: () => {}, deck: 'a' as DeckId });
     night.setDeck('b');
     expect(night.state().deck).toBe('b');
+  });
+
+  it('prepares stems for a queued song while the previous turn plays', async () => {
+    const { decks, deck, slot } = fakeDecks();
+    deck.load.mockImplementation(async () => {
+      Object.assign(slot, staged(null, 'Live take'));
+      return { ok: true, message: 'loaded' };
+    });
+    const prepare = vi.fn(async () => 'ready' as const);
+    const night = new KaraokeNight({ decks, onState: () => {}, prepare });
+    night.openNight();
+    night.add('Ana', 'web:ana', 'One');
+    await vi.waitFor(() => expect(deck.play).toHaveBeenCalled());
+    expect(prepare).toHaveBeenCalledWith('One');
+  });
+
+  it('prefetches a song queued while somebody is already singing', async () => {
+    const { decks, deck, slot } = fakeDecks();
+    deck.load.mockImplementation(async () => {
+      Object.assign(slot, staged({ lanes: ['vocals'], gains: [1] }));
+      return { ok: true, message: 'loaded' };
+    });
+    const prefetch = vi.fn(async () => null);
+    const night = new KaraokeNight({ decks, onState: () => {}, prefetch });
+    night.openNight();
+    night.add('Ana', 'web:ana', 'One');
+    await vi.waitFor(() => expect(deck.play).toHaveBeenCalled());
+    night.add('Ben', 'web:ben', 'Two');
+    await vi.waitFor(() => expect(prefetch).toHaveBeenCalledWith('Two'));
+  });
+
+  it('will not move the night onto a deck the plan does not cover', () => {
+    const { decks } = fakeDecks();
+    const night = new KaraokeNight({
+      decks,
+      onState: () => {},
+      deck: 'a' as DeckId,
+      deckAllowed: (d) => d === 'a' || d === 'b',
+    });
+    expect(night.setDeck('c')).toContain('paid plan');
+    expect(night.state().deck).toBe('a');
+    expect(night.setDeck('b')).toContain('deck B');
+    expect(night.state().deck).toBe('b');
+  });
+
+  it('drops a song that fails to load twice', async () => {
+    const { decks, deck } = fakeDecks();
+    deck.load.mockImplementation(async () => ({ ok: false, message: 'no stream' }));
+    const announce = vi.fn();
+    const night = new KaraokeNight({ decks, onState: () => {}, announce });
+    night.openNight();
+    night.add('Ana', 'web:ana', 'Dead link');
+    await vi.waitFor(() => expect(night.state().entries).toHaveLength(0), { timeout: 3000 });
+    expect(announce.mock.calls.join('\n')).toContain('dropped');
+  });
+
+  it('applies the night key to each turn', async () => {
+    const { decks, deck, slot } = fakeDecks();
+    deck.load.mockImplementation(async () => {
+      Object.assign(slot, staged({ lanes: ['vocals'], gains: [1] }));
+      return { ok: true, message: 'loaded' };
+    });
+    const night = new KaraokeNight({ decks, onState: () => {} });
+    night.openNight();
+    expect(night.setTranspose(-2)).toContain('-2');
+    night.add('Ana', 'web:ana', 'One');
+    await vi.waitFor(() => expect(deck.transpose).toHaveBeenCalledWith('a', -2));
+    expect(night.state().transpose).toBe(-2);
+  });
+
+  it('resumes a saved night from the front of the queue', async () => {
+    const { decks, deck, slot } = fakeDecks();
+    deck.load.mockImplementation(async () => {
+      Object.assign(slot, staged({ lanes: ['vocals'], gains: [1] }));
+      return { ok: true, message: 'loaded' };
+    });
+    const saved = {
+      open: true,
+      transpose: 0,
+      instrumental: false,
+      current: null,
+      deck: 'a' as DeckId,
+      entries: [
+        {
+          id: 'k1',
+          singer: 'Ana',
+          singerId: 'web:ana',
+          title: 'One',
+          status: 'queued' as const,
+          deck: null,
+          addedAt: 1,
+        },
+      ],
+    };
+    const night = new KaraokeNight({ decks, onState: () => {} });
+    night.restore(saved);
+    expect(night.isOpen()).toBe(true);
+    await night.advance();
+    expect(deck.load).toHaveBeenCalledWith('a', 'One');
   });
 });

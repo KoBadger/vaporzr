@@ -138,6 +138,23 @@ export class KaraokeQueue {
     this.currentId = null;
   }
 
+  /**
+   * Rebuild the queue from a saved snapshot (a deploy mid-night).
+   *
+   * Nobody stays "on stage": the deck that was playing is gone, so the turn in
+   * flight is put back in line and the first singer is picked up by `advance()`.
+   */
+  restore(state: KaraokeState): void {
+    this.items = state.entries.map((e) => ({
+      ...e,
+      status: e.status === 'preparing' ? 'queued' : e.status,
+      deck: null,
+      attempts: e.attempts ?? 0,
+    }));
+    this.currentId = null;
+    this.seq = this.items.length;
+  }
+
   /** Move a singer's remaining song to the back of their own line. */
   requeue(id: string, at = Date.now()): void {
     const hit = this.items.find((e) => e.id === id);
@@ -146,9 +163,15 @@ export class KaraokeQueue {
     if (this.currentId === id) this.currentId = null;
   }
 
-  state(extra: { open: boolean; instrumental: boolean; deck?: KaraokeEntry['deck'] }): KaraokeState {
+  state(extra: {
+    open: boolean;
+    instrumental: boolean;
+    deck?: KaraokeEntry['deck'];
+    transpose?: number;
+  }): KaraokeState {
     return {
       open: extra.open,
+      transpose: extra.transpose ?? 0,
       instrumental: extra.instrumental,
       current: this.current(),
       entries: this.list(),
@@ -219,13 +242,19 @@ export function activeKaraokeLine(lines: KaraokeLine[], ms: number): number {
  * gap to the next one. That gap *is* the sung duration for most pop lyrics —
  * which is what lets the highlight wipe across the line instead of snapping on
  * at a single instant. Word timings, when present, override it.
+ *
+ * The wipe is capped: a gap of eight seconds is nearly always an instrumental
+ * break, and a highlight that creeps through it looks like the lyrics are
+ * broken rather than the song having a rest in it.
  */
+export const KARAOKE_WIPE_MAX_MS = 6000;
+
 export function karaokeLineProgress(lines: KaraokeLine[], index: number, ms: number): number {
   const line = lines[index];
   if (!line) return 0;
   const next = lines[index + 1];
-  const end = next ? next.timeMs : line.timeMs + 4000;
-  const span = Math.max(1, end - line.timeMs);
+  const gap = next ? next.timeMs - line.timeMs : 4000;
+  const span = Math.max(1, Math.min(gap, KARAOKE_WIPE_MAX_MS));
   return Math.max(0, Math.min(1, (ms - line.timeMs) / span));
 }
 
