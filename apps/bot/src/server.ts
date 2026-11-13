@@ -2408,7 +2408,10 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
             }),
           );
         } catch (err) {
-          res.writeHead(502, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          // 200, not 502: Cloudflare replaces origin 5xx responses with its own
+          // HTML error page, which destroyed this JSON and made a failed key
+          // look like a broken endpoint. The caller reads `ok`, not the status.
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
           res.end(
             JSON.stringify({
               ok: false,

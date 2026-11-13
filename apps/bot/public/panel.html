@@ -4556,13 +4556,42 @@
         }
         el['btn-amok-refresh'].onclick = loadAmok;
         el['btn-amok-test'].onclick = function () {
-          el['amok-status'].textContent = 'Testing the provider…';
-          fetch('/api/amok/test', { method: 'POST', credentials: 'same-origin' })
-            .then(function (r) {
-              return r.json();
+          var typed = el['amok-key'].value.trim();
+          el['amok-status'].textContent = typed ? 'Saving the key, then testing…' : 'Testing the provider…';
+          // Save first when a key was typed. "Paste the key and click Test" is the
+          // obvious gesture, and needing a separate Save before Test is exactly
+          // how a perfectly good key ends up never reaching the server.
+          var saved = typed
+            ? fetch('/api/amok', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  provider: el['amok-provider'].value,
+                  model: el['amok-model'].value.trim(),
+                  apiKey: typed,
+                }),
+              }).then(function (r) {
+                return r.json().then(function (d) {
+                  return { ok: r.ok, d: d };
+                });
+              })
+            : Promise.resolve(null);
+          saved
+            .then(function (res) {
+              if (res && !res.ok) {
+                el['amok-status'].textContent = '❌ ' + ((res.d && res.d.error) || 'Could not save the key.');
+                toast('error', 'The key could not be saved.');
+                return null;
+              }
+              if (typed) el['amok-key'].value = '';
+              return fetch('/api/amok/test', { method: 'POST', credentials: 'same-origin' }).then(function (r) {
+                return r.json();
+              });
             })
             .then(function (d) {
-              if (d && d.ok) {
+              if (!d) return;
+              if (d.ok) {
                 el['amok-status'].textContent =
                   '✅ ' +
                   (d.chain && d.chain[0] ? d.chain[0] : 'provider') +
@@ -4573,7 +4602,7 @@
                   '”';
                 toast('ok', 'AMOK 9000 answered.');
               } else {
-                el['amok-status'].textContent = '❌ ' + ((d && d.error) || 'Provider test failed.');
+                el['amok-status'].textContent = '❌ ' + (d.error || 'Provider test failed.');
                 toast('error', 'The provider did not answer — see the status line.');
               }
             })
