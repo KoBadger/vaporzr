@@ -548,9 +548,11 @@ export function buildWeaselSsml(text: string): string {
   const clean = cleanWeaselSpeechText(text);
   const escaped = clean.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-  // Subtle only: -0.8st / 88% stays human; anything deeper or slower reads as
+  // Subtle only: -0.5st / 92% stays human; anything deeper or slower reads as
   // a person doing a robot impression, which is the one thing HAL never is.
-  return `<speak><prosody rate="88%" pitch="-0.8st">${escaped}</prosody></speak>`;
+  // The register was a shade lower and slower, which was right for a chat
+  // reply but made a shout-out drag under a 128 BPM track.
+  return `<speak><prosody rate="92%" pitch="-0.5st">${escaped}</prosody></speak>`;
 }
 
 /** Convert a 48 kHz 16-bit mono WAV buffer into 48 kHz 16-bit stereo Int16 PCM. */
@@ -811,13 +813,25 @@ function silenceStereo48k(ms: number): Buffer {
 }
 
 /**
+ * Level a voice drop sits at, measured as RMS rather than peak.
+ *
+ * Speech crest factor is ~12 dB, so peak-normalising a line leaves its average
+ * far below a music bed that was mastered to its own ceiling. -16 dBFS RMS
+ * clears a ducked track while the ceiling below keeps it off the limiter.
+ */
+const VOICE_DROP_RMS = 0.14;
+/** Peak ceiling for a voice drop: ≈ -1 dBFS, just under clipping. */
+const VOICE_DROP_CEIL = 0.9;
+
+/**
  * "Softer presence" for the cloned voice.
  *
  * Chatterbox lands hot and brittle: full-band energy, spiky consonants and a
  * level that sits on top of the music instead of in it. That reads as uncanny
  * even when the timbre is right. This is a light broadcast chain — rumble
- * filter, gentle top-end roll-off, slow 3:1 compression, peak trim — so the
- * character stays but the delivery stops sounding shouted.
+ * filter, gentle top-end roll-off, a touch of presence, slow 3:1 compression,
+ * then loudness trim — so the character stays but the delivery stops sounding
+ * shouted and stops disappearing under the track.
  */
 export function softenWeaselPcm(pcm: Buffer): Buffer {
   const frames = Math.floor(pcm.length / 4);
@@ -825,6 +839,10 @@ export function softenWeaselPcm(pcm: Buffer): Buffer {
   const sr = 48_000;
   const hpA = Math.exp((-2 * Math.PI * 90) / sr);
   const lpA = Math.exp((-2 * Math.PI * 6200) / sr);
+  // Presence band: what sits above ~2.8 kHz. A drop made only of body and
+  // rumble reads as muffled next to a loud track — this shelf gives the
+  // consonants somewhere to land without going back to brittle.
+  const presA = Math.exp((-2 * Math.PI * 2800) / sr);
   const att = Math.exp(-1 / (0.01 * sr));
   const rel = Math.exp(-1 / (0.2 * sr));
   const buf = new Float32Array(frames * 2);
@@ -834,7 +852,10 @@ export function softenWeaselPcm(pcm: Buffer): Buffer {
   let prevR = 0;
   let lpL = 0;
   let lpR = 0;
+  let presL = 0;
+  let presR = 0;
   let env = 0;
+  let sumSq = 0;
   const threshold = 0.16;
   const ratio = 3;
   let peak = 0;
@@ -847,9 +868,11 @@ export function softenWeaselPcm(pcm: Buffer): Buffer {
     prevR = r;
     lpL = lpA * lpL + (1 - lpA) * hpL;
     lpR = lpA * lpR + (1 - lpA) * hpR;
-    // Keep most of the body, shave the top that makes sibilance sting.
-    let ol = hpL * 0.58 + lpL * 0.42;
-    let or = hpR * 0.58 + lpR * 0.42;
+    presL = presA * presL + (1 - presA) * lpL;
+    presR = presA * presR + (1 - presA) * lpR;
+    // Keep the body, shave the sting, and lift what is left of the top end.
+    let ol = hpL * 0.55 + lpL * 0.45 + (lpL - presL) * 0.45;
+    let or = hpR * 0.55 + lpR * 0.45 + (lpR - presR) * 0.45;
     const mag = Math.max(Math.abs(ol), Math.abs(or));
     const coeff = mag > env ? att : rel;
     env = coeff * env + (1 - coeff) * mag;
@@ -858,11 +881,18 @@ export function softenWeaselPcm(pcm: Buffer): Buffer {
     or = Math.tanh(or * gain * 1.1) / Math.tanh(1.1);
     buf[i * 2] = ol;
     buf[i * 2 + 1] = or;
+    sumSq += ol * ol + or * or;
     const p = Math.max(Math.abs(ol), Math.abs(or));
     if (p > peak) peak = p;
   }
-  // Sit at about -3 dBFS: loud enough to be clear, not a jump-scare.
-  const norm = peak > 0.0001 ? 0.7 / peak : 1;
+  // Level by loudness, not by peak. Chatterbox lines with one plosive used to
+  // normalise against that single transient and then sit quiet for the rest of
+  // the sentence — which is exactly how a drop ends up buried under a track.
+  // Aim the average at a fixed RMS and let a peak ceiling catch the rest.
+  const rms = Math.sqrt(sumSq / Math.max(1, frames * 2));
+  const makeup = rms > 0.0005 ? Math.min(8, VOICE_DROP_RMS / rms) : 1;
+  const ceiling = peak > 0 ? Math.min(1, VOICE_DROP_CEIL / (peak * makeup)) : 1;
+  const norm = makeup * ceiling;
   const out = Buffer.allocUnsafe(frames * 4);
   for (let i = 0; i < frames; i++) {
     const l = Math.max(-32768, Math.min(32767, Math.round(buf[i * 2] * norm * 32767)));
@@ -1036,7 +1066,10 @@ async function synthClonedHalVoice(text: string): Promise<{ pcm: Buffer; duratio
   const audioPrompt = (process.env.AMOK_VOICE_SAMPLE_URL ?? '').trim() || getHalVoiceRefDataUri();
   if (!repToken || !audioPrompt) return null;
 
-  const exaggeration = Number(process.env.AMOK_VOICE_EXAGGERATION ?? 0.35);
+  // 0.45 rather than 0.35: enough intonation that a line lands as speech rather
+  // than a reading, still nowhere near the cartoon end of the dial. HAL is
+  // calm, not flat.
+  const exaggeration = Number(process.env.AMOK_VOICE_EXAGGERATION ?? 0.45);
   const cfg = Number(process.env.AMOK_VOICE_CFG ?? 0.3);
   // ONE prediction per drop. Replicate's low-credit tier allows a burst of 1
   // (≈6/min), so firing a request per sentence meant most were throttled and

@@ -130,9 +130,10 @@ describe('Amok ("AMOK 9000") Discord integration', () => {
   it('shapes HAL prosody and converts 48 kHz mono WAV/PCM buffers', () => {
     expect(cleanWeaselSpeechText('Hey **AMOK**! `wheeze` https://example.com')).toBe('Hey AMOK! wheeze');
     const ssml = buildWeaselSsml('I am afraid I cannot do that.');
-    expect(ssml).toContain('<prosody rate="88%" pitch="-0.8st">I am afraid I cannot do that.</prosody>');
-    // No surfer slang stretching left in the pipeline.
+    expect(ssml).toContain('<prosody rate="92%" pitch="-0.5st">I am afraid I cannot do that.</prosody>');
+    // Still measured — nothing close to the stretched surfer delivery.
     expect(ssml).not.toContain('<prosody rate="84%"');
+    expect(ssml).not.toContain('pitch="+');
 
     const pcm = Buffer.alloc(4);
     pcm.writeInt16LE(1000, 0);
@@ -180,6 +181,41 @@ describe('Amok ("AMOK 9000") Discord integration', () => {
     expect(cleanVoiceReference(Buffer.from('not a wav'))).toBeNull();
   });
 
+  it('levels a voice drop by loudness, not by its loudest peak', () => {
+    const frames = 48_000;
+    function sine(amplitude: number): Buffer {
+      const pcm = Buffer.alloc(frames * 4);
+      for (let i = 0; i < frames; i++) {
+        const v = Math.round(Math.sin((2 * Math.PI * 220 * i) / 48_000) * amplitude);
+        pcm.writeInt16LE(v, i * 4);
+        pcm.writeInt16LE(v, i * 4 + 2);
+      }
+      return pcm;
+    }
+    function stats(buf: Buffer): { peak: number; rms: number } {
+      let peak = 0;
+      let sumSq = 0;
+      for (let i = 0; i < frames; i++) {
+        const l = buf.readInt16LE(i * 4) / 32768;
+        const r = buf.readInt16LE(i * 4 + 2) / 32768;
+        peak = Math.max(peak, Math.abs(l), Math.abs(r));
+        sumSq += l * l + r * r;
+      }
+      return { peak, rms: Math.sqrt(sumSq / (frames * 2)) };
+    }
+
+    // A quiet line and a hot line should land at the same loudness: peak
+    // normalisation used to leave the quiet one buried under the track.
+    const quiet = stats(softenWeaselPcm(sine(3_000)));
+    const hot = stats(softenWeaselPcm(sine(30_000)));
+    expect(quiet.rms).toBeGreaterThan(0.11);
+    expect(hot.rms).toBeGreaterThan(0.11);
+    expect(Math.abs(quiet.rms - hot.rms)).toBeLessThan(0.04);
+    // And neither rides the limiter into clipping.
+    expect(quiet.peak).toBeLessThanOrEqual(Math.round(0.91 * 32767));
+    expect(hot.peak).toBeLessThanOrEqual(Math.round(0.91 * 32767));
+  });
+
   it('softens cloned PCM without changing its length', () => {
     const frames = 48_000;
     const pcm = Buffer.alloc(frames * 4);
@@ -192,9 +228,9 @@ describe('Amok ("AMOK 9000") Discord integration', () => {
     expect(soft.length).toBe(pcm.length);
     let peak = 0;
     for (let i = 0; i < frames; i++) peak = Math.max(peak, Math.abs(soft.readInt16LE(i * 4)));
-    // Trimmed to about -3 dBFS instead of riding at full scale.
-    expect(peak).toBeLessThanOrEqual(Math.round(0.72 * 32767));
-    expect(peak).toBeGreaterThan(10_000);
+    // Audible, and under the ceiling rather than riding full scale.
+    expect(peak).toBeGreaterThan(2_000);
+    expect(peak).toBeLessThanOrEqual(Math.round(0.91 * 32767));
   });
 
   it('stores and summarizes long-term user and server memory', () => {

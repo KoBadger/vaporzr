@@ -167,7 +167,17 @@ export class VoiceManager implements AudioTransport {
   private suppressFadeIfRemainingMs = 0;
   /** Ducking: lower the music while channel members are speaking. */
   private duckAuto: ((userId: string) => boolean) | null = null;
-  private duckFactor = 0.25;
+  /**
+   * How far the music drops under an overlay or a live speaker.
+   *
+   * This used to be 0.25, which reads as "the track stopped and a voice played"
+   * rather than "the DJ talked over the record". 0.38 keeps the beat audible
+   * under a drop the way a club mixer's duck does.
+   */
+  private duckFactor = 0.38;
+  /** Ramped version of duckFactor applied sample-by-sample; 1 = untouched. */
+  private duckGain = 1;
+  private duckRampTimer: ReturnType<typeof setInterval> | null = null;
   private duckHoldMs = 700;
   private duckSpeakers = new Set<string>();
   private duckTimer: NodeJS.Timeout | null = null;
@@ -846,7 +856,10 @@ export class VoiceManager implements AudioTransport {
       this.stream &&
       !this.paused &&
       this.player.state.status === AudioPlayerStatus.Playing &&
-      (!this.expectingPcm || (this.lastChunkAt > 0 && Date.now() - this.lastChunkAt < 1000)),
+      // A deck set owns the sink outright: its chunks only stop when the decks
+      // are paused, and stealing the player in that moment drops the whole set.
+      // The queued-music path can be between tracks, so it checks freshness.
+      (this.expectingPcm || (this.lastChunkAt > 0 && Date.now() - this.lastChunkAt < 2500)),
     );
     if (streamFlowing) {
       this.sfxBuffer = this.sfxBuffer ? Buffer.concat([this.sfxBuffer, data]) : data;
@@ -884,7 +897,7 @@ export class VoiceManager implements AudioTransport {
     const mixSamples = Math.floor(Math.min(chunk.length, sfx.length) / 2);
     // Duck the music under the SFX/voice overlay while keeping the overlay at
     // full level (ducking resource.volume instead would quiet the voice too).
-    const musicScale = this.isDucking() ? this.duckFactor : 1;
+    const musicScale = this.isDucking() ? this.duckGain : 1;
     for (let i = 0; i < mixSamples; i++) {
       const a = Math.round(chunk.readInt16LE(i * 2) * musicScale);
       const b = sfx.readInt16LE(i * 2);
@@ -1538,9 +1551,42 @@ export class VoiceManager implements AudioTransport {
     return this.duckSpeakers.size > 0;
   }
 
+  /**
+   * Ramp the sample-level music duck instead of stepping it.
+   *
+   * A hard 12 dB step at the start of a voice line is audible as a hole in the
+   * track; 140 ms in and 450 ms out is fast enough to stay out of the voice's
+   * way and slow enough to read as a mix.
+   */
+  private rampDuckGain(target: number, ms: number): void {
+    if (this.duckRampTimer) {
+      clearInterval(this.duckRampTimer);
+      this.duckRampTimer = null;
+    }
+    const from = this.duckGain;
+    if (Math.abs(from - target) < 0.005) {
+      this.duckGain = target;
+      return;
+    }
+    const steps = Math.max(1, Math.round(ms / 20));
+    let i = 0;
+    const timer = setInterval(() => {
+      i++;
+      const t = Math.min(1, i / steps);
+      this.duckGain = from + (target - from) * t;
+      if (t >= 1) {
+        clearInterval(timer);
+        if (this.duckRampTimer === timer) this.duckRampTimer = null;
+      }
+    }, 20);
+    timer.unref?.();
+    this.duckRampTimer = timer;
+  }
+
   /** Cancel a manual duck immediately. */
   cancelDuck(): void {
     this.duckForceUntil = 0;
+    this.rampDuckGain(1, 250);
     this.applyVolumeToResource();
   }
 
@@ -1548,10 +1594,12 @@ export class VoiceManager implements AudioTransport {
   duckFor(ms: number): void {
     if (ms <= 0) return;
     this.duckForceUntil = Math.max(this.duckForceUntil, Date.now() + ms);
+    this.rampDuckGain(this.duckFactor, 140);
     this.applyVolumeToResource();
     const t = setTimeout(() => {
       if (Date.now() >= this.duckForceUntil) {
         this.duckForceUntil = 0;
+        if (!this.isDucking()) this.rampDuckGain(1, 450);
         this.applyVolumeToResource();
       }
     }, ms + 60);
@@ -1574,12 +1622,14 @@ export class VoiceManager implements AudioTransport {
       this.duckTimer = null;
     }
     if (this.duckSpeakers.size > 0) {
+      this.rampDuckGain(this.duckFactor, 180);
       this.applyVolumeToResource();
     } else {
       // Release shortly after the last speaker stops so short gaps don't pump.
       this.duckTimer = setTimeout(() => {
         this.duckTimer = null;
         this.duckSpeakers.clear();
+        if (!this.isDucking()) this.rampDuckGain(1, 450);
         this.applyVolumeToResource();
       }, this.duckHoldMs);
       this.duckTimer.unref?.();
