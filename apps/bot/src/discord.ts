@@ -288,7 +288,7 @@ const COMMANDS = [
     .addSubcommand((sc) =>
       sc
         .setName('give')
-        .setDescription('Owner: mint a single-use link (control = full panel, view = watch/listen)')
+        .setDescription('Owner: mint one link that opens the decks, karaoke screen, visuals and panel')
         .addStringOption((o) =>
           o
             .setName('scope')
@@ -305,6 +305,13 @@ const COMMANDS = [
             .setDescription('How long the invite stays usable (1-168, default 12 control / 24 view)')
             .setMinValue(1)
             .setMaxValue(168),
+        )
+        .addIntegerOption((o) =>
+          o
+            .setName('uses')
+            .setDescription('How many times the link can be opened (0 = reusable; default 10 control / 50 view)')
+            .setMinValue(0)
+            .setMaxValue(100),
         ),
     )
     .addSubcommand((sc) => sc.setName('show').setDescription('Owner: reveal the master key itself'))
@@ -365,6 +372,15 @@ const COMMANDS = [
     .addBooleanOption((o) =>
       o.setName('karaoke').setDescription('Jump straight into live karaoke highlight').setRequired(false),
     ),
+  new SlashCommandBuilder()
+    .setName('karaoke')
+    .setDescription('Start a karaoke night, add a song, or open the karaoke screen')
+    .addStringOption((o) =>
+      o.setName('song').setDescription('Song title or link to add to the sing queue').setRequired(false),
+    ),
+  new SlashCommandBuilder()
+    .setName('reset')
+    .setDescription('Panic button: put pitch, tempo, EQ, filter, trims, stems and crossfader back to neutral'),
   new SlashCommandBuilder()
     .setName('perms')
     .setDescription('Manage permissions (admin only)')
@@ -1693,10 +1709,10 @@ export class DiscordBot {
    * multi-use so a reload mid-song does not lock the room out.
    */
   private karaokeStageUrl(guildId: string): string | null {
-    const base = (config.staticBaseUrl || config.jamPublicBase || '').replace(/\/+$/, '');
-    if (!base) return null;
+    const target = vizTunnel.pageLink('/karaoke');
+    if (!target.secure) return null;
     const { token } = mintInvite('view', `karaoke ${guildId}`, 6 * 60 * 60 * 1000, Date.now(), 200);
-    return `${base}/karaoke?invite=${encodeURIComponent(token)}`;
+    return `${target.url}?invite=${encodeURIComponent(token)}`;
   }
 
   /** True when something is already playing that karaoke would cut off. */
@@ -1741,9 +1757,12 @@ export class DiscordBot {
       .setColor(0xf04ac0)
       .setTitle(state.open ? '🎤 Karaoke is open' : '🎤 Karaoke')
       .setDescription(
-        state.open
+        (state.open
           ? 'Add a song with the button below. Songs load on a deck with the vocal track dropped, and the lyrics go up on the karaoke screen.'
-          : 'Press **Start karaoke** to open the night. Anyone can add a song; the bot drops the vocals and keeps the instrumental.',
+          : 'Press **Start karaoke** to open the night. Anyone can add a song; the bot drops the vocals and keeps the instrumental.') +
+          (this.sessionFor(guildId).voice.isConnectionReady()
+            ? ''
+            : '\n\n🔈 **Not in a voice channel yet** — press **Join voice** (or just start) and I will join yours.'),
       )
       .addFields({ name: 'Up now', value: now, inline: false }, { name: 'Queue', value: waiting, inline: false })
       .setFooter({
@@ -1756,6 +1775,11 @@ export class DiscordBot {
     if (!state.open) {
       primary.addComponents(
         new ButtonBuilder().setCustomId('vz:k-start').setLabel('Start karaoke').setStyle(ButtonStyle.Success),
+      );
+    }
+    if (!this.sessionFor(guildId).voice.isConnectionReady()) {
+      primary.addComponents(
+        new ButtonBuilder().setCustomId('vz:k-voice').setLabel('Join voice').setStyle(ButtonStyle.Secondary),
       );
     }
     primary.addComponents(
@@ -1779,6 +1803,96 @@ export class DiscordBot {
     }
 
     return { embeds: [embed], components: [primary, second] };
+  }
+
+  /**
+   * Every link one invite opens, on one screen.
+   *
+   * The old reply named a single page, which is why using the deck *and* the
+   * karaoke screen meant minting twice and getting refused the second time.
+   * One token opens all of them now, and the list says which is which.
+   */
+  private keyInviteEmbed(
+    scope: AccessScope,
+    hours: number,
+    uses: number,
+    token: string,
+    inviteId: string,
+  ): EmbedBuilder {
+    const withToken = (target: { url: string; secure: boolean }): string | null =>
+      target.secure ? `${target.url}?invite=${encodeURIComponent(token)}` : null;
+    const page = (path: string): string | null => withToken(vizTunnel.pageLink(path));
+
+    const rows: Array<[string, string | null]> =
+      scope === 'request'
+        ? [['Song requests', page('/jam')]]
+        : scope === 'view'
+          ? [
+              ['🎤 Karaoke screen', page('/karaoke')],
+              ['🎛 Visualizer', page('/viz')],
+              ['🎧 Hi-fi listen', page('/listen')],
+            ]
+          : [
+              ['🎚 Decks', page('/deck')],
+              ['🎤 Karaoke screen', page('/karaoke')],
+              ['🎛 Visualizer', page('/viz')],
+              ['🎧 Hi-fi listen', page('/listen')],
+              ['⚙️ Control panel', page('/panel')],
+            ];
+
+    const lines = rows
+      .filter(([, url]) => Boolean(url))
+      .map(([label, url]) => `**${label}**\n<${url}>`)
+      .join('\n');
+    const insecure = rows.some(([, url]) => !url);
+    const reach = insecure
+      ? '\n\n⚠️ Some links are missing because there is no public https address yet. ' +
+        'Set `PUBLIC_BASE_URL` (or run the tunnel) and links come back — until then the LAN ' +
+        'address only works on your own network.'
+      : '';
+
+    return new EmbedBuilder()
+      .setTitle(scope === 'control' ? 'Control invite' : scope === 'view' ? 'View invite' : 'Song-request invite')
+      .setDescription(
+        (lines || '(no links available yet)') +
+          `\n\nExpires in **${hours}h**. ` +
+          (uses === 0 ? 'Reusable until then.' : `Works **${uses}** time${uses === 1 ? '' : 's'}.`) +
+          (scope === 'control'
+            ? '\nOpen the deck on your laptop and the karaoke screen on the TV from this same list.'
+            : scope === 'view'
+              ? '\nCannot change playback — safe to leave on a screen in the room.'
+              : '\nOpens the song-request page only — no listening, no controls.') +
+          reach,
+      )
+      .setColor(this.themeColor())
+      .setFooter({ text: `id ${inviteId} · /key revoke ${inviteId} to cut it off early` });
+  }
+
+  /**
+   * Karaoke has to be *in* the voice channel to be heard. The deck's sink writes
+   * into the voice player, and with no player every byte is dropped silently —
+   * the failure looks like a broken bot, not a missing join.
+   *
+   * Returns a room-facing reason when it could not join, or null when we are in.
+   */
+  private async ensureKaraokeVoice(
+    interaction: ButtonInteraction | ModalSubmitInteraction | ChatInputCommandInteraction,
+    guildId: string,
+  ): Promise<string | null> {
+    const session = this.sessionFor(guildId);
+    if (session.voice.isConnectionReady()) return null;
+    const guild = interaction.guild;
+    const member = interaction.member;
+    if (!guild || !member || !('voice' in member) || !member.voice.channel) {
+      return 'Join a voice channel first — karaoke plays through the bot in that channel.';
+    }
+    const channel = member.voice.channel;
+    try {
+      await session.voice.join(guild.id, channel.id, guild.voiceAdapterCreator, channel);
+      return null;
+    } catch (err) {
+      return `Couldn't join **${channel.name}**: ${err instanceof Error ? err.message : String(err)}`;
+    }
   }
 
   /** Host action? Skip/close/key change have to be, but starting an empty room is not. */
@@ -1846,7 +1960,22 @@ export class DiscordBot {
           .catch(() => {});
         return;
       }
+      const joined = await this.ensureKaraokeVoice(interaction, guildId);
+      if (joined) {
+        await interaction.reply({ content: joined, flags: MessageFlags.Ephemeral }).catch(() => {});
+        return;
+      }
       night.openNight();
+      await interaction.update(this.karaokeCard(guildId)).catch(() => {});
+      return;
+    }
+
+    if (id === 'vz:k-voice') {
+      const joined = await this.ensureKaraokeVoice(interaction, guildId);
+      if (joined) {
+        await interaction.reply({ content: joined, flags: MessageFlags.Ephemeral }).catch(() => {});
+        return;
+      }
       await interaction.update(this.karaokeCard(guildId)).catch(() => {});
       return;
     }
@@ -1880,6 +2009,11 @@ export class DiscordBot {
     }
     const night = this.karaokeFor(guildId);
     if (!night.isOpen()) night.openNight();
+    const joined = await this.ensureKaraokeVoice(interaction, guildId);
+    if (joined) {
+      await interaction.reply({ content: joined, flags: MessageFlags.Ephemeral }).catch(() => {});
+      return;
+    }
     // A Discord user IS their identity here, which is what stops one person
     // stacking the queue — unlike the stage screen, where the typed name is all
     // we have.
@@ -2049,6 +2183,13 @@ export class DiscordBot {
           // of semitones without the mix changing speed.
           quiet(decks.transpose(deck, msg.semitones ?? 0));
           break;
+        case 'reset': {
+          // The panic button. Calm the karaoke night's own key first, or the
+          // next turn would put the pitch straight back.
+          this.karaokeNights.get(gid)?.setTranspose(0);
+          report(decks.resetAudio());
+          break;
+        }
         case 'karaoke': {
           // The sing queue, driven from the stage screen or the deck page.
           const night = this.karaokeFor(gid);
@@ -2894,6 +3035,48 @@ export class DiscordBot {
     }
 
     switch (name) {
+      case 'karaoke': {
+        // The one-command launch: no song = the card, with a song = straight
+        // into the queue. Voice is handled here too, because karaoke with the
+        // bot outside the channel looks exactly like a broken bot.
+        if (!this.requireLevel('karaoke', interaction)) {
+          await interaction.reply({ content: '🔒 You need a higher role for karaoke.', flags: MessageFlags.Ephemeral });
+          break;
+        }
+        const gid = interaction.guildId;
+        if (!gid) {
+          await interaction.reply({ content: 'Karaoke needs a server.', flags: MessageFlags.Ephemeral });
+          break;
+        }
+        const song = interaction.options.getString('song');
+        if (!song) {
+          await interaction.reply(this.karaokeCard(gid));
+          break;
+        }
+        const joined = await this.ensureKaraokeVoice(interaction, gid);
+        if (joined) {
+          await interaction.reply({ content: joined, flags: MessageFlags.Ephemeral });
+          break;
+        }
+        const night = this.karaokeFor(gid);
+        if (!night.isOpen()) night.openNight();
+        const added = night.add(interaction.user.username, `discord:${interaction.user.id}`, song);
+        await interaction.reply({ content: added, flags: MessageFlags.Ephemeral });
+        break;
+      }
+
+      case 'reset': {
+        const gid = interaction.guildId;
+        if (!gid) {
+          await interaction.reply({ content: 'Needs a server.', flags: MessageFlags.Ephemeral });
+          break;
+        }
+        this.karaokeNights.get(gid)?.setTranspose(0);
+        const reset = this.deckFor(gid).resetAudio();
+        await interaction.reply({ content: reset.message, flags: MessageFlags.Ephemeral });
+        break;
+      }
+
       case 'play': {
         const query = interaction.options.getString('query');
         const file = interaction.options.getAttachment('file');
@@ -3317,10 +3500,6 @@ export class DiscordBot {
       case 'key': {
         const sub = interaction.options.getSubcommand();
         if (!this.perms.isOwner(interaction.user.id)) return this.deny(interaction);
-        const pl = vizTunnel.panelLink();
-        const vl = vizTunnel.vizLink();
-        const linkFor = (base: { url: string; secure: boolean }, token: string): string =>
-          base.secure ? `${base.url}?invite=${encodeURIComponent(token)}` : '';
 
         if (sub === 'rotate') {
           const newKey = randomBytes(12).toString('base64url');
@@ -3439,28 +3618,23 @@ export class DiscordBot {
           1,
           Math.min(168, interaction.options.getInteger('hours') ?? (scope === 'control' ? 12 : 24)),
         );
-        const minted = mintInvite(scope, `discord:${interaction.user.username}`, hours * 60 * 60 * 1000);
-        const link = linkFor(scope === 'control' ? pl : vl, minted.token);
+        // One token opens every surface, so the default has to survive opening
+        // more than one page — a single-use invite made the deck page and the
+        // karaoke screen mutually exclusive.
+        const uses = Math.max(
+          0,
+          Math.min(100, interaction.options.getInteger('uses') ?? (scope === 'control' ? 10 : 50)),
+        );
+        const minted = mintInvite(
+          scope,
+          `discord:${interaction.user.username}`,
+          hours * 60 * 60 * 1000,
+          Date.now(),
+          uses,
+        );
         if (interaction.guildId) await this.markKeyedGuild(interaction.guildId);
         await interaction.reply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle(
-                scope === 'control' ? 'Control invite' : scope === 'view' ? 'View invite' : 'Song-request invite',
-              )
-              .setDescription(
-                (link ? `<${link}>\n\n` : '(links appear once PUBLIC_BASE_URL or a tunnel is up)\n\n') +
-                  `Single use, expires in ${hours}h. ` +
-                  (scope === 'control'
-                    ? 'Unlocks the control panel, and the same link also opens /viz and /listen.'
-                    : scope === 'view'
-                      ? 'Watch the visualizer or listen in hi-fi; cannot change playback.'
-                      : 'Opens the song-request page only - no listening, no controls.') +
-                  "\n\nIf a key screen appears, paste this link's code there.",
-              )
-              .setColor(this.themeColor())
-              .setFooter({ text: `id ${minted.invite.id} · /key revoke ${minted.invite.id} to cut it off early` }),
-          ],
+          embeds: [this.keyInviteEmbed(scope, hours, uses, minted.token, minted.invite.id)],
           flags: MessageFlags.Ephemeral,
         });
         break;
@@ -5825,10 +5999,6 @@ export class DiscordBot {
           if (!this.perms.isOwner(message.author.id)) return void (await deny());
           const parts = args.trim().split(/\s+/).filter(Boolean);
           const sub = (parts[0] ?? '').toLowerCase();
-          const pl = vizTunnel.panelLink();
-          const vl = vizTunnel.vizLink();
-          const linkFor = (base: { url: string; secure: boolean }, token: string): string =>
-            base.secure ? `${base.url}?invite=${encodeURIComponent(token)}` : '';
 
           if (sub === 'rotate') {
             const newKey = randomBytes(12).toString('base64url');
@@ -5917,20 +6087,17 @@ export class DiscordBot {
           const scopeArg = (parts[1] ?? '').toLowerCase();
           const scope: AccessScope = scopeArg === 'view' ? 'view' : scopeArg === 'request' ? 'request' : 'control';
           const hours = Math.max(1, Math.min(168, Number(parts[2]) || (scope === 'control' ? 12 : 24)));
-          const minted = mintInvite(scope, `discord:${message.author.username}`, hours * 60 * 60 * 1000);
-          const link = linkFor(scope === 'control' ? pl : vl, minted.token);
-          if (message.guildId) await this.markKeyedGuild(message.guildId);
-          await message.reply(
-            `**${scope === 'control' ? 'Control' : scope === 'view' ? 'View' : 'Song-request'} invite**\n` +
-              (link ? `${link}\n\n` : '(links appear once PUBLIC_BASE_URL or a tunnel is up)\n\n') +
-              `Single use, expires in ${hours}h. ` +
-              (scope === 'control'
-                ? 'Unlocks the control panel, and the same link also opens /viz and /listen.'
-                : scope === 'view'
-                  ? 'Watch the visualizer or listen in hi-fi; cannot change playback.'
-                  : 'Opens the song-request page only - no listening, no controls.') +
-              `\n\nid \`${minted.invite.id}\` · \`V@key revoke ${minted.invite.id}\` to cut it off early`,
+          // `V@key give [scope] [hours] [uses]` — 0 means reusable.
+          const uses = Math.max(0, Math.min(100, Number(parts[3]) || (scope === 'control' ? 10 : 50)));
+          const minted = mintInvite(
+            scope,
+            `discord:${message.author.username}`,
+            hours * 60 * 60 * 1000,
+            Date.now(),
+            uses,
           );
+          if (message.guildId) await this.markKeyedGuild(message.guildId);
+          await message.reply({ embeds: [this.keyInviteEmbed(scope, hours, uses, minted.token, minted.invite.id)] });
           break;
         }
         case 'sc':
@@ -6329,6 +6496,18 @@ export class DiscordBot {
         }
 
         case 'k':
+        case 'reset': {
+          if (!canUse('reset')) return void (await deny());
+          const gid = message.guildId;
+          if (!gid) {
+            await message.reply('Needs a server.');
+            break;
+          }
+          this.karaokeNights.get(gid)?.setTranspose(0);
+          await message.reply(this.deckFor(gid).resetAudio().message);
+          break;
+        }
+
         case 'karaoke': {
           if (!canUse('karaoke')) return void (await deny());
           // Bare command = the karaoke card. Everything is behind a button so

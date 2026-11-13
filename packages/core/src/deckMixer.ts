@@ -849,6 +849,88 @@ export class DeckMixer {
     this.startTick();
   }
 
+  /**
+   * Put one deck's processing back to neutral **without touching what is loaded
+   * or where the playhead is**.
+   *
+   * This is the panic button. "It sounds wrong" has half a dozen possible
+   * causes — a key change, a tempo nudge from SYNC, a half-killed EQ band, a
+   * filter left open, a muted stem lane, a trim pulled down — and hunting them
+   * one at a time mid-set is the worst possible time to debug. Everything that
+   * colours the sound goes back to unity in one call, and the music keeps
+   * playing: only the decoder restarts, and only if the pitch actually moved.
+   */
+  resetChannel(id: DeckId): boolean {
+    const slot = this.slot(id);
+    if (!slot.state.source) return false;
+    const pos = slot.state.positionMs;
+    const wasPlaying = slot.state.playing;
+    const pitched = Math.abs(slot.state.tempo - 1) > 0.0005 || Math.abs(slot.state.transpose ?? 0) > 0.01;
+    const dirty =
+      pitched ||
+      slot.state.gain !== 1 ||
+      slot.state.eq.low !== 0 ||
+      slot.state.eq.mid !== 0 ||
+      slot.state.eq.high !== 0 ||
+      slot.state.filter.type !== 'off' ||
+      slot.micro !== 1 ||
+      Boolean(slot.state.loop) ||
+      slot.stemGains.some((g) => g !== 1);
+
+    slot.state.eq = { ...FLAT_EQ };
+    this.rebuildCoefs(slot);
+    slot.state.filter = { type: 'off', cutoff: 20_000 };
+    slot.filterCoefs = IDENTITY_BIQUAD;
+    slot.filterState = [newBiquadState(), newBiquadState()];
+    slot.state.gain = 1;
+    slot.state.tempo = 1;
+    slot.state.transpose = 0;
+    slot.micro = 1;
+    slot.state.drift = 1;
+    if (slot.stemGains.length > 0) {
+      slot.stemGains = slot.stemGains.map(() => 1);
+      if (slot.state.stems) slot.state.stems = { lanes: [...slot.state.stems.lanes], gains: [...slot.stemGains] };
+    }
+    this.clearLoopState(slot);
+    if (pitched) {
+      // The decoder is rendering at the old rate/pitch; everything else is a
+      // per-sample gain or filter and needs no restart.
+      slot.baseMs = pos;
+      slot.consumedFrames = 0;
+      slot.state.positionMs = pos;
+      slot.ring.clear();
+      this.killDecoder(slot);
+      slot.fadeFrames = Math.round(this.sampleRate * 0.03);
+      if (wasPlaying) this.spawnDecoder(slot, pos);
+    }
+    this.emit();
+    return dirty;
+  }
+
+  /** Master side of the panic button: volume and crossfader back to neutral. */
+  resetMaster(): void {
+    this.masterGain = 1;
+    this.crossfader = 0.5;
+    this.emit();
+  }
+
+  /** True when any deck is doing something other than playing the file straight. */
+  isDirty(): boolean {
+    return this.allSlots().some(
+      (s) =>
+        s.state.source &&
+        (Math.abs(s.state.tempo - 1) > 0.0005 ||
+          Math.abs(s.state.transpose ?? 0) > 0.01 ||
+          s.state.gain !== 1 ||
+          s.state.eq.low !== 0 ||
+          s.state.eq.mid !== 0 ||
+          s.state.eq.high !== 0 ||
+          s.state.filter.type !== 'off' ||
+          Boolean(s.state.loop) ||
+          s.stemGains.some((g) => g !== 1)),
+    );
+  }
+
   /** Stop everything and release the decoders. */
   stopAll(): void {
     for (const slot of this.allSlots()) {
@@ -957,7 +1039,14 @@ export class DeckMixer {
     let rate = tempo;
     if (Math.abs(transpose) > 0.01) {
       const pitch = Math.pow(2, transpose / 12);
-      filters.push(`asetrate=${Math.round(this.sampleRate * pitch)}`, `aresample=${this.sampleRate}`);
+      // `-af` runs BEFORE the `-ar` output resample, so asetrate would otherwise
+      // be told about a rate the samples are not at (a 44.1 kHz file read as
+      // 48 kHz is ~1.5 semitones and 9% fast). Pin the rate first.
+      filters.push(
+        `aresample=${this.sampleRate}`,
+        `asetrate=${Math.round(this.sampleRate * pitch)}`,
+        `aresample=${this.sampleRate}`,
+      );
       // Undo the speed change asetrate introduced, keeping the deck's tempo.
       rate = tempo / pitch;
     }

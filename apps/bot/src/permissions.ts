@@ -54,6 +54,7 @@ const DEFAULT_COMMAND_LEVELS: Record<string, PermissionLevel> = {
   burst: 'user',
   lyrics: 'user',
   karaoke: 'user',
+  reset: 'user',
   skip: 'user',
   remove: 'user',
   clear: 'user',

@@ -3316,6 +3316,12 @@
             <button data-mid="loopoff" data-tip="Clear the loop">LOOP OFF</button>
             <button data-mid="stop" data-tip="Stop every deck and hand the channel back to the queue">STOP ALL</button>
             <button
+              data-mid="reset"
+              data-tip="Panic button: pitch, tempo, EQ, filter, trims, stems and crossfader back to neutral. Playback keeps going"
+            >
+              RESET
+            </button>
+            <button
               data-mid="semi-down"
               data-tip="Pitch the track down a semitone — the karaoke key change. Tempo and stems stay put"
             >
@@ -4295,6 +4301,11 @@
             control('loop-clear', { deck: deck });
           } else if (kind === 'stop') {
             control('stop');
+          } else if (kind === 'reset') {
+            // One press, no confirmation: the whole point is that it is faster
+            // to hit than to work out which control is making it sound wrong.
+            control('reset');
+            toast('info', 'Audio back to neutral — playback untouched.');
           } else if (kind === 'semi-down' || kind === 'semi-up') {
             // Key change: pitch only. The mixer restarts the decoder at the same
             // playhead, so the tempo, the beat grid and the stem alignment are

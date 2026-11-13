@@ -16,7 +16,7 @@ import {
   type DeckSyncState,
 } from '@vaporzr/core/deckMixer';
 import { downloadToTempFile } from '@vaporzr/core/mediaDownload';
-import { deckPartner, isDeckId } from '@vaporzr/shared';
+import { DECK_IDS, deckPartner, isDeckId } from '@vaporzr/shared';
 import { writeJsonAtomicSync } from '@vaporzr/core/jsonFile';
 import type { ResolvedTrack } from '@vaporzr/core/spotify';
 import { probeDuration } from '@vaporzr/core/suno';
@@ -285,6 +285,25 @@ export class DeckController {
       if (!oldest) break;
       this.resolved.delete(oldest);
     }
+  }
+
+  /**
+   * Panic button: every colouring stage back to neutral, playback untouched.
+   * Used by `V@reset`, the deck page's RESET, and the same path the karaoke
+   * night uses when a set has drifted into sounding wrong.
+   */
+  resetAudio(): DeckActionResult {
+    this.mixer.resetMaster();
+    const dirty: string[] = [];
+    for (const id of DECK_IDS) {
+      if (this.mixer.resetChannel(id)) dirty.push(id.toUpperCase());
+    }
+    return {
+      ok: true,
+      message: dirty.length
+        ? `Audio reset — ${dirty.join(', ')} back to neutral (pitch, tempo, EQ, filter, trims, stems, crossfader).`
+        : 'Audio was already neutral — nothing was colouring the sound.',
+    };
   }
 
   /**

@@ -223,6 +223,8 @@ export type DeckAction =
   | 'tempo'
   /** Pitch shift in semitones for karaoke key changes. */
   | 'transpose'
+  /** Panic button: every colouring stage back to neutral, playback untouched. */
+  | 'reset'
   | 'cue-set'
   | 'cue-jump'
   | 'cue-clear'

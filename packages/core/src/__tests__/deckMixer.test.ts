@@ -397,3 +397,49 @@ describe('stem lanes', () => {
     expect(m.state().a.stems).toBeNull();
   });
 });
+
+describe('audio reset', () => {
+  const mixer = () => new DeckMixer({ sink: () => true });
+  const SOURCE = { file: 'C:/tmp/track.mp3', title: 'Track', artist: 'X', durationMs: 180_000 };
+
+  it('puts every colouring stage back to neutral and leaves playback alone', () => {
+    const m = mixer();
+    m.load('a', SOURCE, {
+      play: false,
+      stems: { lanes: ['vocals', 'music'], files: ['C:/tmp/track/vocals.mp3', 'C:/tmp/track/no_vocals.mp3'] },
+    });
+    m.seek('a', 42_000);
+    m.setEqBand('a', 'low', -20);
+    m.setGain('a', 0.4);
+    m.setFilterKnob('a', 0.9);
+    m.setTranspose('a', -3);
+    m.setTempo('a', 1.08);
+    m.setStemGain('a', 'vocals', 0);
+    m.setCrossfader(0.1);
+    m.setMasterGain(0.5);
+    expect(m.isDirty()).toBe(true);
+
+    expect(m.resetChannel('a')).toBe(true);
+    m.resetMaster();
+
+    const s = m.state().a;
+    expect(s.eq).toEqual({ low: 0, mid: 0, high: 0 });
+    expect(s.gain).toBe(1);
+    expect(s.filter.type).toBe('off');
+    expect(s.transpose).toBe(0);
+    expect(s.tempo).toBe(1);
+    expect(s.stems?.gains).toEqual([1, 1]);
+    expect(m.getCrossfader()).toBe(0.5);
+    expect(m.isDirty()).toBe(false);
+    // A reset must not rewind the set.
+    expect(s.positionMs).toBe(42_000);
+  });
+
+  it('reports nothing to do on a deck that is already neutral or empty', () => {
+    const m = mixer();
+    expect(m.resetChannel('b')).toBe(false);
+    m.load('a', SOURCE, { play: false });
+    expect(m.resetChannel('a')).toBe(false);
+    expect(m.isDirty()).toBe(false);
+  });
+});
