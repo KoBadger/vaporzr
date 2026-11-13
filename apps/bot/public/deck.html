@@ -1785,6 +1785,48 @@
         opacity: 0.55;
         cursor: wait;
       }
+      /* Channel meters: one bar per deck plus the master bus. The width is
+         driven from rAF, so no CSS transition — it would smooth twice. */
+      .vu-rows {
+        display: grid;
+        gap: 3px;
+      }
+      .vu-row {
+        display: grid;
+        grid-template-columns: 12px 1fr;
+        align-items: center;
+        gap: 7px;
+        font: 700 9px/1 var(--mono);
+        letter-spacing: 0.1em;
+        color: var(--dim-2);
+      }
+      .vu-row i {
+        position: relative;
+        display: block;
+        height: 6px;
+        border-radius: 3px;
+        border: 1px solid var(--line-soft);
+        background: #07070f;
+        overflow: hidden;
+      }
+      .vu-row b {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        width: 0;
+        border-radius: 2px;
+        background: linear-gradient(90deg, #22d3ee 0%, #4ade80 58%, #fbbf24 84%, #f87171 100%);
+      }
+      .vu-row.master {
+        margin-top: 2px;
+      }
+      .vu-row.master i {
+        height: 8px;
+      }
+      .vu-row.master span {
+        color: #b4bfff;
+      }
       /* ---------- drop targets: samples and dropped tracks ---------- */
       .drop-hint {
         margin-top: 6px;
@@ -2787,9 +2829,10 @@
       <button class="fn" id="btn-browse" title="Track browser (press /)"><span class="led"></span>BROWSE</button>
       <button class="fn" id="btn-keys" title="Keyboard shortcuts (press ?)">KEYS</button>
       <button class="fn pro-only" id="btn-range" title="Pitch fader range"><span class="lbl">±8%</span></button>
-      <button class="fn pro-only" id="btn-decks" title="Show two decks or all four">
-        <span class="lbl">2 DECKS</span>
-      </button>
+      <div class="mode-switch" id="deck-layout" role="group" aria-label="Deck layout">
+        <button id="decks-2" aria-pressed="false" title="Show decks A and B only">2 DECKS</button>
+        <button id="decks-4" aria-pressed="true" title="Show all four decks">4 DECKS</button>
+      </div>
       <button class="fn help-btn" id="btn-help" title="How to mix (short guide)" aria-label="How to mix">?</button>
       <span class="spacer"></span>
       <button class="fn" id="btn-sync"><span class="led"></span>SYNC</button>
@@ -3184,6 +3227,25 @@
             <span class="lg-a">■ <span id="overlap-a">A</span></span>
             <span class="lg-b">■ <span id="overlap-b">B</span></span>
             <span id="overlap-note"></span>
+          </div>
+
+          <div class="block-label">LEVELS <span class="muted">post-fader</span></div>
+          <div class="vu-rows">
+            <div class="vu-row" data-vu="a">
+              <span>A</span><i><b></b></i>
+            </div>
+            <div class="vu-row" data-vu="b">
+              <span>B</span><i><b></b></i>
+            </div>
+            <div class="vu-row" data-vu="c">
+              <span>C</span><i><b></b></i>
+            </div>
+            <div class="vu-row" data-vu="d">
+              <span>D</span><i><b></b></i>
+            </div>
+            <div class="vu-row master" data-vu="master">
+              <span>M</span><i><b></b></i>
+            </div>
           </div>
 
           <div class="block-label">QUICK</div>
@@ -3995,6 +4057,43 @@
           }
         }
 
+        /** dBFS (-60..0) → 0..1 bar fill. */
+        function vuPct(db) {
+          var d = Number(db);
+          if (!isFinite(d)) return 0;
+          return Math.max(0, Math.min(1, (Math.max(-60, Math.min(0, d)) + 60) / 60));
+        }
+
+        var vuTarget = { a: 0, b: 0, c: 0, d: 0, master: 0 };
+        var vuShown = { a: 0, b: 0, c: 0, d: 0, master: 0 };
+
+        /** Read the meter targets out of the latest state push. */
+        function sampleMeters() {
+          if (!state) return;
+          ['a', 'b', 'c', 'd'].forEach(function (id) {
+            var slot = state[id];
+            vuTarget[id] = slot && slot.playing ? vuPct(slot.levelDb) : 0;
+          });
+          vuTarget.master = vuPct(state.masterLevelDb);
+        }
+
+        /* A VU has ballistics: it snaps up and falls back slowly. State arrives
+           at ~4 Hz, so the falling edge is animated here rather than in CSS. */
+        function startMeters() {
+          function frame() {
+            ['a', 'b', 'c', 'd', 'master'].forEach(function (id) {
+              var t = vuTarget[id] || 0;
+              var s = vuShown[id] || 0;
+              s = t >= s ? t : s + (t - s) * 0.09;
+              vuShown[id] = s;
+              var bar = el('[data-vu="' + id + '"] b');
+              if (bar) bar.style.width = (s * 100).toFixed(1) + '%';
+            });
+            requestAnimationFrame(frame);
+          }
+          requestAnimationFrame(frame);
+        }
+
         /** Keep the C/D channel strip and the quick buttons in step with the server. */
         function paintMid() {
           all('[data-chan-gain]').forEach(function (input) {
@@ -4015,6 +4114,7 @@
             j.classList.toggle('on', mode === 'cdj');
           }
           drawOverlap();
+          sampleMeters();
         }
 
         /** One quick action, always aimed at the focused deck. */
@@ -5673,6 +5773,8 @@
           });
           flushOnRelease(thumbXfade, 'xfade');
 
+          startMeters();
+
           /* ---- centre strip wiring: C/D trims, quick wins, shout-out ---- */
           all('[data-chan-gain]').forEach(function (input) {
             var id = input.getAttribute('data-chan-gain');
@@ -6261,9 +6363,9 @@
              and shrinks the platters on a laptop. C and D keep running either
              way — this is a view toggle, not a mixer change. */
           (function () {
-            var btn = el('#btn-decks');
-            if (!btn) return;
-            var lbl = el('.lbl', btn) || btn;
+            var two = el('#decks-2');
+            var four = el('#decks-4');
+            if (!two || !four) return;
             var count = 4;
             try {
               count = localStorage.getItem('vz-deck-count') === '2' ? 2 : 4;
@@ -6272,15 +6374,17 @@
             }
             function applyDeckLayout() {
               document.body.classList.toggle('two-decks', count === 2);
-              lbl.textContent = count === 2 ? '2 DECKS' : '4 DECKS';
-              btn.setAttribute('aria-pressed', count === 2 ? 'true' : 'false');
+              two.classList.toggle('on', count === 2);
+              four.classList.toggle('on', count === 4);
+              two.setAttribute('aria-pressed', String(count === 2));
+              four.setAttribute('aria-pressed', String(count === 4));
               // Focus cannot sit on a hidden deck: fall back to A so the quick
               // actions and the shout-out box still have a target.
               if (count === 2 && (focusId === 'c' || focusId === 'd')) focusDeck('a');
               if (state) drawOverlap();
             }
-            btn.onclick = function () {
-              count = count === 2 ? 4 : 2;
+            function setCount(next) {
+              count = next;
               try {
                 localStorage.setItem('vz-deck-count', String(count));
               } catch (e) {
@@ -6288,6 +6392,12 @@
               }
               applyDeckLayout();
               toast('info', count === 2 ? 'Two-deck view — C and D keep playing.' : 'Four-deck view.');
+            }
+            two.onclick = function () {
+              setCount(2);
+            };
+            four.onclick = function () {
+              setCount(4);
             };
             applyDeckLayout();
           })();
