@@ -1697,6 +1697,9 @@ export class DiscordBot {
         case 'lock':
           report(decks.lock(msg.enabled === false ? null : deck));
           break;
+        case 'stemGain':
+          quiet(decks.stemGain(deck, msg.lane ?? '', msg.value ?? 1));
+          break;
         case 'shout': {
           // A shout-out is spoken over whatever is playing. It is deliberately
           // not metered against the caller's daily voice budget: a control

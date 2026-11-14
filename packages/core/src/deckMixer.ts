@@ -307,6 +307,13 @@ interface SlotRuntime {
   ring: PcmRing;
   proc: ChildProcess | null;
   procEnded: boolean;
+  /** Local stem files when this deck plays a separated track, else null. */
+  stemFiles: string[] | null;
+  /** Lane gains, parallel to `stemFiles`. */
+  stemGains: number[];
+  /** One decoder ring per stem; tick() sums them into `ring`. */
+  stemRings: PcmRing[] | null;
+  stemProcs: ChildProcess[] | null;
   coefs: BiquadCoefs[];
   eqState: BiquadState[][]; // [band][channel]
   /** DJ filter coefficients + per-channel state (identity when bypassed). */
@@ -401,6 +408,10 @@ export class DeckMixer {
       ring: new PcmRing(),
       proc: null,
       procEnded: false,
+      stemFiles: null,
+      stemGains: [],
+      stemRings: null,
+      stemProcs: null,
       coefs: [IDENTITY_BIQUAD, IDENTITY_BIQUAD, IDENTITY_BIQUAD],
       eqState: [newBiquadState(), newBiquadState(), newBiquadState()].map(() => [newBiquadState(), newBiquadState()]),
       filterCoefs: IDENTITY_BIQUAD,
@@ -433,6 +444,7 @@ export class DeckMixer {
       cues: [...slot.state.cues],
       loop: slot.state.loop ? { ...slot.state.loop } : null,
       filter: { ...slot.state.filter },
+      stems: slot.state.stems ? { lanes: [...slot.state.stems.lanes], gains: [...slot.state.stems.gains] } : null,
     });
     return {
       active: this.allSlots().some((s) => s.state.playing || Boolean(s.state.source)),
@@ -453,10 +465,30 @@ export class DeckMixer {
   /* ---------------------------------------------------------- transport -- */
 
   /** Cue (or start) a track on a deck. `seekMs` positions the playhead. */
-  load(id: DeckId, source: DeckSource, opts: { seekMs?: number; play?: boolean } = {}): void {
+  load(
+    id: DeckId,
+    source: DeckSource,
+    opts: {
+      seekMs?: number;
+      play?: boolean;
+      /** Separated lanes for this track. Files must be local, sample-aligned
+       *  and the same length as the source decode. */
+      stems?: { lanes: string[]; files: string[] } | null;
+    } = {},
+  ): void {
     const slot = this.slot(id);
     this.killDecoder(slot);
     slot.ring.clear();
+    // Stem lanes are a property of the loaded track, so they are replaced with
+    // it rather than merged — a stale lane from the last track would play the
+    // wrong audio under the new one.
+    const stems =
+      opts.stems && opts.stems.files.length > 1 && opts.stems.files.length === opts.stems.lanes.length
+        ? opts.stems
+        : null;
+    slot.stemFiles = stems ? stems.files.slice() : null;
+    slot.stemGains = stems ? stems.lanes.map(() => 1) : [];
+    slot.state.stems = stems ? { lanes: stems.lanes.slice(), gains: slot.stemGains.slice() } : null;
     slot.state.source = { ...source, durationMs: source.durationMs || 0 };
     slot.state.durationMs = Math.max(0, Math.round(source.durationMs || 0));
     slot.state.bpm = source.bpm ?? slot.state.bpm;
@@ -490,11 +522,24 @@ export class DeckMixer {
     this.emit();
   }
 
+  /** Fade one stem lane up or down. 0 mutes it (that is the karaoke switch). */
+  setStemGain(id: DeckId, lane: string, gain: number): void {
+    const slot = this.slot(id);
+    const stems = slot.state.stems;
+    if (!stems) return;
+    const i = stems.lanes.indexOf(lane);
+    if (i < 0) return;
+    const v = Math.max(0, Math.min(1, Number.isFinite(gain) ? gain : 1));
+    slot.stemGains[i] = v;
+    slot.state.stems = { lanes: [...stems.lanes], gains: [...slot.stemGains] };
+    this.emit();
+  }
+
   play(id?: DeckId): void {
     for (const slot of id ? [this.slot(id)] : this.allSlots()) {
       if (!slot.state.source || slot.state.ended) continue;
       // A cued deck has no decoder yet (see load): start it at the cue point.
-      if (!slot.proc && !slot.procEnded) {
+      if (!slot.proc && !slot.procEnded && !(slot.stemProcs && slot.stemProcs.length > 0)) {
         slot.baseMs = slot.state.positionMs;
         slot.consumedFrames = 0;
         this.spawnDecoder(slot, Math.round(slot.state.positionMs));
@@ -865,10 +910,8 @@ export class DeckMixer {
     this.onState?.();
   }
 
-  private spawnDecoder(slot: SlotRuntime, seekMs: number): void {
-    const file = slot.state.source?.file;
-    if (!file) return;
-    const tempo = slot.state.tempo;
+  /** ffmpeg argv that decodes `file` to s16le from `seekMs` at the deck tempo. */
+  private decoderArgs(file: string, seekMs: number, tempo: number): string[] {
     const args = ['-hide_banner', '-loglevel', 'error', '-nostdin'];
     // Input seek on a local file: fast and frame-accurate for audio.
     if (seekMs > 0) args.push('-ss', (seekMs / 1000).toFixed(3));
@@ -890,22 +933,33 @@ export class DeckMixer {
       args.push('-af', stages.map((s) => `atempo=${s.toFixed(4)}`).join(','));
     }
     args.push('-f', 's16le', 'pipe:1');
+    return args;
+  }
 
+  /** One decoder writing into `ring`; `isCurrent` drops events from a killed proc. */
+  private spawnPcm(
+    slot: SlotRuntime,
+    file: string,
+    seekMs: number,
+    ring: PcmRing,
+    isCurrent: () => boolean,
+    onEnd: () => void,
+  ): ChildProcess | null {
     let proc: ChildProcess;
     try {
-      proc = spawn(this.ffmpegPath, args, { windowsHide: true });
+      proc = spawn(this.ffmpegPath, this.decoderArgs(file, seekMs, slot.state.tempo), {
+        windowsHide: true,
+      });
     } catch (err) {
       console.warn(`[deck:${slot.id}] decoder spawn failed: ${err instanceof Error ? err.message : err}`);
-      return;
+      return null;
     }
-    slot.proc = proc;
-    slot.procEnded = false;
     proc.stdout?.on('data', (d: Buffer) => {
-      if (slot.proc !== proc) return;
-      slot.ring.push(d);
+      if (!isCurrent()) return;
+      ring.push(d);
       // ~2 s of buffer is plenty; pausing the pipe is cheaper than dropping audio.
       const cap = this.sampleRate * 4 * 2;
-      if (slot.ring.byteLength > cap) proc.stdout?.pause();
+      if (ring.byteLength > cap) proc.stdout?.pause();
     });
     proc.stderr?.on('data', (d: Buffer) => {
       const line = d.toString().trim();
@@ -915,33 +969,116 @@ export class DeckMixer {
       console.warn(`[deck:${slot.id}] decoder error: ${err.message}`);
       // A spawn/exec failure never emits 'exit', so without this the deck stayed
       // "playing" forever and the ticker spun over an empty ring.
-      if (slot.proc !== proc) return;
-      slot.proc = null;
-      slot.procEnded = true;
+      if (!isCurrent()) return;
+      onEnd();
     });
     proc.on('exit', () => {
-      if (slot.proc === proc) {
+      if (isCurrent()) onEnd();
+    });
+    return proc;
+  }
+
+  private spawnDecoder(slot: SlotRuntime, seekMs: number): void {
+    const file = slot.state.source?.file;
+    if (!file) return;
+    const stems = slot.stemFiles;
+    if (stems && stems.length > 1) {
+      // One decoder per lane: gains then apply per stem in tick(), which is the
+      // whole point (mute the vocal and the rest keeps playing).
+      const rings = stems.map(() => new PcmRing());
+      const procs: ChildProcess[] = [];
+      slot.stemRings = rings;
+      slot.stemProcs = procs;
+      slot.proc = null;
+      slot.procEnded = false;
+      let ended = 0;
+      const onEnd = (): void => {
+        if (slot.stemProcs !== procs) return;
+        ended++;
+        if (ended >= stems.length) slot.procEnded = true;
+      };
+      stems.forEach((stem, i) => {
+        const proc = this.spawnPcm(slot, stem, seekMs, rings[i]!, () => slot.stemProcs === procs, onEnd);
+        // A lane that never started cannot report an exit; count it so the deck
+        // still ends instead of sitting on a dead ticker.
+        if (proc) procs.push(proc);
+        else onEnd();
+      });
+      return;
+    }
+
+    slot.stemRings = null;
+    slot.stemProcs = null;
+    slot.procEnded = false;
+    const proc = this.spawnPcm(
+      slot,
+      file,
+      seekMs,
+      slot.ring,
+      () => slot.proc === proc,
+      () => {
         slot.proc = null;
         slot.procEnded = true;
-      }
-    });
+      },
+    );
+    slot.proc = proc;
   }
 
   private killDecoder(slot: SlotRuntime): void {
-    const proc = slot.proc;
+    const procs = [slot.proc, ...(slot.stemProcs ?? [])].filter((p): p is ChildProcess => Boolean(p));
     slot.proc = null;
+    slot.stemProcs = null;
+    slot.stemRings = null;
     slot.procEnded = false;
-    if (!proc) return;
-    try {
-      proc.stdout?.destroy();
-    } catch {
-      /* ignore */
+    for (const proc of procs) {
+      try {
+        proc.stdout?.destroy();
+      } catch {
+        /* ignore */
+      }
+      try {
+        proc.kill();
+      } catch {
+        /* ignore */
+      }
     }
-    try {
-      proc.kill();
-    } catch {
-      /* ignore */
+  }
+
+  /**
+   * Sum the stem lanes into the deck ring.
+   *
+   * Every lane is read by the same byte count so the stems stay sample-aligned;
+   * summing them at unity reproduces the original mix, which is what makes a
+   * lane gain a mix control rather than an effect.
+   */
+  private pumpStems(slot: SlotRuntime): void {
+    const rings = slot.stemRings;
+    const procs = slot.stemProcs;
+    if (!rings || rings.length === 0) return;
+    // Refill decoders that hit the buffer cap.
+    rings.forEach((ring, i) => {
+      const proc = procs?.[i];
+      if (proc?.stdout?.isPaused() && ring.byteLength < this.sampleRate * 2) proc.stdout.resume();
+    });
+    const cap = this.sampleRate * 4 * 2;
+    let take = Math.min(cap - slot.ring.byteLength, this.framesPerTick * 8);
+    for (const ring of rings) take = Math.min(take, ring.byteLength);
+    take -= take % 4;
+    if (take <= 0) return;
+    const parts = rings.map((ring) => ring.readUpTo(take));
+    const gains = slot.stemGains;
+    const out = Buffer.allocUnsafe(take);
+    const samples = take / 2;
+    for (let i = 0; i < samples; i++) {
+      let v = 0;
+      for (let k = 0; k < parts.length; k++) {
+        const g = gains[k] ?? 1;
+        if (g === 0) continue;
+        v += parts[k]!.readInt16LE(i * 2) * g;
+      }
+      out.writeInt16LE(v > 32767 ? 32767 : v < -32768 ? -32768 : Math.round(v), i * 2);
     }
+    slot.ring.push(out);
   }
 
   private startTick(): void {
@@ -969,6 +1106,9 @@ export class DeckMixer {
 
     for (const slot of slots) {
       if (!slot.state.playing) continue;
+      // Stem decks sum their lanes into the ring first; everything downstream
+      // (EQ, filter, trimming, loops) then works on one stream as usual.
+      if (slot.stemRings) this.pumpStems(slot);
       // Refill a decoder that was paused by the buffer cap.
       if (slot.proc?.stdout?.isPaused() && slot.ring.byteLength < this.sampleRate * 2) {
         slot.proc.stdout.resume();
