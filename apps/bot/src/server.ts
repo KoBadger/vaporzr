@@ -465,6 +465,8 @@ function accessNeedFor(pathname: string): AccessScope | null {
   if (pathname === '/status') return 'view';
   if (pathname === '/viz' || pathname === '/viz.html') return 'view';
   if (pathname === '/listen' || pathname === '/listen.html') return 'view';
+  // The karaoke screen is a read-only stage view: lyrics and the sing queue.
+  if (pathname === '/karaoke' || pathname === '/karaoke.html') return 'view';
   return null;
 }
 
@@ -2420,6 +2422,26 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
               error: err instanceof Error ? err.message.slice(0, 400) : 'Provider test failed.',
             }),
           );
+        }
+        break;
+      }
+
+      case '/karaoke':
+      case '/karaoke.html': {
+        // The room's TV: lyrics, backgrounds and the sing queue. View-gated
+        // (see accessNeedFor) because it can only read — every change goes back
+        // through deck:control, which needs the control key.
+        try {
+          const build = (process.env.VAPORZR_BUILD ?? 'dev').slice(0, 7);
+          const file = fs
+            .readFileSync(path.join(__dirname, '..', 'public', 'karaoke.html'), 'utf8')
+            .replace(/\{\{ORIGIN\}\}/g, origin)
+            .replace(/\{\{BUILD\}\}/g, build);
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+          res.end(file);
+        } catch {
+          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('Karaoke screen not found.');
         }
         break;
       }

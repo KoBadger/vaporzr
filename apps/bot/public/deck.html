@@ -3322,6 +3322,12 @@
             >
               KARAOKE
             </button>
+            <button data-mid="stage" data-tip="Open the karaoke screen in its own window — put it on a TV, sing along">
+              KARAOKE SCREEN
+            </button>
+            <button data-mid="night" data-tip="Open karaoke night so singers can queue songs from the karaoke screen">
+              OPEN NIGHT
+            </button>
           </div>
 
           <div class="block-label">SHOUT OUT <span class="muted">spoken over the mix</span></div>
@@ -4297,6 +4303,13 @@
               'info',
               vocalOn ? 'Karaoke on — vocals muted, instrumental keeps playing.' : 'Karaoke off — vocals back.',
             );
+          } else if (kind === 'stage') {
+            // The room's screen: a separate tab/window so it can go on a TV
+            // while this page stays the mixer.
+            window.open('/karaoke?deck=' + encodeURIComponent(deck), 'vz-karaoke');
+          } else if (kind === 'night') {
+            control('karaoke', { op: 'open' });
+            toast('info', 'Karaoke night open — singers can add songs on the karaoke screen.');
           }
         }
 

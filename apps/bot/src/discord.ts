@@ -115,6 +115,7 @@ import { vizTunnel } from './tunnel.js';
 import { renderPanelIconPng, PANEL_ICON_FALLBACKS } from './panelIcons.js';
 import { jamJoinLinks, type Bridge } from './bridge.js';
 import { DeckController } from './decks.js';
+import { KaraokeNight, karaokeQueueText } from './karaoke.js';
 import { guildRegistry, noteGuildJoin, noteGuildLeave, noteGuildsSeen } from './guildRegistry.js';
 import {
   DECK_IDS,
@@ -122,6 +123,7 @@ import {
   type DeckEq,
   type DeckId,
   type InboundMessage,
+  type KaraokeLyricsPayload,
   type PermissionLevel,
   type TrackInfo,
   type PlaybackState,
@@ -1026,6 +1028,8 @@ export class DiscordBot {
   private weaselListenBusy = new Set<string>();
   /** guildId -> live two-deck mixer (see decks.ts). Created on first use. */
   private deckControllers = new Map<string, DeckController>();
+  /** guildId -> karaoke night (sing queue + stage turns). Created on first use. */
+  private karaokeNights = new Map<string, KaraokeNight>();
   /** guildId -> active AI steering / harmonic arc directive for Endless Wave (`v@h wave ...`). */
   private ewSteerPrompt = new Map<string, string>();
   /** guildId -> buffered AI crate-digger picks for Endless Wave. */
@@ -1255,6 +1259,13 @@ export class DiscordBot {
     bridge.deckStateProvider = (guildId) => {
       const gid = guildId ?? bridge.getPrimaryGuildId();
       return gid ? (this.deckControllers.get(gid)?.state() ?? null) : null;
+    };
+    // Karaoke night: the stage screen reads lyrics and the sing queue over the
+    // same socket it already uses for deck state.
+    bridge.onKaraokeLyrics = (guildId, deck) => this.karaokeLyrics(guildId, deck);
+    bridge.onKaraokeQueue = (guildId) => {
+      const gid = guildId ?? bridge.getPrimaryGuildId();
+      return gid ? (this.karaokeNights.get(gid)?.state() ?? null) : null;
     };
     // Uploads from the deck page: pads land in data/samples, dropped tracks are
     // written to the normal uploads dir and cued on the deck they were dropped on.
@@ -1580,10 +1591,69 @@ export class DiscordBot {
   }
 
   /**
-   * Deck commands from the `/deck` page. Continuous controls (fader, trim, EQ,
-   * seek) stay silent — only discrete actions and failures toast, otherwise
-   * dragging the crossfader would fire a hundred notifications.
+   * Karaoke night for a guild: the sing queue plus the stage turns. Shares the
+   * guild's decks (a turn is a deck load with the vocal lane down), so the
+   * stage screen and the mixer can never disagree about what is playing.
    */
+  private karaokeFor(guildId: string): KaraokeNight {
+    let night = this.karaokeNights.get(guildId);
+    if (!night) {
+      night = new KaraokeNight({
+        decks: this.deckFor(guildId),
+        onState: (state) => this.bridge.broadcastKaraokeQueue(state, guildId),
+        announce: (text) => {
+          // Titles are user-supplied: never let one ping the room.
+          void this.panelShareChannel(guildId)
+            .then((ch) => ch?.send({ content: text, allowedMentions: { parse: [] } }))
+            .catch(() => {});
+        },
+      });
+      this.karaokeNights.set(guildId, night);
+    }
+    return night;
+  }
+
+  /**
+   * Lyrics for whatever a deck is playing — the stage screen's data source.
+   * LRCLIB matches by title/artist/duration, so the deck's own source metadata
+   * is enough; nothing here needs the queue's track.
+   */
+  private async karaokeLyrics(guildId: string | undefined, deck: DeckId): Promise<KaraokeLyricsPayload> {
+    const gid = guildId ?? this.bridge.getPrimaryGuildId() ?? '';
+    const source = gid ? this.deckControllers.get(gid)?.state()[deck]?.source : null;
+    if (!source) {
+      return { deck, title: '', artist: '', lines: [], reason: 'Nothing is loaded on this deck yet.' };
+    }
+    const artist = source.artist ?? '';
+    const lyr = await fetchLyrics({
+      name: source.title,
+      artists: artist ? [artist] : [],
+      album: '',
+      durationMs: source.durationMs,
+    }).catch(() => null);
+    if (!lyr) {
+      return {
+        deck,
+        title: source.title,
+        artist,
+        lines: [],
+        reason: 'No lyrics found for this one — the instrumental still works.',
+      };
+    }
+    const lines = (lyr.syncedLines ?? []).map((l) => ({ timeMs: l.timeMs, text: l.text }));
+    if (lines.length === 0) {
+      return {
+        deck,
+        title: lyr.trackName || source.title,
+        artist: lyr.artistName || artist,
+        lines: [],
+        plain: lyr.lyrics,
+        reason: 'Only plain lyrics for this one (no timings) — shown loosely.',
+      };
+    }
+    return { deck, title: lyr.trackName || source.title, artist: lyr.artistName || artist, lines };
+  }
+
   private async handleDeckMessage(
     guildId: string | undefined,
     msg: (InboundMessage & { type: 'deck:load' }) | (InboundMessage & { type: 'deck:control' }),
@@ -1700,6 +1770,46 @@ export class DiscordBot {
         case 'stemGain':
           quiet(decks.stemGain(deck, msg.lane ?? '', msg.value ?? 1));
           break;
+        case 'karaoke': {
+          // The sing queue, driven from the stage screen or the deck page.
+          const night = this.karaokeFor(gid);
+          const op = msg.op ?? 'open';
+          if (op === 'add') {
+            // A page has no Discord identity, so the name it sends IS the
+            // identity: same name = same singer, which is what keeps one person
+            // from queueing twice.
+            const singer =
+              String(msg.singer ?? '')
+                .replace(/\s+/g, ' ')
+                .trim()
+                .slice(0, 40) || 'Singer';
+            const title = String(msg.title ?? '').trim();
+            if (!title) {
+              report({ ok: false, message: 'Which song? Give me a title or a link.' });
+              break;
+            }
+            report({ ok: true, message: night.add(singer, `web:${singer.toLowerCase()}`, title) });
+            break;
+          }
+          if (op === 'skip') report({ ok: true, message: night.skip() });
+          else if (op === 'clear') report({ ok: true, message: night.clear() });
+          else if (op === 'remove') report({ ok: true, message: night.remove(String(msg.entryId ?? '')) });
+          else if (op === 'list') report({ ok: true, message: karaokeQueueText(night.state()) });
+          else if (op === 'close')
+            report({ ok: true, message: night.closeNight().open ? 'Still open.' : 'Karaoke closed.' });
+          else {
+            const state = night.openNight();
+            // Opening with an empty queue does not start the music: the first
+            // singer does.
+            report({
+              ok: true,
+              message: state.open
+                ? `🎤 Karaoke open — ${state.entries.length} in the queue. The karaoke screen is at /karaoke.`
+                : 'Karaoke open.',
+            });
+          }
+          break;
+        }
         case 'shout': {
           // A shout-out is spoken over whatever is playing. It is deliberately
           // not metered against the caller's daily voice budget: a control

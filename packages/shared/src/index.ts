@@ -237,7 +237,66 @@ export type DeckAction =
   /** Announce a phrase over the mix, from the deck page's shout-out box. */
   | 'shout'
   /** Set one stem lane level; 0 mutes it (the karaoke switch). */
-  | 'stemGain';
+  | 'stemGain'
+  /** Karaoke night: add/skip/clear the sing queue (see `op`). */
+  | 'karaoke';
+
+/** One timed line on the karaoke screen. */
+export interface KaraokeLine {
+  timeMs: number;
+  text: string;
+  /**
+   * Per-word timings, when the track has been aligned. Line-level LRC has none,
+   * so the screen falls back to wiping the line across its own duration.
+   */
+  words?: Array<{ text: string; timeMs: number; endMs?: number }>;
+}
+
+/** Status of one singer's turn. */
+export type KaraokeEntryStatus = 'queued' | 'preparing' | 'ready' | 'failed';
+
+/** One person waiting to sing. */
+export interface KaraokeEntry {
+  id: string;
+  /** Display name (already sanitised for drawing as text). */
+  singer: string;
+  /** Stable per-person id, so one singer cannot stack the queue. */
+  singerId: string;
+  title: string;
+  artist?: string;
+  /** Resolved stream uri, once the entry has been looked up. */
+  uri?: string;
+  status: KaraokeEntryStatus;
+  /** Human-readable progress/why-not for `preparing` and `failed`. */
+  detail?: string;
+  durationMs?: number;
+  /** Deck this singer is on, while their turn is live. */
+  deck?: DeckId | null;
+  addedAt: number;
+}
+
+/** Karaoke night state, broadcast to every screen. */
+export interface KaraokeState {
+  open: boolean;
+  /** True when the vocal lane is muted for the current turn. */
+  instrumental: boolean;
+  current: KaraokeEntry | null;
+  entries: KaraokeEntry[];
+  deck: DeckId | null;
+}
+
+/** Timed lyrics for one deck's loaded track. */
+export interface KaraokeLyricsPayload {
+  deck: DeckId;
+  title: string;
+  artist: string;
+  /** Timed lines; empty when only plain text (or nothing) was found. */
+  lines: KaraokeLine[];
+  /** Full plain text when no synced lyrics exist. */
+  plain?: string;
+  /** Why `lines` is empty, for the screen to say so instead of showing blank. */
+  reason?: string;
+}
 
 export interface GuildPermissions {
   roles: Record<PermissionLevel, string[]>;
@@ -421,10 +480,22 @@ export type InboundMessage =
       text?: string;
       /** Stem lane name for 'stemGain' (e.g. 'vocals', 'drums', 'music'). */
       lane?: string;
+      /** Sub-action for 'karaoke': add | skip | clear | open | close | remove | list. */
+      op?: 'add' | 'skip' | 'clear' | 'open' | 'close' | 'remove' | 'list';
+      /** Entry id for karaoke 'remove'. */
+      entryId?: string;
+      /** Singer display name for karaoke 'add'. */
+      singer?: string;
+      /** Song title or link for karaoke 'add'. */
+      title?: string;
       guildId?: string;
     }
   /** Ask for the current deck state (sent on connect). */
   | { type: 'deck:request'; guildId?: string }
+  /** Karaoke screen: lyrics for whatever this deck is playing. */
+  | { type: 'karaoke:request'; deck?: DeckId; guildId?: string }
+  /** Karaoke screen/panel: the sing queue. */
+  | { type: 'karaoke:queue'; guildId?: string }
   /** A jam guest asks to skip the current track (see CrowdVote). */
   | { type: 'skipvote' }
   | CommandMessage;
@@ -536,4 +607,10 @@ export type OutboundMessage =
   | { type: 'deck:state'; state: DeckMixerState; guildId?: string }
   /** Waveform peaks for a freshly loaded deck (0..1, left-to-right). */
   | { type: 'deck:waveform'; deck: DeckId; peaks: number[]; durationMs: number; guildId?: string }
+  /**
+   * Timed lyrics for the karaoke screen, matched to a deck's loaded track.
+   * `offsetMs` is the screen's own nudge, echoed so a second screen can adopt it.
+   */
+  | ({ type: 'karaoke:lyrics'; guildId?: string } & KaraokeLyricsPayload)
+  | { type: 'karaoke:queue'; state: KaraokeState; guildId?: string }
   | CommandMessage;

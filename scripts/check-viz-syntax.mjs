@@ -31,6 +31,7 @@ for (const page of [
   'apps/bot/public/listen.html',
   'apps/bot/public/panel.html',
   'apps/bot/public/deck.html',
+  'apps/bot/public/karaoke.html',
   'apps/bot/public/home.html',
 ]) {
   const html = fs.readFileSync(page, 'utf8');
