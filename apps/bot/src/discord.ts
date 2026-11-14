@@ -118,6 +118,7 @@ import { DeckController, stemsKeyFor } from './decks.js';
 import { writeJsonAtomicSync } from '@vaporzr/core/jsonFile';
 import { KaraokeNight, karaokeQueueText, stemBackendAvailable } from './karaoke.js';
 import { setMasterKey } from './masterKey.js';
+import { playbackSourceStatus, setPreferYoutube } from './playbackSettings.js';
 import { clearStemSettings, saveStemSettings, stemSettingsStatus } from './stemSettings.js';
 import { guildRegistry, noteGuildJoin, noteGuildLeave, noteGuildsSeen } from './guildRegistry.js';
 import {
@@ -392,6 +393,15 @@ const COMMANDS = [
     .setDescription('Start a karaoke night, add a song, or open the karaoke screen')
     .addStringOption((o) =>
       o.setName('song').setDescription('Song title or link to add to the sing queue').setRequired(false),
+    ),
+  new SlashCommandBuilder()
+    .setName('source')
+    .setDescription('Where audio streams from — youtube for best quality, or spotify natively')
+    .addStringOption((o) =>
+      o
+        .setName('mode')
+        .setDescription('Leave empty to see the current source')
+        .addChoices({ name: 'youtube', value: 'youtube' }, { name: 'spotify', value: 'spotify' }),
     ),
   new SlashCommandBuilder()
     .setName('stems')
@@ -3086,6 +3096,30 @@ export class DiscordBot {
         if (!night.isOpen()) night.openNight();
         const added = night.add(interaction.user.username, `discord:${interaction.user.id}`, song);
         await interaction.reply({ content: added, flags: MessageFlags.Ephemeral });
+        break;
+      }
+
+      case 'source': {
+        if (!this.requireLevel('dj', interaction)) return this.deny(interaction);
+        const mode = interaction.options.getString('mode');
+        if (!mode) {
+          const st = playbackSourceStatus();
+          await interaction.reply({
+            content: st.preferYoutube
+              ? `🔊 Audio comes from **YouTube** (best quality, immune to Spotify API rate limits) — set from the ${st.source}.`
+              : `🔊 Audio comes from **Spotify** natively (librespot) — set from the ${st.source}.`,
+            flags: MessageFlags.Ephemeral,
+          });
+          break;
+        }
+        setPreferYoutube(mode === 'youtube');
+        await interaction.reply({
+          content:
+            mode === 'youtube'
+              ? '✅ YouTube it is — the next track streams from YouTube, and Spotify API rate limits can no longer stall the queue.'
+              : '✅ Back to native Spotify playback. If the API rate-limits, tracks will stall again.',
+          flags: MessageFlags.Ephemeral,
+        });
         break;
       }
 
@@ -6598,6 +6632,31 @@ export class DiscordBot {
         }
 
         case 'k':
+        case 'source': {
+          if (!this.perms.can('dj', message.guild!, message.member as never)) return void (await deny());
+          const want = args.trim().toLowerCase();
+          if (!want) {
+            const st = playbackSourceStatus();
+            await message.reply(
+              st.preferYoutube
+                ? `🔊 Audio: **YouTube** (set from the ${st.source}). \`V@source spotify\` to switch.`
+                : `🔊 Audio: **Spotify** native (set from the ${st.source}). \`V@source youtube\` to switch.`,
+            );
+            break;
+          }
+          if (want !== 'youtube' && want !== 'spotify') {
+            await message.reply('Use `V@source youtube` or `V@source spotify`.');
+            break;
+          }
+          setPreferYoutube(want === 'youtube');
+          await message.reply(
+            want === 'youtube'
+              ? '✅ Audio now streams from YouTube — Spotify rate limits cannot stall the queue.'
+              : '✅ Back to native Spotify playback.',
+          );
+          break;
+        }
+
         case 'stems': {
           if (!this.perms.isOwner(message.author.id)) return void (await deny());
           const typed = args.trim();
