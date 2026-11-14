@@ -67,6 +67,7 @@ import { analyticsStore } from '@vaporzr/core/analytics';
 import { amokChat, amokProviderChain } from './amokProvider.js';
 import { amokSettingsStatus, clearAmokSettings, saveAmokSettings } from './amokSettings.js';
 import { clearStemSettings, loadStemSettings, saveStemSettings, stemSettingsStatus } from './stemSettings.js';
+import { loadMasterKey } from './masterKey.js';
 import { domainStore } from '@vaporzr/core/domains';
 import { setlistShares } from '@vaporzr/core/setlistShare';
 import { tapes as globalTapes } from '@vaporzr/core/tape';
@@ -269,6 +270,9 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
   // A token saved from the panel beats the env value and has to be in place
   // before anything asks whether hosted stems are available.
   loadStemSettings();
+  // Same for the owner's pinned master key: it has to be in force before the
+  // first request is authorised.
+  loadMasterKey();
   // Declared here so the request handler (which runs later) can read live
   // guild data from the bridge once it exists.
   let bridge: Bridge | null = null;
