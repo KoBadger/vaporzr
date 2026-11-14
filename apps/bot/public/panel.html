@@ -2206,7 +2206,8 @@
           </div>
           <div class="sub" style="margin-top: 8px">
             Searches Spotify &amp; YouTube, or paste a link (Spotify, YouTube, SoundCloud, Apple, Suno, a podcast
-            feed/episode, or any page with audio). Playlists queue up to 25. Shift+Enter = play next.
+            feed/episode, or any page with audio). Playlists queue up to 25. Picking a result fills the box — then ＋
+            Queue, ⤴ Next or ▶ decides where it goes. Shift+Enter = play next.
           </div>
           <div style="margin-top: 8px">
             <a href="#" id="bulk-toggle" style="color: var(--accent); font-size: 11px; text-decoration: none"
@@ -4460,22 +4461,31 @@
           doSearch(false, true);
         };
         el.search.addEventListener('keydown', function (e) {
-          if (e.key === 'Enter') {
-            e.preventDefault();
-            if (e.shiftKey) doSearch(false, true);
-            else doSearch(false);
-          }
+          if (e.key !== 'Enter') return;
+          // While the type-ahead is open it owns Enter: the first press chooses
+          // the highlighted hit, and the next one (box now closed) queues it.
+          var box = document.getElementById('search-suggest');
+          if (box && !box.hidden) return;
+          e.preventDefault();
+          if (e.shiftKey) doSearch(false, true);
+          else doSearch(false);
         });
         function doSearch(now, insert) {
-          var q = el.search.value.trim();
-          if (!q) {
+          var typed = el.search.value.trim();
+          if (!typed) {
             toast('error', 'Type something to search first');
             el.search.focus();
             return;
           }
+          // A picked suggestion carries its exact uri: sending the title back
+          // through search could land on a different version of the same song.
+          var q =
+            el.search.dataset.picked === typed && el.search.dataset.pickedUri ? el.search.dataset.pickedUri : typed;
           cmd('playSearch', { query: q, now: now, insert: !!insert });
-          toast('info', (insert ? 'Queuing next' : now ? 'Searching & playing' : 'Adding') + ' "' + q + '"…');
+          toast('info', (insert ? 'Queuing next' : now ? 'Searching & playing' : 'Adding') + ' "' + typed + '"…');
           el.search.value = '';
+          delete el.search.dataset.picked;
+          delete el.search.dataset.pickedUri;
         }
         // The type-ahead lives in its own <script> further down, so it reaches
         // the queue/play plumbing through this one hook instead of duplicating
@@ -5679,18 +5689,22 @@
           input.value = it.artist ? it.title + ' ' + it.artist : it.title;
           input.focus();
         }
-        // Picking a hit now plays it. Filling the box and leaving the user to
-        // press play again read as "selecting does nothing".
-        function pick(i, mode) {
+        // Picking a hit fills the box with that exact track and stops there: the
+        // placement buttons (▶ / ＋ Queue / ⤴ Next) stay the decision, instead of
+        // a stray click jumping the playhead.
+        function pick(i) {
           var it = items[i];
           if (!it) return;
           var label = it.artist ? it.title + ' ' + it.artist : it.title;
           hide();
-          input.value = '';
-          if (typeof window.__vzPanelSearch === 'function') {
-            window.__vzPanelSearch(label, mode || 'play');
-          } else {
-            input.value = label;
+          input.value = label;
+          input.dataset.picked = label;
+          input.dataset.pickedUri = it.uri || '';
+          input.focus();
+          try {
+            input.setSelectionRange(label.length, label.length);
+          } catch (err) {
+            /* some browsers refuse on a type=search field; harmless */
           }
         }
         /** Explain an empty box instead of silently showing nothing. */
@@ -5727,10 +5741,10 @@
             time.className = 'ss-time';
             time.textContent = it.durationMs ? fmtMs(it.durationMs) : '';
             row.appendChild(time);
-            // Shift-click queues it instead of jumping the playhead.
+            // Clicking a hit chooses it; where it lands is the button row's call.
             row.addEventListener('mousedown', function (e) {
               e.preventDefault();
-              pick(i, e.shiftKey ? 'add' : 'play');
+              pick(i);
             });
             box.appendChild(row);
           });
@@ -5778,12 +5792,12 @@
             active = (active + (e.key === 'ArrowDown' ? 1 : -1) + n) % n;
             paint();
           } else if (e.key === 'Enter') {
-            // Enter on a highlighted hit plays it; Enter with nothing
-            // highlighted falls through to the panel's own search.
+            // Enter on a highlighted hit chooses it, exactly like a click. The
+            // next Enter (now that the box is filled) queues it.
             if (active >= 0) {
               e.preventDefault();
               e.stopImmediatePropagation();
-              pick(active, e.shiftKey ? 'next' : 'play');
+              pick(active);
             }
           } else if (e.key === 'Escape') {
             hide();
