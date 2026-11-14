@@ -1911,8 +1911,21 @@ export class Bridge {
 
   /** Attach the video id when the state is describing the cached track. */
   private withVideo(state: PlaybackState): PlaybackState {
-    const same = !!state.track?.uri && this.trackVideo.uri === state.track.uri;
-    const id = same ? this.trackVideo.id : null;
+    const uri = state.track?.uri ?? '';
+    const same = !!uri && this.trackVideo.uri === uri;
+    let id = same ? this.trackVideo.id : null;
+    let official = same ? this.trackVideo.official : false;
+    // A YouTube-sourced track already IS a video, so the Activity can show it
+    // without waiting on the official-video lookup. That lookup only runs for
+    // the session queue and can miss tracks loaded straight onto a deck, which
+    // left the player on a thumbnail with no clip.
+    if (!id && uri.startsWith('youtube:video:')) {
+      const vid = uri.slice('youtube:video:'.length).split(/[?&/]/)[0];
+      if (/^[\w-]{6,20}$/.test(vid)) {
+        id = vid;
+        official = /(official|vevo|\btopic\b)/i.test(state.track?.name ?? '');
+      }
+    }
     if (!id) return state;
     return {
       ...state,

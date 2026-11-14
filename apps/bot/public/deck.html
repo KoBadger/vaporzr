@@ -380,6 +380,120 @@
           grid-column: 1 / -1;
         }
       }
+      /* ---------- fit-to-height deck ----------
+         A rig does not scroll: it gets denser. Every control on a deck is sized
+         from the height the card actually has, and secondary rows (subtitle,
+         hint text, capture row, side buttons) give up their space first. Without
+         this each deck grew its own scrollbar, which is the opposite of how a
+         CDJ behaves when you shrink the window. */
+      @media (min-width: 961px) {
+        /* Rows must be allowed to shrink below their content, or the fixed rig
+           height loses to the deck's intrinsic height and everything scrolls. */
+        .rig {
+          grid-template-rows: repeat(2, minmax(0, 1fr));
+          --jog: clamp(84px, 20vh, 158px);
+          --wave-h: clamp(38px, 8vh, 74px);
+          --pad-h: clamp(24px, 3.6vh, 40px);
+          --loop-h: clamp(22px, 3.2vh, 34px);
+          --btn-h: clamp(26px, 3.4vh, 38px);
+          --deck-gap: clamp(4px, 0.9vh, 10px);
+        }
+        body.two-decks .rig {
+          grid-template-rows: minmax(0, 1fr);
+        }
+        /* Four decks share the same height, so each card gets half of it and
+           must scale down further to stay whole. */
+        body:not(.two-decks) .rig {
+          --jog: clamp(56px, 9vh, 84px);
+          --wave-h: clamp(24px, 4vh, 36px);
+          --pad-h: clamp(20px, 2.6vh, 30px);
+          --loop-h: clamp(18px, 2.2vh, 26px);
+        }
+        body:not(.two-decks) .rig .deck .jog-side,
+        body:not(.two-decks) .rig .deck .fader-col {
+          display: none;
+        }
+        /* One row of pads instead of two: half a deck's height is not enough
+           for a 4x2 grid plus everything else. */
+        body:not(.two-decks) .rig .deck .pads,
+        body:not(.two-decks) .rig .deck .loop-pads {
+          grid-template-columns: repeat(8, 1fr);
+        }
+        /* At half height a deck keeps only what you touch: title, waveform,
+           jog, pads, loops, transport. Labels and the beat strip go. */
+        body:not(.two-decks) .rig .deck .block-label,
+        body:not(.two-decks) .rig .deck .beat-strip,
+        body:not(.two-decks) .rig .deck .sub {
+          display: none;
+        }
+        .rig .deck,
+        .rig .mixer {
+          min-height: 0;
+        }
+        .rig .deck {
+          gap: var(--deck-gap);
+          padding: clamp(6px, 1.2vh, 10px);
+        }
+        .rig .deck .jog {
+          width: min(var(--jog), 100%);
+        }
+        .rig .deck .wave {
+          height: var(--wave-h);
+          margin-top: 4px;
+        }
+        .rig .deck .pads .pad,
+        .rig .deck .pads button {
+          height: var(--pad-h);
+          padding: 0;
+        }
+        .rig .deck .loop-pads button {
+          height: var(--loop-h);
+          padding: 0;
+        }
+        .rig .deck .transport button {
+          height: var(--btn-h);
+          padding: 0 8px;
+        }
+        .rig .deck .beat-strip {
+          height: clamp(16px, 2.4vh, 30px);
+          margin-top: 3px;
+        }
+        /* The cue-capture row is a convenience, not a transport control. */
+        .rig .deck .capture-row {
+          display: none;
+        }
+        /* EQ belongs to the channel strip on the mixer, exactly as on a CDJ +
+           club mixer pair: keeping a second copy of LOW/MID/HIGH on every deck
+           card cost 120px of height and bought nothing. */
+        .rig .deck .channel {
+          display: none;
+        }
+      }
+      @media (min-width: 961px) and (max-height: 800px) {
+        .rig .deck .sub {
+          display: none;
+        }
+        .rig .deck .block-label .hint {
+          display: none;
+        }
+        .rig .deck .block-label {
+          margin-bottom: 2px;
+        }
+        .rig .deck .jog-mode,
+        .rig .deck .q-btn {
+          padding: 4px 3px;
+        }
+      }
+      @media (min-width: 961px) and (max-height: 700px) {
+        .rig .deck .jog-side,
+        .rig .deck .beat-strip,
+        .rig .deck .block-label {
+          display: none;
+        }
+        .rig .deck .times {
+          margin-top: 2px;
+        }
+      }
       /* Two-deck mode: the classic A | mixer | B rig. The C/D cards stay in
          the DOM (their audio keeps running) and the mixer's second bank of
          trims hides, so nothing on screen is dead. */

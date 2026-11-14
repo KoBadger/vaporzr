@@ -3148,13 +3148,27 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
           return;
         }
         try {
+          const started = Date.now();
           const items = await bot.onSearch(q, limit);
           searchCache.set(cacheKey, { at: Date.now(), items });
+          // An empty answer has to say *why*, otherwise the panel just looks
+          // broken: with Spotify cooling down and YouTube answering nothing the
+          // box would go silent with no hint that a provider was the cause.
+          let why = '';
+          if (!items.length) {
+            const cool = spotifyCooldownRemainingSec();
+            const parts: string[] = ['no matches'];
+            if (cool > 0) parts.push(`Spotify cooling down ${Math.max(1, Math.ceil(cool / 60))} min`);
+            parts.push('YouTube returned nothing');
+            why = parts.join(' · ');
+          }
           res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-          res.end(JSON.stringify({ ok: true, items }));
-        } catch {
+          res.end(JSON.stringify({ ok: true, items, why, tookMs: Date.now() - started }));
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.warn(`[search] "${q}" failed: ${message}`);
           res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-          res.end(JSON.stringify({ ok: false, items: [] }));
+          res.end(JSON.stringify({ ok: false, items: [], why: `search failed: ${message}` }));
         }
         break;
       }

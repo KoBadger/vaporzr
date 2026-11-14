@@ -598,6 +598,22 @@
       .ss-item.active {
         background: color-mix(in srgb, var(--accent) 16%, transparent);
       }
+      /* Explain an empty type-ahead instead of showing nothing at all. */
+      .ss-item.ss-status {
+        display: block;
+        grid-template-columns: none;
+        cursor: default;
+        font-size: 11.5px;
+        color: var(--muted);
+        padding: 8px 10px;
+        box-shadow: none;
+      }
+      .ss-item.ss-status.bad {
+        color: #fbbf24;
+      }
+      .ss-item.ss-status:hover {
+        background: transparent;
+      }
       .ss-item.active .ss-src {
         color: var(--accent2);
       }
@@ -2922,7 +2938,12 @@
         var theme = THEMES[0];
 
         function send(msg) {
-          if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify(msg));
+            return true;
+          }
+          // Silent drops made every control look dead with no explanation.
+          return false;
         }
         var DJ_ALLOWED = {
           play: 1,
@@ -2939,6 +2960,11 @@
           clear: 1,
           playAt: 1,
           queuePlay: 1,
+          // Searching and queueing IS playback control: a DJ link that could
+          // queue from the list but not search would silently refuse every
+          // pick from the type-ahead.
+          playSearch: 1,
+          bulkSearch: 1,
           move: 1,
           dedupe: 1,
           skipto: 1,
@@ -2956,7 +2982,9 @@
             toast('info', '🎧 DJ access is playback-only — ask the owner for full control');
             return;
           }
-          send(Object.assign({ type: 'cmd', command: command }, extra || {}));
+          var sent = send(Object.assign({ type: 'cmd', command: command }, extra || {}));
+          if (!sent) toast('error', 'Not connected to the bot — reconnecting…');
+          return sent;
         }
         function enableDjMode() {
           if (DJ_MODE) return;
@@ -4449,6 +4477,15 @@
           toast('info', (insert ? 'Queuing next' : now ? 'Searching & playing' : 'Adding') + ' "' + q + '"…');
           el.search.value = '';
         }
+        // The type-ahead lives in its own <script> further down, so it reaches
+        // the queue/play plumbing through this one hook instead of duplicating
+        // the search command here.
+        window.__vzPanelSearch = function (query, mode) {
+          var q = String(query || '').trim();
+          if (!q) return;
+          el.search.value = q;
+          doSearch(mode === 'play', mode === 'next');
+        };
 
         /* ---------- bulk add ---------- */
         el['bulk-toggle'].onclick = function (e) {
@@ -5642,6 +5679,32 @@
           input.value = it.artist ? it.title + ' ' + it.artist : it.title;
           input.focus();
         }
+        // Picking a hit now plays it. Filling the box and leaving the user to
+        // press play again read as "selecting does nothing".
+        function pick(i, mode) {
+          var it = items[i];
+          if (!it) return;
+          var label = it.artist ? it.title + ' ' + it.artist : it.title;
+          hide();
+          input.value = '';
+          if (typeof window.__vzPanelSearch === 'function') {
+            window.__vzPanelSearch(label, mode || 'play');
+          } else {
+            input.value = label;
+          }
+        }
+        /** Explain an empty box instead of silently showing nothing. */
+        function showStatus(text, bad) {
+          items = [];
+          active = -1;
+          box.innerHTML = '';
+          var row = document.createElement('div');
+          row.className = 'ss-item ss-status' + (bad ? ' bad' : '');
+          row.textContent = text;
+          box.appendChild(row);
+          box.hidden = false;
+          input.setAttribute('aria-expanded', 'false');
+        }
         function render(list) {
           items = list;
           box.innerHTML = '';
@@ -5664,9 +5727,10 @@
             time.className = 'ss-time';
             time.textContent = it.durationMs ? fmtMs(it.durationMs) : '';
             row.appendChild(time);
+            // Shift-click queues it instead of jumping the playhead.
             row.addEventListener('mousedown', function (e) {
               e.preventDefault();
-              choose(i);
+              pick(i, e.shiftKey ? 'add' : 'play');
             });
             box.appendChild(row);
           });
@@ -5679,17 +5743,30 @@
           var q = input.value.trim();
           clearTimeout(timer);
           if (q.length < 2) return hide();
+          // Say "searching" straight away: a box that stays blank for a second
+          // is indistinguishable from one that is broken.
+          showStatus('Searching…');
           timer = setTimeout(function () {
             var mine = ++seq;
             fetch('/api/search?limit=6&q=' + encodeURIComponent(q), { credentials: 'same-origin' })
               .then(function (r) {
-                return r.ok ? r.json() : null;
+                if (!r.ok) {
+                  if (mine !== seq) return;
+                  if (r.status === 403)
+                    return showStatus('Not signed in — reopen this page from Discord or with your key.', true);
+                  if (r.status === 429) return showStatus('Too many searches — one moment.', true);
+                  return showStatus('Search failed (HTTP ' + r.status + ')', true);
+                }
+                return r.json().then(function (d) {
+                  if (mine !== seq) return;
+                  var list = (d && d.items) || [];
+                  if (list.length) render(list);
+                  else showStatus((d && d.why) || 'No matches', true);
+                });
               })
-              .then(function (d) {
-                if (mine !== seq) return;
-                render((d && d.items) || []);
-              })
-              .catch(hide);
+              .catch(function () {
+                if (mine === seq) showStatus('Search unreachable — check the connection', true);
+              });
           }, 190);
         });
         input.addEventListener('keydown', function (e) {
@@ -5701,12 +5778,12 @@
             active = (active + (e.key === 'ArrowDown' ? 1 : -1) + n) % n;
             paint();
           } else if (e.key === 'Enter') {
-            // Fill the box instead of firing a search: the panel's own Enter
-            // handler decides between queue and play.
+            // Enter on a highlighted hit plays it; Enter with nothing
+            // highlighted falls through to the panel's own search.
             if (active >= 0) {
               e.preventDefault();
               e.stopImmediatePropagation();
-              choose(active);
+              pick(active, e.shiftKey ? 'next' : 'play');
             }
           } else if (e.key === 'Escape') {
             hide();
