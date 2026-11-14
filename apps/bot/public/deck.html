@@ -424,10 +424,9 @@
           --pad-h: clamp(18px, calc(var(--rig-h) * 0.03), 30px);
           --loop-h: clamp(16px, calc(var(--rig-h) * 0.026), 26px);
         }
-        body:not(.two-decks) .rig .deck .jog-side,
-        body:not(.two-decks) .rig .deck .fader-col {
-          display: none;
-        }
+        /* Four decks: the platter buttons and pitch fader come back where there
+           is room for them (see the min-width:1121 block at the end), packed
+           into two micro-columns beside the jog. */
         /* One row of pads instead of two: half a deck's height is not enough
            for a 4x2 grid plus everything else. */
         body:not(.two-decks) .rig .deck .pads,
@@ -1276,6 +1275,26 @@
         letter-spacing: 0;
         background: transparent;
         border-color: transparent;
+      }
+      /* Cue capture: copy this playhead onto A or B as a hot cue. It used to be
+         a full row under the pads; two chips in the transport do the same job
+         without costing a row on every card. */
+      .cap-mini {
+        display: flex;
+        gap: 4px;
+        margin-left: auto;
+      }
+      .cap-mini button {
+        height: var(--btn-h, 30px);
+        padding: 0 7px;
+        border-radius: 7px;
+        font: 800 9px/1 var(--mono);
+        letter-spacing: 0.04em;
+        color: #9aa6d6;
+      }
+      .cap-mini button:hover {
+        color: #dfe6ff;
+        border-color: #3a4270;
       }
       /* ---------- channel strip (EQ) ---------- */
       .channel {
@@ -2461,8 +2480,10 @@
         justify-content: flex-start;
         gap: 10px;
       }
+      /* Kills stay reachable in SIMPLE mode too: one tap of the low band is the
+         move every beginner learns first. */
       body.simple .kill-row {
-        display: none;
+        display: grid;
       }
       /* Short guided start, opened on a first visit and re-openable with ?. */
       .tut {
@@ -3432,6 +3453,34 @@
           display: none;
         }
       }
+      /* Four decks with room to spare: the platter buttons and the pitch fader
+         come back as two micro-columns beside the jog. Below 1120px the side
+         rail stays off — there is no column for it — which is why this is a
+         width rule and not just a deck-count rule. */
+      @media (min-width: 1121px) {
+        body:not(.two-decks) .rig .deck .jog-side {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 3px;
+          align-content: center;
+          min-width: 0;
+        }
+        body:not(.two-decks) .rig .deck .jog-side .side-label,
+        body:not(.two-decks) .rig .deck .jog-side .bar-read {
+          display: none;
+        }
+        body:not(.two-decks) .rig .deck .jog-side button {
+          min-width: 0;
+          padding: 4px 2px;
+          font-size: 7px;
+          letter-spacing: 0.06em;
+          overflow: hidden;
+        }
+        body:not(.two-decks) .rig .deck .fader-col .left-read,
+        body:not(.two-decks) .rig .deck .fader-col .fader-label {
+          display: none;
+        }
+      }
     </style>
   </head>
   <body>
@@ -3595,6 +3644,10 @@
             <span>NUDGE</span>
             <button data-nudge="25" title="Nudge 25 ms forward">+</button>
           </div>
+          <div class="cap-mini pro-only">
+            <button data-capture="a" title="Copy this playhead to deck A's first free cue pad">→A</button>
+            <button data-capture="b" title="Copy this playhead to deck B's first free cue pad">→B</button>
+          </div>
         </div>
 
         <div class="pads-block">
@@ -3608,15 +3661,6 @@
             <button class="pad pro-only" data-pad="6" title="Set or jump to hot cue 6">6</button>
             <button class="pad pro-only" data-pad="7" title="Set or jump to hot cue 7">7</button>
             <button class="pad pro-only" data-pad="8" title="Set or jump to hot cue 8">8</button>
-          </div>
-          <div class="capture-row">
-            <span class="cap-label">Capture cue →</span>
-            <button class="mini-btn" data-capture="a" title="Copy this playhead to deck A's first free cue pad">
-              A
-            </button>
-            <button class="mini-btn" data-capture="b" title="Copy this playhead to deck B's first free cue pad">
-              B
-            </button>
           </div>
         </div>
 
@@ -4316,6 +4360,10 @@
             <span>NUDGE</span>
             <button data-nudge="25" title="Nudge 25 ms forward">+</button>
           </div>
+          <div class="cap-mini pro-only">
+            <button data-capture="a" title="Copy this playhead to deck A's first free cue pad">→A</button>
+            <button data-capture="b" title="Copy this playhead to deck B's first free cue pad">→B</button>
+          </div>
         </div>
 
         <div class="pads-block">
@@ -4329,15 +4377,6 @@
             <button class="pad pro-only" data-pad="6" title="Set or jump to hot cue 6">6</button>
             <button class="pad pro-only" data-pad="7" title="Set or jump to hot cue 7">7</button>
             <button class="pad pro-only" data-pad="8" title="Set or jump to hot cue 8">8</button>
-          </div>
-          <div class="capture-row">
-            <span class="cap-label">Capture cue →</span>
-            <button class="mini-btn" data-capture="a" title="Copy this playhead to deck A's first free cue pad">
-              A
-            </button>
-            <button class="mini-btn" data-capture="b" title="Copy this playhead to deck B's first free cue pad">
-              B
-            </button>
           </div>
         </div>
 
