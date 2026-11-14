@@ -5979,18 +5979,43 @@ export class DiscordBot {
             // Remember what each item was searched for, so a wrong pick can be
             // re-offered the same candidate list later.
             const itemQuery = new Map<string, string>();
-            for (const q of items) {
+            // One slow lookup must not hold the whole list hostage: a bulk of
+            // ten names used to resolve strictly one after another, so a single
+            // provider hiccup left the ack sitting there for minutes with
+            // nothing after it.
+            const bounded = async (q: string): Promise<ResolvedTrack[] | null> => {
+              let timer: NodeJS.Timeout | undefined;
               try {
-                const t = await resolvePlayInput(q);
-                if (t[0]) {
-                  resolved.push(t[0]);
-                  itemQuery.set(t[0].uri, q);
-                } else unresolved.push(q);
-              } catch {
-                // Name it in the reply — a silent skip reads as "it ignored my song".
-                unresolved.push(q);
+                return await Promise.race([
+                  resolvePlayInput(q),
+                  new Promise<null>((resolve) => {
+                    timer = setTimeout(() => resolve(null), 25_000);
+                  }),
+                ]);
+              } finally {
+                if (timer) clearTimeout(timer);
               }
-            }
+            };
+            const slots: (Omit<TrackInfo, 'addedBy' | 'addedAt'> | null)[] = new Array(items.length).fill(null);
+            let cursor = 0;
+            const worker = async (): Promise<void> => {
+              while (cursor < items.length) {
+                const i = cursor++;
+                const q = items[i];
+                try {
+                  const t = await bounded(q);
+                  if (t && t[0]) {
+                    slots[i] = t[0];
+                    itemQuery.set(t[0].uri, q);
+                  } else unresolved.push(q);
+                } catch {
+                  // Name it in the reply — a silent skip reads as "it ignored my song".
+                  unresolved.push(q);
+                }
+              }
+            };
+            await Promise.all([worker(), worker(), worker(), worker()]);
+            for (const t of slots) if (t) resolved.push(t);
             for (const f of files) {
               try {
                 resolved.push(await this.downloadUploadedTrack(f));
