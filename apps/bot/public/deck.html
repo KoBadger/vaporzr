@@ -343,8 +343,8 @@
          2000px below the decks, which is the "this doesn't look like VDJ" part. */
       @media (min-width: 961px) {
         .rig {
-          height: calc(100vh - 168px);
-          min-height: 540px;
+          height: calc(100vh - 168px - var(--bb-h, 0px));
+          min-height: 420px;
           align-items: stretch;
         }
         .rig .deck,
@@ -391,12 +391,15 @@
            height loses to the deck's intrinsic height and everything scrolls. */
         .rig {
           grid-template-rows: repeat(2, minmax(0, 1fr));
-          --jog: clamp(84px, 20vh, 158px);
-          --wave-h: clamp(38px, 8vh, 74px);
-          --pad-h: clamp(24px, 3.6vh, 40px);
-          --loop-h: clamp(22px, 3.2vh, 34px);
-          --btn-h: clamp(26px, 3.4vh, 38px);
-          --deck-gap: clamp(4px, 0.9vh, 10px);
+          /* Sized from the height the rig actually gets (page minus header and
+             the library strip), not from the viewport: 22vh of a 900px window
+             is not 22% of the 650px the deck really has. */
+          --jog: clamp(84px, calc((100vh - 214px) * 0.22), 158px);
+          --wave-h: clamp(38px, calc((100vh - 214px) * 0.1), 74px);
+          --pad-h: clamp(24px, calc((100vh - 214px) * 0.05), 40px);
+          --loop-h: clamp(22px, calc((100vh - 214px) * 0.045), 34px);
+          --btn-h: clamp(26px, calc((100vh - 214px) * 0.048), 38px);
+          --deck-gap: clamp(4px, calc((100vh - 214px) * 0.012), 10px);
         }
         body.two-decks .rig {
           grid-template-rows: minmax(0, 1fr);
@@ -404,10 +407,10 @@
         /* Four decks share the same height, so each card gets half of it and
            must scale down further to stay whole. */
         body:not(.two-decks) .rig {
-          --jog: clamp(56px, 9vh, 84px);
-          --wave-h: clamp(24px, 4vh, 36px);
-          --pad-h: clamp(20px, 2.6vh, 30px);
-          --loop-h: clamp(18px, 2.2vh, 26px);
+          --jog: clamp(44px, calc((100vh - 214px) * 0.1), 84px);
+          --wave-h: clamp(20px, calc((100vh - 214px) * 0.045), 36px);
+          --pad-h: clamp(18px, calc((100vh - 214px) * 0.03), 30px);
+          --loop-h: clamp(16px, calc((100vh - 214px) * 0.026), 26px);
         }
         body:not(.two-decks) .rig .deck .jog-side,
         body:not(.two-decks) .rig .deck .fader-col {
@@ -1812,8 +1815,10 @@
           position: fixed;
           left: 0;
           right: 0;
-          bottom: 0;
-          z-index: 40;
+          /* The library strip owns the very bottom of the screen; the thumb dock
+             stacks on top of it instead of hiding underneath. */
+          bottom: var(--bb-h, 0px);
+          z-index: 41;
           padding: 9px 10px calc(9px + env(safe-area-inset-bottom));
           background: linear-gradient(#101123, #07070f);
           border-top: 1px solid var(--line);
@@ -3038,6 +3043,132 @@
       .rec-last:hover {
         background: rgba(34, 230, 164, 0.12);
       }
+      /* ---------- browser strip ----------
+         Every DJ program has one: the library is always one keystroke away and
+         loading is a click, not a trip to another page. Ours sits under the rig
+         so the decks keep the height they were given. */
+      .browser-bar {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 45;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 7px 12px;
+        background: rgba(7, 9, 20, 0.96);
+        border-top: 1px solid #1e2647;
+        box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.45);
+      }
+      .browser-bar .bb-tag {
+        font: 800 9px/1 inherit;
+        letter-spacing: 0.18em;
+        color: #7d8ac4;
+        white-space: nowrap;
+      }
+      .browser-bar input {
+        flex: 1;
+        min-width: 0;
+        height: 30px;
+        padding: 0 10px;
+        border-radius: 8px;
+        border: 1px solid #232b52;
+        background: #0a0d1e;
+        color: #dbe4ff;
+        font: 600 12px/1 inherit;
+      }
+      .browser-bar input:focus {
+        outline: none;
+        border-color: color-mix(in srgb, var(--a) 60%, #232b52);
+      }
+      .browser-bar .bb-hint {
+        font: 600 9.5px/1.2 inherit;
+        letter-spacing: 0.04em;
+        color: #66739f;
+        white-space: nowrap;
+      }
+      .bb-results {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 46px;
+        z-index: 44;
+        max-height: 46vh;
+        overflow-y: auto;
+        background: rgba(9, 11, 24, 0.98);
+        border-top: 1px solid #1e2647;
+        box-shadow: 0 -16px 40px rgba(0, 0, 0, 0.5);
+      }
+      .bb-results[hidden] {
+        display: none;
+      }
+      .bb-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 10px;
+        padding: 7px 12px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.035);
+        cursor: pointer;
+      }
+      .bb-row:hover,
+      .bb-row.on {
+        background: rgba(80, 110, 255, 0.12);
+      }
+      .bb-main {
+        min-width: 0;
+      }
+      .bb-title {
+        font: 600 12.5px/1.25 inherit;
+        color: #dfe6ff;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .bb-artist {
+        font: 600 10.5px/1.2 inherit;
+        color: #7e8ab5;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .bb-src {
+        margin-left: 8px;
+        font: 700 8px/1 inherit;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: #5f6c9c;
+      }
+      .bb-load {
+        display: flex;
+        gap: 5px;
+      }
+      .bb-load button {
+        height: 24px;
+        min-width: 26px;
+        padding: 0 7px;
+        font: 800 9.5px/1 var(--mono);
+        letter-spacing: 0.06em;
+      }
+      .bb-load button.a {
+        border-color: #1c4d63;
+        color: #7fe6ff;
+      }
+      .bb-load button.b {
+        border-color: #5c3a1c;
+        color: #ffc98a;
+      }
+      .bb-note {
+        padding: 10px 12px;
+        font: 600 11px/1.4 inherit;
+        color: #7e8ab5;
+      }
+      @media (max-width: 640px) {
+        .browser-bar .bb-hint {
+          display: none;
+        }
+      }
     </style>
   </head>
   <body>
@@ -3768,6 +3899,19 @@
       </section>
     </main>
 
+    <!-- Library strip: type, Enter loads deck A, Shift+Enter loads deck B. -->
+    <div class="bb-results" id="bb-results" hidden></div>
+    <div class="browser-bar" id="browser-bar">
+      <span class="bb-tag">⌨ LIBRARY</span>
+      <input
+        id="bb-search"
+        placeholder="Search a song, artist or paste a link…"
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <span class="bb-hint">Enter → A · Shift+Enter → B · Esc closes</span>
+    </div>
+
     <div class="thumbbar" id="thumb">
       <button id="thumb-a" class="tb-a" title="Play or pause deck A">A PLAY</button>
       <button id="thumb-a-cue" class="tb-a" title="Cue deck A back to the start">CUE</button>
@@ -4085,8 +4229,15 @@
         }
 
         function send(msg) {
-          if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg));
+          if (ws && ws.readyState === 1) {
+            ws.send(JSON.stringify(msg));
+            return true;
+          }
+          return false;
         }
+        // The library strip lives in its own <script> below and loads tracks
+        // through this one hook rather than opening a second socket.
+        window.__vzDeckSend = send;
         /**
          * Type-ahead for a song input: debounced /api/search, keyboard driven,
          * and picking a row hands the exact uri to the caller (no re-guessing).
@@ -6853,6 +7004,209 @@
           }
 
           connect();
+        });
+      })();
+    </script>
+    <script>
+      /* Library strip. Type, pause, pick a row: A loads the left deck and B the
+         right (C/D appear in four-deck mode). The load goes over the socket the
+         page already has, so nothing here needs its own connection. */
+      (function () {
+        var bar = document.getElementById('browser-bar');
+        var input = document.getElementById('bb-search');
+        var box = document.getElementById('bb-results');
+        if (!bar || !input || !box) return;
+
+        var items = [];
+        var active = -1;
+        var timer = null;
+        var seq = 0;
+
+        // Reserve the strip's height so the rig keeps its "fits one screen" rule.
+        function paintHeight() {
+          document.documentElement.style.setProperty('--bb-h', bar.offsetHeight + 'px');
+        }
+        paintHeight();
+        window.addEventListener('resize', paintHeight);
+
+        function deckButtons(row, item) {
+          var wrap = document.createElement('div');
+          wrap.className = 'bb-load';
+          var targets = document.body.classList.contains('two-decks') ? ['a', 'b'] : ['a', 'b', 'c', 'd'];
+          targets.forEach(function (deck) {
+            var b = document.createElement('button');
+            b.className = deck;
+            b.type = 'button';
+            b.textContent = deck.toUpperCase();
+            b.title = 'Load on deck ' + deck.toUpperCase();
+            b.addEventListener('mousedown', function (e) {
+              e.preventDefault();
+              e.stopPropagation();
+              load(deck, item);
+            });
+            wrap.appendChild(b);
+          });
+          row.appendChild(wrap);
+        }
+
+        function render(list) {
+          items = list;
+          box.innerHTML = '';
+          if (!list.length) {
+            var none = document.createElement('div');
+            none.className = 'bb-note';
+            none.textContent = 'No matches — try a different spelling, or paste a link.';
+            box.appendChild(none);
+            box.hidden = false;
+            active = -1;
+            return;
+          }
+          list.forEach(function (it, i) {
+            var row = document.createElement('div');
+            row.className = 'bb-row';
+            var main = document.createElement('div');
+            main.className = 'bb-main';
+            var title = document.createElement('div');
+            title.className = 'bb-title';
+            title.textContent = it.title || '—';
+            var artist = document.createElement('div');
+            artist.className = 'bb-artist';
+            artist.textContent = it.artist || '';
+            var src = document.createElement('span');
+            src.className = 'bb-src';
+            src.textContent = it.source || '';
+            artist.appendChild(src);
+            main.appendChild(title);
+            main.appendChild(artist);
+            row.appendChild(main);
+            deckButtons(row, it);
+            row.addEventListener('mousedown', function (e) {
+              e.preventDefault();
+              active = i;
+              paint();
+              load(e.shiftKey ? 'b' : 'a', it);
+            });
+            box.appendChild(row);
+          });
+          active = 0;
+          box.hidden = false;
+          paint();
+        }
+
+        function paint() {
+          Array.prototype.forEach.call(box.children, function (row, i) {
+            row.classList.toggle('on', i === active);
+          });
+        }
+
+        function hide() {
+          box.hidden = true;
+          box.innerHTML = '';
+          items = [];
+          active = -1;
+        }
+
+        function load(deck, item) {
+          if (!item || !item.uri) return;
+          var send = window.__vzDeckSend;
+          if (typeof send !== 'function' || !send({ type: 'deck:load', deck: deck, query: item.uri })) {
+            var note = document.createElement('div');
+            note.className = 'bb-note';
+            note.textContent = 'Not connected to the bot — loading when it reconnects.';
+            box.innerHTML = '';
+            box.appendChild(note);
+            box.hidden = false;
+            return;
+          }
+          hide();
+          input.value = '';
+          input.focus();
+        }
+
+        function search() {
+          var q = input.value.trim();
+          if (q.length < 2) return hide();
+          var mine = ++seq;
+          box.innerHTML = '';
+          var note = document.createElement('div');
+          note.className = 'bb-note';
+          note.textContent = 'Searching…';
+          box.appendChild(note);
+          box.hidden = false;
+          fetch('/api/search?limit=8&q=' + encodeURIComponent(q), { credentials: 'same-origin' })
+            .then(function (r) {
+              if (!r.ok) throw new Error('HTTP ' + r.status);
+              return r.json();
+            })
+            .then(function (d) {
+              if (mine !== seq) return;
+              var list = (d && d.items) || [];
+              if (list.length) return render(list);
+              box.innerHTML = '';
+              var none = document.createElement('div');
+              none.className = 'bb-note';
+              none.textContent = (d && d.why) || 'No matches';
+              box.appendChild(none);
+              box.hidden = false;
+            })
+            .catch(function () {
+              if (mine !== seq) return;
+              box.innerHTML = '';
+              var err = document.createElement('div');
+              err.className = 'bb-note';
+              err.textContent = 'Search failed — check the connection.';
+              box.appendChild(err);
+              box.hidden = false;
+            });
+        }
+
+        input.addEventListener('input', function () {
+          clearTimeout(timer);
+          timer = setTimeout(search, 220);
+        });
+
+        input.addEventListener('keydown', function (e) {
+          if (e.key === 'Escape') {
+            hide();
+            input.blur();
+            return;
+          }
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            var q = input.value.trim();
+            if (items[active]) {
+              load(e.shiftKey ? 'b' : 'a', items[active]);
+              return;
+            }
+            if (!q) return;
+            // No suggestion picked: load the typed text as-is (a link, or let the
+            // bot resolve the name), which is how a DJ browser behaves.
+            var send = window.__vzDeckSend;
+            if (typeof send === 'function') {
+              send({ type: 'deck:load', deck: e.shiftKey ? 'b' : 'a', query: q });
+              hide();
+              input.value = '';
+            }
+            return;
+          }
+          if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            if (box.hidden || !items.length) return;
+            e.preventDefault();
+            var n = items.length;
+            active = (active + (e.key === 'ArrowDown' ? 1 : -1) + n) % n;
+            paint();
+          }
+        });
+
+        // Typing anywhere on the page that is not a field jumps to the library,
+        // like pressing a letter in any DJ software.
+        document.addEventListener('keydown', function (e) {
+          var t = e.target;
+          var typing =
+            t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+          if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+          if (e.key === ' ' || e.key.length !== 1) return;
+          input.focus();
         });
       })();
     </script>
