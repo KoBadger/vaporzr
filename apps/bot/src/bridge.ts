@@ -10,6 +10,8 @@ import {
   type DeckId,
   type DeckMixerState,
   type InboundMessage,
+  type KaraokeLyricsPayload,
+  type KaraokeState,
   type OutboundMessage,
   type PlaybackState,
   type QueueSnapshot,
@@ -211,6 +213,13 @@ export class Bridge {
     | null = null;
   /** Current deck state for a guild, or null when that guild has no decks. */
   deckStateProvider: ((guildId?: string) => DeckMixerState | null) | null = null;
+  /**
+   * Karaoke night. Lyrics are resolved on demand (one fetch per track, cached
+   * by the lyrics module) and the queue is owned by the Discord layer for the
+   * same reason decks are: the bot holds the mixer and the room announcements.
+   */
+  onKaraokeLyrics: ((guildId: string | undefined, deck: DeckId) => Promise<KaraokeLyricsPayload>) | null = null;
+  onKaraokeQueue: ((guildId: string | undefined) => KaraokeState | null) | null = null;
   /**
    * HTTP uploads from the deck page: a one-shot for the sample bank, and an
    * audio file dropped straight onto a deck. Both live here because the bot
@@ -798,19 +807,51 @@ export class Bridge {
         break;
       }
       case 'deck:load':
-      case 'deck:control':
-        // Decks change what the whole channel hears — control scope only, and
-        // never a guest/Activity socket.
-        if (!this.isAuthed(socket)) {
+      case 'deck:control': {
+        // Adding your own song to a karaoke night is a request, not a mix
+        // change, so the view-scoped screen in the room may do exactly that and
+        // nothing else. Everything about the decks stays control-key only.
+        const viewKaraoke =
+          msg.type === 'deck:control' && msg.action === 'karaoke' && (msg.op === 'add' || msg.op === 'list');
+        if (!this.isAuthed(socket) && !viewKaraoke) {
           this.notice('error', 'Live decks need the control key.');
           return;
         }
         if (!this.allowCommand(socket)) return;
         this.onDeckAction?.(this.clientGuildId(socket), msg);
         break;
+      }
       case 'deck:request': {
         const state = this.deckStateProvider?.(this.clientGuildId(socket));
         if (state) this.sendToSocket(socket, { type: 'deck:state', state });
+        break;
+      }
+      case 'karaoke:request': {
+        // Read-only: the karaoke screen is a view surface (a TV in the room),
+        // so it needs no control credential — only "not a jam guest".
+        if (this.scopeOf(socket) === 'guest') return;
+        const guildId = this.clientGuildId(socket);
+        const provider = this.onKaraokeLyrics;
+        if (!provider) return;
+        void provider(guildId, msg.deck ?? 'a')
+          .then((payload) => this.sendToSocket(socket, { type: 'karaoke:lyrics', guildId, ...payload }))
+          .catch(() => {
+            this.sendToSocket(socket, {
+              type: 'karaoke:lyrics',
+              guildId,
+              deck: msg.deck ?? 'a',
+              title: '',
+              artist: '',
+              lines: [],
+              reason: 'Lyrics lookup failed.',
+            });
+          });
+        break;
+      }
+      case 'karaoke:queue': {
+        if (this.scopeOf(socket) === 'guest') return;
+        const state = this.onKaraokeQueue?.(this.clientGuildId(socket));
+        if (state) this.sendToSocket(socket, { type: 'karaoke:queue', state, guildId: this.clientGuildId(socket) });
         break;
       }
       default:
@@ -1896,6 +1937,16 @@ export class Bridge {
   /** Push a freshly decoded waveform to the deck page. */
   broadcastDeckWaveform(guildId: string, deck: DeckId, peaks: number[], durationMs: number): void {
     this.broadcastPanels({ type: 'deck:waveform', deck, peaks, durationMs, guildId });
+  }
+
+  /** Karaoke queue to every stage screen and panel. */
+  broadcastKaraokeQueue(state: KaraokeState, guildId?: string): void {
+    this.broadcastPanels({ type: 'karaoke:queue', state, guildId });
+  }
+
+  /** Lyrics for the deck's current track, for the stage screen. */
+  broadcastKaraokeLyrics(payload: KaraokeLyricsPayload, guildId?: string): void {
+    this.broadcastPanels({ type: 'karaoke:lyrics', guildId, ...payload });
   }
 
   /**

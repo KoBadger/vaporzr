@@ -494,6 +494,7 @@ export class DeckMixer {
     slot.state.bpm = source.bpm ?? slot.state.bpm;
     slot.state.ended = false;
     slot.state.tempo = 1;
+    slot.state.transpose = 0;
     slot.state.gain = 1;
     slot.state.eq = { ...FLAT_EQ };
     slot.state.filter = { type: 'off', cutoff: 20_000 };
@@ -609,6 +610,32 @@ export class DeckMixer {
     this.killDecoder(slot);
     slot.fadeFrames = Math.round(this.sampleRate * 0.04);
     // Same as seek: a cued deck just carries the new rate into play().
+    if (slot.state.playing) this.spawnDecoder(slot, pos);
+    this.emit();
+  }
+
+  /**
+   * Pitch-shift a deck in semitones without changing its tempo.
+   *
+   * Karaoke's key change: most people cannot sing in the record's key, and the
+   * alternative (resampling the whole mix) would drag the tempo with it. This
+   * restarts the decoder at the same playhead, so it costs a 40 ms fade.
+   */
+  setTranspose(id: DeckId, semitones: number): void {
+    const slot = this.slot(id);
+    if (!slot.state.source) return;
+    const st = Math.max(-6, Math.min(6, Math.round(Number.isFinite(semitones) ? semitones : 0)));
+    if (st === (slot.state.transpose ?? 0)) return;
+    const pos = slot.state.positionMs;
+    slot.state.transpose = st;
+    slot.baseMs = pos;
+    slot.consumedFrames = 0;
+    slot.state.positionMs = pos;
+    slot.ring.clear();
+    // Cached loop PCM was rendered at the old pitch.
+    this.resetLoopCache(slot);
+    this.killDecoder(slot);
+    slot.fadeFrames = Math.round(this.sampleRate * 0.04);
     if (slot.state.playing) this.spawnDecoder(slot, pos);
     this.emit();
   }
@@ -822,6 +849,88 @@ export class DeckMixer {
     this.startTick();
   }
 
+  /**
+   * Put one deck's processing back to neutral **without touching what is loaded
+   * or where the playhead is**.
+   *
+   * This is the panic button. "It sounds wrong" has half a dozen possible
+   * causes — a key change, a tempo nudge from SYNC, a half-killed EQ band, a
+   * filter left open, a muted stem lane, a trim pulled down — and hunting them
+   * one at a time mid-set is the worst possible time to debug. Everything that
+   * colours the sound goes back to unity in one call, and the music keeps
+   * playing: only the decoder restarts, and only if the pitch actually moved.
+   */
+  resetChannel(id: DeckId): boolean {
+    const slot = this.slot(id);
+    if (!slot.state.source) return false;
+    const pos = slot.state.positionMs;
+    const wasPlaying = slot.state.playing;
+    const pitched = Math.abs(slot.state.tempo - 1) > 0.0005 || Math.abs(slot.state.transpose ?? 0) > 0.01;
+    const dirty =
+      pitched ||
+      slot.state.gain !== 1 ||
+      slot.state.eq.low !== 0 ||
+      slot.state.eq.mid !== 0 ||
+      slot.state.eq.high !== 0 ||
+      slot.state.filter.type !== 'off' ||
+      slot.micro !== 1 ||
+      Boolean(slot.state.loop) ||
+      slot.stemGains.some((g) => g !== 1);
+
+    slot.state.eq = { ...FLAT_EQ };
+    this.rebuildCoefs(slot);
+    slot.state.filter = { type: 'off', cutoff: 20_000 };
+    slot.filterCoefs = IDENTITY_BIQUAD;
+    slot.filterState = [newBiquadState(), newBiquadState()];
+    slot.state.gain = 1;
+    slot.state.tempo = 1;
+    slot.state.transpose = 0;
+    slot.micro = 1;
+    slot.state.drift = 1;
+    if (slot.stemGains.length > 0) {
+      slot.stemGains = slot.stemGains.map(() => 1);
+      if (slot.state.stems) slot.state.stems = { lanes: [...slot.state.stems.lanes], gains: [...slot.stemGains] };
+    }
+    this.clearLoopState(slot);
+    if (pitched) {
+      // The decoder is rendering at the old rate/pitch; everything else is a
+      // per-sample gain or filter and needs no restart.
+      slot.baseMs = pos;
+      slot.consumedFrames = 0;
+      slot.state.positionMs = pos;
+      slot.ring.clear();
+      this.killDecoder(slot);
+      slot.fadeFrames = Math.round(this.sampleRate * 0.03);
+      if (wasPlaying) this.spawnDecoder(slot, pos);
+    }
+    this.emit();
+    return dirty;
+  }
+
+  /** Master side of the panic button: volume and crossfader back to neutral. */
+  resetMaster(): void {
+    this.masterGain = 1;
+    this.crossfader = 0.5;
+    this.emit();
+  }
+
+  /** True when any deck is doing something other than playing the file straight. */
+  isDirty(): boolean {
+    return this.allSlots().some(
+      (s) =>
+        s.state.source &&
+        (Math.abs(s.state.tempo - 1) > 0.0005 ||
+          Math.abs(s.state.transpose ?? 0) > 0.01 ||
+          s.state.gain !== 1 ||
+          s.state.eq.low !== 0 ||
+          s.state.eq.mid !== 0 ||
+          s.state.eq.high !== 0 ||
+          s.state.filter.type !== 'off' ||
+          Boolean(s.state.loop) ||
+          s.stemGains.some((g) => g !== 1)),
+    );
+  }
+
   /** Stop everything and release the decoders. */
   stopAll(): void {
     for (const slot of this.allSlots()) {
@@ -910,17 +1019,41 @@ export class DeckMixer {
     this.onState?.();
   }
 
-  /** ffmpeg argv that decodes `file` to s16le from `seekMs` at the deck tempo. */
-  private decoderArgs(file: string, seekMs: number, tempo: number): string[] {
+  /**
+   * ffmpeg argv that decodes `file` to s16le from `seekMs` at the deck tempo.
+   *
+   * `transpose` is a pure pitch shift: asetrate changes the sample rate (which
+   * plays the file back faster and therefore higher) and an equal atempo restores
+   * the original duration. Because every stem lane gets the *identical* filter
+   * chain on identical input, the lanes stay sample-aligned — the whole point of
+   * the stem mixer holds through a key change.
+   */
+  private decoderArgs(file: string, seekMs: number, tempo: number, transpose = 0): string[] {
     const args = ['-hide_banner', '-loglevel', 'error', '-nostdin'];
     // Input seek on a local file: fast and frame-accurate for audio.
     if (seekMs > 0) args.push('-ss', (seekMs / 1000).toFixed(3));
     args.push('-i', file);
     args.push('-vn', '-ac', '2', '-ar', String(this.sampleRate));
-    if (Math.abs(tempo - 1) > 0.0005) {
+    const filters: string[] = [];
+    // Pitch first: a semitone is a 2^(1/12) rate multiplier.
+    let rate = tempo;
+    if (Math.abs(transpose) > 0.01) {
+      const pitch = Math.pow(2, transpose / 12);
+      // `-af` runs BEFORE the `-ar` output resample, so asetrate would otherwise
+      // be told about a rate the samples are not at (a 44.1 kHz file read as
+      // 48 kHz is ~1.5 semitones and 9% fast). Pin the rate first.
+      filters.push(
+        `aresample=${this.sampleRate}`,
+        `asetrate=${Math.round(this.sampleRate * pitch)}`,
+        `aresample=${this.sampleRate}`,
+      );
+      // Undo the speed change asetrate introduced, keeping the deck's tempo.
+      rate = tempo / pitch;
+    }
+    if (Math.abs(rate - 1) > 0.0005) {
       // atempo only accepts 0.5..2.0; chain for anything outside that band.
       const stages: number[] = [];
-      let r = tempo;
+      let r = rate;
       while (r > 2) {
         stages.push(2);
         r /= 2;
@@ -930,8 +1063,9 @@ export class DeckMixer {
         r /= 0.5;
       }
       stages.push(r);
-      args.push('-af', stages.map((s) => `atempo=${s.toFixed(4)}`).join(','));
+      filters.push(...stages.map((s) => `atempo=${s.toFixed(4)}`));
     }
+    if (filters.length > 0) args.push('-af', filters.join(','));
     args.push('-f', 's16le', 'pipe:1');
     return args;
   }
@@ -947,7 +1081,7 @@ export class DeckMixer {
   ): ChildProcess | null {
     let proc: ChildProcess;
     try {
-      proc = spawn(this.ffmpegPath, this.decoderArgs(file, seekMs, slot.state.tempo), {
+      proc = spawn(this.ffmpegPath, this.decoderArgs(file, seekMs, slot.state.tempo, slot.state.transpose ?? 0), {
         windowsHide: true,
       });
     } catch (err) {

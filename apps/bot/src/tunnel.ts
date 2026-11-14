@@ -143,6 +143,17 @@ export const vizTunnel = {
     if (b.secure) return { url: `${b.url}/listen`, secure: true };
     return { url: `http://${lanOrPublic()}:${config.port}/listen`, secure: false };
   },
+  /**
+   * Any page on the same origin as the other links. One place decides whether a
+   * link is reachable from a phone (tunnel/https) or only on the LAN, so a new
+   * page cannot drift into its own idea of where the bot lives.
+   */
+  pageLink(pathname: string): { url: string; secure: boolean } {
+    const b = base();
+    const suffix = pathname.startsWith('/') ? pathname : `/${pathname}`;
+    if (b.secure) return { url: `${b.url}${suffix}`, secure: true };
+    return { url: `http://${lanOrPublic()}:${config.port}${suffix}`, secure: false };
+  },
 };
 
 function lanOrPublic(): string {

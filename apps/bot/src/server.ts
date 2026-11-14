@@ -29,6 +29,7 @@ import {
   spotifyCooldownRemainingSec,
 } from '@vaporzr/core/spotify';
 import { tokenStore } from '@vaporzr/core/tokenStore';
+import { replicateStemsEnabled } from '@vaporzr/core/stemSeparation';
 import { Bridge } from './bridge.js';
 import { SessionManager } from './session.js';
 import { PermissionsManager } from './permissions.js';
@@ -65,6 +66,7 @@ import { statsStore } from '@vaporzr/core/stats';
 import { analyticsStore } from '@vaporzr/core/analytics';
 import { amokChat, amokProviderChain } from './amokProvider.js';
 import { amokSettingsStatus, clearAmokSettings, saveAmokSettings } from './amokSettings.js';
+import { clearStemSettings, loadStemSettings, saveStemSettings, stemSettingsStatus } from './stemSettings.js';
 import { domainStore } from '@vaporzr/core/domains';
 import { setlistShares } from '@vaporzr/core/setlistShare';
 import { tapes as globalTapes } from '@vaporzr/core/tape';
@@ -264,6 +266,9 @@ function probePoTokenProvider(): void {
 }
 
 export function startServer(sessions: SessionManager, perms: PermissionsManager): Bridge {
+  // A token saved from the panel beats the env value and has to be in place
+  // before anything asks whether hosted stems are available.
+  loadStemSettings();
   // Declared here so the request handler (which runs later) can read live
   // guild data from the bridge once it exists.
   let bridge: Bridge | null = null;
@@ -465,6 +470,8 @@ function accessNeedFor(pathname: string): AccessScope | null {
   if (pathname === '/status') return 'view';
   if (pathname === '/viz' || pathname === '/viz.html') return 'view';
   if (pathname === '/listen' || pathname === '/listen.html') return 'view';
+  // The karaoke screen is a read-only stage view: lyrics and the sing queue.
+  if (pathname === '/karaoke' || pathname === '/karaoke.html') return 'view';
   return null;
 }
 
@@ -991,8 +998,27 @@ function keyPrompt(res: http.ServerResponse, message?: string): void {
      * only there so the page still works with JavaScript disabled.
      */
     function go() {
-      var value = (input.value || '').trim();
+      var raw = (input.value || '').trim();
+      if (!raw) {
+        input.focus();
+        return;
+      }
+      // People paste the whole link /key give handed them, not the code in it.
+      // Pull the credential out of that instead of bouncing them with
+      // "invalid key" — it is the same secret either way.
+      var value = raw;
+      try {
+        if (/^https?:\/\//i.test(raw)) {
+          var u = new URL(raw);
+          value = u.searchParams.get('invite') || u.searchParams.get('key') || '';
+        }
+      } catch (e) {
+        /* not a URL: use it as typed */
+      }
+      value = String(value).replace(/^['"]|['"]$/g, '').trim();
       if (!value) {
+        input.value = '';
+        input.placeholder = 'paste the link, or the code inside it';
         input.focus();
         return;
       }
@@ -2312,6 +2338,50 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
         break;
       }
 
+      case '/api/stems': {
+        // Stem separation holds a bearer token that spends money, so it needs
+        // the same control credential as the AI provider settings.
+        if (controlAuthRequired() && !hasShareAccess(req, url)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'unauthorized' }));
+          return;
+        }
+        if (req.method === 'GET') {
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          res.end(JSON.stringify({ ...stemSettingsStatus(), hosted: replicateStemsEnabled() }));
+          break;
+        }
+        if (req.method === 'POST') {
+          let payload: { replicateToken?: string } | null = null;
+          try {
+            const raw = await readJsonBody(req);
+            payload = raw && typeof raw === 'object' ? (raw as { replicateToken?: string }) : null;
+          } catch {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid request body.' }));
+            return;
+          }
+          const saved = saveStemSettings({ replicateToken: payload?.replicateToken });
+          if (!saved.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: saved.error }));
+            return;
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          res.end(JSON.stringify({ ok: true, ...stemSettingsStatus(), hosted: replicateStemsEnabled() }));
+          break;
+        }
+        if (req.method === 'DELETE') {
+          clearStemSettings();
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          res.end(JSON.stringify({ ok: true, ...stemSettingsStatus(), hosted: replicateStemsEnabled() }));
+          break;
+        }
+        res.writeHead(405, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'method not allowed' }));
+        break;
+      }
+
       case '/api/amok': {
         // The AI provider is owner-level configuration: it spends money and it
         // holds a bearer key, so a jam guest must never reach it.
@@ -2420,6 +2490,26 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
               error: err instanceof Error ? err.message.slice(0, 400) : 'Provider test failed.',
             }),
           );
+        }
+        break;
+      }
+
+      case '/karaoke':
+      case '/karaoke.html': {
+        // The room's TV: lyrics, backgrounds and the sing queue. View-gated
+        // (see accessNeedFor) because it can only read — every change goes back
+        // through deck:control, which needs the control key.
+        try {
+          const build = (process.env.VAPORZR_BUILD ?? 'dev').slice(0, 7);
+          const file = fs
+            .readFileSync(path.join(__dirname, '..', 'public', 'karaoke.html'), 'utf8')
+            .replace(/\{\{ORIGIN\}\}/g, origin)
+            .replace(/\{\{BUILD\}\}/g, build);
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+          res.end(file);
+        } catch {
+          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('Karaoke screen not found.');
         }
         break;
       }
