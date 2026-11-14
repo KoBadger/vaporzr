@@ -2366,6 +2366,80 @@
           </div>
         </div>
 
+        <!-- Stems: the one karaoke prerequisite that used to need a shell. -->
+        <div class="card collapsible" id="stems-card" data-tab="more">
+          <div id="queue-info">
+            <span class="section-label">🎚 STEMS</span>
+            <span class="badge" id="stems-badge">—</span>
+            <button
+              id="btn-stems-refresh"
+              class="icon"
+              data-tip="Recheck the separation backend"
+              style="height: 26px; min-width: 26px; font-size: 12px"
+            >
+              ↻
+            </button>
+          </div>
+          <div id="stems-status" style="font-size: 12px; color: var(--muted); margin-bottom: 8px">Checking…</div>
+          <div style="display: flex; gap: 6px; flex-wrap: wrap">
+            <input
+              id="stems-key"
+              type="password"
+              placeholder="Replicate token (r8_…)"
+              autocomplete="off"
+              spellcheck="false"
+              style="flex: 1; min-width: 180px"
+            />
+            <button id="btn-stems-save" class="primary" style="height: 30px; min-width: 64px">Save</button>
+            <button id="btn-stems-clear" class="mini-btn" style="height: 30px">Clear</button>
+          </div>
+          <div style="font-size: 11px; color: var(--muted); margin-top: 6px">
+            Karaoke can drop the vocal only on a song whose stems exist. Hosted Demucs separates a track in ~80 s; with
+            no token a karaoke turn plays with the vocals still in. Tokens:
+            <b>replicate.com/account/api-tokens</b>. Saved on the server — no .env, no restart.
+          </div>
+        </div>
+
+        <!-- Karaoke night + the audio panic button, in the place people look first. -->
+        <div class="card collapsible" id="karaoke-card" data-tab="more">
+          <div id="queue-info">
+            <span class="section-label">🎤 KARAOKE</span>
+            <span class="badge" id="karaoke-badge">closed</span>
+          </div>
+          <div id="karaoke-status" style="font-size: 12px; color: var(--muted); margin-bottom: 8px">Not running.</div>
+          <div style="display: flex; gap: 6px; flex-wrap: wrap">
+            <button id="btn-karaoke-open" class="primary" style="height: 30px; min-width: 96px">Open night</button>
+            <button id="btn-karaoke-close" class="mini-btn" style="height: 30px">Close</button>
+            <button id="btn-karaoke-screen" class="mini-btn" style="height: 30px">Karaoke screen</button>
+            <button id="btn-karaoke-skip" class="mini-btn" style="height: 30px">Skip turn</button>
+          </div>
+          <div style="display: flex; gap: 6px; margin-top: 6px">
+            <input id="karaoke-song" placeholder="Song title or link" style="flex: 1" />
+            <input id="karaoke-who" placeholder="Name" style="width: 104px" />
+            <button id="btn-karaoke-add" class="mini-btn">Add</button>
+          </div>
+          <div style="display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap">
+            <button
+              id="btn-audio-reset"
+              class="mini-btn"
+              style="border-color: #5a2c3a; color: #ffb3c4"
+              data-tip="Pitch, tempo, EQ, filter, trims, stems and crossfader back to neutral. Playback keeps going"
+            >
+              ⟲ Reset audio
+            </button>
+            <button id="btn-karaoke-keydown" class="mini-btn" data-tip="Pitch the current turn down a semitone">
+              Key −
+            </button>
+            <button id="btn-karaoke-keyup" class="mini-btn" data-tip="Pitch the current turn up a semitone">
+              Key +
+            </button>
+          </div>
+          <div
+            id="karaoke-queue"
+            style="font-size: 12px; color: var(--muted); margin-top: 8px; white-space: pre-wrap; line-height: 1.5"
+          ></div>
+        </div>
+
         <!-- Plan / billing. Hidden until /api/billing/status says billing is
              configured, so a deployment that never sold a plan shows nothing. -->
         <div class="card collapsible" id="plan-card" data-tab="more" style="display: none">
@@ -2793,6 +2867,27 @@
           'preset-cycle',
           'conn-dot',
           'conn-text',
+          'stems-card',
+          'stems-badge',
+          'stems-status',
+          'stems-key',
+          'btn-stems-save',
+          'btn-stems-clear',
+          'btn-stems-refresh',
+          'karaoke-card',
+          'karaoke-badge',
+          'karaoke-status',
+          'karaoke-song',
+          'karaoke-who',
+          'karaoke-queue',
+          'btn-karaoke-open',
+          'btn-karaoke-close',
+          'btn-karaoke-skip',
+          'btn-karaoke-add',
+          'btn-karaoke-screen',
+          'btn-karaoke-keydown',
+          'btn-karaoke-keyup',
+          'btn-audio-reset',
         ].forEach(function (id) {
           el[id] = $(id);
         });
@@ -3798,6 +3893,9 @@
             send({ type: 'hello', role: 'panel', name: 'browser-panel' });
             send({ type: 'panel:subscribe', channels: ['state', 'queue', 'visuals'] });
             send({ type: 'state:request' });
+            // The karaoke card needs the sing queue on load; the server answers
+            // with a karaoke:queue broadcast.
+            send({ type: 'karaoke:queue' });
           };
           /* ---- Jam: presence roster + a scan-to-join QR ---- */
           var jam = { names: [], contributors: [], joinPath: '', joinUrl: '', crowdPath: '', crowdUrl: '' };
@@ -3914,6 +4012,9 @@
             switch (msg.type) {
               case 'deck:state':
                 if (window.__vzDeck) window.__vzDeck(msg.state);
+                break;
+              case 'karaoke:queue':
+                renderKaraoke(msg.state);
                 break;
               case 'jam:presence':
                 jam = msg;
@@ -4655,6 +4756,149 @@
               toast('info', 'Cleared the saved AI provider.');
             })
             .catch(function () {});
+        };
+
+        /* ---------- stems (Replicate token, no .env needed) ---------- */
+        function renderStems(d) {
+          if (!d) return;
+          el['stems-badge'].textContent = d.configured ? 'ready' : 'off';
+          el['stems-badge'].className = 'badge' + (d.configured ? '' : ' warn');
+          el['stems-status'].textContent = d.configured
+            ? 'Hosted separation on · token ' +
+              (d.hint || '') +
+              (d.source === 'env' ? ' · from the deployment env' : ' · saved here')
+            : 'No token — karaoke turns play with vocals, and nothing is separated.';
+        }
+        function loadStems() {
+          fetch('/api/stems', { credentials: 'same-origin' })
+            .then(function (r) {
+              if (r.status === 401 || r.status === 403) {
+                el['stems-status'].textContent = 'Open this panel with the control key to set the stem token.';
+                return null;
+              }
+              return r.ok ? r.json() : null;
+            })
+            .then(function (d) {
+              if (d) renderStems(d);
+            })
+            .catch(function () {});
+        }
+        el['btn-stems-refresh'].onclick = loadStems;
+        el['btn-stems-save'].onclick = function () {
+          var token = el['stems-key'].value.trim();
+          if (!token) {
+            toast('warn', 'Paste the Replicate token first.');
+            el['stems-key'].focus();
+            return;
+          }
+          el['stems-status'].textContent = 'Saving…';
+          fetch('/api/stems', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ replicateToken: token }),
+          })
+            .then(function (r) {
+              return r.json().then(function (d) {
+                return { ok: r.ok, d: d };
+              });
+            })
+            .then(function (res) {
+              if (!res.ok) {
+                el['stems-status'].textContent = '❌ ' + ((res.d && res.d.error) || 'Could not save the token.');
+                toast('error', (res.d && res.d.error) || 'Could not save the token.');
+                return;
+              }
+              el['stems-key'].value = '';
+              renderStems(res.d);
+              toast('ok', 'Stem separation is on — the next karaoke song gets an instrumental.');
+            })
+            .catch(function () {
+              toast('error', 'Could not save the token.');
+            });
+        };
+        el['btn-stems-clear'].onclick = function () {
+          fetch('/api/stems', { method: 'DELETE', credentials: 'same-origin' })
+            .then(function (r) {
+              return r.json();
+            })
+            .then(function (d) {
+              renderStems(d);
+              toast('info', 'Cleared the saved stem token.');
+            })
+            .catch(function () {});
+        };
+        loadStems();
+
+        /* ---------- karaoke night + audio reset ---------- */
+        var karaokeState = null;
+        function renderKaraoke(state) {
+          if (!state) return;
+          karaokeState = state;
+          el['karaoke-badge'].textContent = state.open ? 'open' : 'closed';
+          el['karaoke-badge'].className = 'badge' + (state.open ? '' : ' warn');
+          var now = state.current
+            ? 'On stage: ' + state.current.singer + ' — ' + state.current.title
+            : state.open
+              ? 'Nobody on stage.'
+              : 'Not running.';
+          var key = state.transpose ? ' · key ' + (state.transpose > 0 ? '+' : '') + state.transpose : '';
+          el['karaoke-status'].textContent = now + key;
+          var entries = state.entries || [];
+          el['karaoke-queue'].textContent = entries.length
+            ? entries
+                .slice(0, 10)
+                .map(function (e, i) {
+                  var badge = state.current && e.id === state.current.id ? '🎤' : String(i + 1) + '.';
+                  return badge + ' ' + e.singer + ' — ' + e.title;
+                })
+                .join('\n')
+            : state.open
+              ? 'Queue is empty.'
+              : '';
+        }
+        function karaokeAction(extra) {
+          send(Object.assign({ type: 'deck:control', action: 'karaoke' }, extra));
+        }
+        el['btn-karaoke-open'].onclick = function () {
+          karaokeAction({ op: 'open' });
+        };
+        el['btn-karaoke-close'].onclick = function () {
+          karaokeAction({ op: 'close' });
+        };
+        el['btn-karaoke-skip'].onclick = function () {
+          karaokeAction({ op: 'skip' });
+        };
+        el['btn-karaoke-add'].onclick = function () {
+          var song = el['karaoke-song'].value.trim();
+          var who = el['karaoke-who'].value.trim() || 'Singer';
+          if (!song) {
+            toast('warn', 'Which song?');
+            el['karaoke-song'].focus();
+            return;
+          }
+          karaokeAction({ op: 'add', singer: who, title: song });
+          el['karaoke-song'].value = '';
+        };
+        el['karaoke-song'].addEventListener('keydown', function (e) {
+          if (e.key === 'Enter') el['btn-karaoke-add'].click();
+        });
+        el['btn-karaoke-keydown'].onclick = function () {
+          var cur = (karaokeState && karaokeState.transpose) || 0;
+          karaokeAction({ op: 'transpose', semitones: cur - 1 });
+        };
+        el['btn-karaoke-keyup'].onclick = function () {
+          var cur = (karaokeState && karaokeState.transpose) || 0;
+          karaokeAction({ op: 'transpose', semitones: cur + 1 });
+        };
+        el['btn-karaoke-screen'].onclick = function () {
+          // The stage screen mints its own view invite server-side, so the panel
+          // does not have to hand out its control key for a TV.
+          window.open('/karaoke', 'vz-karaoke');
+        };
+        el['btn-audio-reset'].onclick = function () {
+          send({ type: 'deck:control', action: 'reset' });
+          toast('ok', 'Audio back to neutral — pitch, tempo, EQ, filter, stems, crossfader.');
         };
         loadAmok();
 
