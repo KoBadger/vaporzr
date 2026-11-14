@@ -642,7 +642,14 @@ function grantPageAccess(req: http.IncomingMessage, url: URL, res: http.ServerRe
       return false;
     }
     noteAuthFailure(ip);
-    keyPrompt(res, 'That key or invite is not valid, or it has already been used.');
+    // Be exact about *why*: "invalid or already used" is read as "my key
+    // expired" by an owner retyping the master key, which is the wrong hunt.
+    keyPrompt(
+      res,
+      key
+        ? 'That is not the current master key, and no invite matches it. Run <b>/key show</b> in Discord for the live key, or <b>/key give</b> for a link.'
+        : 'No valid credential. Ask the operator for a panel link.',
+    );
     return false;
   }
 
@@ -978,11 +985,11 @@ function keyPrompt(res: http.ServerResponse, message?: string): void {
 </head><body>
 <form method="GET" id="key-form">
   <h1>VAPORZR <span>/ access</span></h1>
-  <p>Enter the share key, or an invite link's code</p>
+  <p>Enter the share key, or paste an invite link</p>
   <input name="key" id="key-input" placeholder="key or invite" autofocus autocomplete="off" spellcheck="false">
   <button id="key-submit">Enter</button>
   ${message ? `<div class="err">${message}</div>` : ''}
-  <div class="fine">Invites from <b>/key give</b> work once and expire on their own.<br>The owner key is in your bot's .env (SHARE_KEY).</div>
+  <div class="fine">The live master key is <b>/key show</b> in Discord (owner only).<br>Links from <b>/key give</b> expire, and may be used the number of times they say.</div>
 </form>
 <script>
   (function () {
@@ -2499,6 +2506,11 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
         // The room's TV: lyrics, backgrounds and the sing queue. View-gated
         // (see accessNeedFor) because it can only read — every change goes back
         // through deck:control, which needs the control key.
+        //
+        // Framed by Discord on purpose: the Activity's Karaoke button navigates
+        // here inside the Activity iframe, and `frame-ancestors 'none'` would
+        // make that a blank panel with no error to look at.
+        htmlSecurityHeaders(res, true);
         try {
           const build = (process.env.VAPORZR_BUILD ?? 'dev').slice(0, 7);
           const file = fs

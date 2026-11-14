@@ -124,16 +124,12 @@
   }
 
   function openKaraoke() {
+    // Stay inside the Activity frame: a popup is blocked on mobile and loses the
+    // Activity chrome. The stage page renders a "back to visuals" control when
+    // it is told it came from here.
     var url = karaokeUrl();
-    var sdk = window.__VZ_SDK__;
-    if (sdk && sdk.commands && typeof sdk.commands.openExternalLink === 'function') {
-      Promise.resolve(sdk.commands.openExternalLink({ url: url })).catch(function () {
-        window.open(url, '_blank', 'noopener');
-      });
-      return;
-    }
-    var win = window.open(url, '_blank', 'noopener');
-    if (!win) location.href = url;
+    var sep = url.indexOf('?') >= 0 ? '&' : '?';
+    location.href = url + sep + 'back=1';
   }
 
   function hide() {
