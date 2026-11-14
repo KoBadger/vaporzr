@@ -343,7 +343,7 @@
          2000px below the decks, which is the "this doesn't look like VDJ" part. */
       @media (min-width: 961px) {
         .rig {
-          height: calc(100vh - 168px - var(--bb-h, 0px));
+          height: calc(100vh - 168px - var(--bb-h, 0px) - var(--mw-h, 0px));
           min-height: 420px;
           align-items: stretch;
         }
@@ -362,7 +362,7 @@
              stay put and only the utility stack between them scrolls. */
           overflow: hidden;
         }
-        .rig .mixer .mixer-scroll {
+        .rig .mixer .mix-panel {
           flex: 1 1 auto;
           overflow-y: auto;
           overscroll-behavior: contain;
@@ -402,15 +402,16 @@
            height loses to the deck's intrinsic height and everything scrolls. */
         .rig {
           grid-template-rows: repeat(2, minmax(0, 1fr));
-          /* Sized from the height the rig actually gets (page minus header and
-             the library strip), not from the viewport: 22vh of a 900px window
-             is not 22% of the 650px the deck really has. */
-          --jog: clamp(84px, calc((100vh - 214px) * 0.22), 158px);
-          --wave-h: clamp(38px, calc((100vh - 214px) * 0.1), 74px);
-          --pad-h: clamp(24px, calc((100vh - 214px) * 0.05), 40px);
-          --loop-h: clamp(22px, calc((100vh - 214px) * 0.045), 34px);
-          --btn-h: clamp(26px, calc((100vh - 214px) * 0.048), 38px);
-          --deck-gap: clamp(4px, calc((100vh - 214px) * 0.012), 10px);
+          /* Sized from the height the rig actually gets (page minus header, the
+             mix waveform and the library strip), not from the viewport: 22vh of
+             a 900px window is not 22% of the 650px the deck really has. */
+          --rig-h: calc(100vh - 214px - var(--bb-h, 0px) - var(--mw-h, 0px));
+          --jog: clamp(84px, calc(var(--rig-h) * 0.22), 158px);
+          --wave-h: clamp(38px, calc(var(--rig-h) * 0.1), 74px);
+          --pad-h: clamp(24px, calc(var(--rig-h) * 0.05), 40px);
+          --loop-h: clamp(22px, calc(var(--rig-h) * 0.045), 34px);
+          --btn-h: clamp(26px, calc(var(--rig-h) * 0.048), 38px);
+          --deck-gap: clamp(4px, calc(var(--rig-h) * 0.012), 10px);
         }
         body.two-decks .rig {
           grid-template-rows: minmax(0, 1fr);
@@ -418,10 +419,10 @@
         /* Four decks share the same height, so each card gets half of it and
            must scale down further to stay whole. */
         body:not(.two-decks) .rig {
-          --jog: clamp(44px, calc((100vh - 214px) * 0.1), 84px);
-          --wave-h: clamp(20px, calc((100vh - 214px) * 0.045), 36px);
-          --pad-h: clamp(18px, calc((100vh - 214px) * 0.03), 30px);
-          --loop-h: clamp(16px, calc((100vh - 214px) * 0.026), 26px);
+          --jog: clamp(44px, calc(var(--rig-h) * 0.1), 84px);
+          --wave-h: clamp(20px, calc(var(--rig-h) * 0.045), 36px);
+          --pad-h: clamp(18px, calc(var(--rig-h) * 0.03), 30px);
+          --loop-h: clamp(16px, calc(var(--rig-h) * 0.026), 26px);
         }
         body:not(.two-decks) .rig .deck .jog-side,
         body:not(.two-decks) .rig .deck .fader-col {
@@ -1620,6 +1621,66 @@
       }
       /* The bank and the crossfader stay put; only the utility blocks between
          them scroll when the window is short, which is how a mixer behaves. */
+      /* Mixer panels: one tab's worth of controls at a time, so the crossfader
+         and the channel strips never scroll out of reach. */
+      .mix-tabs {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 4px;
+      }
+      .mix-tabs button {
+        padding: 6px 2px;
+        border-radius: 6px;
+        font: 800 8px/1 inherit;
+        letter-spacing: 0.1em;
+        color: #7f8cbd;
+        background: #0a0a16;
+      }
+      .mix-tabs button.on {
+        color: #cfe0ff;
+        border-color: rgba(120, 140, 255, 0.5);
+        background: rgba(80, 110, 255, 0.14);
+      }
+      .mix-panel {
+        min-height: 0;
+      }
+      .mp-pane {
+        display: none;
+        flex-direction: column;
+        gap: 9px;
+      }
+      .mp-pane.on {
+        display: flex;
+      }
+      /* Channel meters live in the strips, where the hand already is. */
+      .chan-meter {
+        flex: 1 1 auto;
+        min-width: 8px;
+        height: 3px;
+        border-radius: 2px;
+        background: #141a30;
+        overflow: hidden;
+      }
+      .chan-meter b {
+        display: block;
+        height: 100%;
+        width: 0;
+        background: var(--deck);
+      }
+      .master-meter {
+        display: block;
+        height: 3px;
+        margin-top: 5px;
+        border-radius: 2px;
+        background: #141a30;
+        overflow: hidden;
+      }
+      .master-meter b {
+        display: block;
+        height: 100%;
+        width: 0;
+        background: linear-gradient(90deg, var(--green), var(--amber), var(--red));
+      }
       .mixer-scroll {
         display: flex;
         flex-direction: column;
@@ -2043,30 +2104,110 @@
         border-color: rgba(34, 211, 238, 0.5);
         color: #b9f4ff;
       }
-      .overlap-wrap {
+      /* ---------- the pair, top of the page ----------
+         The one display every DJ looks at: both decks on a single timeline,
+         A mirrored above the centre line and B below, scrolling past a fixed
+         playhead. It spans the page because a half-width version buried in the
+         mixer is a picture, not an instrument. */
+      .mixwave {
+        display: grid;
+        grid-template-columns: minmax(92px, 132px) minmax(0, 1fr) minmax(92px, 132px);
+        gap: 10px;
+        height: clamp(62px, 10vh, 104px);
+        margin-bottom: 10px;
+        padding: 7px 10px;
+        border-radius: 12px;
+        border: 1px solid var(--line);
+        background:
+          radial-gradient(600px 120px at 50% 0%, rgba(106, 92, 255, 0.14), transparent 70%),
+          linear-gradient(#0c0d1c, #07080f);
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.04),
+          0 8px 22px rgba(0, 0, 0, 0.4);
+      }
+      .mw-canvas {
         position: relative;
+        min-width: 0;
       }
       #overlap-wave {
         display: block;
         width: 100%;
-        height: 52px;
+        height: 100%;
         border-radius: 8px;
-        border: 1px solid var(--line-soft);
-        background: #07070f;
+        border: 1px solid #12142a;
+        background: #05060f;
       }
-      #overlap-legend {
-        display: flex;
-        gap: 10px;
-        margin-top: 3px;
-        font: 700 9px/1.5 var(--mono);
+      .mw-note {
+        position: absolute;
+        left: 9px;
+        bottom: 5px;
+        font: 700 8.5px/1 var(--mono);
         letter-spacing: 0.12em;
-        color: var(--dim-2);
+        color: #77839f;
+        text-shadow: 0 1px 2px #05060f;
+        pointer-events: none;
       }
-      #overlap-legend .lg-a {
+      .mw-info {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        min-width: 0;
+        padding-top: 2px;
+      }
+      .mw-info.b {
+        align-items: flex-end;
+        text-align: right;
+      }
+      .mw-deck {
+        font: 800 10px/1 var(--mono);
+        letter-spacing: 0.2em;
+      }
+      .mw-info.a .mw-deck {
         color: var(--a);
       }
-      #overlap-legend .lg-b {
+      .mw-info.b .mw-deck {
         color: var(--b);
+      }
+      .mw-title {
+        max-width: 100%;
+        font: 700 11px/1.25 inherit;
+        color: #dfe6ff;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .mw-meta {
+        font: 700 8.5px/1.3 var(--mono);
+        letter-spacing: 0.1em;
+        color: #6f7cab;
+      }
+      @media (min-width: 961px) and (max-height: 840px) {
+        /* Short window: the strip keeps its place but gives the decks and the
+           mixer panel their height back. The observer re-measures --mw-h. */
+        .mixwave {
+          height: 56px;
+          margin-bottom: 8px;
+        }
+      }
+      @media (max-width: 760px) {
+        .mixwave {
+          grid-template-columns: 1fr;
+          height: auto;
+          gap: 5px;
+        }
+        .mw-canvas {
+          height: 64px;
+          order: 2;
+        }
+        .mw-info {
+          flex-direction: row;
+          align-items: baseline;
+          gap: 7px;
+        }
+        .mw-info.b {
+          align-items: baseline;
+          text-align: left;
+        }
       }
       .shout-row {
         display: grid;
@@ -2318,7 +2459,7 @@
       }
       body.simple .mixer {
         justify-content: flex-start;
-        gap: 14px;
+        gap: 10px;
       }
       body.simple .kill-row {
         display: none;
@@ -3341,6 +3482,26 @@
     <!-- All four decks at a glance; click 3·4 to bring that bank on screen. -->
     <div class="deck-rail" id="deck-rail" aria-label="All decks"></div>
 
+    <!-- The pair on one timeline, the way VirtualDJ opens: deck A above the
+         centre line, deck B below it, both scrolling past a fixed playhead.
+         Full width, because this is the display you actually read. -->
+    <section class="mixwave" id="mixwave" aria-label="Deck A and B on one timeline">
+      <div class="mw-info a">
+        <span class="mw-deck" id="overlap-a">A</span>
+        <span class="mw-title" id="mw-title-a">—</span>
+        <span class="mw-meta" id="mw-meta-a"></span>
+      </div>
+      <div class="mw-canvas">
+        <canvas id="overlap-wave" aria-label="Deck A above, deck B below, playhead centred"></canvas>
+        <span class="mw-note" id="overlap-note"></span>
+      </div>
+      <div class="mw-info b">
+        <span class="mw-deck" id="overlap-b">B</span>
+        <span class="mw-title" id="mw-title-b">—</span>
+        <span class="mw-meta" id="mw-meta-b"></span>
+      </div>
+    </section>
+
     <main class="rig">
       <section class="deck a" data-deck="a">
         <div class="deck-head">
@@ -3484,10 +3645,11 @@
           <span class="dim">MASTER</span>
         </div>
 
-        <div class="block-label" id="mid-chans-label">CHANNEL STRIPS</div>
         <div class="chan-bank" id="mid-chans">
           <div class="chan-strip" data-chan-deck="a">
-            <div class="chan-head"><span>A</span><i class="chan-led" aria-hidden="true"></i></div>
+            <div class="chan-head">
+              <span>A</span><i class="chan-meter" data-vu="a"><b></b></i><i class="chan-led" aria-hidden="true"></i>
+            </div>
             <div class="chan-knobs">
               <div
                 class="knob"
@@ -3578,7 +3740,9 @@
           </div>
 
           <div class="chan-strip" data-chan-deck="b">
-            <div class="chan-head"><span>B</span><i class="chan-led" aria-hidden="true"></i></div>
+            <div class="chan-head">
+              <span>B</span><i class="chan-meter" data-vu="b"><b></b></i><i class="chan-led" aria-hidden="true"></i>
+            </div>
             <div class="chan-knobs">
               <div
                 class="knob"
@@ -3669,7 +3833,9 @@
           </div>
 
           <div class="chan-strip" data-chan-deck="c">
-            <div class="chan-head"><span>C</span><i class="chan-led" aria-hidden="true"></i></div>
+            <div class="chan-head">
+              <span>C</span><i class="chan-meter" data-vu="c"><b></b></i><i class="chan-led" aria-hidden="true"></i>
+            </div>
             <div class="chan-knobs">
               <div
                 class="knob"
@@ -3760,7 +3926,9 @@
           </div>
 
           <div class="chan-strip" data-chan-deck="d">
-            <div class="chan-head"><span>D</span><i class="chan-led" aria-hidden="true"></i></div>
+            <div class="chan-head">
+              <span>D</span><i class="chan-meter" data-vu="d"><b></b></i><i class="chan-led" aria-hidden="true"></i>
+            </div>
             <div class="chan-knobs">
               <div
                 class="knob"
@@ -3851,120 +4019,106 @@
           </div>
         </div>
 
-        <div class="mixer-scroll">
-          <div class="filters">
-            <div class="filter-unit">
-              <div class="filter-top">
-                <span class="f-name">FILTER A</span><span class="filter-val" data-filter-val="a">OFF</span>
-              </div>
-              <div class="detent">
-                <input type="range" data-filter="a" min="0" max="100" step="1" value="50" aria-label="Filter deck A" />
-              </div>
+        <div class="filters">
+          <div class="filter-unit">
+            <div class="filter-top">
+              <span class="f-name">FILTER A</span><span class="filter-val" data-filter-val="a">OFF</span>
             </div>
-            <div class="filter-unit">
-              <div class="filter-top">
-                <span class="f-name">FILTER B</span><span class="filter-val" data-filter-val="b">OFF</span>
+            <div class="detent">
+              <input type="range" data-filter="a" min="0" max="100" step="1" value="50" aria-label="Filter deck A" />
+            </div>
+          </div>
+          <div class="filter-unit">
+            <div class="filter-top">
+              <span class="f-name">FILTER B</span><span class="filter-val" data-filter-val="b">OFF</span>
+            </div>
+            <div class="detent">
+              <input type="range" data-filter="b" min="0" max="100" step="1" value="50" aria-label="Filter deck B" />
+            </div>
+          </div>
+        </div>
+
+        <div class="mix-tabs" id="mix-tabs" role="tablist" aria-label="Mixer panels">
+          <button type="button" class="on" data-mtab="fx" role="tab" aria-selected="true">BEAT FX</button>
+          <button type="button" data-mtab="samples" role="tab" aria-selected="false">SAMPLES</button>
+          <button type="button" data-mtab="stems" role="tab" aria-selected="false">STEMS</button>
+          <button type="button" data-mtab="quick" role="tab" aria-selected="false">QUICK</button>
+        </div>
+
+        <div class="mix-panel" id="mix-panel">
+          <div class="mp-pane on" data-pane="fx">
+            <div>
+              <div class="block-label">BEAT FX</div>
+              <div class="pads" id="fx-pads"></div>
+            </div>
+          </div>
+
+          <div class="mp-pane" data-pane="samples">
+            <div>
+              <div class="bank-head">
+                <div class="block-label">SAMPLE BANK <span id="samples-count" class="muted"></span></div>
+                <button class="mini-btn" id="sample-fill" title="Fill any empty pads from the library">FILL</button>
+                <button class="mini-btn" id="sample-reset" title="Restore the starter eight">RESET</button>
+                <button class="mini-btn" id="sample-lib-toggle" title="Browse every sample on the server">
+                  LIBRARY
+                </button>
+                <button class="mini-btn" id="sample-add" title="Add a one-shot (WAV, MP3, OGG, FLAC, M4A)">+</button>
               </div>
-              <div class="detent">
-                <input type="range" data-filter="b" min="0" max="100" step="1" value="50" aria-label="Filter deck B" />
+              <div class="pads" id="sample-pads" data-drop="sample" title="Drop a WAV or MP3 here"></div>
+              <div class="drop-hint" id="sample-hint">Drop audio on the bank, or press +</div>
+              <div class="sample-lib" id="sample-lib" hidden>
+                <div class="search-wrap">
+                  <input
+                    id="sample-search"
+                    type="search"
+                    placeholder="Search samples…"
+                    autocomplete="off"
+                    role="combobox"
+                    aria-expanded="false"
+                    aria-controls="sample-suggest"
+                  />
+                  <div class="sample-suggest" id="sample-suggest" role="listbox" hidden></div>
+                </div>
+                <div class="sample-lib-list" id="sample-lib-list"></div>
+                <div class="sample-sets">
+                  <select id="sample-setup" aria-label="Saved sample setups">
+                    <option value="">Saved setups…</option>
+                  </select>
+                  <button class="mini-btn" id="sample-setup-save" title="Save the eight pads as a setup">SAVE</button>
+                  <button class="mini-btn" id="sample-setup-apply" title="Load the selected setup">LOAD</button>
+                  <button class="mini-btn" id="sample-setup-del" title="Delete the selected setup">DEL</button>
+                </div>
+              </div>
+              <input id="sample-file" type="file" accept=".wav,.mp3,.ogg,.flac,.m4a,.opus,audio/*" hidden />
+            </div>
+
+            <div class="match-block pro-only">
+              <div class="block-label">SYNC / MATCH</div>
+              <div class="match-top">
+                <div class="drift-ring" id="drift-ring">
+                  <svg viewBox="0 0 52 52" aria-hidden="true">
+                    <circle class="ring-track" cx="26" cy="26" r="22"></circle>
+                    <circle class="ring-arc" id="drift-arc" cx="26" cy="26" r="22"></circle>
+                  </svg>
+                  <div class="ring-ms"><span id="drift-ms">—</span><small>DRIFT</small></div>
+                </div>
+                <div class="match-rows">
+                  <div class="match-row"><span class="tag">A · BPM / TEMPO</span><span id="match-a">—</span></div>
+                  <div class="match-row"><span class="tag">B · BPM / TEMPO</span><span id="match-b">—</span></div>
+                  <div class="match-row"><span class="tag">PHASE</span><span id="match-delta">—</span></div>
+                </div>
               </div>
             </div>
           </div>
 
-          <div>
-            <div class="block-label">BEAT FX</div>
-            <div class="pads" id="fx-pads"></div>
-          </div>
-
-          <div>
-            <div class="bank-head">
-              <div class="block-label">SAMPLE BANK <span id="samples-count" class="muted"></span></div>
-              <button class="mini-btn" id="sample-fill" title="Fill any empty pads from the library">FILL</button>
-              <button class="mini-btn" id="sample-reset" title="Restore the starter eight">RESET</button>
-              <button class="mini-btn" id="sample-lib-toggle" title="Browse every sample on the server">LIBRARY</button>
-              <button class="mini-btn" id="sample-add" title="Add a one-shot (WAV, MP3, OGG, FLAC, M4A)">+</button>
-            </div>
-            <div class="pads" id="sample-pads" data-drop="sample" title="Drop a WAV or MP3 here"></div>
-            <div class="drop-hint" id="sample-hint">Drop audio on the bank, or press +</div>
-            <div class="sample-lib" id="sample-lib" hidden>
-              <div class="search-wrap">
-                <input
-                  id="sample-search"
-                  type="search"
-                  placeholder="Search samples…"
-                  autocomplete="off"
-                  role="combobox"
-                  aria-expanded="false"
-                  aria-controls="sample-suggest"
-                />
-                <div class="sample-suggest" id="sample-suggest" role="listbox" hidden></div>
-              </div>
-              <div class="sample-lib-list" id="sample-lib-list"></div>
-              <div class="sample-sets">
-                <select id="sample-setup" aria-label="Saved sample setups">
-                  <option value="">Saved setups…</option>
-                </select>
-                <button class="mini-btn" id="sample-setup-save" title="Save the eight pads as a setup">SAVE</button>
-                <button class="mini-btn" id="sample-setup-apply" title="Load the selected setup">LOAD</button>
-                <button class="mini-btn" id="sample-setup-del" title="Delete the selected setup">DEL</button>
-              </div>
-            </div>
-            <input id="sample-file" type="file" accept=".wav,.mp3,.ogg,.flac,.m4a,.opus,audio/*" hidden />
-          </div>
-
-          <div class="match-block pro-only">
-            <div class="block-label">SYNC / MATCH</div>
-            <div class="match-top">
-              <div class="drift-ring" id="drift-ring">
-                <svg viewBox="0 0 52 52" aria-hidden="true">
-                  <circle class="ring-track" cx="26" cy="26" r="22"></circle>
-                  <circle class="ring-arc" id="drift-arc" cx="26" cy="26" r="22"></circle>
-                </svg>
-                <div class="ring-ms"><span id="drift-ms">—</span><small>DRIFT</small></div>
-              </div>
-              <div class="match-rows">
-                <div class="match-row"><span class="tag">A · BPM / TEMPO</span><span id="match-a">—</span></div>
-                <div class="match-row"><span class="tag">B · BPM / TEMPO</span><span id="match-b">—</span></div>
-                <div class="match-row"><span class="tag">PHASE</span><span id="match-delta">—</span></div>
-              </div>
-            </div>
-          </div>
-
-          <div class="mid-extra" id="mid-extra">
-            <div class="block-label">WAVEFORMS <span class="muted">focused pair</span></div>
-            <div class="overlap-wrap">
-              <canvas id="overlap-wave" height="52" aria-label="Both decks' waveforms on one timeline"></canvas>
-            </div>
-            <div id="overlap-legend">
-              <span class="lg-a">■ <span id="overlap-a">A</span></span>
-              <span class="lg-b">■ <span id="overlap-b">B</span></span>
-              <span id="overlap-note"></span>
-            </div>
-
+          <div class="mp-pane" data-pane="stems">
             <div class="block-label">STEMS <span class="muted" id="stem-deck-label">focused deck</span></div>
             <div class="stems" id="stem-lanes">
               <div class="stems-empty">No separated stems on this deck.</div>
             </div>
+          </div>
 
-            <div class="block-label">LEVELS <span class="muted">post-fader</span></div>
-            <div class="vu-rows">
-              <div class="vu-row" data-vu="a">
-                <span>A</span><i><b></b></i>
-              </div>
-              <div class="vu-row" data-vu="b">
-                <span>B</span><i><b></b></i>
-              </div>
-              <div class="vu-row" data-vu="c">
-                <span>C</span><i><b></b></i>
-              </div>
-              <div class="vu-row" data-vu="d">
-                <span>D</span><i><b></b></i>
-              </div>
-              <div class="vu-row master" data-vu="master">
-                <span>M</span><i><b></b></i>
-              </div>
-            </div>
-
+          <div class="mp-pane" data-pane="quick">
             <div class="block-label">QUICK <span class="muted" id="mid-key"></span></div>
             <div class="mid-btns">
               <button id="mid-quantize" data-mid="quantize" data-tip="Snap seeks, cue jumps and loops to the beat grid">
@@ -4024,33 +4178,33 @@
               />
               <button id="shout-send">📣 SAY</button>
             </div>
-          </div>
 
-          <div class="mixer-foot">
-            <div class="monitor-row">
-              <span id="engine">engine idle</span>
-              <button
-                id="monitor"
-                data-tip="Hear the deck mix in this tab. Needed when the bot is not in a voice channel; mute Vaporzr in Discord first if you are in one."
-              >
-                🔊 Monitor
-              </button>
+            <div class="mixer-foot">
+              <div class="monitor-row">
+                <span id="engine">engine idle</span>
+                <button
+                  id="monitor"
+                  data-tip="Hear the deck mix in this tab. Needed when the bot is not in a voice channel; mute Vaporzr in Discord first if you are in one."
+                >
+                  🔊 Monitor
+                </button>
+              </div>
+              <div class="midi-row pro-only">
+                <span>MIDI OUT</span>
+                <select id="midi-out" aria-label="MIDI output port">
+                  <option value="">none</option>
+                </select>
+                <button id="midi-clock" title="Send start/stop and 24 PPQN clock to the selected port">CLOCK</button>
+              </div>
+              <span id="midi-status" class="muted pro-only">MIDI IN: waiting for a device…</span>
+              <span class="hints pro-only">
+                <span class="kbd">space</span> both · <span class="kbd">A</span>/<span class="kbd">B</span> play ·
+                <span class="kbd">S</span> sync · <span class="kbd">L</span> lock ·
+                <span class="kbd">←→</span> fader<br />
+                <span class="kbd">1-8</span> cues A · <span class="kbd">shift+1-8</span> cues B ·
+                <span class="kbd">Q-Y</span> FX
+              </span>
             </div>
-            <div class="midi-row pro-only">
-              <span>MIDI OUT</span>
-              <select id="midi-out" aria-label="MIDI output port">
-                <option value="">none</option>
-              </select>
-              <button id="midi-clock" title="Send start/stop and 24 PPQN clock to the selected port">CLOCK</button>
-            </div>
-            <span id="midi-status" class="muted pro-only">MIDI IN: waiting for a device…</span>
-            <span class="hints pro-only">
-              <span class="kbd">space</span> both · <span class="kbd">A</span>/<span class="kbd">B</span> play ·
-              <span class="kbd">S</span> sync · <span class="kbd">L</span> lock ·
-              <span class="kbd">←→</span> fader<br />
-              <span class="kbd">1-8</span> cues A · <span class="kbd">shift+1-8</span> cues B ·
-              <span class="kbd">Q-Y</span> FX
-            </span>
           </div>
         </div>
 
@@ -4066,6 +4220,7 @@
             <span id="mix-sum">−∞ dB</span>
             <span id="hr-clip">CLIP</span>
           </div>
+          <i class="master-meter" data-vu="master"><b></b></i>
         </div>
       </section>
 
@@ -4711,72 +4866,153 @@
         }
 
         /**
-         * Both waveforms on one time axis.
+         * The pair on one timeline, VDJ-style.
          *
-         * Separate per-deck canvases tell you what each track looks like but not
-         * whether the drops line up, which is the whole job when beat-matching.
-         * Both lanes are scaled to the *longer* of the two durations, so a
-         * transient that looks aligned actually is aligned.
+         * Deck A is mirrored above the centre line and B below it, each scaled
+         * around its own playhead at a fixed time-per-pixel, so a kick that
+         * crosses the line on both lanes together really is aligned. Zoomed to
+         * a 20-second window: the whole-track view told you nothing about the
+         * next eight bars, which is what a mix is decided on.
          */
+        var OVERLAP_WINDOW_MS = 20000;
+        var LANE_COLOR = {
+          a: 'rgba(34, 211, 238, 0.82)',
+          b: 'rgba(255, 60, 172, 0.82)',
+          c: 'rgba(127, 230, 255, 0.8)',
+          d: 'rgba(255, 201, 138, 0.82)',
+        };
+
         function drawOverlap() {
+          // Display-only: a canvas misbehaving must never freeze the deck UI.
+          try {
+            drawOverlapInner();
+          } catch (err) {
+            if (!drawOverlapWarned) {
+              drawOverlapWarned = true;
+              console.warn('[deck] waveform draw failed', err);
+            }
+          }
+        }
+        var drawOverlapWarned = false;
+
+        function drawOverlapInner() {
           var cv = el('#overlap-wave');
           if (!cv || !state) return;
-          if (!cv.width || cv.width < 2) cv.width = Math.max(120, Math.round(cv.clientWidth || 300));
-          var ctx = cv.getContext('2d');
-          var w = cv.width;
-          var h = cv.height;
-          ctx.clearRect(0, 0, w, h);
+          var dpr = window.devicePixelRatio || 1;
+          var w = cv.clientWidth || 600;
+          var h = cv.clientHeight || 84;
+          if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+            cv.width = Math.round(w * dpr);
+            cv.height = Math.round(h * dpr);
+          }
+          var g = cv.getContext('2d');
+          if (!g) return;
+          g.setTransform(dpr, 0, 0, dpr, 0, 0);
+          g.clearRect(0, 0, w, h);
 
           var a = focusId;
           var b = overlayPartner(a);
-          var da = Math.max(1, (state[a] && state[a].durationMs) || 0);
-          var db = Math.max(1, (state[b] && state[b].durationMs) || 0);
-          var span = Math.max(da, db);
-          var usable = Math.max(0, w - 2);
+          var mid = Math.round(h / 2) + 0.5;
+          var half = Math.max(6, h / 2 - 4);
 
-          function lane(id, color, top, height) {
-            var peaks = waves[id];
-            var dur = Math.max(1, (state[id] && state[id].durationMs) || 0);
-            var widthPx = Math.max(1, Math.round((dur / span) * usable));
-            ctx.fillStyle = color;
-            if (!peaks || peaks.length === 0) {
-              // Nothing decoded yet: a flat line still shows the track's length
-              // relative to its partner, which is most of the information.
-              ctx.globalAlpha = 0.22;
-              ctx.fillRect(1, top + height / 2 - 1, widthPx, 2);
-              ctx.globalAlpha = 1;
-            } else {
-              var step = widthPx / peaks.length;
-              var mid = top + height / 2;
-              for (var i = 0; i < peaks.length; i++) {
-                var amp = Math.max(0.03, Math.min(1, peaks[i] || 0));
-                var barH = Math.max(1, amp * (height / 2));
-                ctx.fillRect(1 + i * step, mid - barH, Math.max(1, step - 0.4), barH * 2);
-              }
-            }
-            var pos = (state[id] && state[id].positionMs) || 0;
-            var x = 1 + (Math.min(pos, dur) / span) * usable;
-            ctx.globalAlpha = 0.95;
-            ctx.fillRect(x, top, 1.5, height);
-            ctx.globalAlpha = 1;
+          // Faint second markers; the strip is a timeline, not a picture.
+          g.strokeStyle = 'rgba(255, 255, 255, 0.055)';
+          g.lineWidth = 1;
+          for (var s = 1; s < 10; s += 1) {
+            if (s === 5) continue;
+            var gx = Math.round((w / 10) * s) + 0.5;
+            g.beginPath();
+            g.moveTo(gx, 0);
+            g.lineTo(gx, h);
+            g.stroke();
           }
 
-          var laneH = Math.max(10, h / 2 - 4);
-          lane(a, 'rgba(34, 211, 238, 0.85)', 3, laneH);
-          lane(b, 'rgba(255, 60, 172, 0.85)', h / 2 + 1, laneH);
+          function nowMs(slot) {
+            return slot.positionMs + (slot.playing && localClock.at ? Date.now() - localClock.at : 0);
+          }
+
+          function lane(id, up) {
+            var slot = state[id];
+            if (!slot || !slot.durationMs) return;
+            var dur = slot.durationMs;
+            var pos = nowMs(slot);
+            var start = pos - OVERLAP_WINDOW_MS / 2;
+            var pxPerMs = w / OVERLAP_WINDOW_MS;
+            var bandTop = up ? 0 : mid;
+            var bandH = up ? mid : h - mid;
+
+            if (slot.loop) {
+              var lx0 = Math.max(0, (slot.loop.inMs - start) * pxPerMs);
+              var lx1 = Math.min(w, (slot.loop.outMs - start) * pxPerMs);
+              if (lx1 > lx0) {
+                g.fillStyle = 'rgba(255, 138, 61, 0.12)';
+                g.fillRect(lx0, bandTop, lx1 - lx0, bandH);
+              }
+            }
+
+            var peaks = waves[id];
+            if (peaks && peaks.length) {
+              g.fillStyle = LANE_COLOR[id] || LANE_COLOR.a;
+              // Two-pixel columns on a wide strip: half the fills, same picture.
+              var stepPx = w > 900 ? 2 : 1;
+              for (var x = 0; x < w; x += stepPx) {
+                var t = start + x / pxPerMs;
+                if (t < 0 || t > dur) continue;
+                var idx = Math.floor((t / dur) * peaks.length);
+                var amp = Math.max(0.02, Math.min(1, peaks[idx] || 0));
+                var barH = Math.max(1, amp * half);
+                if (up) g.fillRect(x, mid - barH, stepPx, barH);
+                else g.fillRect(x, mid, stepPx, barH);
+              }
+            }
+
+            slot.cues.forEach(function (cue, i) {
+              if (cue == null) return;
+              var cx = Math.round((cue - start) * pxPerMs) + 0.5;
+              if (cx < 0 || cx > w) return;
+              g.fillStyle = 'rgba(203, 215, 255, 0.8)';
+              g.fillRect(cx, bandTop, 1, bandH);
+              g.fillStyle = 'rgba(203, 215, 255, 0.6)';
+              g.font = '8px ui-monospace, monospace';
+              g.fillText(String(i + 1), cx + 2, up ? 9 : h - 3);
+            });
+          }
+
+          lane(a, true);
+          lane(b, false);
+
+          // Fixed playhead: both lanes scroll past it.
+          g.fillStyle = 'rgba(255, 255, 255, 0.75)';
+          g.fillRect(Math.round(w / 2) - 0.5, 0, 1.5, h);
+          g.fillStyle = 'rgba(255, 255, 255, 0.16)';
+          g.fillRect(0, mid - 0.5, w, 1);
 
           var la = el('#overlap-a');
-          if (la) la.textContent = a.toUpperCase() + (state[a] && state[a].playing ? ' ▶' : '');
+          if (la) la.textContent = a.toUpperCase();
           var lb = el('#overlap-b');
-          if (lb) lb.textContent = b.toUpperCase() + (state[b] && state[b].playing ? ' ▶' : '');
+          if (lb) lb.textContent = b.toUpperCase();
+          [a, b].forEach(function (id) {
+            var slot = state[id];
+            var title = el('#mw-title-' + id);
+            if (title) title.textContent = slot && slot.source ? slot.source.title : 'empty';
+            var meta = el('#mw-meta-' + id);
+            if (meta) {
+              var bits = [];
+              if (slot && slot.bpm) bits.push(Math.round(slot.bpm) + ' BPM');
+              if (slot && slot.key) bits.push(String(slot.key));
+              if (slot && slot.transpose) bits.push((slot.transpose > 0 ? '+' : '') + slot.transpose);
+              if (slot && slot.playing) bits.push('▶ PLAYING');
+              meta.textContent = bits.join(' · ');
+            }
+          });
           var note = el('#overlap-note');
           if (note) {
-            var bits = [];
-            if (state[a] && state[a].bpm) bits.push(Math.round(state[a].bpm) + ' BPM');
-            if (state[a] && state[a].key) bits.push(String(state[a].key));
-            if (state[b] && state[b].bpm) bits.push('vs ' + Math.round(state[b].bpm) + ' BPM');
-            if (state[b] && state[b].key) bits.push(String(state[b].key));
-            note.textContent = bits.join(' ');
+            var bitsN = [];
+            if (state[a] && state[a].bpm) bitsN.push(Math.round(state[a].bpm) + ' BPM');
+            if (state[a] && state[a].key) bitsN.push(String(state[a].key));
+            if (state[b] && state[b].bpm) bitsN.push('vs ' + Math.round(state[b].bpm) + ' BPM');
+            if (state[b] && state[b].key) bitsN.push(String(state[b].key));
+            note.textContent = bitsN.join(' ');
           }
         }
 
@@ -4801,9 +5037,12 @@
         }
 
         /* A VU has ballistics: it snaps up and falls back slowly. State arrives
-           at ~4 Hz, so the falling edge is animated here rather than in CSS. */
+           at ~4 Hz, so the falling edge is animated here rather than in CSS. The
+           top waveform rides the same loop at 20 fps — it scrolls with the audio
+           clock, and 4 fps made it look like a slideshow. */
         function startMeters() {
-          function frame() {
+          var lastWave = 0;
+          function frame(ts) {
             ['a', 'b', 'c', 'd', 'master'].forEach(function (id) {
               var t = vuTarget[id] || 0;
               var s = vuShown[id] || 0;
@@ -4812,6 +5051,10 @@
               var bar = el('[data-vu="' + id + '"] b');
               if (bar) bar.style.width = (s * 100).toFixed(1) + '%';
             });
+            if (ts - lastWave > 50) {
+              lastWave = ts;
+              drawOverlap();
+            }
             requestAnimationFrame(frame);
           }
           requestAnimationFrame(frame);
@@ -6626,6 +6869,21 @@
 
           startMeters();
 
+          /* ---- mixer panels: one tab at a time ---- */
+          all('#mix-tabs button').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+              var want = btn.getAttribute('data-mtab');
+              all('#mix-tabs button').forEach(function (b) {
+                var on = b === btn;
+                b.classList.toggle('on', on);
+                b.setAttribute('aria-selected', String(on));
+              });
+              all('#mix-panel .mp-pane').forEach(function (pane) {
+                pane.classList.toggle('on', pane.getAttribute('data-pane') === want);
+              });
+            });
+          });
+
           /* ---- centre strip wiring: quick wins, shout-out ---- */
           all('[data-mid]').forEach(function (btn) {
             btn.onclick = function () {
@@ -7303,6 +7561,21 @@
               stripObserver.observe(c);
             });
           }
+
+          /* Reserve the mix waveform's footprint so the rig keeps its "fits one
+             screen" rule. Measured rather than hard-coded: the strip's height is
+             a clamp of the viewport and it stacks on phones. */
+          (function reserveWave() {
+            var wave = document.getElementById('mixwave');
+            if (!wave) return;
+            function paintH() {
+              var cssH = wave.getBoundingClientRect().height + 10; /* + margin */
+              document.documentElement.style.setProperty('--mw-h', Math.round(cssH) + 'px');
+            }
+            paintH();
+            window.addEventListener('resize', paintH);
+            if (window.ResizeObserver) new ResizeObserver(paintH).observe(wave);
+          })();
 
           connect();
         });
