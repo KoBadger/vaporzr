@@ -494,6 +494,36 @@
           margin-top: 2px;
         }
       }
+      /* ---------- mixer: fit the column ----------
+         The mixer is a tall stack of small blocks, so at rig heights it used to
+         scroll ~550px. On a wide screen the extra blocks flow into a second
+         column instead of one endless list. */
+      @media (min-width: 961px) {
+        .rig .mixer {
+          padding: clamp(6px, 1.1vh, 10px);
+          --mixer-gap: clamp(5px, 0.9vh, 10px);
+        }
+        .rig .mixer .mid-extra {
+          gap: var(--mixer-gap);
+          padding-top: clamp(6px, 1vh, 12px);
+        }
+      }
+      @media (min-width: 1180px) {
+        .rig .mixer .mid-extra {
+          grid-template-columns: 1fr 1fr;
+          align-items: start;
+        }
+        /* The level meters are the one block that wants the full width. */
+        .rig .mixer .mid-extra > .levels,
+        .rig .mixer .mid-extra > #levels {
+          grid-column: 1 / -1;
+        }
+      }
+      @media (min-width: 961px) and (max-height: 800px) {
+        .rig .mixer .block-label {
+          margin-bottom: 2px;
+        }
+      }
       /* Two-deck mode: the classic A | mixer | B rig. The C/D cards stay in
          the DOM (their audio keeps running) and the mixer's second bank of
          trims hides, so nothing on screen is dead. */

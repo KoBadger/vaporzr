@@ -418,6 +418,29 @@ function stripVersionSegments(name: string): string {
     .trim();
 }
 
+/** Part numbers named in a title: "Pt. II", "Part 2", "Vol. 3". */
+function partNumbers(text: string): Set<number> {
+  const roman: Record<string, number> = {
+    i: 1,
+    ii: 2,
+    iii: 3,
+    iv: 4,
+    v: 5,
+    vi: 6,
+    vii: 7,
+    viii: 8,
+    ix: 9,
+    x: 10,
+  };
+  const out = new Set<number>();
+  for (const m of text.matchAll(/\b(?:pt|part|vol|volume|chapter|no)\.?\s*(\d+|[ivx]+)\b/g)) {
+    const raw = m[1];
+    const n = /^\d+$/.test(raw) ? Number(raw) : roman[raw];
+    if (n) out.add(n);
+  }
+  return out;
+}
+
 /** Rank search results for a free-text play query (lower = better).
  *  Beyond plain name matching this penalizes version variants (remixes, edits,
  *  movie versions…) when the user didn't ask for one, and boosts tracks whose
@@ -427,6 +450,16 @@ export function scorePlayResult(track: ResolvedTrack, query: string): number {
   const q = query.toLowerCase().trim();
   const n = track.name.toLowerCase().trim();
   let s = scoreSearchResult(n, q);
+  // Sequels are the one case where fuzzy matching is actively wrong: "phantom
+  // pt.1" and "phantom pt.2" share every word but the number, so Spotify's own
+  // ordering handed back Pt. II for both and a bulk of the pair queued one song
+  // twice. Compare the part numbers explicitly.
+  const qParts = partNumbers(q);
+  if (qParts.size > 0) {
+    const nParts = partNumbers(n);
+    if ([...qParts].some((p) => nParts.has(p))) s -= 4;
+    else s += nParts.size > 0 ? 5 : 2;
+  }
   const core = stripVersionSegments(n);
   // A variant marker in the NAME is penalized whether or not stripVersionSegments
   // managed to reduce it. The dash form names the remixer first
