@@ -120,6 +120,7 @@ import { KaraokeNight, karaokeQueueText, stemBackendAvailable } from './karaoke.
 import { setMasterKey } from './masterKey.js';
 import { playbackSourceStatus, setPreferYoutube } from './playbackSettings.js';
 import { clearStemSettings, saveStemSettings, stemSettingsStatus } from './stemSettings.js';
+import { clearSpotifySettings, saveSpotifySettings, spotifySettingsStatus } from './spotifySettings.js';
 import { guildRegistry, noteGuildJoin, noteGuildLeave, noteGuildsSeen } from './guildRegistry.js';
 import {
   DECK_IDS,
@@ -410,6 +411,15 @@ const COMMANDS = [
       o
         .setName('token')
         .setDescription('Replicate token (r8_…) — omit to see the current status, "off" to clear it')
+        .setRequired(false),
+    ),
+  new SlashCommandBuilder()
+    .setName('spotify')
+    .setDescription('Spotify web-player cookie: keeps search and playlist reads off the app quota')
+    .addStringOption((o) =>
+      o
+        .setName('sp_dc')
+        .setDescription('sp_dc cookie from open.spotify.com — omit for status, "off" to clear')
         .setRequired(false),
     ),
   new SlashCommandBuilder()
@@ -3175,6 +3185,36 @@ export class DiscordBot {
         await interaction.reply({
           content: saved.ok
             ? `✅ Saved (${stemSettingsStatus().hint}). Hosted separation is on — the next karaoke song gets an instrumental.`
+            : `❌ ${saved.error}`,
+          flags: MessageFlags.Ephemeral,
+        });
+        break;
+      }
+
+      case 'spotify': {
+        // A cookie is operator configuration like the stem token — and it is a
+        // credential, so it never comes back in a reply.
+        if (!this.perms.isOwner(interaction.user.id)) return this.deny(interaction);
+        const typed = (interaction.options.getString('sp_dc') ?? '').trim();
+        if (!typed) {
+          const st = spotifySettingsStatus();
+          await interaction.reply({
+            content: st.configured
+              ? `🟢 Spotify cookie ${st.hint} (from ${st.source}). Playlist reads and web search run outside the app quota.`
+              : '🟢 No Spotify cookie yet. DevTools → Application → Cookies → `open.spotify.com` → `sp_dc`, then `/spotify sp_dc:AQ…`.',
+            flags: MessageFlags.Ephemeral,
+          });
+          break;
+        }
+        if (/^(off|clear|remove|none)$/i.test(typed)) {
+          clearSpotifySettings();
+          await interaction.reply({ content: 'Spotify cookie cleared.', flags: MessageFlags.Ephemeral });
+          break;
+        }
+        const saved = saveSpotifySettings({ spDc: typed });
+        await interaction.reply({
+          content: saved.ok
+            ? `✅ Saved (${spotifySettingsStatus().hint}). Search and full playlist reads now use the web player, not the app quota.`
             : `❌ ${saved.error}`,
           flags: MessageFlags.Ephemeral,
         });
@@ -6732,6 +6772,28 @@ export class DiscordBot {
           await message.reply(
             saved.ok ? `✅ Saved (${stemSettingsStatus().hint}). Hosted separation is on.` : `❌ ${saved.error}`,
           );
+          break;
+        }
+
+        case 'spotify': {
+          if (!this.perms.isOwner(message.author.id)) return void (await deny());
+          const typed = args.trim();
+          if (!typed) {
+            const st = spotifySettingsStatus();
+            await message.reply(
+              st.configured
+                ? `🟢 Spotify cookie ${st.hint} (from ${st.source}) — playlist reads and web search skip the app quota.`
+                : '🟢 No Spotify cookie. Set one: `V@spotify AQ…` (DevTools → Application → Cookies → sp_dc).',
+            );
+            break;
+          }
+          if (/^(off|clear|remove|none)$/i.test(typed)) {
+            clearSpotifySettings();
+            await message.reply('Spotify cookie cleared.');
+            break;
+          }
+          const saved = saveSpotifySettings({ spDc: typed });
+          await message.reply(saved.ok ? `✅ Saved (${spotifySettingsStatus().hint}).` : `❌ ${saved.error}`);
           break;
         }
 

@@ -358,6 +358,17 @@
         .rig .mixer {
           position: static;
           top: auto;
+          /* The channel bank and the crossfader are the parts you touch; they
+             stay put and only the utility stack between them scrolls. */
+          overflow: hidden;
+        }
+        .rig .mixer .mixer-scroll {
+          flex: 1 1 auto;
+          overflow-y: auto;
+          overscroll-behavior: contain;
+          padding-right: 2px;
+          scrollbar-width: thin;
+          scrollbar-color: #26305a transparent;
         }
         /* The coach line is onboarding for a first visit; on a real rig it just
            steals a row from the mixer. */
@@ -536,8 +547,8 @@
       }
       body.two-decks .rig .deck.c,
       body.two-decks .rig .deck.d,
-      body.two-decks #mid-chans,
-      body.two-decks #mid-chans-label,
+      body.two-decks .chan-strip[data-chan-deck='c'],
+      body.two-decks .chan-strip[data-chan-deck='d'],
       body.two-decks #deck-rail .dr-chip[data-deck='c'],
       body.two-decks #deck-rail .dr-chip[data-deck='d'] {
         display: none;
@@ -1503,6 +1514,117 @@
       .mixer-head .dim {
         letter-spacing: 0.18em;
         font-size: 9px;
+      }
+      /* ---------- channel bank ----------
+         Four strips, one per deck, side by side like a club mixer: trim, the
+         three EQ bands, and the kill buttons that used to live on the deck
+         cards. Each strip carries its deck colour and a play LED, so the
+         column reads A B C D from left to right. */
+      /* Two-deck mode hides C/D, so A and B take the whole width: one row of
+         four knobs each, the way a two-channel mixer is laid out. */
+      body.two-decks .chan-bank {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      body.two-decks .chan-knobs {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+      body.two-decks .chan-strip .knob-dial {
+        width: 32px;
+        height: 32px;
+      }
+      .chan-bank {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 5px;
+      }
+      .chan-strip {
+        display: grid;
+        gap: 4px;
+        min-width: 0;
+        padding: 5px 4px 4px;
+        border-radius: 8px;
+        border: 1px solid var(--line-soft);
+        background: linear-gradient(#0d0e1d, #08080f);
+      }
+      .chan-strip[data-chan-deck='a'] {
+        --deck: var(--a);
+      }
+      .chan-strip[data-chan-deck='b'] {
+        --deck: var(--b);
+      }
+      .chan-strip[data-chan-deck='c'] {
+        --deck: #7fe6ff;
+      }
+      .chan-strip[data-chan-deck='d'] {
+        --deck: #ffc98a;
+      }
+      .chan-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 4px;
+        font: 800 9px/1 var(--mono);
+        letter-spacing: 0.14em;
+        color: var(--deck);
+      }
+      .chan-led {
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: #1c2340;
+        box-shadow: inset 0 0 0 1px #0a0c18;
+      }
+      .chan-strip.playing .chan-led {
+        background: var(--green);
+        box-shadow: 0 0 7px rgba(34, 230, 164, 0.85);
+      }
+      .chan-knobs {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 2px;
+      }
+      .chan-strip .knob {
+        gap: 1px;
+      }
+      .chan-strip .knob-dial {
+        width: 26px;
+        height: 26px;
+      }
+      .chan-strip .knob-name {
+        font: 700 7px/1 inherit;
+        letter-spacing: 0.1em;
+        color: #8d99cf;
+      }
+      .chan-strip output {
+        font: 700 8px/1 var(--mono);
+        color: #c3cdfa;
+        font-variant-numeric: tabular-nums;
+      }
+      .chan-strip .kill-row {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 3px;
+      }
+      .chan-strip .kill-row button {
+        padding: 3px 0;
+        border-radius: 4px;
+        font: 700 7.5px/1 inherit;
+        letter-spacing: 0.08em;
+        color: #8d99cf;
+        background: #0a0a16;
+      }
+      .chan-strip .kill-row button.on {
+        color: #ffc2d2;
+        border-color: rgba(255, 60, 95, 0.55);
+        background: rgba(255, 60, 95, 0.18);
+      }
+      /* The bank and the crossfader stay put; only the utility blocks between
+         them scroll when the window is short, which is how a mixer behaves. */
+      .mixer-scroll {
+        display: flex;
+        flex-direction: column;
+        gap: 9px;
+        min-height: 0;
       }
       .filter-unit {
         display: grid;
@@ -3314,96 +3436,6 @@
           </div>
         </div>
 
-        <div class="channel pro-only">
-          <div class="eq-knobs" data-role="eq">
-            <div
-              class="knob"
-              data-knob="low"
-              role="slider"
-              tabindex="0"
-              aria-label="Deck A low"
-              aria-valuemin="-40"
-              aria-valuemax="6"
-              aria-valuenow="0"
-            >
-              <div class="knob-dial">
-                <svg viewBox="0 0 44 44" aria-hidden="true">
-                  <path class="knob-track" d="M11.39 11.39 A15 15 0 1 1 11.39 33.61" />
-                  <path class="knob-fill" d="" />
-                </svg>
-                <span class="knob-cap"></span>
-              </div>
-              <span class="knob-name">LOW</span>
-              <output data-out="low">0</output>
-            </div>
-            <div
-              class="knob"
-              data-knob="mid"
-              role="slider"
-              tabindex="0"
-              aria-label="Deck A mid"
-              aria-valuemin="-40"
-              aria-valuemax="6"
-              aria-valuenow="0"
-            >
-              <div class="knob-dial">
-                <svg viewBox="0 0 44 44" aria-hidden="true">
-                  <path class="knob-track" d="M11.39 11.39 A15 15 0 1 1 11.39 33.61" />
-                  <path class="knob-fill" d="" />
-                </svg>
-                <span class="knob-cap"></span>
-              </div>
-              <span class="knob-name">MID</span>
-              <output data-out="mid">0</output>
-            </div>
-            <div
-              class="knob"
-              data-knob="high"
-              role="slider"
-              tabindex="0"
-              aria-label="Deck A high"
-              aria-valuemin="-40"
-              aria-valuemax="6"
-              aria-valuenow="0"
-            >
-              <div class="knob-dial">
-                <svg viewBox="0 0 44 44" aria-hidden="true">
-                  <path class="knob-track" d="M11.39 11.39 A15 15 0 1 1 11.39 33.61" />
-                  <path class="knob-fill" d="" />
-                </svg>
-                <span class="knob-cap"></span>
-              </div>
-              <span class="knob-name">HIGH</span>
-              <output data-out="high">0</output>
-            </div>
-            <div
-              class="knob"
-              data-knob="trim"
-              role="slider"
-              tabindex="0"
-              aria-label="Deck A trim"
-              aria-valuemin="0"
-              aria-valuemax="100"
-              aria-valuenow="100"
-            >
-              <div class="knob-dial">
-                <svg viewBox="0 0 44 44" aria-hidden="true">
-                  <path class="knob-track" d="M11.39 11.39 A15 15 0 1 1 11.39 33.61" />
-                  <path class="knob-fill" d="" />
-                </svg>
-                <span class="knob-cap"></span>
-              </div>
-              <span class="knob-name">TRIM</span>
-              <output data-out="trim">100</output>
-            </div>
-          </div>
-          <div class="kill-row">
-            <button data-kill="low">KILL LOW</button>
-            <button data-kill="mid">KILL MID</button>
-            <button data-kill="high">KILL HIGH</button>
-          </div>
-        </div>
-
         <div class="pads-block">
           <div class="block-label">HOT CUE<span class="hint">tap = set / jump · hold = clear</span></div>
           <div class="pads" data-role="pads">
@@ -3452,81 +3484,573 @@
           <span class="dim">MASTER</span>
         </div>
 
-        <div class="filters">
-          <div class="filter-unit">
-            <div class="filter-top">
-              <span class="f-name">FILTER A</span><span class="filter-val" data-filter-val="a">OFF</span>
+        <div class="block-label" id="mid-chans-label">CHANNEL STRIPS</div>
+        <div class="chan-bank" id="mid-chans">
+          <div class="chan-strip" data-chan-deck="a">
+            <div class="chan-head"><span>A</span><i class="chan-led" aria-hidden="true"></i></div>
+            <div class="chan-knobs">
+              <div
+                class="knob"
+                data-knob="trim"
+                role="slider"
+                tabindex="0"
+                aria-label="Deck A trim"
+                aria-valuemin="0"
+                aria-valuemax="100"
+                aria-valuenow="100"
+              >
+                <div class="knob-dial">
+                  <svg viewBox="0 0 44 44" aria-hidden="true">
+                    <path class="knob-track" d="M11.39 11.39 A15 15 0 1 1 11.39 33.61" />
+                    <path class="knob-fill" d="" />
+                  </svg>
+                  <span class="knob-cap"></span>
+                </div>
+                <span class="knob-name">TRIM</span>
+                <output data-out="trim">100</output>
+              </div>
+              <div
+                class="knob"
+                data-knob="low"
+                role="slider"
+                tabindex="0"
+                aria-label="Deck A low"
+                aria-valuemin="-40"
+                aria-valuemax="6"
+                aria-valuenow="0"
+              >
+                <div class="knob-dial">
+                  <svg viewBox="0 0 44 44" aria-hidden="true">
+                    <path class="knob-track" d="M11.39 11.39 A15 15 0 1 1 11.39 33.61" />
+                    <path class="knob-fill" d="" />
+                  </svg>
+                  <span class="knob-cap"></span>
+                </div>
+                <span class="knob-name">LOW</span>
+                <output data-out="low">0</output>
+              </div>
+              <div
+                class="knob"
+                data-knob="mid"
+                role="slider"
+                tabindex="0"
+                aria-label="Deck A mid"
+                aria-valuemin="-40"
+                aria-valuemax="6"
+                aria-valuenow="0"
+              >
+                <div class="knob-dial">
+                  <svg viewBox="0 0 44 44" aria-hidden="true">
+                    <path class="knob-track" d="M11.39 11.39 A15 15 0 1 1 11.39 33.61" />
+                    <path class="knob-fill" d="" />
+                  </svg>
+                  <span class="knob-cap"></span>
+                </div>
+                <span class="knob-name">MID</span>
+                <output data-out="mid">0</output>
+              </div>
+              <div
+                class="knob"
+                data-knob="high"
+                role="slider"
+                tabindex="0"
+                aria-label="Deck A high"
+                aria-valuemin="-40"
+                aria-valuemax="6"
+                aria-valuenow="0"
+              >
+                <div class="knob-dial">
+                  <svg viewBox="0 0 44 44" aria-hidden="true">
+                    <path class="knob-track" d="M11.39 11.39 A15 15 0 1 1 11.39 33.61" />
+                    <path class="knob-fill" d="" />
+                  </svg>
+                  <span class="knob-cap"></span>
+                </div>
+                <span class="knob-name">HIGH</span>
+                <output data-out="high">0</output>
+              </div>
             </div>
-            <div class="detent">
-              <input type="range" data-filter="a" min="0" max="100" step="1" value="50" aria-label="Filter deck A" />
+            <div class="kill-row">
+              <button data-kill="low" title="Kill low">L</button>
+              <button data-kill="mid" title="Kill mid">M</button>
+              <button data-kill="high" title="Kill high">H</button>
             </div>
           </div>
-          <div class="filter-unit">
-            <div class="filter-top">
-              <span class="f-name">FILTER B</span><span class="filter-val" data-filter-val="b">OFF</span>
+
+          <div class="chan-strip" data-chan-deck="b">
+            <div class="chan-head"><span>B</span><i class="chan-led" aria-hidden="true"></i></div>
+            <div class="chan-knobs">
+              <div
+                class="knob"
+                data-knob="trim"
+                role="slider"
+                tabindex="0"
+                aria-label="Deck B trim"
+                aria-valuemin="0"
+                aria-valuemax="100"
+                aria-valuenow="100"
+              >
+                <div class="knob-dial">
+                  <svg viewBox="0 0 44 44" aria-hidden="true">
+                    <path class="knob-track" d="M11.39 11.39 A15 15 0 1 1 11.39 33.61" />
+                    <path class="knob-fill" d="" />
+                  </svg>
+                  <span class="knob-cap"></span>
+                </div>
+                <span class="knob-name">TRIM</span>
+                <output data-out="trim">100</output>
+              </div>
+              <div
+                class="knob"
+                data-knob="low"
+                role="slider"
+                tabindex="0"
+                aria-label="Deck B low"
+                aria-valuemin="-40"
+                aria-valuemax="6"
+                aria-valuenow="0"
+              >
+                <div class="knob-dial">
+                  <svg viewBox="0 0 44 44" aria-hidden="true">
+                    <path class="knob-track" d="M11.39 11.39 A15 15 0 1 1 11.39 33.61" />
+                    <path class="knob-fill" d="" />
+                  </svg>
+                  <span class="knob-cap"></span>
+                </div>
+                <span class="knob-name">LOW</span>
+                <output data-out="low">0</output>
+              </div>
+              <div
+                class="knob"
+                data-knob="mid"
+                role="slider"
+                tabindex="0"
+                aria-label="Deck B mid"
+                aria-valuemin="-40"
+                aria-valuemax="6"
+                aria-valuenow="0"
+              >
+                <div class="knob-dial">
+                  <svg viewBox="0 0 44 44" aria-hidden="true">
+                    <path class="knob-track" d="M11.39 11.39 A15 15 0 1 1 11.39 33.61" />
+                    <path class="knob-fill" d="" />
+                  </svg>
+                  <span class="knob-cap"></span>
+                </div>
+                <span class="knob-name">MID</span>
+                <output data-out="mid">0</output>
+              </div>
+              <div
+                class="knob"
+                data-knob="high"
+                role="slider"
+                tabindex="0"
+                aria-label="Deck B high"
+                aria-valuemin="-40"
+                aria-valuemax="6"
+                aria-valuenow="0"
+              >
+                <div class="knob-dial">
+                  <svg viewBox="0 0 44 44" aria-hidden="true">
+                    <path class="knob-track" d="M11.39 11.39 A15 15 0 1 1 11.39 33.61" />
+                    <path class="knob-fill" d="" />
+                  </svg>
+                  <span class="knob-cap"></span>
+                </div>
+                <span class="knob-name">HIGH</span>
+                <output data-out="high">0</output>
+              </div>
             </div>
-            <div class="detent">
-              <input type="range" data-filter="b" min="0" max="100" step="1" value="50" aria-label="Filter deck B" />
+            <div class="kill-row">
+              <button data-kill="low" title="Kill low">L</button>
+              <button data-kill="mid" title="Kill mid">M</button>
+              <button data-kill="high" title="Kill high">H</button>
+            </div>
+          </div>
+
+          <div class="chan-strip" data-chan-deck="c">
+            <div class="chan-head"><span>C</span><i class="chan-led" aria-hidden="true"></i></div>
+            <div class="chan-knobs">
+              <div
+                class="knob"
+                data-knob="trim"
+                role="slider"
+                tabindex="0"
+                aria-label="Deck C trim"
+                aria-valuemin="0"
+                aria-valuemax="100"
+                aria-valuenow="100"
+              >
+                <div class="knob-dial">
+                  <svg viewBox="0 0 44 44" aria-hidden="true">
+                    <path class="knob-track" d="M11.39 11.39 A15 15 0 1 1 11.39 33.61" />
+                    <path class="knob-fill" d="" />
+                  </svg>
+                  <span class="knob-cap"></span>
+                </div>
+                <span class="knob-name">TRIM</span>
+                <output data-out="trim">100</output>
+              </div>
+              <div
+                class="knob"
+                data-knob="low"
+                role="slider"
+                tabindex="0"
+                aria-label="Deck C low"
+                aria-valuemin="-40"
+                aria-valuemax="6"
+                aria-valuenow="0"
+              >
+                <div class="knob-dial">
+                  <svg viewBox="0 0 44 44" aria-hidden="true">
+                    <path class="knob-track" d="M11.39 11.39 A15 15 0 1 1 11.39 33.61" />
+                    <path class="knob-fill" d="" />
+                  </svg>
+                  <span class="knob-cap"></span>
+                </div>
+                <span class="knob-name">LOW</span>
+                <output data-out="low">0</output>
+              </div>
+              <div
+                class="knob"
+                data-knob="mid"
+                role="slider"
+                tabindex="0"
+                aria-label="Deck C mid"
+                aria-valuemin="-40"
+                aria-valuemax="6"
+                aria-valuenow="0"
+              >
+                <div class="knob-dial">
+                  <svg viewBox="0 0 44 44" aria-hidden="true">
+                    <path class="knob-track" d="M11.39 11.39 A15 15 0 1 1 11.39 33.61" />
+                    <path class="knob-fill" d="" />
+                  </svg>
+                  <span class="knob-cap"></span>
+                </div>
+                <span class="knob-name">MID</span>
+                <output data-out="mid">0</output>
+              </div>
+              <div
+                class="knob"
+                data-knob="high"
+                role="slider"
+                tabindex="0"
+                aria-label="Deck C high"
+                aria-valuemin="-40"
+                aria-valuemax="6"
+                aria-valuenow="0"
+              >
+                <div class="knob-dial">
+                  <svg viewBox="0 0 44 44" aria-hidden="true">
+                    <path class="knob-track" d="M11.39 11.39 A15 15 0 1 1 11.39 33.61" />
+                    <path class="knob-fill" d="" />
+                  </svg>
+                  <span class="knob-cap"></span>
+                </div>
+                <span class="knob-name">HIGH</span>
+                <output data-out="high">0</output>
+              </div>
+            </div>
+            <div class="kill-row">
+              <button data-kill="low" title="Kill low">L</button>
+              <button data-kill="mid" title="Kill mid">M</button>
+              <button data-kill="high" title="Kill high">H</button>
+            </div>
+          </div>
+
+          <div class="chan-strip" data-chan-deck="d">
+            <div class="chan-head"><span>D</span><i class="chan-led" aria-hidden="true"></i></div>
+            <div class="chan-knobs">
+              <div
+                class="knob"
+                data-knob="trim"
+                role="slider"
+                tabindex="0"
+                aria-label="Deck D trim"
+                aria-valuemin="0"
+                aria-valuemax="100"
+                aria-valuenow="100"
+              >
+                <div class="knob-dial">
+                  <svg viewBox="0 0 44 44" aria-hidden="true">
+                    <path class="knob-track" d="M11.39 11.39 A15 15 0 1 1 11.39 33.61" />
+                    <path class="knob-fill" d="" />
+                  </svg>
+                  <span class="knob-cap"></span>
+                </div>
+                <span class="knob-name">TRIM</span>
+                <output data-out="trim">100</output>
+              </div>
+              <div
+                class="knob"
+                data-knob="low"
+                role="slider"
+                tabindex="0"
+                aria-label="Deck D low"
+                aria-valuemin="-40"
+                aria-valuemax="6"
+                aria-valuenow="0"
+              >
+                <div class="knob-dial">
+                  <svg viewBox="0 0 44 44" aria-hidden="true">
+                    <path class="knob-track" d="M11.39 11.39 A15 15 0 1 1 11.39 33.61" />
+                    <path class="knob-fill" d="" />
+                  </svg>
+                  <span class="knob-cap"></span>
+                </div>
+                <span class="knob-name">LOW</span>
+                <output data-out="low">0</output>
+              </div>
+              <div
+                class="knob"
+                data-knob="mid"
+                role="slider"
+                tabindex="0"
+                aria-label="Deck D mid"
+                aria-valuemin="-40"
+                aria-valuemax="6"
+                aria-valuenow="0"
+              >
+                <div class="knob-dial">
+                  <svg viewBox="0 0 44 44" aria-hidden="true">
+                    <path class="knob-track" d="M11.39 11.39 A15 15 0 1 1 11.39 33.61" />
+                    <path class="knob-fill" d="" />
+                  </svg>
+                  <span class="knob-cap"></span>
+                </div>
+                <span class="knob-name">MID</span>
+                <output data-out="mid">0</output>
+              </div>
+              <div
+                class="knob"
+                data-knob="high"
+                role="slider"
+                tabindex="0"
+                aria-label="Deck D high"
+                aria-valuemin="-40"
+                aria-valuemax="6"
+                aria-valuenow="0"
+              >
+                <div class="knob-dial">
+                  <svg viewBox="0 0 44 44" aria-hidden="true">
+                    <path class="knob-track" d="M11.39 11.39 A15 15 0 1 1 11.39 33.61" />
+                    <path class="knob-fill" d="" />
+                  </svg>
+                  <span class="knob-cap"></span>
+                </div>
+                <span class="knob-name">HIGH</span>
+                <output data-out="high">0</output>
+              </div>
+            </div>
+            <div class="kill-row">
+              <button data-kill="low" title="Kill low">L</button>
+              <button data-kill="mid" title="Kill mid">M</button>
+              <button data-kill="high" title="Kill high">H</button>
             </div>
           </div>
         </div>
 
-        <div>
-          <div class="block-label">BEAT FX</div>
-          <div class="pads" id="fx-pads"></div>
-        </div>
-
-        <div>
-          <div class="bank-head">
-            <div class="block-label">SAMPLE BANK <span id="samples-count" class="muted"></span></div>
-            <button class="mini-btn" id="sample-fill" title="Fill any empty pads from the library">FILL</button>
-            <button class="mini-btn" id="sample-reset" title="Restore the starter eight">RESET</button>
-            <button class="mini-btn" id="sample-lib-toggle" title="Browse every sample on the server">LIBRARY</button>
-            <button class="mini-btn" id="sample-add" title="Add a one-shot (WAV, MP3, OGG, FLAC, M4A)">+</button>
+        <div class="mixer-scroll">
+          <div class="filters">
+            <div class="filter-unit">
+              <div class="filter-top">
+                <span class="f-name">FILTER A</span><span class="filter-val" data-filter-val="a">OFF</span>
+              </div>
+              <div class="detent">
+                <input type="range" data-filter="a" min="0" max="100" step="1" value="50" aria-label="Filter deck A" />
+              </div>
+            </div>
+            <div class="filter-unit">
+              <div class="filter-top">
+                <span class="f-name">FILTER B</span><span class="filter-val" data-filter-val="b">OFF</span>
+              </div>
+              <div class="detent">
+                <input type="range" data-filter="b" min="0" max="100" step="1" value="50" aria-label="Filter deck B" />
+              </div>
+            </div>
           </div>
-          <div class="pads" id="sample-pads" data-drop="sample" title="Drop a WAV or MP3 here"></div>
-          <div class="drop-hint" id="sample-hint">Drop audio on the bank, or press +</div>
-          <div class="sample-lib" id="sample-lib" hidden>
-            <div class="search-wrap">
+
+          <div>
+            <div class="block-label">BEAT FX</div>
+            <div class="pads" id="fx-pads"></div>
+          </div>
+
+          <div>
+            <div class="bank-head">
+              <div class="block-label">SAMPLE BANK <span id="samples-count" class="muted"></span></div>
+              <button class="mini-btn" id="sample-fill" title="Fill any empty pads from the library">FILL</button>
+              <button class="mini-btn" id="sample-reset" title="Restore the starter eight">RESET</button>
+              <button class="mini-btn" id="sample-lib-toggle" title="Browse every sample on the server">LIBRARY</button>
+              <button class="mini-btn" id="sample-add" title="Add a one-shot (WAV, MP3, OGG, FLAC, M4A)">+</button>
+            </div>
+            <div class="pads" id="sample-pads" data-drop="sample" title="Drop a WAV or MP3 here"></div>
+            <div class="drop-hint" id="sample-hint">Drop audio on the bank, or press +</div>
+            <div class="sample-lib" id="sample-lib" hidden>
+              <div class="search-wrap">
+                <input
+                  id="sample-search"
+                  type="search"
+                  placeholder="Search samples…"
+                  autocomplete="off"
+                  role="combobox"
+                  aria-expanded="false"
+                  aria-controls="sample-suggest"
+                />
+                <div class="sample-suggest" id="sample-suggest" role="listbox" hidden></div>
+              </div>
+              <div class="sample-lib-list" id="sample-lib-list"></div>
+              <div class="sample-sets">
+                <select id="sample-setup" aria-label="Saved sample setups">
+                  <option value="">Saved setups…</option>
+                </select>
+                <button class="mini-btn" id="sample-setup-save" title="Save the eight pads as a setup">SAVE</button>
+                <button class="mini-btn" id="sample-setup-apply" title="Load the selected setup">LOAD</button>
+                <button class="mini-btn" id="sample-setup-del" title="Delete the selected setup">DEL</button>
+              </div>
+            </div>
+            <input id="sample-file" type="file" accept=".wav,.mp3,.ogg,.flac,.m4a,.opus,audio/*" hidden />
+          </div>
+
+          <div class="match-block pro-only">
+            <div class="block-label">SYNC / MATCH</div>
+            <div class="match-top">
+              <div class="drift-ring" id="drift-ring">
+                <svg viewBox="0 0 52 52" aria-hidden="true">
+                  <circle class="ring-track" cx="26" cy="26" r="22"></circle>
+                  <circle class="ring-arc" id="drift-arc" cx="26" cy="26" r="22"></circle>
+                </svg>
+                <div class="ring-ms"><span id="drift-ms">—</span><small>DRIFT</small></div>
+              </div>
+              <div class="match-rows">
+                <div class="match-row"><span class="tag">A · BPM / TEMPO</span><span id="match-a">—</span></div>
+                <div class="match-row"><span class="tag">B · BPM / TEMPO</span><span id="match-b">—</span></div>
+                <div class="match-row"><span class="tag">PHASE</span><span id="match-delta">—</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="mid-extra" id="mid-extra">
+            <div class="block-label">WAVEFORMS <span class="muted">focused pair</span></div>
+            <div class="overlap-wrap">
+              <canvas id="overlap-wave" height="52" aria-label="Both decks' waveforms on one timeline"></canvas>
+            </div>
+            <div id="overlap-legend">
+              <span class="lg-a">■ <span id="overlap-a">A</span></span>
+              <span class="lg-b">■ <span id="overlap-b">B</span></span>
+              <span id="overlap-note"></span>
+            </div>
+
+            <div class="block-label">STEMS <span class="muted" id="stem-deck-label">focused deck</span></div>
+            <div class="stems" id="stem-lanes">
+              <div class="stems-empty">No separated stems on this deck.</div>
+            </div>
+
+            <div class="block-label">LEVELS <span class="muted">post-fader</span></div>
+            <div class="vu-rows">
+              <div class="vu-row" data-vu="a">
+                <span>A</span><i><b></b></i>
+              </div>
+              <div class="vu-row" data-vu="b">
+                <span>B</span><i><b></b></i>
+              </div>
+              <div class="vu-row" data-vu="c">
+                <span>C</span><i><b></b></i>
+              </div>
+              <div class="vu-row" data-vu="d">
+                <span>D</span><i><b></b></i>
+              </div>
+              <div class="vu-row master" data-vu="master">
+                <span>M</span><i><b></b></i>
+              </div>
+            </div>
+
+            <div class="block-label">QUICK <span class="muted" id="mid-key"></span></div>
+            <div class="mid-btns">
+              <button id="mid-quantize" data-mid="quantize" data-tip="Snap seeks, cue jumps and loops to the beat grid">
+                QUANTIZE
+              </button>
+              <button id="mid-jog" data-mid="jog" data-tip="Toggle the platter between vinyl scratch and CDJ bend">
+                JOG
+              </button>
+              <button id="mid-grid-down" data-mid="grid-" data-tip="Shift the beat grid 5 ms earlier">GRID −</button>
+              <button id="mid-grid-up" data-mid="grid+" data-tip="Shift the beat grid 5 ms later">GRID +</button>
+              <button data-mid="loop4" data-tip="Set a 4-beat loop on the focused deck">LOOP 4</button>
+              <button data-mid="loop8" data-tip="Set an 8-beat loop on the focused deck">LOOP 8</button>
+              <button data-mid="loop16" data-tip="Set a 16-beat loop on the focused deck">LOOP 16</button>
+              <button data-mid="loopoff" data-tip="Clear the loop">LOOP OFF</button>
+              <button data-mid="stop" data-tip="Stop every deck and hand the channel back to the queue">
+                STOP ALL
+              </button>
+              <button
+                data-mid="reset"
+                data-tip="Panic button: pitch, tempo, EQ, filter, trims, stems and crossfader back to neutral. Playback keeps going"
+              >
+                RESET
+              </button>
+              <button
+                data-mid="semi-down"
+                data-tip="Pitch the track down a semitone — the karaoke key change. Tempo and stems stay put"
+              >
+                KEY −
+              </button>
+              <button data-mid="semi-up" data-tip="Pitch the track up a semitone">KEY +</button>
+              <button
+                id="mid-karaoke"
+                data-mid="karaoke"
+                data-tip="Mute the vocal lane and keep the instrumental — karaoke mode for a separated track"
+              >
+                KARAOKE
+              </button>
+              <button
+                data-mid="stage"
+                data-tip="Open the karaoke screen in its own window — put it on a TV, sing along"
+              >
+                KARAOKE SCREEN
+              </button>
+              <button data-mid="night" data-tip="Open karaoke night so singers can queue songs from the karaoke screen">
+                OPEN NIGHT
+              </button>
+            </div>
+
+            <div class="block-label">SHOUT OUT <span class="muted">spoken over the mix</span></div>
+            <div class="shout-row">
               <input
-                id="sample-search"
-                type="search"
-                placeholder="Search samples…"
+                id="shout-text"
+                maxlength="120"
+                placeholder="Say it over the music…"
                 autocomplete="off"
-                role="combobox"
-                aria-expanded="false"
-                aria-controls="sample-suggest"
+                data-tip="AMOK 9000 reads this out over whatever is playing"
               />
-              <div class="sample-suggest" id="sample-suggest" role="listbox" hidden></div>
-            </div>
-            <div class="sample-lib-list" id="sample-lib-list"></div>
-            <div class="sample-sets">
-              <select id="sample-setup" aria-label="Saved sample setups">
-                <option value="">Saved setups…</option>
-              </select>
-              <button class="mini-btn" id="sample-setup-save" title="Save the eight pads as a setup">SAVE</button>
-              <button class="mini-btn" id="sample-setup-apply" title="Load the selected setup">LOAD</button>
-              <button class="mini-btn" id="sample-setup-del" title="Delete the selected setup">DEL</button>
+              <button id="shout-send">📣 SAY</button>
             </div>
           </div>
-          <input id="sample-file" type="file" accept=".wav,.mp3,.ogg,.flac,.m4a,.opus,audio/*" hidden />
-        </div>
 
-        <div class="match-block pro-only">
-          <div class="block-label">SYNC / MATCH</div>
-          <div class="match-top">
-            <div class="drift-ring" id="drift-ring">
-              <svg viewBox="0 0 52 52" aria-hidden="true">
-                <circle class="ring-track" cx="26" cy="26" r="22"></circle>
-                <circle class="ring-arc" id="drift-arc" cx="26" cy="26" r="22"></circle>
-              </svg>
-              <div class="ring-ms"><span id="drift-ms">—</span><small>DRIFT</small></div>
+          <div class="mixer-foot">
+            <div class="monitor-row">
+              <span id="engine">engine idle</span>
+              <button
+                id="monitor"
+                data-tip="Hear the deck mix in this tab. Needed when the bot is not in a voice channel; mute Vaporzr in Discord first if you are in one."
+              >
+                🔊 Monitor
+              </button>
             </div>
-            <div class="match-rows">
-              <div class="match-row"><span class="tag">A · BPM / TEMPO</span><span id="match-a">—</span></div>
-              <div class="match-row"><span class="tag">B · BPM / TEMPO</span><span id="match-b">—</span></div>
-              <div class="match-row"><span class="tag">PHASE</span><span id="match-delta">—</span></div>
+            <div class="midi-row pro-only">
+              <span>MIDI OUT</span>
+              <select id="midi-out" aria-label="MIDI output port">
+                <option value="">none</option>
+              </select>
+              <button id="midi-clock" title="Send start/stop and 24 PPQN clock to the selected port">CLOCK</button>
             </div>
+            <span id="midi-status" class="muted pro-only">MIDI IN: waiting for a device…</span>
+            <span class="hints pro-only">
+              <span class="kbd">space</span> both · <span class="kbd">A</span>/<span class="kbd">B</span> play ·
+              <span class="kbd">S</span> sync · <span class="kbd">L</span> lock ·
+              <span class="kbd">←→</span> fader<br />
+              <span class="kbd">1-8</span> cues A · <span class="kbd">shift+1-8</span> cues B ·
+              <span class="kbd">Q-Y</span> FX
+            </span>
           </div>
         </div>
 
@@ -3541,137 +4065,6 @@
             <span class="mr-label">MIX SUM</span>
             <span id="mix-sum">−∞ dB</span>
             <span id="hr-clip">CLIP</span>
-          </div>
-        </div>
-
-        <div class="mixer-foot">
-          <div class="monitor-row">
-            <span id="engine">engine idle</span>
-            <button
-              id="monitor"
-              data-tip="Hear the deck mix in this tab. Needed when the bot is not in a voice channel; mute Vaporzr in Discord first if you are in one."
-            >
-              🔊 Monitor
-            </button>
-          </div>
-          <div class="midi-row pro-only">
-            <span>MIDI OUT</span>
-            <select id="midi-out" aria-label="MIDI output port">
-              <option value="">none</option>
-            </select>
-            <button id="midi-clock" title="Send start/stop and 24 PPQN clock to the selected port">CLOCK</button>
-          </div>
-          <span id="midi-status" class="muted pro-only">MIDI IN: waiting for a device…</span>
-          <span class="hints pro-only">
-            <span class="kbd">space</span> both · <span class="kbd">A</span>/<span class="kbd">B</span> play ·
-            <span class="kbd">S</span> sync · <span class="kbd">L</span> lock · <span class="kbd">←→</span> fader<br />
-            <span class="kbd">1-8</span> cues A · <span class="kbd">shift+1-8</span> cues B ·
-            <span class="kbd">Q-Y</span> FX
-          </span>
-        </div>
-
-        <div class="mid-extra" id="mid-extra">
-          <div class="block-label" id="mid-chans-label">CHANNELS C · D <span class="muted">line level</span></div>
-          <div class="mini-chans" id="mid-chans">
-            <label class="mini-chan">
-              <span>C</span>
-              <input type="range" min="0" max="100" step="1" value="100" data-chan-gain="c" aria-label="Trim deck C" />
-              <span class="mc-val" data-chan-val="c">100</span>
-            </label>
-            <label class="mini-chan">
-              <span>D</span>
-              <input type="range" min="0" max="100" step="1" value="100" data-chan-gain="d" aria-label="Trim deck D" />
-              <span class="mc-val" data-chan-val="d">100</span>
-            </label>
-          </div>
-
-          <div class="block-label">WAVEFORMS <span class="muted">focused pair</span></div>
-          <div class="overlap-wrap">
-            <canvas id="overlap-wave" height="52" aria-label="Both decks' waveforms on one timeline"></canvas>
-          </div>
-          <div id="overlap-legend">
-            <span class="lg-a">■ <span id="overlap-a">A</span></span>
-            <span class="lg-b">■ <span id="overlap-b">B</span></span>
-            <span id="overlap-note"></span>
-          </div>
-
-          <div class="block-label">STEMS <span class="muted" id="stem-deck-label">focused deck</span></div>
-          <div class="stems" id="stem-lanes">
-            <div class="stems-empty">No separated stems on this deck.</div>
-          </div>
-
-          <div class="block-label">LEVELS <span class="muted">post-fader</span></div>
-          <div class="vu-rows">
-            <div class="vu-row" data-vu="a">
-              <span>A</span><i><b></b></i>
-            </div>
-            <div class="vu-row" data-vu="b">
-              <span>B</span><i><b></b></i>
-            </div>
-            <div class="vu-row" data-vu="c">
-              <span>C</span><i><b></b></i>
-            </div>
-            <div class="vu-row" data-vu="d">
-              <span>D</span><i><b></b></i>
-            </div>
-            <div class="vu-row master" data-vu="master">
-              <span>M</span><i><b></b></i>
-            </div>
-          </div>
-
-          <div class="block-label">QUICK <span class="muted" id="mid-key"></span></div>
-          <div class="mid-btns">
-            <button id="mid-quantize" data-mid="quantize" data-tip="Snap seeks, cue jumps and loops to the beat grid">
-              QUANTIZE
-            </button>
-            <button id="mid-jog" data-mid="jog" data-tip="Toggle the platter between vinyl scratch and CDJ bend">
-              JOG
-            </button>
-            <button id="mid-grid-down" data-mid="grid-" data-tip="Shift the beat grid 5 ms earlier">GRID −</button>
-            <button id="mid-grid-up" data-mid="grid+" data-tip="Shift the beat grid 5 ms later">GRID +</button>
-            <button data-mid="loop4" data-tip="Set a 4-beat loop on the focused deck">LOOP 4</button>
-            <button data-mid="loop8" data-tip="Set an 8-beat loop on the focused deck">LOOP 8</button>
-            <button data-mid="loop16" data-tip="Set a 16-beat loop on the focused deck">LOOP 16</button>
-            <button data-mid="loopoff" data-tip="Clear the loop">LOOP OFF</button>
-            <button data-mid="stop" data-tip="Stop every deck and hand the channel back to the queue">STOP ALL</button>
-            <button
-              data-mid="reset"
-              data-tip="Panic button: pitch, tempo, EQ, filter, trims, stems and crossfader back to neutral. Playback keeps going"
-            >
-              RESET
-            </button>
-            <button
-              data-mid="semi-down"
-              data-tip="Pitch the track down a semitone — the karaoke key change. Tempo and stems stay put"
-            >
-              KEY −
-            </button>
-            <button data-mid="semi-up" data-tip="Pitch the track up a semitone">KEY +</button>
-            <button
-              id="mid-karaoke"
-              data-mid="karaoke"
-              data-tip="Mute the vocal lane and keep the instrumental — karaoke mode for a separated track"
-            >
-              KARAOKE
-            </button>
-            <button data-mid="stage" data-tip="Open the karaoke screen in its own window — put it on a TV, sing along">
-              KARAOKE SCREEN
-            </button>
-            <button data-mid="night" data-tip="Open karaoke night so singers can queue songs from the karaoke screen">
-              OPEN NIGHT
-            </button>
-          </div>
-
-          <div class="block-label">SHOUT OUT <span class="muted">spoken over the mix</span></div>
-          <div class="shout-row">
-            <input
-              id="shout-text"
-              maxlength="120"
-              placeholder="Say it over the music…"
-              autocomplete="off"
-              data-tip="AMOK 9000 reads this out over whatever is playing"
-            />
-            <button id="shout-send">📣 SAY</button>
           </div>
         </div>
       </section>
@@ -3767,96 +4160,6 @@
             <button data-nudge="-25" title="Nudge 25 ms back">−</button>
             <span>NUDGE</span>
             <button data-nudge="25" title="Nudge 25 ms forward">+</button>
-          </div>
-        </div>
-
-        <div class="channel pro-only">
-          <div class="eq-knobs" data-role="eq">
-            <div
-              class="knob"
-              data-knob="low"
-              role="slider"
-              tabindex="0"
-              aria-label="Deck B low"
-              aria-valuemin="-40"
-              aria-valuemax="6"
-              aria-valuenow="0"
-            >
-              <div class="knob-dial">
-                <svg viewBox="0 0 44 44" aria-hidden="true">
-                  <path class="knob-track" d="M11.39 11.39 A15 15 0 1 1 11.39 33.61" />
-                  <path class="knob-fill" d="" />
-                </svg>
-                <span class="knob-cap"></span>
-              </div>
-              <span class="knob-name">LOW</span>
-              <output data-out="low">0</output>
-            </div>
-            <div
-              class="knob"
-              data-knob="mid"
-              role="slider"
-              tabindex="0"
-              aria-label="Deck B mid"
-              aria-valuemin="-40"
-              aria-valuemax="6"
-              aria-valuenow="0"
-            >
-              <div class="knob-dial">
-                <svg viewBox="0 0 44 44" aria-hidden="true">
-                  <path class="knob-track" d="M11.39 11.39 A15 15 0 1 1 11.39 33.61" />
-                  <path class="knob-fill" d="" />
-                </svg>
-                <span class="knob-cap"></span>
-              </div>
-              <span class="knob-name">MID</span>
-              <output data-out="mid">0</output>
-            </div>
-            <div
-              class="knob"
-              data-knob="high"
-              role="slider"
-              tabindex="0"
-              aria-label="Deck B high"
-              aria-valuemin="-40"
-              aria-valuemax="6"
-              aria-valuenow="0"
-            >
-              <div class="knob-dial">
-                <svg viewBox="0 0 44 44" aria-hidden="true">
-                  <path class="knob-track" d="M11.39 11.39 A15 15 0 1 1 11.39 33.61" />
-                  <path class="knob-fill" d="" />
-                </svg>
-                <span class="knob-cap"></span>
-              </div>
-              <span class="knob-name">HIGH</span>
-              <output data-out="high">0</output>
-            </div>
-            <div
-              class="knob"
-              data-knob="trim"
-              role="slider"
-              tabindex="0"
-              aria-label="Deck B trim"
-              aria-valuemin="0"
-              aria-valuemax="100"
-              aria-valuenow="100"
-            >
-              <div class="knob-dial">
-                <svg viewBox="0 0 44 44" aria-hidden="true">
-                  <path class="knob-track" d="M11.39 11.39 A15 15 0 1 1 11.39 33.61" />
-                  <path class="knob-fill" d="" />
-                </svg>
-                <span class="knob-cap"></span>
-              </div>
-              <span class="knob-name">TRIM</span>
-              <output data-out="trim">100</output>
-            </div>
-          </div>
-          <div class="kill-row">
-            <button data-kill="low">KILL LOW</button>
-            <button data-kill="mid">KILL MID</button>
-            <button data-kill="high">KILL HIGH</button>
           </div>
         </div>
 
@@ -4583,17 +4886,8 @@
           });
         }
 
-        /** Keep the C/D channel strip and the quick buttons in step with the server. */
+        /** Keep the quick buttons and the focused-deck readouts in step with the server. */
         function paintMid() {
-          all('[data-chan-gain]').forEach(function (input) {
-            var id = input.getAttribute('data-chan-gain');
-            var slot = state && state[id];
-            if (!slot) return;
-            var v = Math.round(Math.max(0, Math.min(1, slot.gain)) * 100);
-            if (document.activeElement !== input) input.value = v;
-            var label = el('[data-chan-val="' + id + '"]');
-            if (label) label.textContent = String(v);
-          });
           var q = el('#mid-quantize');
           if (q && state) q.classList.toggle('on', !!(state[focusId] && state[focusId].quantize));
           var j = el('#mid-jog');
@@ -5109,12 +5403,24 @@
                 ? '-' + fmt(Math.max(0, slot.durationMs - pos)) + ' left'
                 : '— left';
             }
-            all('[data-knob]', root).forEach(function (knob) {
-              if (knob.hasAttribute('data-dragging')) return;
-              var role = knob.getAttribute('data-knob');
-              if (role === 'trim') paintKnob(knob, 'trim', Math.round(slot.gain * 100));
-              else paintKnob(knob, 'eq', Math.round(slot.eq[role]));
+            // Trim and EQ live on the mixer's channel strip, one per deck. The
+            // card itself no longer carries a second copy (see .rig .deck .channel).
+            var strip = el('.chan-strip[data-chan-deck="' + id + '"]');
+            [root, strip].forEach(function (host) {
+              if (!host) return;
+              all('[data-knob]', host).forEach(function (knob) {
+                if (knob.hasAttribute('data-dragging')) return;
+                var role = knob.getAttribute('data-knob');
+                if (role === 'trim') paintKnob(knob, 'trim', Math.round(slot.gain * 100));
+                else paintKnob(knob, 'eq', Math.round(slot.eq[role]));
+              });
             });
+            if (strip) {
+              strip.classList.toggle('playing', !!slot.playing);
+              all('[data-kill]', strip).forEach(function (btn) {
+                btn.classList.toggle('on', +slot.eq[btn.getAttribute('data-kill')] <= -39.5);
+              });
+            }
             var tempo = el('[data-role="tempo"]', root);
             if (document.activeElement !== tempo) tempo.value = (slot.tempo * 100).toFixed(1);
             el('[data-out="tempo"]', root).textContent = (slot.tempo * 100).toFixed(1);
@@ -6199,22 +6505,6 @@
               jogEl.addEventListener('pointerup', endJog);
               jogEl.addEventListener('pointercancel', endJog);
             }
-            all('[data-knob]', root).forEach(function (knob) {
-              var role = knob.getAttribute('data-knob');
-              var trim = role === 'trim';
-              var key = id + ':' + (trim ? 'gain' : 'eq:' + role);
-              bindKnob(knob, trim ? 'trim' : 'eq', function (value, immediate) {
-                var action = trim ? 'gain' : 'eq';
-                var payload = trim ? { deck: id, value: value / 100 } : { deck: id, band: role, db: value };
-                if (immediate) control(action, payload);
-                else controlThrottled(key, action, payload);
-              });
-            });
-            all('[data-kill]', root).forEach(function (btn) {
-              btn.onclick = function () {
-                control('kill', { deck: id, band: btn.getAttribute('data-kill') });
-              };
-            });
             var tempoEl = el('[data-role="tempo"]', root);
             tempoEl.addEventListener('input', function (e) {
               var v = Number(e.target.value);
@@ -6231,6 +6521,28 @@
             all('[data-nudge]', root).forEach(function (btn) {
               btn.onclick = function () {
                 control('nudge', { deck: id, positionMs: Number(btn.getAttribute('data-nudge')) });
+              };
+            });
+          });
+
+          /* The mixer's channel bank: one strip per deck, both banks included,
+             so deck C/D get the same trim, EQ and kills as A/B. */
+          all('#mid-chans .chan-strip').forEach(function (strip) {
+            var chan = strip.getAttribute('data-chan-deck');
+            all('[data-knob]', strip).forEach(function (knob) {
+              var role = knob.getAttribute('data-knob');
+              var trim = role === 'trim';
+              var key = chan + ':' + (trim ? 'gain' : 'eq:' + role);
+              bindKnob(knob, trim ? 'trim' : 'eq', function (value, immediate) {
+                var action = trim ? 'gain' : 'eq';
+                var payload = trim ? { deck: chan, value: value / 100 } : { deck: chan, band: role, db: value };
+                if (immediate) control(action, payload);
+                else controlThrottled(key, action, payload);
+              });
+            });
+            all('[data-kill]', strip).forEach(function (btn) {
+              btn.onclick = function () {
+                control('kill', { deck: chan, band: btn.getAttribute('data-kill') });
               };
             });
           });
@@ -6314,18 +6626,7 @@
 
           startMeters();
 
-          /* ---- centre strip wiring: C/D trims, quick wins, shout-out ---- */
-          all('[data-chan-gain]').forEach(function (input) {
-            var id = input.getAttribute('data-chan-gain');
-            var key = 'midgain-' + id;
-            input.addEventListener('input', function () {
-              var v = Number(input.value) || 0;
-              var label = el('[data-chan-val="' + id + '"]');
-              if (label) label.textContent = String(Math.round(v));
-              controlThrottled(key, 'gain', { deck: id, value: v / 100 });
-            });
-            flushOnRelease(input, key);
-          });
+          /* ---- centre strip wiring: quick wins, shout-out ---- */
           all('[data-mid]').forEach(function (btn) {
             btn.onclick = function () {
               midAction(btn.getAttribute('data-mid'));
