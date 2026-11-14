@@ -117,6 +117,8 @@ import { jamJoinLinks, type Bridge } from './bridge.js';
 import { DeckController, stemsKeyFor } from './decks.js';
 import { writeJsonAtomicSync } from '@vaporzr/core/jsonFile';
 import { KaraokeNight, karaokeQueueText, stemBackendAvailable } from './karaoke.js';
+import { setMasterKey } from './masterKey.js';
+import { clearStemSettings, saveStemSettings, stemSettingsStatus } from './stemSettings.js';
 import { guildRegistry, noteGuildJoin, noteGuildLeave, noteGuildsSeen } from './guildRegistry.js';
 import {
   DECK_IDS,
@@ -315,6 +317,19 @@ const COMMANDS = [
         ),
     )
     .addSubcommand((sc) => sc.setName('show').setDescription('Owner: reveal the master key itself'))
+    .addSubcommand((sc) =>
+      sc
+        .setName('set')
+        .setDescription('Owner: pin this exact key as the master key (survives deploys)')
+        .addStringOption((o) =>
+          o
+            .setName('key')
+            .setDescription('The new master key (10+ characters, no spaces)')
+            .setRequired(true)
+            .setMinLength(10)
+            .setMaxLength(128),
+        ),
+    )
     .addSubcommand((sc) => sc.setName('list').setDescription('Owner: list active devices and unused invites'))
     .addSubcommand((sc) =>
       sc
@@ -377,6 +392,15 @@ const COMMANDS = [
     .setDescription('Start a karaoke night, add a song, or open the karaoke screen')
     .addStringOption((o) =>
       o.setName('song').setDescription('Song title or link to add to the sing queue').setRequired(false),
+    ),
+  new SlashCommandBuilder()
+    .setName('stems')
+    .setDescription('Stem separation: set the Replicate token so karaoke can drop vocals')
+    .addStringOption((o) =>
+      o
+        .setName('token')
+        .setDescription('Replicate token (r8_…) — omit to see the current status, "off" to clear it')
+        .setRequired(false),
     ),
   new SlashCommandBuilder()
     .setName('reset')
@@ -3065,6 +3089,35 @@ export class DiscordBot {
         break;
       }
 
+      case 'stems': {
+        // The token spends money, so it is owner configuration like /key.
+        if (!this.perms.isOwner(interaction.user.id)) return this.deny(interaction);
+        const typed = (interaction.options.getString('token') ?? '').trim();
+        if (!typed) {
+          const st = stemSettingsStatus();
+          await interaction.reply({
+            content: st.configured
+              ? `🎚 Stem separation is on · token ${st.hint} · from ${st.source}. Karaoke drops the vocal on separated tracks.`
+              : '🎚 No stem token yet, so karaoke turns play with the vocals still in. Set one with `/stems token:r8_…` (from replicate.com/account/api-tokens).',
+            flags: MessageFlags.Ephemeral,
+          });
+          break;
+        }
+        if (/^(off|clear|remove|none)$/i.test(typed)) {
+          clearStemSettings();
+          await interaction.reply({ content: 'Stem token cleared.', flags: MessageFlags.Ephemeral });
+          break;
+        }
+        const saved = saveStemSettings({ replicateToken: typed });
+        await interaction.reply({
+          content: saved.ok
+            ? `✅ Saved (${stemSettingsStatus().hint}). Hosted separation is on — the next karaoke song gets an instrumental.`
+            : `❌ ${saved.error}`,
+          flags: MessageFlags.Ephemeral,
+        });
+        break;
+      }
+
       case 'reset': {
         const gid = interaction.guildId;
         if (!gid) {
@@ -3524,6 +3577,36 @@ export class DiscordBot {
               `New master key issued. Every device and invite is dead ` +
               `(${killed.sessions} session${killed.sessions === 1 ? '' : 's'}, ${killed.invites} invite${killed.invites === 1 ? '' : 's'}).\n` +
               `The new key is in your .env (SHARE_KEY). Use \`/key give\` for links from now on.`,
+            flags: MessageFlags.Ephemeral,
+          });
+          break;
+        }
+
+        if (sub === 'set') {
+          // Pin the key the owner actually remembers. `/key rotate` writes the
+          // deployment env, which the next redeploy overwrites — this one lives
+          // on the data volume, so it stays put.
+          const typed = interaction.options.getString('key', true);
+          const saved = setMasterKey(typed);
+          if (!saved.ok) {
+            await interaction.reply({ content: `❌ ${saved.error}`, flags: MessageFlags.Ephemeral });
+            break;
+          }
+          const killed = revokeAll();
+          await interaction.reply({
+            embeds: [
+              new EmbedBuilder()
+                .setTitle('Master key set')
+                .setDescription(
+                  `New master key: \`${saved.hint}\`\n\n` +
+                    'Open `/panel?key=<the key>` (or paste it into the key screen) on any device. ' +
+                    'It is stored on the data volume, so redeploys keep it.\n\n' +
+                    `Signed out ${killed.sessions} session${killed.sessions === 1 ? '' : 's'} and ` +
+                    `cancelled ${killed.invites} invite${killed.invites === 1 ? '' : 's'} minted under the old key.`,
+                )
+                .setColor(this.themeColor())
+                .setFooter({ text: '/key give mints expiring links for everyone else' }),
+            ],
             flags: MessageFlags.Ephemeral,
           });
           break;
@@ -6026,6 +6109,25 @@ export class DiscordBot {
             break;
           }
 
+          if (sub === 'set') {
+            // Everything after "set" is the key, spaces included being pointless
+            // but harmless to reject.
+            const typed = parts.slice(1).join(' ').trim();
+            const saved = setMasterKey(typed);
+            if (!saved.ok) {
+              await message.reply(`❌ ${saved.error}`);
+              break;
+            }
+            const killed = revokeAll();
+            await message.reply(
+              `🔑 **Master key set** — \`${saved.hint}\`\n` +
+                'Open `/panel?key=<the key>` on any device. Stored on the data volume, so redeploys keep it.\n' +
+                `Signed out ${killed.sessions} session${killed.sessions === 1 ? '' : 's'} and ` +
+                `cancelled ${killed.invites} invite${killed.invites === 1 ? '' : 's'}.`,
+            );
+            break;
+          }
+
           if (sub === 'show') {
             if (!config.shareKey) {
               await message.reply('No share key is configured - the web tier is open.');
@@ -6496,6 +6598,30 @@ export class DiscordBot {
         }
 
         case 'k':
+        case 'stems': {
+          if (!this.perms.isOwner(message.author.id)) return void (await deny());
+          const typed = args.trim();
+          if (!typed) {
+            const st = stemSettingsStatus();
+            await message.reply(
+              st.configured
+                ? `🎚 Stem separation is on · token ${st.hint} · from ${st.source}.`
+                : '🎚 No stem token. Set one: `V@stems r8_…` (from replicate.com/account/api-tokens).',
+            );
+            break;
+          }
+          if (/^(off|clear|remove|none)$/i.test(typed)) {
+            clearStemSettings();
+            await message.reply('Stem token cleared.');
+            break;
+          }
+          const saved = saveStemSettings({ replicateToken: typed });
+          await message.reply(
+            saved.ok ? `✅ Saved (${stemSettingsStatus().hint}). Hosted separation is on.` : `❌ ${saved.error}`,
+          );
+          break;
+        }
+
         case 'reset': {
           if (!canUse('reset')) return void (await deny());
           const gid = message.guildId;
