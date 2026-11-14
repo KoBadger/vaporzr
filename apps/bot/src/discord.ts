@@ -415,7 +415,7 @@ const COMMANDS = [
     ),
   new SlashCommandBuilder()
     .setName('spotify')
-    .setDescription('Spotify web-player cookie: keeps search and playlist reads off the app quota')
+    .setDescription('Spotify web-player cookie: read playlists and albums without the app quota')
     .addStringOption((o) =>
       o
         .setName('sp_dc')
@@ -3200,7 +3200,7 @@ export class DiscordBot {
           const st = spotifySettingsStatus();
           await interaction.reply({
             content: st.configured
-              ? `🟢 Spotify cookie ${st.hint} (from ${st.source}). Playlist reads and web search run outside the app quota.`
+              ? `🟢 Spotify cookie ${st.hint} (from ${st.source}). Playlist and album links resolve through the web player, outside the app quota.`
               : '🟢 No Spotify cookie yet. DevTools → Application → Cookies → `open.spotify.com` → `sp_dc`, then `/spotify sp_dc:AQ…`.',
             flags: MessageFlags.Ephemeral,
           });
@@ -3214,7 +3214,7 @@ export class DiscordBot {
         const saved = saveSpotifySettings({ spDc: typed });
         await interaction.reply({
           content: saved.ok
-            ? `✅ Saved (${spotifySettingsStatus().hint}). Search and full playlist reads now use the web player, not the app quota.`
+            ? `✅ Saved (${spotifySettingsStatus().hint}). Playlist and album links now read in full through the web player, which costs no app quota.`
             : `❌ ${saved.error}`,
           flags: MessageFlags.Ephemeral,
         });
@@ -6782,7 +6782,7 @@ export class DiscordBot {
             const st = spotifySettingsStatus();
             await message.reply(
               st.configured
-                ? `🟢 Spotify cookie ${st.hint} (from ${st.source}) — playlist reads and web search skip the app quota.`
+                ? `🟢 Spotify cookie ${st.hint} (from ${st.source}) — playlist and album links resolve through the web player.`
                 : '🟢 No Spotify cookie. Set one: `V@spotify AQ…` (DevTools → Application → Cookies → sp_dc).',
             );
             break;

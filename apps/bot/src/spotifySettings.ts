@@ -8,11 +8,12 @@ import { writeJsonAtomicSync } from './jsonFile.js';
  * Spotify web-player credentials, editable from Discord.
  *
  * `SPOTIFY_SP_DC` is the cookie a signed-in open.spotify.com tab keeps. It is
- * the only way to read a public playlist in full without touching the app's
- * development-mode quota, and it is also what the quota-free search path mints
- * its token from. Like the stem token it used to be `.env`-only, which made
- * "stop burning the quota" a server login; it lives in
- * `data/spotify-settings.json` now and is applied to `config` in place.
+ * what lets the bot read a public playlist or album in full — through the web
+ * player's own session — without spending the app's development-mode quota, so
+ * a 429 window no longer stops links from resolving. Like the stem token it
+ * used to be `.env`-only, which made "read playlists without the quota" a
+ * server login; it lives in `data/spotify-settings.json` now and is applied to
+ * `config` in place.
  *
  * Precedence: a cookie saved here wins over `SPOTIFY_SP_DC` from the env, because
  * the Discord command is the surface the operator can actually reach.
