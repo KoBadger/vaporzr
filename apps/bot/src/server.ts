@@ -69,6 +69,7 @@ import { amokSettingsStatus, clearAmokSettings, saveAmokSettings } from './amokS
 import { clearStemSettings, loadStemSettings, saveStemSettings, stemSettingsStatus } from './stemSettings.js';
 import { loadMasterKey } from './masterKey.js';
 import { loadPlaybackSettings } from './playbackSettings.js';
+import { loadSpotifySettings } from './spotifySettings.js';
 import { domainStore } from '@vaporzr/core/domains';
 import { setlistShares } from '@vaporzr/core/setlistShare';
 import { tapes as globalTapes } from '@vaporzr/core/tape';
@@ -276,6 +277,8 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
   loadMasterKey();
   /** Audio source choice, same story as the key: env is not reachable remotely. */
   loadPlaybackSettings();
+  /** The sp_dc cookie that keeps search and playlist reads off the app quota. */
+  loadSpotifySettings();
   // Declared here so the request handler (which runs later) can read live
   // guild data from the bridge once it exists.
   let bridge: Bridge | null = null;

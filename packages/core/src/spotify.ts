@@ -573,6 +573,11 @@ const WEB_TOKEN_URL = 'https://open.spotify.com/api/token';
 let cachedWebToken: { token: string; expiresAt: number } | null = null;
 let cachedTotp: { key: Buffer; version: number; at: number } | null = null;
 
+/** Drop the minted web-player token. Called when the sp_dc cookie is replaced. */
+export function resetWebPlayerToken(): void {
+  cachedWebToken = null;
+}
+
 function webTotpSecret(): Buffer {
   const bytes = config.spotifyTotpSecret
     .split(',')
@@ -750,11 +755,11 @@ export async function searchTracks(query: string, limit = 10): Promise<ResolvedT
 
   // Quota-free web-player search first (the "long ago" workaround) — no app
   // quota consumed. The OAuth /search call below only runs if that's missing
-  // or disabled via SPOTIFY_ANON_SEARCH=off. During a 429 window the anonymous
-  // path is taken even when it isn't the configured default: the account is
-  // untouched by Spotify's app quota, so search keeps its metadata instead of
-  // degrading to bare YouTube titles for the whole cooldown.
-  if (config.spotifyAnonSearch || spotifyCooldownRemainingSec() > 0) {
+  // or disabled via SPOTIFY_ANON_SEARCH=off. A saved sp_dc cookie is itself a
+  // deliberate opt-in, and during a 429 window this path is taken even without
+  // one: the account is untouched by Spotify's app quota, so search keeps its
+  // metadata instead of degrading to bare YouTube titles for the whole cooldown.
+  if (config.spotifyAnonSearch || config.spotifySpDc || spotifyCooldownRemainingSec() > 0) {
     const anon = await searchTracksAnonymous(query, limit);
     if (anon) {
       cacheSet(key, anon, SEARCH_TTL_MS);
