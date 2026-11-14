@@ -753,21 +753,10 @@ export async function searchTracks(query: string, limit = 10): Promise<ResolvedT
   const cached = cacheGet<ResolvedTrack[]>(key);
   if (cached) return cached;
 
-  // Quota-free web-player search first (the "long ago" workaround) — no app
-  // quota consumed. The OAuth /search call below only runs if that's missing
-  // or disabled via SPOTIFY_ANON_SEARCH=off. During a 429 window the anonymous
-  // path is taken even when it isn't the configured default: the account is
-  // untouched by Spotify's app quota, so search keeps its metadata instead of
-  // degrading to bare YouTube titles for the whole cooldown.
-  if (config.spotifyAnonSearch || spotifyCooldownRemainingSec() > 0) {
-    const anon = await searchTracksAnonymous(query, limit);
-    if (anon) {
-      cacheSet(key, anon, SEARCH_TTL_MS);
-      return anon;
-    }
-    if (config.spotifySpDc) warnWebTokenUnavailable();
-  }
-
+  // No quota-free search path: Spotify's partner endpoint now demands a
+  // persisted-query hash, so there is nothing left to try during a cooldown.
+  // The concurrent YouTube search covers that window instead of spending a
+  // request on an endpoint that cannot answer.
   const token = await getAccessToken();
   const data = await apiGet<{ tracks: { items: SpotifyTrack[] } }>(
     `/search?q=${encodeURIComponent(query)}&type=track&limit=${limit}`,

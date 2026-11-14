@@ -1835,9 +1835,21 @@ export class DiscordBot {
           : 'Press **Start karaoke** to open the night. Anyone can add a song; the bot drops the vocals and keeps the instrumental.') +
           (this.sessionFor(guildId).voice.isConnectionReady()
             ? ''
-            : '\n\n🔈 **Not in a voice channel yet** — press **Join voice** (or just start) and I will join yours.'),
+            : '\n\n🔈 **Not in a voice channel yet** — press **Join voice** (or just start) and I will join yours.') +
+          (stemSettingsStatus().configured
+            ? ''
+            : '\n\n⚠️ **No stem key yet** — turns play with the vocals still in. Set it once with `/stems token:r8_…`.'),
       )
-      .addFields({ name: 'Up now', value: now, inline: false }, { name: 'Queue', value: waiting, inline: false })
+      .addFields(
+        { name: 'Up now', value: now, inline: false },
+        { name: 'Queue', value: waiting, inline: false },
+        {
+          name: 'How it works',
+          value:
+            'Join a voice channel → **Start karaoke** → **Add a song**. It loads on the stage deck with the vocal dropped and plays straight away; the next singer follows automatically.',
+          inline: false,
+        },
+      )
       .setFooter({
         text: state.open
           ? `Key ${state.transpose ? `${state.transpose > 0 ? '+' : ''}${state.transpose}` : 'original'} · stage deck ${(state.deck ?? 'a').toUpperCase()}`
@@ -3123,6 +3135,10 @@ export class DiscordBot {
         }
         const song = interaction.options.getString('song');
         if (!song) {
+          // Bare command opens the night as well as showing the card, so what
+          // the card says and what the bot is doing can never disagree.
+          const night = this.karaokeFor(gid);
+          if (!night.isOpen()) night.openNight();
           await interaction.reply(this.karaokeCard(gid));
           break;
         }
@@ -6811,31 +6827,40 @@ export class DiscordBot {
 
         case 'karaoke': {
           if (!canUse('karaoke')) return void (await deny());
-          // Bare command = the karaoke card. Everything is behind a button so
-          // nobody has to remember a URL, and the stage link carries its own
-          // view invite. A query still means "lyrics for this song" below.
-          if (!args) {
-            if (!message.guildId) {
-              await message.reply('Karaoke needs a server.');
-              break;
-            }
-            await message.reply(this.karaokeCard(message.guildId));
+          // One command does the whole setup: join the singer's channel if the
+          // bot is not in one, open the night if it is closed, then either show
+          // the card (no song) or put the song straight on stage. The old
+          // behaviour — a song meant "show me lyrics" — is why `V@karaoke <song>`
+          // looked like it did nothing; lyrics live on `V@lyrics`.
+          const gid = message.guildId;
+          if (!gid) {
+            await message.reply('Karaoke needs a server.');
             break;
           }
-          const payload = await this.lyricsKaraokePayload(s, args || undefined);
-          if ('error' in payload) await message.reply({ content: payload.error });
-          else {
-            const msg = await message.reply({ embeds: [payload.embed] });
-            this.registerKaraoke(
-              s,
-              msg.id,
-              message.guildId!,
-              message.channelId,
-              payload.title,
-              payload.artist,
-              payload.syncedLines,
-            );
+          const session = this.sessionFor(gid);
+          if (!session.voice.isConnectionReady()) {
+            const channel = message.member?.voice?.channel;
+            if (!channel) {
+              await message.reply('Join a voice channel first — karaoke plays through the bot in that channel.');
+              break;
+            }
+            try {
+              await session.voice.join(gid, channel.id, message.guild!.voiceAdapterCreator, channel);
+            } catch (err) {
+              await message.reply(
+                `❌ Could not join **${channel.name}**: ${err instanceof Error ? err.message : String(err)}`,
+              );
+              break;
+            }
           }
+          const night = this.karaokeFor(gid);
+          if (!night.isOpen()) night.openNight();
+          if (!args) {
+            await message.reply(this.karaokeCard(gid));
+            break;
+          }
+          const added = night.add(message.author.username, `discord:${message.author.id}`, args);
+          await message.reply(added);
           break;
         }
 
