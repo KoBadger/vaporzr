@@ -336,6 +336,50 @@
         position: sticky;
         top: 12px;
       }
+      /* ---------- one-screen rig ----------
+         A DJ rig is a fixed surface, not a web page: everything you mix with is
+         on screen at once and each column scrolls inside itself if it has more
+         than fits. Without this the page was 2899px tall and the mixer sat
+         2000px below the decks, which is the "this doesn't look like VDJ" part. */
+      @media (min-width: 961px) {
+        .rig {
+          height: calc(100vh - 168px);
+          min-height: 540px;
+          align-items: stretch;
+        }
+        .rig .deck,
+        .rig .mixer {
+          max-height: 100%;
+          overflow-y: auto;
+          overscroll-behavior: contain;
+          scrollbar-width: thin;
+          scrollbar-color: #26305a transparent;
+        }
+        .rig .mixer {
+          position: static;
+          top: auto;
+        }
+        /* The coach line is onboarding for a first visit; on a real rig it just
+           steals a row from the mixer. */
+        #coach {
+          display: none;
+        }
+        /* Hot cues and loops sit side by side instead of stacking, which is what
+           makes the deck card fit without its own scrollbar. */
+        .rig .deck {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          align-content: start;
+        }
+        .rig .deck > .deck-head,
+        .rig .deck > .display,
+        .rig .deck > .jog-row,
+        .rig .deck > .beat-strip,
+        .rig .deck > .transport,
+        .rig .deck > .channel {
+          grid-column: 1 / -1;
+        }
+      }
       /* Two-deck mode: the classic A | mixer | B rig. The C/D cards stay in
          the DOM (their audio keeps running) and the mixer's second bank of
          trims hides, so nothing on screen is dead. */
