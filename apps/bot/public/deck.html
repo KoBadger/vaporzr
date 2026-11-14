@@ -351,7 +351,7 @@
       body.two-decks #deck-rail .dr-chip[data-deck='d'] {
         display: none;
       }
-      @media (max-width: 1180px) {
+      @media (max-width: 960px) {
         body.two-decks .rig {
           grid-template-columns: 1fr 1fr;
           grid-template-areas:
@@ -359,7 +359,7 @@
             'mixer mixer';
         }
       }
-      @media (max-width: 760px) {
+      @media (max-width: 640px) {
         body.two-decks .rig {
           grid-template-columns: 1fr;
           grid-template-areas:
@@ -368,7 +368,7 @@
             'mixer';
         }
       }
-      @media (max-width: 1180px) {
+      @media (max-width: 960px) {
         .rig {
           grid-template-columns: 1fr 1fr;
           grid-template-areas:
@@ -380,7 +380,7 @@
           position: static;
         }
       }
-      @media (max-width: 760px) {
+      @media (max-width: 640px) {
         .rig {
           grid-template-columns: 1fr;
           grid-template-areas:
@@ -6602,9 +6602,12 @@
             var two = el('#decks-2');
             var four = el('#decks-4');
             if (!two || !four) return;
-            var count = 4;
+            var count = 2;
             try {
-              count = localStorage.getItem('vz-deck-count') === '2' ? 2 : 4;
+              // Two decks is the default because that is the rig people are
+              // looking for: A | mixer | B on one screen. Four is a deliberate
+              // choice, remembered once made.
+              count = localStorage.getItem('vz-deck-count') === '4' ? 4 : 2;
             } catch (e) {
               /* private mode */
             }
