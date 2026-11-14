@@ -1664,6 +1664,9 @@ export class DiscordBot {
         },
       });
       this.deckControllers.set(guildId, decks);
+      // A deploy used to empty A–D. Put back what was loaded before the restart
+      // — paused, as every deck load is, so nothing starts on its own.
+      void decks.restoreSaved().catch(() => {});
     }
     return decks;
   }

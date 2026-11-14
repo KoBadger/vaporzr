@@ -231,7 +231,77 @@ export class DeckController {
     let durationMs = track.durationMs || 0;
     if (!durationMs) durationMs = (await probeDuration(file).catch(() => null)) ?? 0;
 
-    return this.cue(deck, file, track.name, (track.artists ?? []).join(', '), durationMs, track.uri);
+    return this.cue(deck, file, track.name, (track.artists ?? []).join(', '), durationMs, track.uri, q);
+  }
+
+  /**
+   * Decks used to live only in memory, so every deploy — or any restart — left
+   * A–D empty and a loaded set simply gone. The queries are written to
+   * `data/decks/<guild>.json` on each load and re-loaded (paused, as always)
+   * when the controller is created again.
+   */
+  private savedDeckPath(): string {
+    return path.join(config.dataDir, 'decks', `${this.opts.guildId.replace(/[^\w-]/g, '')}.json`);
+  }
+
+  private rememberDeck(deck: DeckId, query: string | undefined): void {
+    const q = (query ?? '').trim();
+    if (!q) return;
+    try {
+      const file = this.savedDeckPath();
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      let all: Record<string, { query: string; at: number }> = {};
+      try {
+        all = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, { query: string; at: number }>;
+      } catch {
+        all = {};
+      }
+      all[deck] = { query: q.slice(0, 300), at: Date.now() };
+      writeJsonAtomicSync(file, all);
+    } catch (err) {
+      console.warn(`[deck] could not save deck ${deck}: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  private forgetDeck(deck: DeckId): void {
+    try {
+      const file = this.savedDeckPath();
+      const all = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
+      if (!(deck in all)) return;
+      delete all[deck];
+      writeJsonAtomicSync(file, all);
+    } catch {
+      /* nothing saved, nothing to forget */
+    }
+  }
+
+  /**
+   * Put back what was loaded before the last restart. Silent by design: decks
+   * cue paused, so nothing starts playing on its own; a slot that has been
+   * filled in the meantime (a karaoke turn, a manual load) is left alone.
+   */
+  async restoreSaved(): Promise<number> {
+    let all: Record<string, { query?: string }> = {};
+    try {
+      all = JSON.parse(fs.readFileSync(this.savedDeckPath(), 'utf8')) as Record<string, { query?: string }>;
+    } catch {
+      return 0;
+    }
+    let restored = 0;
+    for (const deck of DECK_IDS) {
+      const query = all[deck]?.query?.trim();
+      if (!query) continue;
+      const slot = this.state()[deck];
+      if (slot?.source) continue;
+      try {
+        const res = await this.load(deck, query);
+        if (res.ok) restored++;
+      } catch (err) {
+        console.warn(`[deck] restore ${deck} failed: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+    if (restored) console.log(`[deck] restored ${restored} deck(s) after restart`);
+    return restored;
   }
 
   /**
@@ -378,6 +448,7 @@ export class DeckController {
     artist: string,
     durationMs: number,
     uri?: string,
+    query?: string,
   ): DeckActionResult {
     this.engage();
     // Stems are only a thing once a track has been separated. When they are
@@ -412,6 +483,10 @@ export class DeckController {
     this.history.push({ title: name, artist, at: Date.now() });
     if (this.history.length > 300) this.history.splice(0, this.history.length - 300);
     if (uri) this.fileCache.set(uri, file);
+    // Only remembered when the load came from a query: a local file or a
+    // starter sample is not something the next boot can fetch again.
+    if (query) this.rememberDeck(deck, query);
+    else this.forgetDeck(deck);
     return {
       ok: true,
       message: `Deck ${deck.toUpperCase()} cued: **${name}**${durationMs ? ` (${Math.round(durationMs / 1000)}s)` : ''}.`,

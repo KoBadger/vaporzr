@@ -60,3 +60,26 @@ describe('scorePlayResult prefers the original over a variant', () => {
     expect(askedFor).toBeLessThan(notAsked);
   });
 });
+
+describe('scorePlayResult keeps sequels apart', () => {
+  // Regression: `V@bulk Phantom pt.1 - Justice; phantom pt.2 - Justice` queued
+  // Pt. II twice. Every word matched both titles, so Spotify's own ordering won
+  // and the duplicate guard then dropped one of them.
+  const q1 = 'phantom pt.1 - justice';
+  const q2 = 'phantom pt.2 - justice';
+
+  it('picks Pt. I for a Pt. 1 query and Pt. II for a Pt. 2 query', () => {
+    const one = t('Phantom Pt. I', ['Justice']);
+    const two = t('Phantom Pt. II', ['Justice']);
+    expect(scorePlayResult(one, q1)).toBeLessThan(scorePlayResult(two, q1));
+    expect(scorePlayResult(two, q2)).toBeLessThan(scorePlayResult(one, q2));
+  });
+
+  it('reads arabic and roman part numbers as the same number', () => {
+    const one = t('Phantom Pt. I', ['Justice']);
+    const two = t('Phantom Pt. II', ['Justice']);
+    // The headline score depends on the query text, so compare the ordering.
+    expect(scorePlayResult(two, 'phantom part 2 justice')).toBeLessThan(scorePlayResult(one, 'phantom part 2 justice'));
+    expect(scorePlayResult(two, 'phantom pt ii justice')).toBeLessThan(scorePlayResult(one, 'phantom pt ii justice'));
+  });
+});
