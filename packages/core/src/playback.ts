@@ -914,8 +914,15 @@ export class PlaybackController {
     // from the top — heard as the song cutting out and replaying. Let the first
     // start win; do NOT bump playGeneration here, or the in-flight start would
     // cancel itself.
+    //
+    // The window was 750 ms, which the end-of-track timer and the stall recovery
+    // can and do overlap during a Spotify rate-limit/429 storm — the natural end
+    // fires, the next track stalls because its stream can't resolve, the stall
+    // watchdog calls play() for the SAME old track (stuck cursor), and both end
+    // up within 2 seconds of each other. Widening to 4 s is harmless because the
+    // only legitimate same-track replay is repeat mode, which is checked below.
     const now = Date.now();
-    if (this.lastPlayUri === current.uri && now - this.lastPlayStartedAt < 750) {
+    if (this.lastPlayUri === current.uri && now - this.lastPlayStartedAt < 4000 && !this.queue.getState().repeat) {
       console.log(
         `[playback] ignoring duplicate play() for "${current.name}" (${now - this.lastPlayStartedAt}ms after start)`,
       );
