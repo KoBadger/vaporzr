@@ -1399,23 +1399,49 @@ export class DiscordBot {
         seen.add(key);
         out.push({ title, artist, durationMs: Math.max(0, Math.round(durationMs || 0)), source, uri });
       };
-      try {
-        const hits = await searchTracks(q, Math.min(8, want));
-        for (const t of hits) {
+      // Both providers answer at once and neither may hold the box hostage: a
+      // Spotify call that is slow (rather than fast-failing on 429) used to sit
+      // in front of YouTube, so the type-ahead stayed empty for the whole
+      // keystroke window and looked broken.
+      const bounded = async <T>(work: Promise<T>, ms: number, label: string): Promise<T> => {
+        let timer: NodeJS.Timeout | undefined;
+        try {
+          return await Promise.race([
+            work,
+            new Promise<T>((_, reject) => {
+              timer = setTimeout(() => reject(new Error(`${label} took longer than ${ms}ms`)), ms);
+            }),
+          ]);
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      };
+      const [sp, yt] = await Promise.allSettled([
+        bounded(searchTracks(q, Math.min(8, want)), 3500, 'spotify search'),
+        bounded(searchYoutube(q, Math.min(6, want)), 6000, 'youtube search'),
+      ]);
+      if (sp.status === 'fulfilled') {
+        for (const t of sp.value) {
           push(t.name, (t.artists ?? []).join(', '), t.durationMs ?? 0, t.source ?? 'spotify', t.uri);
         }
-      } catch {
-        /* Spotify down — YouTube still answers */
       }
-      if (out.length < want) {
-        try {
-          const hits = await searchYoutube(q, Math.min(6, want));
-          for (const t of hits) {
-            push(t.name, (t.artists ?? []).join(', '), t.durationMs ?? 0, t.source ?? 'youtube', t.uri);
-          }
-        } catch {
-          /* leave whatever Spotify returned */
+      if (yt.status === 'fulfilled' && out.length < want) {
+        for (const t of yt.value) {
+          push(t.name, (t.artists ?? []).join(', '), t.durationMs ?? 0, t.source ?? 'youtube', t.uri);
         }
+      }
+      // One line per half-minute, not per keystroke: enough to diagnose a dead
+      // provider from the logs without turning typing into a log flood.
+      if (!out.length && Date.now() - lastEmptySearchLog > 30_000) {
+        lastEmptySearchLog = Date.now();
+        const why = [sp, yt]
+          .map((r, i) => {
+            const name = i === 0 ? 'spotify' : 'youtube';
+            return r.status === 'rejected' ? `${name}: ${(r.reason as Error)?.message ?? r.reason}` : '';
+          })
+          .filter(Boolean)
+          .join('; ');
+        console.warn(`[search] no results for "${q}"${why ? ` (${why})` : ''}`);
       }
       // BPM and key, so the deck loader can show tempo before a track is
       // loaded. Spotify audio features only cover Spotify URIs, which is
@@ -14596,6 +14622,9 @@ export function countBulkItems(raw: string): number {
     .map((x) => x.trim())
     .filter(Boolean).length;
 }
+
+/** Throttle for the "search returned nothing" warning above. */
+let lastEmptySearchLog = 0;
 
 /**
  * Official-video lookup. Returns the best candidate plus whether its channel is
