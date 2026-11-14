@@ -1785,6 +1785,53 @@
         opacity: 0.55;
         cursor: wait;
       }
+      /* Stem lanes: only present when the loaded track has been separated.
+         Four lanes is the full split; the mashup cache gives two. */
+      .stems {
+        display: grid;
+        gap: 4px;
+      }
+      .stems-empty {
+        font: 600 10px/1.45 inherit;
+        color: var(--dim-2);
+      }
+      .stem-lane {
+        display: grid;
+        grid-template-columns: 30px 1fr 28px;
+        align-items: center;
+        gap: 6px;
+      }
+      .stem-lane button {
+        padding: 4px 2px;
+        border-radius: 4px;
+        border: 1px solid var(--line-soft);
+        background: #0a0a16;
+        color: var(--dim-2);
+        font: 700 8.5px/1 var(--mono);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        cursor: pointer;
+      }
+      .stem-lane button.on {
+        background: rgba(34, 211, 238, 0.16);
+        border-color: rgba(34, 211, 238, 0.5);
+        color: #b9f4ff;
+      }
+      .stem-lane button.muted {
+        background: rgba(248, 113, 113, 0.16);
+        border-color: rgba(248, 113, 113, 0.5);
+        color: #ffd7d7;
+      }
+      .stem-lane input[type='range'] {
+        width: 100%;
+        min-width: 0;
+      }
+      .stem-lane .stem-val {
+        text-align: right;
+        font: 700 9px/1 var(--mono);
+        color: var(--dim-2);
+        font-variant-numeric: tabular-nums;
+      }
       /* Channel meters: one bar per deck plus the master bus. The width is
          driven from rAF, so no CSS transition — it would smooth twice. */
       .vu-rows {
@@ -3229,6 +3276,11 @@
             <span id="overlap-note"></span>
           </div>
 
+          <div class="block-label">STEMS <span class="muted" id="stem-deck-label">focused deck</span></div>
+          <div class="stems" id="stem-lanes">
+            <div class="stems-empty">No separated stems on this deck.</div>
+          </div>
+
           <div class="block-label">LEVELS <span class="muted">post-fader</span></div>
           <div class="vu-rows">
             <div class="vu-row" data-vu="a">
@@ -3263,6 +3315,13 @@
             <button data-mid="loop16" data-tip="Set a 16-beat loop on the focused deck">LOOP 16</button>
             <button data-mid="loopoff" data-tip="Clear the loop">LOOP OFF</button>
             <button data-mid="stop" data-tip="Stop every deck and hand the channel back to the queue">STOP ALL</button>
+            <button
+              id="mid-karaoke"
+              data-mid="karaoke"
+              data-tip="Mute the vocal lane and keep the instrumental — karaoke mode for a separated track"
+            >
+              KARAOKE
+            </button>
           </div>
 
           <div class="block-label">SHOUT OUT <span class="muted">spoken over the mix</span></div>
@@ -3785,6 +3844,9 @@
           }
           var card = el('.deck[data-deck="' + id + '"]');
           if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          // Stem lanes belong to the focused deck; repaint on focus so they
+          // follow the mouse rather than waiting for the next state push.
+          if (typeof paintStems === 'function') paintStems();
         }
 
         /** One plain sentence: the next useful move, given what the decks are doing. */
@@ -4094,6 +4156,75 @@
           requestAnimationFrame(frame);
         }
 
+        /* ---- stem lanes ----------------------------------------------------
+           A separated track carries its own lanes. Everything else says so,
+           because a lane that mutes nothing is worse than no lane at all. */
+        var lastStemKey = '';
+
+        function paintStems() {
+          var host = el('#stem-lanes');
+          if (!host || !state) return;
+          var slot = state[focusId];
+          var stems = slot && slot.stems;
+          var label = el('#stem-deck-label');
+          if (label) {
+            label.textContent = stems
+              ? focusId.toUpperCase() + ' · ' + stems.lanes.length + ' lanes'
+              : focusId.toUpperCase() + ' · not separated';
+          }
+          var key = focusId + ':' + (stems ? stems.lanes.join('|') : '');
+          if (key !== lastStemKey) {
+            lastStemKey = key;
+            host.textContent = '';
+            if (!stems) {
+              var empty = document.createElement('div');
+              empty.className = 'stems-empty';
+              empty.textContent =
+                'No separated stems for this track — load a track that has been through the stem splitter.';
+              host.appendChild(empty);
+            } else {
+              stems.lanes.forEach(function (lane) {
+                var row = document.createElement('div');
+                row.className = 'stem-lane';
+                var mute = document.createElement('button');
+                mute.type = 'button';
+                mute.textContent = String(lane).slice(0, 3);
+                mute.title = 'Mute ' + lane;
+                mute.setAttribute('data-stem-mute', lane);
+                var input = document.createElement('input');
+                input.type = 'range';
+                input.min = '0';
+                input.max = '100';
+                input.step = '1';
+                input.setAttribute('data-stem', lane);
+                input.setAttribute('aria-label', lane + ' level');
+                var val = document.createElement('span');
+                val.className = 'stem-val';
+                val.setAttribute('data-stem-val', lane);
+                row.appendChild(mute);
+                row.appendChild(input);
+                row.appendChild(val);
+                host.appendChild(row);
+              });
+            }
+          }
+          if (!stems) return;
+          stems.lanes.forEach(function (lane, i) {
+            var g = stems.gains[i] == null ? 1 : stems.gains[i];
+            var pct = Math.round(Math.max(0, Math.min(1, g)) * 100);
+            var input = el('[data-stem="' + lane + '"]', host);
+            if (input && document.activeElement !== input) input.value = String(pct);
+            var val = el('[data-stem-val="' + lane + '"]', host);
+            if (val) val.textContent = pct === 0 ? 'MUTE' : String(pct);
+            var mute = el('[data-stem-mute="' + lane + '"]', host);
+            if (mute) {
+              mute.classList.toggle('muted', pct === 0);
+              mute.classList.toggle('on', pct > 0);
+              mute.setAttribute('aria-pressed', pct === 0 ? 'true' : 'false');
+            }
+          });
+        }
+
         /** Keep the C/D channel strip and the quick buttons in step with the server. */
         function paintMid() {
           all('[data-chan-gain]').forEach(function (input) {
@@ -4113,8 +4244,15 @@
             j.textContent = 'JOG ' + mode.toUpperCase();
             j.classList.toggle('on', mode === 'cdj');
           }
+          var kar = el('#mid-karaoke');
+          if (kar && state) {
+            var ks = state[focusId] && state[focusId].stems;
+            var ki = ks ? ks.lanes.indexOf('vocals') : -1;
+            kar.classList.toggle('on', ki >= 0 && ks.gains[ki] === 0);
+          }
           drawOverlap();
           sampleMeters();
+          paintStems();
         }
 
         /** One quick action, always aimed at the focused deck. */
@@ -4139,6 +4277,26 @@
             control('loop-clear', { deck: deck });
           } else if (kind === 'stop') {
             control('stop');
+          } else if (kind === 'karaoke') {
+            // Karaoke is not a separate audio path: it is the vocal lane at
+            // zero. The instrumental already exists as the other lanes, so the
+            // mix never has to be re-rendered to switch modes.
+            var stems = state[deck] && state[deck].stems;
+            if (!stems) {
+              toast('warn', 'Deck ' + deck.toUpperCase() + ' has no separated stems — karaoke needs them.');
+              return;
+            }
+            var vi = stems.lanes.indexOf('vocals');
+            if (vi < 0) {
+              toast('warn', 'This separation has no vocal lane.');
+              return;
+            }
+            var vocalOn = stems.gains[vi] > 0;
+            control('stemGain', { deck: deck, lane: 'vocals', value: vocalOn ? 0 : 1 });
+            toast(
+              'info',
+              vocalOn ? 'Karaoke on — vocals muted, instrumental keeps playing.' : 'Karaoke off — vocals back.',
+            );
           }
         }
 
@@ -5792,6 +5950,42 @@
               midAction(btn.getAttribute('data-mid'));
             };
           });
+
+          /* Stem lanes are rebuilt with the focused deck, so their controls are
+             delegated from the container instead of bound per row. */
+          var stemHost = el('#stem-lanes');
+          if (stemHost) {
+            stemHost.addEventListener('input', function (e) {
+              var lane = e.target && e.target.getAttribute ? e.target.getAttribute('data-stem') : null;
+              if (!lane) return;
+              var pct = Number(e.target.value) || 0;
+              var val = el('[data-stem-val="' + lane + '"]', stemHost);
+              if (val) val.textContent = pct === 0 ? 'MUTE' : String(Math.round(pct));
+              controlThrottled('stem-' + lane, 'stemGain', {
+                deck: focusId,
+                lane: lane,
+                value: pct / 100,
+              });
+            });
+            stemHost.addEventListener('change', function (e) {
+              var lane = e.target && e.target.getAttribute ? e.target.getAttribute('data-stem') : null;
+              if (lane) flushControl('stem-' + lane);
+            });
+            stemHost.addEventListener('click', function (e) {
+              var node = e.target;
+              while (node && node !== stemHost && !(node.getAttribute && node.getAttribute('data-stem-mute'))) {
+                node = node.parentNode;
+              }
+              if (!node || node === stemHost) return;
+              var lane = node.getAttribute('data-stem-mute');
+              var slot = state && state[focusId];
+              var stems = slot && slot.stems;
+              var i = stems ? stems.lanes.indexOf(lane) : -1;
+              // Mute is a toggle on the lane that is there, not a reset.
+              var now = i >= 0 ? stems.gains[i] : 1;
+              control('stemGain', { deck: focusId, lane: lane, value: now > 0 ? 0 : 1 });
+            });
+          }
           var shoutInput = el('#shout-text');
           var shoutSend = el('#shout-send');
           function sendShout() {

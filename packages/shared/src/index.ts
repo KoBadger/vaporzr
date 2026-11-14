@@ -116,6 +116,14 @@ export interface DeckFilter {
   cutoff: number;
 }
 
+/** Per-lane stem control for a deck playing a separated track. */
+export interface DeckStemState {
+  /** Lane labels in mixer order, e.g. ['vocals', 'drums', 'bass', 'other']. */
+  lanes: string[];
+  /** Per-lane gain, 0..1, parallel to `lanes`. */
+  gains: number[];
+}
+
 export interface DeckSlotState {
   source: DeckSource | null;
   playing: boolean;
@@ -153,6 +161,8 @@ export interface DeckSlotState {
   /** Post-fader RMS of this deck in dBFS (-60..0), for the channel meter.
    *  Optional: hand-built state (tests, replays) leaves it out. */
   levelDb?: number;
+  /** Stem lanes, when this deck is playing a separated copy of the track. */
+  stems?: DeckStemState | null;
 }
 
 /** Set-recording status surfaced to both control surfaces. */
@@ -225,7 +235,9 @@ export type DeckAction =
   | 'quantize'
   | 'beatgrid'
   /** Announce a phrase over the mix, from the deck page's shout-out box. */
-  | 'shout';
+  | 'shout'
+  /** Set one stem lane level; 0 mutes it (the karaoke switch). */
+  | 'stemGain';
 
 export interface GuildPermissions {
   roles: Record<PermissionLevel, string[]>;
@@ -407,6 +419,8 @@ export type InboundMessage =
       enabled?: boolean;
       /** Phrase to announce for 'shout'. */
       text?: string;
+      /** Stem lane name for 'stemGain' (e.g. 'vocals', 'drums', 'music'). */
+      lane?: string;
       guildId?: string;
     }
   /** Ask for the current deck state (sent on connect). */

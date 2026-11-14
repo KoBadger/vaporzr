@@ -330,3 +330,70 @@ describe('DeckMixer control surface', () => {
     expect(m.isRunning()).toBe(false);
   });
 });
+
+describe('stem lanes', () => {
+  const mixer = () => new DeckMixer({ sink: () => true });
+  const SOURCE = { file: 'C:/tmp/track.mp3', title: 'Track', artist: 'X', durationMs: 180_000 };
+
+  it('reports no lanes for an ordinary track', () => {
+    const m = mixer();
+    m.load('a', SOURCE, { play: false });
+    expect(m.state().a.stems).toBeNull();
+  });
+
+  it('exposes one lane per stem file, all at unity', () => {
+    const m = mixer();
+    m.load('a', SOURCE, {
+      play: false,
+      stems: { lanes: ['vocals', 'music'], files: ['C:/tmp/track/vocals.mp3', 'C:/tmp/track/no_vocals.mp3'] },
+    });
+    const stems = m.state().a.stems;
+    expect(stems?.lanes).toEqual(['vocals', 'music']);
+    expect(stems?.gains).toEqual([1, 1]);
+  });
+
+  it('mutes a single lane without touching the others', () => {
+    const m = mixer();
+    m.load('a', SOURCE, {
+      play: false,
+      stems: { lanes: ['vocals', 'music'], files: ['C:/tmp/track/vocals.mp3', 'C:/tmp/track/no_vocals.mp3'] },
+    });
+    m.setStemGain('a', 'vocals', 0);
+    const stems = m.state().a.stems;
+    // Karaoke is exactly this: vocal at zero, everything else untouched.
+    expect(stems?.gains).toEqual([0, 1]);
+  });
+
+  it('clamps out-of-range gains and ignores unknown lanes', () => {
+    const m = mixer();
+    m.load('a', SOURCE, {
+      play: false,
+      stems: { lanes: ['vocals', 'music'], files: ['C:/tmp/track/vocals.mp3', 'C:/tmp/track/no_vocals.mp3'] },
+    });
+    m.setStemGain('a', 'vocals', 4);
+    expect(m.state().a.stems?.gains[0]).toBe(1);
+    m.setStemGain('a', 'vocals', -2);
+    expect(m.state().a.stems?.gains[0]).toBe(0);
+    m.setStemGain('a', 'drums', 0.5);
+    expect(m.state().a.stems?.gains).toEqual([0, 1]);
+  });
+
+  it('drops the lanes when the next track has none', () => {
+    const m = mixer();
+    m.load('a', SOURCE, {
+      play: false,
+      stems: { lanes: ['vocals', 'music'], files: ['C:/tmp/track/vocals.mp3', 'C:/tmp/track/no_vocals.mp3'] },
+    });
+    m.load('a', { ...SOURCE, file: 'C:/tmp/other.mp3' }, { play: false });
+    expect(m.state().a.stems).toBeNull();
+  });
+
+  it('ignores a stem set whose lanes and files disagree', () => {
+    const m = mixer();
+    m.load('a', SOURCE, {
+      play: false,
+      stems: { lanes: ['vocals', 'music', 'bass'], files: ['C:/tmp/a.mp3', 'C:/tmp/b.mp3'] },
+    });
+    expect(m.state().a.stems).toBeNull();
+  });
+});

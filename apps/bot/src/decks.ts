@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -222,6 +223,54 @@ export class DeckController {
     return this.cue(deck, file, name, '', durationMs);
   }
 
+  /**
+   * Separated lanes for a track, when it has been through the stem cache.
+   *
+   * The key matches the mashup game's (`sha1(uri)`, 16 hex chars), so anything
+   * already separated for a mashup lights its lanes up on the decks for free.
+   * Four lanes when the full split is cached, otherwise the two-stem pair the
+   * mashup renders.
+   */
+  private cachedStems(
+    uri: string | undefined,
+    file: string,
+    name: string,
+  ): { lanes: string[]; files: string[] } | null {
+    let key: string;
+    try {
+      key = createHash('sha1')
+        .update(uri || `${name}:${fs.statSync(file).size}`)
+        .digest('hex')
+        .slice(0, 16);
+    } catch {
+      return null;
+    }
+    const dir = path.join(config.dataDir, 'stems', key);
+    const pick = (lanes: string[], files: string[]): { lanes: string[]; files: string[] } | null => {
+      const full = files.map((f) => path.join(dir, f));
+      return full.every((f) => fs.existsSync(f)) ? { lanes, files: full } : null;
+    };
+    return (
+      pick(['vocals', 'drums', 'bass', 'other'], ['vocals.mp3', 'drums.mp3', 'bass.mp3', 'other.mp3']) ??
+      pick(['vocals', 'music'], ['vocals.mp3', 'no_vocals.mp3'])
+    );
+  }
+
+  /** Set one stem lane level on a deck (0 mutes it — the karaoke switch). */
+  stemGain(deck: DeckId, lane: string, value: number): DeckActionResult {
+    const before = this.mixer.state()[deck];
+    if (!before.stems) {
+      return { ok: false, message: `Deck ${deck.toUpperCase()} has no separated stems loaded.` };
+    }
+    this.mixer.setStemGain(deck, lane, value);
+    const after = this.mixer.state()[deck].stems;
+    const gain = after?.gains[after.lanes.indexOf(lane)] ?? 1;
+    return {
+      ok: true,
+      message: `Deck ${deck.toUpperCase()} · ${lane}: ${gain === 0 ? 'muted' : Math.round(gain * 100) + '%'}.`,
+    };
+  }
+
   /** Shared tail of load/loadLocal: engage the decks and hand the file to the mixer. */
   private cue(
     deck: DeckId,
@@ -232,7 +281,14 @@ export class DeckController {
     uri?: string,
   ): DeckActionResult {
     this.engage();
-    this.mixer.load(deck, { file, title: name, artist, durationMs, bpm: null }, { play: false });
+    // Stems are only a thing once a track has been separated. When they are
+    // already cached the lanes come up with the track; when they are not, the
+    // deck plays normally and the page shows no lanes for it.
+    this.mixer.load(
+      deck,
+      { file, title: name, artist, durationMs, bpm: null },
+      { play: false, stems: this.cachedStems(uri, file, name) },
+    );
     // Tempo is needed for SYNC, but detection costs a few hundred ms of ffmpeg —
     // never block the load on it.
     void estimateTempo(file)
