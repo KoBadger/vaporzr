@@ -9349,7 +9349,10 @@ export class DiscordBot {
         },
       )
       .setFooter({
-        text: 'Two instances sharing one token fight over the gateway session — run only one.',
+        // Not a detection: this line used to read like a warning that two
+        // instances were running. What actually explains "I queued songs and
+        // nothing played" most often is a redeploy, so say that instead.
+        text: `build ${(process.env.VAPORZR_BUILD ?? 'dev').slice(0, 7)} · up ${uptime} — a deploy restarts the bot: the queue is restored and the last track resumes`,
       });
   }
 
