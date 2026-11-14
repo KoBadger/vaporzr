@@ -358,8 +358,9 @@
         .rig .mixer {
           position: static;
           top: auto;
-          /* The channel bank and the crossfader are the parts you touch; they
-             stay put and only the utility stack between them scrolls. */
+          /* Fill the column. `align-self: start` in the base rule left the mixer
+             at content height, which is what squeezed the tab panel. */
+          align-self: stretch;
           overflow: hidden;
         }
         .rig .mixer .mix-panel {
@@ -439,6 +440,32 @@
         body:not(.two-decks) .rig .deck .beat-strip,
         body:not(.two-decks) .rig .deck .sub {
           display: none;
+        }
+        .rig .deck .pitch-wrap {
+          /* The pitch fader was 186px tall and single-handedly set the height of
+             every deck row — the reason the cards clipped on a short window. */
+          height: clamp(64px, calc(var(--rig-h) * 0.22), 120px);
+        }
+        .rig .deck .fader-col .left-read {
+          display: none;
+        }
+        /* Four decks share the height, and the top strip already shows both
+           waveforms and both clocks: the per-card copies are the first things
+           that can go without losing a control. */
+        body:not(.two-decks) .rig .deck .wave,
+        body:not(.two-decks) .rig .deck .times {
+          display: none;
+        }
+        body:not(.two-decks) .rig .deck .pitch-wrap {
+          height: 52px;
+        }
+        @media (max-height: 740px) {
+          /* Four decks in a short window: the platter is the one row that can go
+             without removing a transport control. Seeking stays on the strip and
+             the arrow keys. */
+          body:not(.two-decks) .rig .deck .jog-row {
+            display: none;
+          }
         }
         .rig .deck,
         .rig .mixer {
