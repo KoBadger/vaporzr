@@ -257,6 +257,18 @@ export const config = {
   voiceOpusEncoder: (process.env.VOICE_OPUS_ENCODER ?? 'native') === 'off' ? 'off' : 'native',
   /** Opt-in true crossfade (overlap) for decoded tracks; off by default. */
   crossfadeOverlap: process.env.CROSSFADE_OVERLAP === '1' || process.env.CROSSFADE_OVERLAP === 'true',
+
+  /**
+   * Audio-health monitor thresholds (broadband-noise detection).
+   * RMS > noiseRms AND zero-crossing-rate > noiseZcr over a window = "bad".
+   * Set to 0 to disable the monitor entirely.
+   */
+  audioHealthNoiseRms: Number(process.env.AUDIO_HEALTH_NOISE_RMS) || 4000,
+  audioHealthNoiseZcr: Number(process.env.AUDIO_HEALTH_NOISE_ZCR) || 0.42,
+  audioHealthSilenceRms: Number(process.env.AUDIO_HEALTH_SILENCE_RMS) || 48,
+  audioHealthSilenceZcr: Number(process.env.AUDIO_HEALTH_SILENCE_ZCR) || 0,
+  /** How many consecutive bad windows trigger auto-skip (0 = disabled). */
+  audioHealthAutoSkipAfter: Number(process.env.AUDIO_HEALTH_AUTO_SKIP_AFTER) || 3,
   /**
    * Duck the music while channel members are talking. Opt-in (off by default):
    * the receiver's speaking events can be chatty, and dropping/restoring volume

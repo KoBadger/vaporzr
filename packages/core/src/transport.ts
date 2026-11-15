@@ -18,6 +18,12 @@ export interface AudioTransport {
   isRawFeedActive(): boolean;
   /** Current playback position in ms, derived from the feed. */
   getPositionMs(): number;
+  /** Resolve once the voice link can actually carry audio: Ready, and — when E2EE
+   *  (DAVE) is on — with the DAVE session established. This prevents pushing audio
+   *  into a link whose listeners cannot decode it yet (the "only audible after
+   *  leaving and rejoining" symptom). Optional: transports without a voice link
+   *  can omit it and resolve true immediately. */
+  waitForAudioReady?(timeoutMs?: number): Promise<boolean>;
   /** Cancel a pending idle-leave (a command or track start counts as activity). */
   cancelIdleLeave(): void;
 
@@ -72,6 +78,9 @@ export interface AudioTransport {
   setSpectrumTap(cb: ((data: Buffer) => void) | null): void;
   /** Feed the local audio-feature collector (independent of the analyzer tap). */
   setFeatureTap(cb: ((data: Buffer) => void) | null): void;
+  /** Set the callback fired when the PCM monitor detects sustained broadband
+   *  noise in the outgoing stream. */
+  setOnAudioBad?(cb: ((detail: string, trackName?: string) => void) | null): void;
 
   // ---- pause / resume ----
   pause(): void;

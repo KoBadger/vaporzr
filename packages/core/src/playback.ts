@@ -224,6 +224,12 @@ export class PlaybackController {
       console.warn(`[playback] stream refused for "${track?.name ?? 'unknown track'}" (${detail})`);
       if (this.onStreamRefused) this.onStreamRefused(detail, track?.name);
     });
+    if (typeof this.voice.setOnAudioBad === 'function') {
+      this.voice.setOnAudioBad((detail, trackName) => {
+        console.warn(`[playback] audio bad for "${trackName ?? 'unknown track'}" — ${detail}`);
+        if (this.onAudioBad) this.onAudioBad(detail, trackName);
+      });
+    }
   }
 
   /**
@@ -366,6 +372,14 @@ export class PlaybackController {
    *  answered 401/403). Distinct from a stall: the queue and the bot are fine —
    *  the media session is not authorized (stale YouTube cookies / PO token). */
   onStreamRefused: ((detail: string, trackName?: string) => void) | null = null;
+  /** Callback fired when the outgoing PCM stream looks like sustained broadband
+   *  noise instead of decoded audio (e.g. a bad decode or an encryption mismatch). */
+  onAudioBad: ((detail: string, trackName?: string) => void) | null = null;
+
+  /** Surface sustained-noise detections to the bridge / UI so they can be acted on. */
+  setOnAudioBad(cb: ((detail: string, trackName?: string) => void) | null): void {
+    this.onAudioBad = cb ?? null;
+  }
 
   /** Route visualizer-targeted state messages (only the primary session broadcasts). */
   setSendVisualizer(fn: SendFn): void {
@@ -948,6 +962,17 @@ export class PlaybackController {
     if (this.currentStartOffsetMs > 0) this.voice.setStreamOffset(this.currentStartOffsetMs);
     if (!this.voice.isJoined()) {
       throw new Error("I'm not in a voice channel. Join one and try again.");
+    }
+    // Do not push a stream into a link whose listeners cannot decode it yet.
+    // VoiceManager resolves this once the link is Ready and — when E2EE (DAVE) is
+    // on — the DAVE session is established. Starting early is what leaves early
+    // audio undecryptable for listeners until they leave and rejoin. A transport
+    // without a voice link (web PCM fan-out) omits the method and returns here.
+    if (this.voice.waitForAudioReady) {
+      const audioReady = await this.voice.waitForAudioReady();
+      if (!audioReady) {
+        throw new Error('The voice link is still connecting — give it a moment and try again.');
+      }
     }
     console.log(
       `[playback] start "${current.name}" (source=${current.source ?? '?'}${this.currentStartOffsetMs > 0 ? `, offset=${this.currentStartOffsetMs}ms` : ''})`,
