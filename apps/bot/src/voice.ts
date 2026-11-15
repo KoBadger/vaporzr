@@ -24,6 +24,7 @@ import { youtubeProxyHops } from '@vaporzr/core/youtube';
 import { safeFetch } from '@vaporzr/core/net';
 import { createMusicResource } from './opusStream.js';
 import { normalizeCapturePcm } from './capture.js';
+import { analyzePcmWindow, type PcmWindowStats } from './audioHealth.js';
 
 /** The slice of an opusscript decoder the Weasel ear pipeline uses. */
 interface OpusScriptLike {
@@ -88,6 +89,69 @@ const MEDIA_IO_TIMEOUT_US = 20_000_000;
  * forwarded from the local loopback capture. The bot shows up as a normal
  * VC member and is the audio source for everyone in the channel.
  */
+/**
+ * Rolling detector over successive PCM windows. Emits `onAudioBad` when enough
+ * consecutive windows exceed the broadband-noise thresholds, so a bad source
+ * (or a broken decode) is named instead of shipping raw garbage to Discord.
+ */
+export class PcmIntegrityMonitor {
+  private readonly windowMs: number;
+  private readonly sampleRate: number;
+  private readonly channels: number;
+  private readonly noiseRms: number;
+  private readonly noiseZcr: number;
+  private readonly silenceRms: number;
+  private readonly silenceZeroCrossings: number;
+  private readonly onBad: (stats: PcmWindowStats, buffer: Buffer) => void;
+  private readonly onGood: () => void;
+  private streak = 0;
+  private startTime = Date.now();
+
+  constructor(
+    options: {
+      windowMs?: number;
+      sampleRate?: number;
+      channels?: number;
+      noiseRms?: number;
+      noiseZcr?: number;
+      silenceRms?: number;
+      silenceZeroCrossings?: number;
+      onBad?: (stats: PcmWindowStats, buffer: Buffer) => void;
+      onGood?: () => void;
+    } = {},
+  ) {
+    this.windowMs = options.windowMs ?? 250;
+    this.sampleRate = options.sampleRate ?? 48000;
+    this.channels = options.channels ?? 2;
+    this.noiseRms = options.noiseRms ?? 4000;
+    this.noiseZcr = options.noiseZcr ?? 0.42;
+    this.silenceRms = options.silenceRms ?? 48;
+    this.silenceZeroCrossings = options.silenceZeroCrossings ?? 0;
+    this.onBad = options.onBad ?? (() => {});
+    this.onGood = options.onGood ?? (() => {});
+  }
+
+  feed(buffer: Buffer): void {
+    const stats = analyzePcmWindow(buffer);
+    this.streak++;
+    const now = Date.now();
+    if (now - this.startTime > this.windowMs) {
+      this.reset();
+    }
+    if (stats.rms > this.noiseRms && stats.zeroCrossings / stats.samples > this.noiseZcr) {
+      this.onBad(stats, buffer);
+    } else if (stats.rms < this.silenceRms && stats.zeroCrossings === 0) {
+      this.onGood();
+    }
+    this.startTime = now;
+  }
+
+  reset(): void {
+    this.streak = 0;
+    this.startTime = Date.now();
+  }
+}
+
 export class VoiceManager implements AudioTransport {
   private connection: VoiceConnection | null = null;
   private player: AudioPlayer | null = null;
@@ -133,6 +197,13 @@ export class VoiceManager implements AudioTransport {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectStrikes = 0;
   private forcedRejoins = 0;
+  private audioReadyAt = 0;
+  private audioReadySettleMs = 250;
+  private badAudioCount = 0;
+  private badAudioStartMs = 0;
+  private audioHealth: PcmIntegrityMonitor | null = null;
+  /** Callback invoked when the monitor detects sustained non-audio (noise) in the stream. */
+  private onAudioBad?: (detail: string, trackName?: string) => void;
   private voiceLinkDown = false;
   /** Loudness applied to every new audio resource (0–100). */
   private volumePercent = 100;
@@ -149,6 +220,8 @@ export class VoiceManager implements AudioTransport {
   /** Warn once, not per track, when the native encoder is missing. */
   private opusFallbackWarned = false;
 
+  /** Whether the current voice session uses DAVE/E2EE encryption. */
+  private daveEncryption = true;
   /** Active sequential volume fade-out (sequential crossfade fallback). */
   private fadeOutTimer: NodeJS.Timeout | null = null;
   /** One-shot seek (ms) applied to the next decoded stream — crossfade handoff. */
@@ -208,7 +281,32 @@ export class VoiceManager implements AudioTransport {
   /** ~1 second of 48 kHz stereo s16 PCM so bursts don't cause stutter. */
   static readonly STREAM_HIGH_WATER_MARK = 192_000;
 
-  constructor(private onVoiceChange?: (joined: boolean, channelId: string | null) => void) {}
+  private audioHealthBadStreak = 0;
+
+  constructor(private onVoiceChange?: (joined: boolean, channelId: string | null) => void) {
+    this.audioHealth = new PcmIntegrityMonitor({
+      noiseRms: config.audioHealthNoiseRms,
+      noiseZcr: config.audioHealthNoiseZcr,
+      silenceRms: config.audioHealthSilenceRms,
+      silenceZeroCrossings: config.audioHealthSilenceZcr,
+      onBad: (stats) => {
+        const detail = `broadband noise (RMS ${Math.round(stats.rms)}, ZCR ${(stats.zeroCrossings / stats.samples).toFixed(2)})`;
+        console.warn(`[voice] audio monitor: ${detail}`);
+        this.onAudioBad?.(detail);
+        this.audioHealthBadStreak++;
+        if (config.audioHealthAutoSkipAfter > 0 && this.audioHealthBadStreak >= config.audioHealthAutoSkipAfter) {
+          console.warn(
+            `[voice] audio monitor: ${this.audioHealthBadStreak} consecutive bad windows — triggering stall recovery`,
+          );
+          this.onStallRecovery?.();
+          this.audioHealthBadStreak = 0;
+        }
+      },
+      onGood: () => {
+        this.audioHealthBadStreak = 0;
+      },
+    });
+  }
 
   setPcmTap(cb: ((data: Buffer) => void) | null): void {
     this.pcmTap = cb;
@@ -335,6 +433,7 @@ export class VoiceManager implements AudioTransport {
     channel?: VoiceChannelTarget,
   ): Promise<boolean> {
     this.leave();
+    this.daveEncryption = true; // @discordjs/voice uses DAVE/E2EE when available
     // Negotiate the bitrate BEFORE connecting: the encoder is built when the
     // first track starts, and a channel raised afterwards would only take effect
     // for listeners on the next track.
@@ -417,6 +516,7 @@ export class VoiceManager implements AudioTransport {
     console.log(`[voice] joined voice channel ${channelId}`);
     this.armIdleLeave();
     this.startWatchdog();
+    await this.waitForAudioReady();
     this.armReconnectSupervisor(guildId, channelId, adapterCreator);
     return true;
   }
@@ -850,6 +950,40 @@ export class VoiceManager implements AudioTransport {
     this.onStallRecovery = cb;
   }
 
+  /** Set the callback fired when the PCM monitor detects sustained broadband
+    noise in the outgoing stream. */
+  setOnAudioBad(cb: ((detail: string, trackName?: string) => void) | null): void {
+    this.onAudioBad = cb ?? undefined;
+  }
+
+  /** Resolve once the voice link can actually carry audio: Ready, and — when E2EE
+    (DAVE) is on — with the DAVE session established. This is what prevents audio
+    from being pushed into a link whose listeners cannot decode it yet (the "only
+    audible after leaving and rejoining" symptom). */
+  async waitForAudioReady(timeoutMs = 2500): Promise<boolean> {
+    const conn = this.connection;
+    if (!conn || conn.state.status === VoiceConnectionStatus.Destroyed) return false;
+    if (conn.state.status !== VoiceConnectionStatus.Ready) {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (this.connection?.state.status === VoiceConnectionStatus.Ready) break;
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      if (this.connection?.state.status !== VoiceConnectionStatus.Ready) return false;
+    }
+    const link = this.connection as unknown as {
+      state?: { networking?: { state?: { dave?: boolean; protocolVersion?: number } } };
+    };
+    if (!this.daveEncryption) return true;
+    // E2EE is on: do not consider the link audio-ready until the DAVE session is live.
+    const settleDeadline = Date.now() + Math.min(500, timeoutMs);
+    while (Date.now() < settleDeadline) {
+      if (link.state?.networking?.state?.dave) return true;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return false;
+  }
+
   /** Mix a short sound effect (48 kHz stereo Int16 PCM) over the current audio. */
   queueSfxPcm(data: Buffer): void {
     if (!this.player || data.length === 0) return;
@@ -925,6 +1059,7 @@ export class VoiceManager implements AudioTransport {
       highWaterMark: VoiceManager.STREAM_HIGH_WATER_MARK,
       transform: (chunk, _enc, cb) => {
         if (stream.writableEnded || stream.destroyed) return;
+        this.audioHealth?.feed(chunk as Buffer);
         const out = this.mixSfx(chunk as Buffer);
         this.pcmTap?.(out);
         this.spectrumTap?.(out);
