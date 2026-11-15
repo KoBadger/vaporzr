@@ -3022,49 +3022,52 @@
           return sent;
         }
         function setButtonBusy(command, busy) {
-          var ids = CMD_TO_BUTTON[command];
-          if (!ids) return;
-          if (typeof ids === 'string') ids = [ids];
-          ids.forEach(function (id) {
-            var btn = el[id];
-            if (!btn) return;
-            if (busy) {
-              btn.classList.add('disabled');
-              btn.disabled = true;
-            } else {
-              btn.classList.remove('disabled');
-              btn.disabled = false;
+          var targets = CMD_TO_BUTTON[command];
+          if (!targets) return;
+          if (typeof targets === 'string') targets = [targets];
+          targets.forEach(function (t) {
+            // Menu and SFX buttons are selected by data-attribute/class, not id;
+            // anything with a selector character resolves via querySelectorAll.
+            var nodes =
+              t.indexOf(' ') !== -1 || t.indexOf('[') !== -1 ? document.querySelectorAll(t) : el[t] ? [el[t]] : [];
+            for (var i = 0; i < nodes.length; i++) {
+              var btn = nodes[i];
+              if (!btn) continue;
+              if (busy) {
+                btn.classList.add('disabled');
+                btn.disabled = true;
+              } else {
+                btn.classList.remove('disabled');
+                btn.disabled = false;
+              }
             }
           });
         }
         function clearAllBusy() {
           cmdInflight.clear();
-          Object.values(CMD_TO_BUTTON)
-            .flat()
-            .forEach(function (id) {
-              var btn = el[id];
-              if (btn) {
-                btn.classList.remove('disabled');
-                btn.disabled = false;
-              }
-            });
+          Object.keys(CMD_TO_BUTTON).forEach(function (c) {
+            setButtonBusy(c, false);
+          });
         }
         var CMD_TO_BUTTON = {
-          toggle: 'btn-play',
-          play: 'btn-play',
-          pause: 'btn-play',
-          resume: 'btn-play',
-          next: 'btn-next',
-          previous: 'btn-prev',
+          toggle: ['btn-play', 'mini-play'],
+          play: ['btn-play', 'mini-play'],
+          pause: ['btn-play', 'mini-play'],
+          resume: ['btn-play', 'mini-play'],
+          next: ['btn-next', 'mini-next'],
+          previous: ['btn-prev', 'mini-prev'],
           shuffle: 'btn-shuffle',
           repeat: 'btn-repeat',
           dj: 'dj-toggle',
-          volume: 'vol',
-          crossfade: null, // menu buttons handled separately
-          bass: null,
-          speed: null,
-          seek: 'progress',
-          sfx: null,
+          // Continuous sliders are never disabled: a busy-lock would eat a drag
+          // that starts before the server echoes back.
+          volume: null,
+          seek: null,
+          // Tools-menu buttons and the SFX row are data-attribute targets
+          crossfade: '#tools-menu button[data-xfade]',
+          bass: '#tools-menu button[data-bass]',
+          speed: '#tools-menu button[data-speed]',
+          sfx: '#sfx-row button',
         };
         function enableDjMode() {
           if (DJ_MODE) return;
@@ -4140,6 +4143,8 @@
                 state = msg.state;
                 queue = (msg.queue && msg.queue.tracks) || [];
                 currentGuildId = msg.primaryGuildId || null;
+                // A fresh snapshot is authoritative: nothing is in flight.
+                clearAllBusy();
                 if (msg.guest && !GUEST) {
                   GUEST = true;
                   enableGuestMode();
@@ -4170,6 +4175,9 @@
                 // Another server's update must never repaint the one on screen.
                 if (msg.guildId && currentGuildId && msg.guildId !== currentGuildId) break;
                 state = msg.state;
+                // The server echoed the state our commands were acting on:
+                // re-enable every busy button.
+                clearAllBusy();
                 // Clear optimistic state on server confirmation
                 optimistic.playing = null;
                 optimistic.shuffle = null;
@@ -4192,6 +4200,8 @@
               case 'dj:update':
                 djEnabled = msg.enabled;
                 optimistic.dj = null; // clear optimistic on server confirm
+                setButtonBusy('dj', false);
+                cmdInflight.delete('dj');
                 renderDj();
                 break;
               case 'endlesswave':
