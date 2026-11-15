@@ -2926,6 +2926,22 @@
           lyricsIdx = -1,
           lyricsAutoOpened = false;
 
+        // Synchronization helpers
+        var cmdInflight = new Set(); // commands currently awaiting state:update
+        var lastCmdAt = {}; // per-command dedupe timestamps
+        var volDebounceTimer = null; // volume slider debounce
+        var pendingVol = null; // last volume value to send
+        var optimistic = {
+          // optimistic UI state
+          playing: null,
+          shuffle: null,
+          repeat: null,
+          dj: null,
+          crossfade: null,
+          bass: null,
+          speed: null,
+        };
+
         var THEMES = [
           { id: 'vaporzr', name: 'Vaporzr', accent: '#6a5cff', accent2: '#00f0ff' },
           { id: 'neon', name: 'Neon Blast', accent: '#ff073a', accent2: '#1ed6ff' },
@@ -2983,10 +2999,76 @@
             toast('info', '🎧 DJ access is playback-only — ask the owner for full control');
             return;
           }
+          // Per-command dedupe: ignore if same command sent <200ms ago
+          var now = Date.now();
+          if (lastCmdAt[command] && now - lastCmdAt[command] < 200) return;
+          lastCmdAt[command] = now;
+
           var sent = send(Object.assign({ type: 'cmd', command: command }, extra || {}));
-          if (!sent) toast('error', 'Not connected to the bot — reconnecting…');
+          if (!sent) {
+            toast('error', 'Not connected to the bot — reconnecting…');
+            return;
+          }
+          // Track in-flight commands for button disabling
+          cmdInflight.add(command);
+          setButtonBusy(command, true);
+          // Safety timeout: clear busy state if no state:update arrives in 3s
+          setTimeout(function () {
+            if (cmdInflight.has(command)) {
+              cmdInflight.delete(command);
+              setButtonBusy(command, false);
+            }
+          }, 3000);
           return sent;
         }
+        function setButtonBusy(command, busy) {
+          var targets = CMD_TO_BUTTON[command];
+          if (!targets) return;
+          if (typeof targets === 'string') targets = [targets];
+          targets.forEach(function (t) {
+            // Menu and SFX buttons are selected by data-attribute/class, not id;
+            // anything with a selector character resolves via querySelectorAll.
+            var nodes =
+              t.indexOf(' ') !== -1 || t.indexOf('[') !== -1 ? document.querySelectorAll(t) : el[t] ? [el[t]] : [];
+            for (var i = 0; i < nodes.length; i++) {
+              var btn = nodes[i];
+              if (!btn) continue;
+              if (busy) {
+                btn.classList.add('disabled');
+                btn.disabled = true;
+              } else {
+                btn.classList.remove('disabled');
+                btn.disabled = false;
+              }
+            }
+          });
+        }
+        function clearAllBusy() {
+          cmdInflight.clear();
+          Object.keys(CMD_TO_BUTTON).forEach(function (c) {
+            setButtonBusy(c, false);
+          });
+        }
+        var CMD_TO_BUTTON = {
+          toggle: ['btn-play', 'mini-play'],
+          play: ['btn-play', 'mini-play'],
+          pause: ['btn-play', 'mini-play'],
+          resume: ['btn-play', 'mini-play'],
+          next: ['btn-next', 'mini-next'],
+          previous: ['btn-prev', 'mini-prev'],
+          shuffle: 'btn-shuffle',
+          repeat: 'btn-repeat',
+          dj: 'dj-toggle',
+          // Continuous sliders are never disabled: a busy-lock would eat a drag
+          // that starts before the server echoes back.
+          volume: null,
+          seek: null,
+          // Tools-menu buttons and the SFX row are data-attribute targets
+          crossfade: '#tools-menu button[data-xfade]',
+          bass: '#tools-menu button[data-bass]',
+          speed: '#tools-menu button[data-speed]',
+          sfx: '#sfx-row button',
+        };
         function enableDjMode() {
           if (DJ_MODE) return;
           DJ_MODE = true;
@@ -3349,11 +3431,18 @@
             if (artSrc) el.art.src = artSrc;
             else el.art.removeAttribute('src');
             el.art.style.display = t ? 'block' : 'none';
-            el['btn-play'].textContent = state.playing ? '⏸' : '▶';
-            el['btn-play'].setAttribute('data-tip', state.playing ? 'Pause (Space)' : 'Play (Space)');
-            el['btn-shuffle'].classList.toggle('active', !!state.shuffle);
-            el['btn-repeat'].classList.toggle('active', !!state.repeat);
-            el.vol.value = state.volume != null ? state.volume : 50;
+            // Optimistic UI: use local pending state until server confirms
+            var playing = optimistic.playing != null ? optimistic.playing : state.playing;
+            var shuffle = optimistic.shuffle != null ? optimistic.shuffle : state.shuffle;
+            var repeat = optimistic.repeat != null ? optimistic.repeat : state.repeat;
+            el['btn-play'].textContent = playing ? '⏸' : '▶';
+            el['btn-play'].setAttribute('data-tip', playing ? 'Pause (Space)' : 'Play (Space)');
+            el['btn-shuffle'].classList.toggle('active', !!shuffle);
+            el['btn-repeat'].classList.toggle('active', !!repeat);
+            // Volume: don't overwrite while user is dragging
+            if (!el.vol.matches(':active') && !el.vol.matches(':focus')) {
+              el.vol.value = state.volume != null ? state.volume : 50;
+            }
             if (t && t.source) {
               el['src-badge'].style.display = 'inline-block';
               el['src-badge'].textContent =
@@ -3775,12 +3864,13 @@
         }
 
         function renderDj() {
-          el['dj-toggle'].classList.toggle('active', djEnabled);
-          el['dj-badge'].textContent = '🎛 DJ ' + (djEnabled ? 'on' : 'off');
-          el['dj-badge'].classList.toggle('on', djEnabled);
-          el['sfx-status'].textContent = djEnabled ? 'Ready — pick a sound' : 'DJ off — muted';
+          var dj = optimistic.dj != null ? optimistic.dj : djEnabled;
+          el['dj-toggle'].classList.toggle('active', dj);
+          el['dj-badge'].textContent = '🎛 DJ ' + (dj ? 'on' : 'off');
+          el['dj-badge'].classList.toggle('on', dj);
+          el['sfx-status'].textContent = dj ? 'Ready — pick a sound' : 'DJ off — muted';
           document.querySelectorAll('#sfx-row button').forEach(function (b) {
-            b.classList.toggle('disabled', !djEnabled);
+            b.classList.toggle('disabled', !dj);
           });
         }
 
@@ -4053,6 +4143,8 @@
                 state = msg.state;
                 queue = (msg.queue && msg.queue.tracks) || [];
                 currentGuildId = msg.primaryGuildId || null;
+                // A fresh snapshot is authoritative: nothing is in flight.
+                clearAllBusy();
                 if (msg.guest && !GUEST) {
                   GUEST = true;
                   enableGuestMode();
@@ -4083,6 +4175,13 @@
                 // Another server's update must never repaint the one on screen.
                 if (msg.guildId && currentGuildId && msg.guildId !== currentGuildId) break;
                 state = msg.state;
+                // The server echoed the state our commands were acting on:
+                // re-enable every busy button.
+                clearAllBusy();
+                // Clear optimistic state on server confirmation
+                optimistic.playing = null;
+                optimistic.shuffle = null;
+                optimistic.repeat = null;
                 render();
                 updateLyricHighlight(lyricPos());
                 break;
@@ -4100,6 +4199,9 @@
                 break;
               case 'dj:update':
                 djEnabled = msg.enabled;
+                optimistic.dj = null; // clear optimistic on server confirm
+                setButtonBusy('dj', false);
+                cmdInflight.delete('dj');
                 renderDj();
                 break;
               case 'endlesswave':
@@ -4167,6 +4269,10 @@
 
         /* ---------- controls ---------- */
         el['btn-play'].onclick = function () {
+          // Optimistic toggle
+          var willPlay = !(state && state.playing);
+          optimistic.playing = willPlay;
+          render(); // immediate UI feedback
           cmd('toggle');
         };
         el['btn-prev'].onclick = function () {
@@ -4176,10 +4282,15 @@
           cmd('next');
         };
         el['btn-shuffle'].onclick = function () {
-          cmd('shuffle', { shuffle: !(state && state.shuffle) });
+          var willShuffle = !(state && state.shuffle);
+          optimistic.shuffle = willShuffle;
+          render(); // immediate UI feedback
+          cmd('shuffle', { shuffle: willShuffle });
         };
         el['btn-repeat'].onclick = function () {
           var on = !(state && state.repeat);
+          optimistic.repeat = on;
+          render(); // immediate UI feedback
           cmd('repeat', { repeat: on });
           toast('info', on ? '🔁 Repeat on — track replays at its end' : '🔁 Repeat off');
         };
@@ -4188,7 +4299,10 @@
           toast('info', 'Queue cleared');
         };
         el['dj-toggle'].onclick = function () {
-          cmd('dj', { djEnabled: !djEnabled });
+          var willEnable = !djEnabled;
+          optimistic.dj = willEnable;
+          renderDj(); // immediate UI feedback
+          cmd('dj', { djEnabled: willEnable });
         };
         el['wave-select'].onchange = function () {
           cmd('endlesswave', { mode: el['wave-select'].value });
@@ -4440,11 +4554,47 @@
           var row = document.querySelector('#queue li.current');
           if (row) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
         };
+        el.progress.oninput = function () {
+          // Live preview during drag (no server round-trip)
+          paintProgress();
+          if (state) {
+            var posMs = Number(el.progress.value) * 1000;
+            el['t-now'].textContent = fmt(posMs);
+            if (el['mini-time']) {
+              var tot = fmt(state.durationMs || 0);
+              el['mini-time'].textContent = fmt(posMs) + ' / ' + tot;
+            }
+          }
+        };
         el.progress.onchange = function () {
           cmd('seek', { positionMs: Number(el.progress.value) * 1000 });
         };
+        // Mini progress bar: same live preview + commit
+        if (el['mini-progress']) {
+          el['mini-progress'].oninput = function () {
+            el.progress.value = el['mini-progress'].value;
+            paintProgress();
+            if (state) {
+              var posMs = Number(el['mini-progress'].value) * 1000;
+              el['t-now'].textContent = fmt(posMs);
+              var tot = fmt(state.durationMs || 0);
+              el['mini-time'].textContent = fmt(posMs) + ' / ' + tot;
+            }
+          };
+          el['mini-progress'].onchange = function () {
+            el.progress.value = el['mini-progress'].value;
+            paintProgress();
+            cmd('seek', { positionMs: Number(el['mini-progress'].value) * 1000 });
+          };
+        }
         el.vol.oninput = function () {
-          if (state) cmd('volume', { volume: Number(el.vol.value) });
+          if (!state) return;
+          pendingVol = Number(el.vol.value);
+          if (volDebounceTimer) clearTimeout(volDebounceTimer);
+          volDebounceTimer = setTimeout(function () {
+            if (pendingVol != null) cmd('volume', { volume: pendingVol });
+            pendingVol = null;
+          }, 150);
         };
         document.querySelectorAll('#sfx-row button').forEach(function (btn) {
           btn.onclick = function () {
