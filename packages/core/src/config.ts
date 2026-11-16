@@ -265,8 +265,6 @@ export const config = {
    */
   audioHealthNoiseRms: Number(process.env.AUDIO_HEALTH_NOISE_RMS) || 4000,
   audioHealthNoiseZcr: Number(process.env.AUDIO_HEALTH_NOISE_ZCR) || 0.42,
-  audioHealthSilenceRms: Number(process.env.AUDIO_HEALTH_SILENCE_RMS) || 48,
-  audioHealthSilenceZcr: Number(process.env.AUDIO_HEALTH_SILENCE_ZCR) || 0,
   /** How many consecutive bad windows trigger auto-skip (0 = disabled). */
   audioHealthAutoSkipAfter: Number(process.env.AUDIO_HEALTH_AUTO_SKIP_AFTER) || 3,
   /**

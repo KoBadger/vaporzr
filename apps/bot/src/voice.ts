@@ -100,8 +100,6 @@ export class PcmIntegrityMonitor {
   private readonly channels: number;
   private readonly noiseRms: number;
   private readonly noiseZcr: number;
-  private readonly silenceRms: number;
-  private readonly silenceZeroCrossings: number;
   private readonly onBad: (stats: PcmWindowStats, buffer: Buffer) => void;
   private readonly onGood: () => void;
   private streak = 0;
@@ -114,8 +112,6 @@ export class PcmIntegrityMonitor {
       channels?: number;
       noiseRms?: number;
       noiseZcr?: number;
-      silenceRms?: number;
-      silenceZeroCrossings?: number;
       onBad?: (stats: PcmWindowStats, buffer: Buffer) => void;
       onGood?: () => void;
     } = {},
@@ -125,8 +121,6 @@ export class PcmIntegrityMonitor {
     this.channels = options.channels ?? 2;
     this.noiseRms = options.noiseRms ?? 4000;
     this.noiseZcr = options.noiseZcr ?? 0.42;
-    this.silenceRms = options.silenceRms ?? 48;
-    this.silenceZeroCrossings = options.silenceZeroCrossings ?? 0;
     this.onBad = options.onBad ?? (() => {});
     this.onGood = options.onGood ?? (() => {});
   }
@@ -138,9 +132,13 @@ export class PcmIntegrityMonitor {
     if (now - this.startTime > this.windowMs) {
       this.reset();
     }
-    if (stats.rms > this.noiseRms && stats.zeroCrossings / stats.samples > this.noiseZcr) {
+    const isNoise = stats.rms > this.noiseRms && stats.zeroCrossings / stats.samples > this.noiseZcr;
+    if (isNoise) {
       this.onBad(stats, buffer);
-    } else if (stats.rms < this.silenceRms && stats.zeroCrossings === 0) {
+    } else {
+      // Any non-noise window (normal music, speech, or true silence) breaks the
+      // streak. Firing onGood only for digital silence let isolated bad windows
+      // accumulate over an entire session until a spurious auto-skip.
       this.onGood();
     }
     this.startTime = now;
@@ -287,8 +285,6 @@ export class VoiceManager implements AudioTransport {
     this.audioHealth = new PcmIntegrityMonitor({
       noiseRms: config.audioHealthNoiseRms,
       noiseZcr: config.audioHealthNoiseZcr,
-      silenceRms: config.audioHealthSilenceRms,
-      silenceZeroCrossings: config.audioHealthSilenceZcr,
       onBad: (stats) => {
         const detail = `broadband noise (RMS ${Math.round(stats.rms)}, ZCR ${(stats.zeroCrossings / stats.samples).toFixed(2)})`;
         console.warn(`[voice] audio monitor: ${detail}`);
@@ -971,17 +967,55 @@ export class VoiceManager implements AudioTransport {
       }
       if (this.connection?.state.status !== VoiceConnectionStatus.Ready) return false;
     }
-    const link = this.connection as unknown as {
-      state?: { networking?: { state?: { dave?: boolean; protocolVersion?: number } } };
-    };
     if (!this.daveEncryption) return true;
-    // E2EE is on: do not consider the link audio-ready until the DAVE session is live.
-    const settleDeadline = Date.now() + Math.min(500, timeoutMs);
-    while (Date.now() < settleDeadline) {
-      if (link.state?.networking?.state?.dave) return true;
+    // E2EE is on. @discordjs/voice only encrypts once the underlying davey
+    // session reports `ready`; until then it sends the frame as PASSTHROUGH,
+    // and DAVE-enabled clients decode those plaintext bytes as if they were
+    // ciphertext — heard as broadband noise. So the gate must wait for genuine
+    // readiness, not merely for the session object to exist.
+    const start = Date.now();
+    const deadline = start + timeoutMs;
+    // How long to wait for a DAVE session to appear at all before concluding the
+    // channel simply is not E2EE (protocol 0), where plain frames are correct.
+    const appearGraceMs = 400;
+    while (Date.now() < deadline) {
+      const dave = this.daveSessionState();
+      if (dave) {
+        // protocolVersion 0 = DAVE negotiated as off for this channel.
+        if (dave.protocolVersion === 0 || dave.ready) return true;
+      } else if (Date.now() - start > appearGraceMs) {
+        return true;
+      }
       await new Promise((r) => setTimeout(r, 100));
     }
     return false;
+  }
+
+  /**
+   * Read live DAVE readiness out of @discordjs/voice's networking state.
+   * The wrapper exposes `protocolVersion`; the real encrypt/decrypt readiness
+   * flag lives on the inner davey session (`session.ready`).
+   */
+  private daveSessionState(): { ready: boolean; protocolVersion: number } | null {
+    const link = this.connection as unknown as {
+      state?: {
+        networking?: {
+          state?: {
+            dave?: {
+              protocolVersion?: number;
+              ready?: boolean;
+              session?: { ready?: boolean; protocolVersion?: number };
+            };
+          };
+        };
+      };
+    };
+    const dave = link.state?.networking?.state?.dave;
+    if (!dave) return null;
+    return {
+      protocolVersion: dave.protocolVersion ?? dave.session?.protocolVersion ?? 0,
+      ready: dave.session?.ready === true || dave.ready === true,
+    };
   }
 
   /** Mix a short sound effect (48 kHz stereo Int16 PCM) over the current audio. */

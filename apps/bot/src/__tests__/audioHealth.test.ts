@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { analyzePcmWindow, classifyPcmWindow, type PcmWindowStats } from '../audioHealth.js';
+import { PcmIntegrityMonitor } from '../voice.js';
 
 function makeSineTone(freqHz: number, durationMs: number, sampleRate = 48000, amplitude = 16000): Buffer {
   const samples = Math.floor((durationMs / 1000) * sampleRate);
@@ -94,5 +95,26 @@ describe('classifyPcmWindow', () => {
   it('empty samples returns silence', () => {
     const stats: PcmWindowStats = { rms: 0, peak: 0, zeroCrossings: 0, samples: 0 };
     expect(classifyPcmWindow(stats)).toBe('silence');
+  });
+});
+
+describe('PcmIntegrityMonitor streaks', () => {
+  it('breaks a bad streak on ordinary music, not just digital silence', () => {
+    // Regression: onGood used to fire only for pure silence, so isolated noise
+    // windows accumulated across an entire session until a spurious auto-skip.
+    let bad = 0;
+    let good = 0;
+    const monitor = new PcmIntegrityMonitor({
+      onBad: () => bad++,
+      onGood: () => good++,
+    });
+    const quietMusic = makeSineTone(440, 20, 48000, 800); // well under the noise RMS
+    monitor.feed(makeWhiteNoise(20));
+    monitor.feed(makeWhiteNoise(20));
+    monitor.feed(quietMusic);
+    monitor.feed(makeWhiteNoise(20));
+    monitor.feed(makeWhiteNoise(20));
+    expect(bad).toBe(4);
+    expect(good).toBe(1);
   });
 });
