@@ -632,8 +632,12 @@ export class VoiceManager implements AudioTransport {
       if (this.reconnectStrikes < 6) return; // give the library's own reconnect ~30s
       this.reconnectStrikes = 0;
       if (this.forcedRejoins >= 4) {
-        console.warn('[voice] voice link unrecoverable after repeated rejoins — leaving');
-        this.leave();
+        // Leaving the channel used to be the answer here, which is why a flaky
+        // UDP path looked like "the bot keeps leaving". A dead link is not a
+        // reason to abandon a queue: back off and keep trying. Only an explicit
+        // stop/leave tears the session down.
+        this.forcedRejoins = 0;
+        console.warn('[voice] voice link still down after repeated rejoins — backing off and retrying');
         return;
       }
       this.forcedRejoins++;
@@ -956,7 +960,7 @@ export class VoiceManager implements AudioTransport {
     (DAVE) is on — with the DAVE session established. This is what prevents audio
     from being pushed into a link whose listeners cannot decode it yet (the "only
     audible after leaving and rejoining" symptom). */
-  async waitForAudioReady(timeoutMs = 2500): Promise<boolean> {
+  async waitForAudioReady(timeoutMs = config.voiceDaveReadyTimeoutMs): Promise<boolean> {
     const conn = this.connection;
     if (!conn || conn.state.status === VoiceConnectionStatus.Destroyed) return false;
     if (conn.state.status !== VoiceConnectionStatus.Ready) {
@@ -982,12 +986,22 @@ export class VoiceManager implements AudioTransport {
       const dave = this.daveSessionState();
       if (dave) {
         // protocolVersion 0 = DAVE negotiated as off for this channel.
-        if (dave.protocolVersion === 0 || dave.ready) return true;
+        if (dave.protocolVersion === 0 || dave.ready) {
+          const waited = Date.now() - start;
+          if (waited > 500) console.log(`[voice] DAVE ready after ${waited}ms (protocol v${dave.protocolVersion})`);
+          return true;
+        }
       } else if (Date.now() - start > appearGraceMs) {
+        // No session at all: the channel negotiated DAVE off (protocol 0), so
+        // plain frames are correct here.
         return true;
       }
       await new Promise((r) => setTimeout(r, 100));
     }
+    const pending = this.daveSessionState();
+    console.warn(
+      `[voice] DAVE session not ready after ${timeoutMs}ms (protocol v${pending?.protocolVersion ?? '?'}, ready=${pending?.ready ?? false}) — listeners may not decode audio`,
+    );
     return false;
   }
 

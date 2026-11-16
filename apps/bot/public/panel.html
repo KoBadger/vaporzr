@@ -2941,6 +2941,28 @@
           bass: null,
           speed: null,
         };
+        var optimisticTimers = {};
+        // Set a local pending value so the button reacts instantly, then drop it
+        // if the server never confirms (a failed command must not leave the UI
+        // showing a state that is not real).
+        function setOptimistic(key, value) {
+          optimistic[key] = value;
+          if (optimisticTimers[key]) clearTimeout(optimisticTimers[key]);
+          optimisticTimers[key] = setTimeout(function () {
+            optimisticTimers[key] = null;
+            if (optimistic[key] !== value) return;
+            optimistic[key] = null;
+            if (key === 'dj') renderDj();
+            else render();
+          }, 2500);
+        }
+        function clearOptimistic(key) {
+          optimistic[key] = null;
+          if (optimisticTimers[key]) {
+            clearTimeout(optimisticTimers[key]);
+            optimisticTimers[key] = null;
+          }
+        }
 
         var THEMES = [
           { id: 'vaporzr', name: 'Vaporzr', accent: '#6a5cff', accent2: '#00f0ff' },
@@ -4179,9 +4201,9 @@
                 // re-enable every busy button.
                 clearAllBusy();
                 // Clear optimistic state on server confirmation
-                optimistic.playing = null;
-                optimistic.shuffle = null;
-                optimistic.repeat = null;
+                clearOptimistic('playing');
+                clearOptimistic('shuffle');
+                clearOptimistic('repeat');
                 render();
                 updateLyricHighlight(lyricPos());
                 break;
@@ -4199,7 +4221,7 @@
                 break;
               case 'dj:update':
                 djEnabled = msg.enabled;
-                optimistic.dj = null; // clear optimistic on server confirm
+                clearOptimistic('dj'); // clear optimistic on server confirm
                 setButtonBusy('dj', false);
                 cmdInflight.delete('dj');
                 renderDj();
@@ -4271,7 +4293,7 @@
         el['btn-play'].onclick = function () {
           // Optimistic toggle
           var willPlay = !(state && state.playing);
-          optimistic.playing = willPlay;
+          setOptimistic('playing', willPlay);
           render(); // immediate UI feedback
           cmd('toggle');
         };
@@ -4283,13 +4305,13 @@
         };
         el['btn-shuffle'].onclick = function () {
           var willShuffle = !(state && state.shuffle);
-          optimistic.shuffle = willShuffle;
+          setOptimistic('shuffle', willShuffle);
           render(); // immediate UI feedback
           cmd('shuffle', { shuffle: willShuffle });
         };
         el['btn-repeat'].onclick = function () {
           var on = !(state && state.repeat);
-          optimistic.repeat = on;
+          setOptimistic('repeat', on);
           render(); // immediate UI feedback
           cmd('repeat', { repeat: on });
           toast('info', on ? '🔁 Repeat on — track replays at its end' : '🔁 Repeat off');
@@ -4300,7 +4322,7 @@
         };
         el['dj-toggle'].onclick = function () {
           var willEnable = !djEnabled;
-          optimistic.dj = willEnable;
+          setOptimistic('dj', willEnable);
           renderDj(); // immediate UI feedback
           cmd('dj', { djEnabled: willEnable });
         };

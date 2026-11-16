@@ -255,6 +255,14 @@ export const config = {
    * encodes at libopus's default and caps any explicit bitrate at 128 kbps.
    */
   voiceOpusEncoder: (process.env.VOICE_OPUS_ENCODER ?? 'native') === 'off' ? 'off' : 'native',
+  /**
+   * How long to wait for the DAVE/E2EE session to become ready before a track
+   * starts. The MLS handshake with a listener's client can take several
+   * seconds on a slow link; timing out early used to drop the track (heard as
+   * "no sound until I leave and rejoin"). 10s covers a slow handshake while
+   * still failing loudly if the link is genuinely dead.
+   */
+  voiceDaveReadyTimeoutMs: Number(process.env.VOICE_DAVE_READY_TIMEOUT_MS) || 10_000,
   /** Opt-in true crossfade (overlap) for decoded tracks; off by default. */
   crossfadeOverlap: process.env.CROSSFADE_OVERLAP === '1' || process.env.CROSSFADE_OVERLAP === 'true',
 
