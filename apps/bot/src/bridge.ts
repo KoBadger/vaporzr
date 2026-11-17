@@ -386,9 +386,39 @@ export class Bridge {
           /* socket already gone */
         }
       }
+      // Dead-socket reaper: the panel sits behind proxies/tunnels that drop
+      // idle WebSockets every couple of minutes. Without traffic the page froze
+      // on stale state until it reconnected on its own. A ping every 25s keeps
+      // the path warm and `terminate()` clears a connection that stopped
+      // answering — handleClose then runs the normal cleanup.
+      let alive = true;
+      const heartbeat = setInterval(() => {
+        if (!alive) {
+          try {
+            socket.terminate();
+          } catch {
+            /* already gone */
+          }
+          return;
+        }
+        alive = false;
+        try {
+          socket.ping();
+        } catch {
+          /* socket closing under us */
+        }
+      }, 25_000);
+      heartbeat.unref?.();
+      socket.on('pong', () => {
+        alive = true;
+      });
       socket.on('message', (data) => this.handleMessage(socket, data));
-      socket.on('close', () => this.handleClose(socket));
+      socket.on('close', () => {
+        clearInterval(heartbeat);
+        this.handleClose(socket);
+      });
       socket.on('error', () => {
+        clearInterval(heartbeat);
         // Guard: set a flag so any in-flight message handlers can check it.
         (socket as any).__vz_closing = true;
         this.handleClose(socket);
