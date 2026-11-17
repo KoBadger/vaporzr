@@ -55,9 +55,13 @@ describe('VoiceManager.waitForAudioReady (the DAVE white-noise gate)', () => {
     expect(await v.waitForAudioReady(200)).toBe(true);
   });
 
-  it('refuses to call a link ready while the session cannot encrypt yet', async () => {
+  it('starts anyway when the session never becomes ready, rather than dropping the track', async () => {
+    // A slow MLS handshake used to time the gate out and make play() throw: the
+    // track sat queued with no audio and the panel never showed "playing".
+    // Once the link itself is Ready, starting is the lesser evil — the library
+    // sends passthrough frames until the session settles.
     const v = voiceWithDave({ protocolVersion: 1, session: { ready: false } });
-    expect(await v.waitForAudioReady(250)).toBe(false);
+    expect(await v.waitForAudioReady(250)).toBe(true);
   });
 
   it('does not strand a channel that never negotiates DAVE', async () => {

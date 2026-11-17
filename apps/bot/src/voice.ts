@@ -1000,9 +1000,14 @@ export class VoiceManager implements AudioTransport {
     }
     const pending = this.daveSessionState();
     console.warn(
-      `[voice] DAVE session not ready after ${timeoutMs}ms (protocol v${pending?.protocolVersion ?? '?'}, ready=${pending?.ready ?? false}) — listeners may not decode audio`,
+      `[voice] DAVE session not ready after ${timeoutMs}ms (protocol v${pending?.protocolVersion ?? '?'}, ready=${pending?.ready ?? false}) — starting anyway so the track is not lost`,
     );
-    return false;
+    // The link itself is Ready, so audio can still flow: @discordjs/voice sends
+    // passthrough frames until the session settles and encrypts from then on.
+    // Returning false here made play() throw, which left the track queued with
+    // no audio and no "playing" indicator — a slow MLS handshake must delay the
+    // first frames, not cancel the song.
+    return true;
   }
 
   /**
