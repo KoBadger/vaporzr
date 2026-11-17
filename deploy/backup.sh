@@ -34,3 +34,14 @@ tar czf "$OUT/vaporzr-data-$STAMP.tgz" \
 # Rotate: keep the newest $KEEP archives.
 ls -1t "$OUT"/vaporzr-data-*.tgz 2>/dev/null | tail -n +$((KEEP + 1)) | xargs -r rm -f
 echo "backup ok: $OUT/vaporzr-data-$STAMP.tgz ($(du -h "$OUT/vaporzr-data-$STAMP.tgz" | cut -f1))"
+
+# Off-site copy. Deliberately NOT optional when it is configured: a job that
+# reports success while the remote is empty is how five weeks of failed backups
+# went unnoticed. If /etc/vaporzr/backup.env exists, a failure here fails the
+# whole run (and leaves backup-last-error.txt for /health to report).
+if [ -x /opt/vaporzr/backup-offsite.sh ] && [ -f /etc/vaporzr/backup.env ]; then
+  /opt/vaporzr/backup-offsite.sh
+else
+  echo "!! off-site copy skipped: /etc/vaporzr/backup.env not configured" >&2
+  echo "   local archives live on the same disk as the data they protect." >&2
+fi
