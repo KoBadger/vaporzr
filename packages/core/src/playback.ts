@@ -69,6 +69,16 @@ export function clampSeekMs(value: unknown, durationMs: number): number | null {
   const limit = durationMs > 0 ? Math.max(0, durationMs - 250) : Number.MAX_SAFE_INTEGER;
   return Math.max(0, Math.min(Math.round(raw), limit));
 }
+/**
+ * Where a stall-triggered YouTube fallback should resume. A stall recovery that
+ * restarts the song from 0 ("it skipped back to the beginning") used to fall
+ * back without any position; this clamps the resume point into
+ * [0, durationMs - 1s] so a stall in the final second cannot seek past the last
+ * decodable frame and end the track instantly.
+ */
+export function youtubeFallbackResumeMs(durationMs: number, resumeMs: number): number {
+  return Math.min(Math.max(0, resumeMs), Math.max(0, durationMs - 1000));
+}
 /** Resample librespot's 44.1 kHz PCM to Discord's 48 kHz, plus R128 loudness
  *  normalization so Spotify and YouTube/EW tracks land at the same target. A
  *  per-session effect filter string (upbeat/slowed/bass) is appended last so
@@ -191,6 +201,15 @@ export class PlaybackController {
   ];
   /** Invalidates in-flight play() calls when skip/previous/stop changes the cursor. */
   private playGeneration = 0;
+  /**
+   * Timestamp until which a track start is considered in flight. The stall
+   * watchdog used to fire while a natural-advance play() was still resolving
+   * (device lookup, DAVE handshake): state.track still held the OLD track, so
+   * its resync dragged the queue cursor back and re-issued the old song —
+   * both plays then ran concurrently and listeners heard the new track start,
+   * swap back, and restart. Recovery bails while a start is resolving.
+   */
+  private startGuardUntil = 0;
   /** Position to resume from after a stall-driven Spotify re-issue, so a
    *  dried-up feed continues where it stopped instead of restarting at 0. */
   private stallResumeMs = 0;
@@ -944,6 +963,9 @@ export class PlaybackController {
     }
     this.lastPlayUri = current.uri;
     this.lastPlayStartedAt = now;
+    // Cover the whole start path (DAVE wait, device resolution, URL resolve):
+    // stall recovery must not fire against the outgoing track while this runs.
+    this.startGuardUntil = now + 20_000;
     // A re-issue of the SAME track must keep the second-strike marker; a genuine
     // move to a different track clears it.
     if (this.stallReissueUri && this.stallReissueUri !== current.uri) this.stallReissueUri = null;
@@ -1252,7 +1274,7 @@ export class PlaybackController {
   }
 
   /** No Spotify device available — play the track's YouTube match instead. */
-  private async playYoutubeFallback(current: TrackInfo, generation: number): Promise<void> {
+  private async playYoutubeFallback(current: TrackInfo, generation: number, resumeMs = 0): Promise<void> {
     const t0 = Date.now();
     console.log(
       `[playback] ${config.spotifyPreferYoutube ? 'prefer-YouTube mode' : 'no Spotify device'} — resolving "${current.name}" via YouTube`,
@@ -1293,11 +1315,19 @@ export class PlaybackController {
     this.lastYoutubeVideoUri = current.uri;
     this.spotifyFallback = true;
     const durationMs = this.cappedDuration(video.durationMs, current.durationMs);
+    // A stall-triggered fallback resumes where the Spotify feed died instead of
+    // replaying the whole song (heard as the track "skipping back to the
+    // beginning"). Keep a 1s tail so a stall at the very end does not seek past
+    // the last decodable frame and end the track instantly.
+    const seekMs = youtubeFallbackResumeMs(durationMs, resumeMs);
+    if (seekMs > 0) {
+      console.log(`[playback] youtube fallback resumes "${current.name}" at ${Math.round(seekMs / 1000)}s`);
+    }
     this.queue.setState({
       playing: true,
       track: current,
       durationMs,
-      positionMs: 0,
+      positionMs: seekMs,
       source: 'youtube',
     });
     this.voice.playFfmpegUrl(video.streamUrl!, {
@@ -1305,9 +1335,11 @@ export class PlaybackController {
       onEnd: this.serverStreamOnEnd(),
       retries: 4,
       refreshUrl: () => this.refreshYoutubeUrl(video.videoId),
+      seekMs,
+      durationMs,
     });
-    this.scheduleEnd(durationMs, 0);
-    this.schedulePreload(durationMs, 0);
+    this.scheduleEnd(durationMs, seekMs);
+    this.schedulePreload(durationMs, seekMs);
     this.startPositionTracker();
     this.sendVisualizer({ type: 'cmd', command: 'stop' });
   }
@@ -1715,6 +1747,15 @@ export class PlaybackController {
       const state = this.queue.getState();
       const playing = state.track;
       if (!playing) return;
+      // A track start is still resolving (device lookup, DAVE handshake): the
+      // "playing" track is the OUTGOING one, and re-issuing it here is what made
+      // listeners hear the new track start, swap back to the old one, and then
+      // restart. Skip this round — the watchdog re-fires if the feed is still
+      // dry once the start settles.
+      if (Date.now() < this.startGuardUntil) {
+        console.log(`[playback] stall recovery deferred — a track start is still resolving ("${playing.name}")`);
+        return;
+      }
       // A cursor that drifted off the playing track is why this used to do
       // nothing at all: the source/duration lookups below then referred to the
       // wrong track.
@@ -1743,7 +1784,7 @@ export class PlaybackController {
         if (this.stallReissueUri === playing.uri) {
           this.stallReissueUri = null;
           console.warn(`[playback] Spotify feed stalled again — falling back to YouTube for "${playing.name}"`);
-          void this.playYoutubeFallback(playing, this.playGeneration).catch((err) => {
+          void this.playYoutubeFallback(playing, this.playGeneration, pos).catch((err) => {
             console.warn(`[playback] stall fallback failed: ${err instanceof Error ? err.message : err}`);
           });
           return;
