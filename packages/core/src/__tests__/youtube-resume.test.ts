@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { youtubeFallbackResumeMs } from '../playback.js';
+import { youtubeFallbackResumeMs } from '../fallbackResume.js';
 
 describe('youtubeFallbackResumeMs', () => {
   it('keeps a mid-track stall position', () => {

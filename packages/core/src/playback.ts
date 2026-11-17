@@ -17,6 +17,7 @@ import { rememberMeasuredFeatures } from './featureStore.js';
 import { writeJsonAtomicSync } from './jsonFile.js';
 import { buildAudioFxChain, isEqPreset } from './audiofx.js';
 import { canCrossfade, fadeInPcm, handoffBufferMs, planCrossfade, tempoMatchRatio } from './crossfade.js';
+import { youtubeFallbackResumeMs } from './fallbackResume.js';
 import * as EW from '@vaporzr/core/endlesswave';
 import { fetchSkipSegments, type SkipSegment } from './sponsorblock.js';
 import {
@@ -68,16 +69,6 @@ export function clampSeekMs(value: unknown, durationMs: number): number | null {
   if (!Number.isFinite(raw)) return null;
   const limit = durationMs > 0 ? Math.max(0, durationMs - 250) : Number.MAX_SAFE_INTEGER;
   return Math.max(0, Math.min(Math.round(raw), limit));
-}
-/**
- * Where a stall-triggered YouTube fallback should resume. A stall recovery that
- * restarts the song from 0 ("it skipped back to the beginning") used to fall
- * back without any position; this clamps the resume point into
- * [0, durationMs - 1s] so a stall in the final second cannot seek past the last
- * decodable frame and end the track instantly.
- */
-export function youtubeFallbackResumeMs(durationMs: number, resumeMs: number): number {
-  return Math.min(Math.max(0, resumeMs), Math.max(0, durationMs - 1000));
 }
 /** Resample librespot's 44.1 kHz PCM to Discord's 48 kHz, plus R128 loudness
  *  normalization so Spotify and YouTube/EW tracks land at the same target. A
