@@ -96,3 +96,22 @@ describe('classifyPcmWindow', () => {
     expect(classifyPcmWindow(stats)).toBe('silence');
   });
 });
+
+describe('PcmIntegrityMonitor.feed verdicts (mix-stream gate)', () => {
+  it('classifies noise windows so the mix stream can gate them', async () => {
+    const { PcmIntegrityMonitor } = await import('../voice.js');
+    let bad = 0;
+    let good = 0;
+    const monitor = new PcmIntegrityMonitor({
+      onBad: () => bad++,
+      onGood: () => good++,
+    });
+    expect(monitor.feed(makeWhiteNoise(250))).toBe('noise');
+    expect(monitor.feed(makeSineTone(440, 250))).toBe('good');
+    expect(monitor.feed(makeSilence(250))).toBe('good');
+    expect(bad).toBe(1);
+    // Only digital silence breaks the streak (music windows are silent here);
+    // the noise gate itself does not change the callback contract.
+    expect(good).toBe(1);
+  });
+});

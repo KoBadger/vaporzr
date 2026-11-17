@@ -131,19 +131,28 @@ export class PcmIntegrityMonitor {
     this.onGood = options.onGood ?? (() => {});
   }
 
-  feed(buffer: Buffer): void {
+  /**
+   * Analyse one window. Returns 'noise' when the window is broadband noise so
+   * the mix stream can gate it before it reaches listeners; the bad/good
+   * callbacks fire exactly as before either way.
+   */
+  feed(buffer: Buffer): 'noise' | 'good' {
     const stats = analyzePcmWindow(buffer);
     this.streak++;
     const now = Date.now();
     if (now - this.startTime > this.windowMs) {
       this.reset();
     }
-    if (stats.rms > this.noiseRms && stats.zeroCrossings / stats.samples > this.noiseZcr) {
+    const isNoise = stats.rms > this.noiseRms && stats.zeroCrossings / stats.samples > this.noiseZcr;
+    this.startTime = now;
+    if (isNoise) {
       this.onBad(stats, buffer);
-    } else if (stats.rms < this.silenceRms && stats.zeroCrossings === 0) {
+      return 'noise';
+    }
+    if (stats.rms < this.silenceRms && stats.zeroCrossings === 0) {
       this.onGood();
     }
-    this.startTime = now;
+    return 'good';
   }
 
   reset(): void {
@@ -1059,8 +1068,14 @@ export class VoiceManager implements AudioTransport {
       highWaterMark: VoiceManager.STREAM_HIGH_WATER_MARK,
       transform: (chunk, _enc, cb) => {
         if (stream.writableEnded || stream.destroyed) return;
-        this.audioHealth?.feed(chunk as Buffer);
-        const out = this.mixSfx(chunk as Buffer);
+        const verdict = this.audioHealth?.feed(chunk as Buffer);
+        // A broadband-noise window is decode garbage from a failed source (a
+        // stalled Spotify feed, a torn-down ffmpeg), never music — left alone it
+        // reached listeners as harsh static until the watchdog recovered. Gate
+        // it to silence of the same length; the monitor still counts the bad
+        // window, so stall recovery fires exactly as before.
+        const audio = verdict === 'noise' ? Buffer.alloc((chunk as Buffer).length) : (chunk as Buffer);
+        const out = this.mixSfx(audio);
         this.pcmTap?.(out);
         this.spectrumTap?.(out);
         this.featureTap?.(out);
