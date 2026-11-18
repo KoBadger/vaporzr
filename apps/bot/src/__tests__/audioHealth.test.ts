@@ -118,3 +118,21 @@ describe('PcmIntegrityMonitor streaks', () => {
     expect(good).toBe(1);
   });
 });
+
+describe('PcmIntegrityMonitor.feed verdicts (mix-stream gate)', () => {
+  it('classifies noise windows so the mix stream can gate them', () => {
+    let bad = 0;
+    let good = 0;
+    const monitor = new PcmIntegrityMonitor({
+      onBad: () => bad++,
+      onGood: () => good++,
+    });
+    expect(monitor.feed(makeWhiteNoise(250))).toBe('noise');
+    expect(monitor.feed(makeSineTone(440, 250))).toBe('good');
+    expect(monitor.feed(makeSilence(250))).toBe('good');
+    expect(bad).toBe(1);
+    // Every non-noise window breaks the streak, so music and silence both count
+    // as good. The gate only changes what listeners hear while it recovers.
+    expect(good).toBe(2);
+  });
+});

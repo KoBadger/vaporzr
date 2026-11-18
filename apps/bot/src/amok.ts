@@ -825,7 +825,7 @@ function silenceStereo48k(ms: number): Buffer {
  * far below a music bed that was mastered to its own ceiling. -16 dBFS RMS
  * clears a ducked track while the ceiling below keeps it off the limiter.
  */
-const VOICE_DROP_RMS = 0.2;
+const VOICE_DROP_RMS = 0.22;
 /** Peak ceiling for a voice drop: ≈ -1 dBFS, just under clipping. */
 const VOICE_DROP_CEIL = 0.9;
 
@@ -843,7 +843,9 @@ export function softenWeaselPcm(pcm: Buffer): Buffer {
   const frames = Math.floor(pcm.length / 4);
   if (frames <= 0) return pcm;
   const sr = 48_000;
-  const hpA = Math.exp((-2 * Math.PI * 120) / sr);
+  // 100 Hz rather than 120: the extra octave of chest is what makes the line
+  // read as authority instead of a thin narration voice — the HAL register.
+  const hpA = Math.exp((-2 * Math.PI * 100) / sr);
   const lpA = Math.exp((-2 * Math.PI * 6200) / sr);
   // Presence band: what sits above ~2.8 kHz. A drop made only of body and
   // rumble reads as muffled next to a loud track — this shelf gives the
@@ -868,8 +870,10 @@ export function softenWeaselPcm(pcm: Buffer): Buffer {
   let mudR = 0;
   let env = 0;
   let sumSq = 0;
-  const threshold = 0.16;
-  const ratio = 3;
+  // Denser than 3:1 — a firm, even keel quiet parts and stressed syllables
+  // alike, which is what "unhurried" actually sounds like at the waveform level.
+  const threshold = 0.13;
+  const ratio = 3.5;
   let peak = 0;
   for (let i = 0; i < frames; i++) {
     const l = pcm.readInt16LE(i * 4) / 32768;
@@ -904,7 +908,10 @@ export function softenWeaselPcm(pcm: Buffer): Buffer {
   // the sentence — which is exactly how a drop ends up buried under a track.
   // Aim the average at a fixed RMS and let a peak ceiling catch the rest.
   const rms = Math.sqrt(sumSq / Math.max(1, frames * 2));
-  const makeup = rms > 0.0005 ? Math.min(8, VOICE_DROP_RMS / rms) : 1;
+  // Cap 20x, not 8x: a soft-spoken clone (the HAL reference is deliberately
+  // quiet) needs more make-up than a hot one, and the old cap left those lines
+  // sitting under the track no matter how the compressor was tuned.
+  const makeup = rms > 0.0005 ? Math.min(20, VOICE_DROP_RMS / rms) : 1;
   const ceiling = peak > 0 ? Math.min(1, VOICE_DROP_CEIL / (peak * makeup)) : 1;
   const norm = makeup * ceiling;
   const out = Buffer.allocUnsafe(frames * 4);
