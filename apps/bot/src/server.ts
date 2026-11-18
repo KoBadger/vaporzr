@@ -781,11 +781,15 @@ function grantRequestPage(req: http.IncomingMessage, url: URL, res: http.ServerR
       if (secretEquals(value, config.requestKey)) return true;
     }
     if (secretEquals(url.searchParams.get('key'), config.requestKey)) {
-      res.setHeader(
-        'Set-Cookie',
-        `vz_req=${encodeURIComponent(config.requestKey)}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax`,
-      );
-      return true;
+      // Mint a scoped session instead of writing the key itself into a 1-year
+      // cookie. The old cookie WAS the request key: anyone who read it could
+      // reuse it forever, and revoking it meant rotating the key for everyone.
+      // Same exchange as an invite: store the session, then strip the key from
+      // the URL so it does not stay in history.
+      const minted = mintSession('request', 'request key link');
+      res.setHeader('Set-Cookie', sessionCookie(minted.token, minted.session.expiresAt, req));
+      redirectStrippingCredentials(res, url.pathname);
+      return false;
     }
   }
 
