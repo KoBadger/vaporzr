@@ -688,8 +688,10 @@ export class DeckMixer {
     let inMs = Math.max(0, Math.round(region.inMs));
     let outMs = Math.max(inMs + 50, Math.round(region.outMs));
     if (dur) {
-      inMs = Math.min(inMs, dur - 250);
-      outMs = Math.min(outMs, dur);
+      // `dur - 250` goes negative when the decoded duration is under 250 ms,
+      // which used to push the loop in-point below zero and seek past the start.
+      inMs = Math.max(0, Math.min(inMs, dur - 250));
+      outMs = Math.min(dur, Math.max(inMs + 50, outMs));
     }
     if (outMs - inMs > DECK_LOOP_MAX_MS) outMs = inMs + DECK_LOOP_MAX_MS;
     const loop: DeckLoop = { inMs, outMs, beats: region.beats ?? null };

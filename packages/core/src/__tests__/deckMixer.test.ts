@@ -443,3 +443,27 @@ describe('audio reset', () => {
     expect(m.isDirty()).toBe(false);
   });
 });
+
+describe('loop clamping', () => {
+  const mixer = () => new DeckMixer({ sink: () => true });
+
+  it('keeps the in-point non-negative when the deck is shorter than 250ms', () => {
+    // `dur - 250` used to go negative here, pushing the loop in-point below
+    // zero so the deck sought before the start of the file.
+    const m = mixer();
+    m.load('a', { file: 'C:/tmp/short.wav', title: 'Short', artist: 'X', durationMs: 120 }, { play: false });
+    m.setLoop('a', { inMs: 40, outMs: 90, beats: 1 });
+    const loop = m.state().a.loop;
+    expect(loop).not.toBeNull();
+    expect(loop!.inMs).toBeGreaterThanOrEqual(0);
+    expect(loop!.outMs).toBeGreaterThan(loop!.inMs);
+    expect(loop!.outMs).toBeLessThanOrEqual(120);
+  });
+
+  it('leaves a normal loop untouched', () => {
+    const m = mixer();
+    m.load('a', { file: 'C:/tmp/track.mp3', title: 'T', artist: 'X', durationMs: 180_000 }, { play: false });
+    m.setLoop('a', { inMs: 1000, outMs: 3000, beats: 4 });
+    expect(m.state().a.loop).toMatchObject({ inMs: 1000, outMs: 3000 });
+  });
+});

@@ -714,17 +714,22 @@ export class PlaybackController {
   /** Spotify tempo (BPM) for a track, best-effort (cached; short timeout). */
   private async trackTempo(track: TrackInfo | undefined): Promise<number | null> {
     if (!track?.uri?.startsWith('spotify:track:')) return null;
+    let timer: NodeJS.Timeout | undefined;
     try {
       const feat = await Promise.race([
         EW.fetchFeatures(track),
         new Promise<null>((resolve) => {
-          const t = setTimeout(() => resolve(null), 1500);
-          t.unref?.();
+          timer = setTimeout(() => resolve(null), 1500);
+          timer.unref?.();
         }),
       ]);
       return feat?.tempo ?? null;
     } catch {
       return null;
+    } finally {
+      // The timeout used to survive a fast answer, holding the closure for the
+      // rest of its 1.5s. Clear it whichever side of the race won.
+      if (timer) clearTimeout(timer);
     }
   }
 
