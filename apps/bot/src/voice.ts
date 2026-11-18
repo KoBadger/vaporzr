@@ -435,6 +435,8 @@ export class VoiceManager implements AudioTransport {
         this.leave();
       }
     }, VoiceManager.IDLE_LEAVE_MS);
+    // A 30-minute timer must not keep the process (or a test runner) alive.
+    this.idleTimer.unref?.();
   }
 
   /** Cancel the idle auto-leave (e.g. while waiting out a Spotify rate-limit window). */
