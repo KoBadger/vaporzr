@@ -46,6 +46,11 @@ jobs:
       - name: Visualizer syntax check
         run: npm run viz:check
 
+      # The edge monitor is plain ESM with no build step; keep its decision
+      # logic (dedupe, recovery, problem mapping) pinned.
+      - name: Worker monitor tests
+        run: npm run test:worker
+
       - name: Unit tests (bot)
         working-directory: apps/bot
         run: npm run test:coverage
