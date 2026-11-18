@@ -8918,6 +8918,11 @@ export class DiscordBot {
       }
     } catch (err) {
       console.warn(`[discord] reaction ${name} failed: ${err instanceof Error ? err.message : err}`);
+    } finally {
+      // Discord only fires `messageReactionAdd` for a NEW reaction: leaving ours
+      // in place made a second tap do nothing, so the strip felt dead. Remove the
+      // user's reaction so the control can be used again.
+      void reaction.users.remove(user.id).catch(() => {});
     }
   }
 

@@ -31,6 +31,10 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          port: 22
+          timeout: 180
+          retry_count: 2
+          insecure_ignore_known_hosts: false
           envs: BACKUP_NAME
           script: |
             set -e

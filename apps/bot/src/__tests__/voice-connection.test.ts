@@ -32,3 +32,40 @@ describe('VoiceManager connection readiness (the auto-join gate)', () => {
     expect(voiceWithConnection(null).connectionStatus()).toBe('none');
   });
 });
+
+/** VoiceManager whose link is Ready with a controllable DAVE session. */
+function voiceWithDave(dave: unknown): VoiceManager {
+  const v = new VoiceManager();
+  const raw = v as unknown as Record<string, unknown>;
+  raw.connection = { state: { status: 'ready', networking: { state: { dave } } } };
+  return v;
+}
+
+describe('VoiceManager.waitForAudioReady (the DAVE white-noise gate)', () => {
+  it('is ready at once when the DAVE session can encrypt', async () => {
+    // Regression: the gate used to accept a merely *present* session object.
+    // @discordjs/voice sends PASSTHROUGH frames until the inner davey session
+    // reports ready, and DAVE clients decode those as broadband noise.
+    const v = voiceWithDave({ protocolVersion: 1, session: { ready: true } });
+    expect(await v.waitForAudioReady(200)).toBe(true);
+  });
+
+  it('treats a negotiated-off (protocol 0) channel as ready', async () => {
+    const v = voiceWithDave({ protocolVersion: 0, session: { ready: false } });
+    expect(await v.waitForAudioReady(200)).toBe(true);
+  });
+
+  it('starts anyway when the session never becomes ready, rather than dropping the track', async () => {
+    // A slow MLS handshake used to time the gate out and make play() throw: the
+    // track sat queued with no audio and the panel never showed "playing".
+    // Once the link itself is Ready, starting is the lesser evil — the library
+    // sends passthrough frames until the session settles.
+    const v = voiceWithDave({ protocolVersion: 1, session: { ready: false } });
+    expect(await v.waitForAudioReady(250)).toBe(true);
+  });
+
+  it('does not strand a channel that never negotiates DAVE', async () => {
+    const v = voiceWithDave(undefined);
+    expect(await v.waitForAudioReady(900)).toBe(true);
+  });
+});

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { analyzePcmWindow, classifyPcmWindow, type PcmWindowStats } from '../audioHealth.js';
+import { PcmIntegrityMonitor } from '../voice.js';
 
 function makeSineTone(freqHz: number, durationMs: number, sampleRate = 48000, amplitude = 16000): Buffer {
   const samples = Math.floor((durationMs / 1000) * sampleRate);
@@ -97,9 +98,29 @@ describe('classifyPcmWindow', () => {
   });
 });
 
+describe('PcmIntegrityMonitor streaks', () => {
+  it('breaks a bad streak on ordinary music, not just digital silence', () => {
+    // Regression: onGood used to fire only for pure silence, so isolated noise
+    // windows accumulated across an entire session until a spurious auto-skip.
+    let bad = 0;
+    let good = 0;
+    const monitor = new PcmIntegrityMonitor({
+      onBad: () => bad++,
+      onGood: () => good++,
+    });
+    const quietMusic = makeSineTone(440, 20, 48000, 800); // well under the noise RMS
+    monitor.feed(makeWhiteNoise(20));
+    monitor.feed(makeWhiteNoise(20));
+    monitor.feed(quietMusic);
+    monitor.feed(makeWhiteNoise(20));
+    monitor.feed(makeWhiteNoise(20));
+    expect(bad).toBe(4);
+    expect(good).toBe(1);
+  });
+});
+
 describe('PcmIntegrityMonitor.feed verdicts (mix-stream gate)', () => {
-  it('classifies noise windows so the mix stream can gate them', async () => {
-    const { PcmIntegrityMonitor } = await import('../voice.js');
+  it('classifies noise windows so the mix stream can gate them', () => {
     let bad = 0;
     let good = 0;
     const monitor = new PcmIntegrityMonitor({
@@ -110,8 +131,8 @@ describe('PcmIntegrityMonitor.feed verdicts (mix-stream gate)', () => {
     expect(monitor.feed(makeSineTone(440, 250))).toBe('good');
     expect(monitor.feed(makeSilence(250))).toBe('good');
     expect(bad).toBe(1);
-    // Only digital silence breaks the streak (music windows are silent here);
-    // the noise gate itself does not change the callback contract.
-    expect(good).toBe(1);
+    // Every non-noise window breaks the streak, so music and silence both count
+    // as good. The gate only changes what listeners hear while it recovers.
+    expect(good).toBe(2);
   });
 });

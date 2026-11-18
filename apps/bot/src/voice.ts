@@ -100,8 +100,6 @@ export class PcmIntegrityMonitor {
   private readonly channels: number;
   private readonly noiseRms: number;
   private readonly noiseZcr: number;
-  private readonly silenceRms: number;
-  private readonly silenceZeroCrossings: number;
   private readonly onBad: (stats: PcmWindowStats, buffer: Buffer) => void;
   private readonly onGood: () => void;
   private streak = 0;
@@ -114,8 +112,6 @@ export class PcmIntegrityMonitor {
       channels?: number;
       noiseRms?: number;
       noiseZcr?: number;
-      silenceRms?: number;
-      silenceZeroCrossings?: number;
       onBad?: (stats: PcmWindowStats, buffer: Buffer) => void;
       onGood?: () => void;
     } = {},
@@ -125,8 +121,6 @@ export class PcmIntegrityMonitor {
     this.channels = options.channels ?? 2;
     this.noiseRms = options.noiseRms ?? 4000;
     this.noiseZcr = options.noiseZcr ?? 0.42;
-    this.silenceRms = options.silenceRms ?? 48;
-    this.silenceZeroCrossings = options.silenceZeroCrossings ?? 0;
     this.onBad = options.onBad ?? (() => {});
     this.onGood = options.onGood ?? (() => {});
   }
@@ -149,9 +143,10 @@ export class PcmIntegrityMonitor {
       this.onBad(stats, buffer);
       return 'noise';
     }
-    if (stats.rms < this.silenceRms && stats.zeroCrossings === 0) {
-      this.onGood();
-    }
+    // Any non-noise window (normal music, speech, or true silence) breaks the
+    // streak. Firing onGood only for digital silence let isolated bad windows
+    // accumulate over an entire session until a spurious auto-skip.
+    this.onGood();
     return 'good';
   }
 
@@ -296,8 +291,6 @@ export class VoiceManager implements AudioTransport {
     this.audioHealth = new PcmIntegrityMonitor({
       noiseRms: config.audioHealthNoiseRms,
       noiseZcr: config.audioHealthNoiseZcr,
-      silenceRms: config.audioHealthSilenceRms,
-      silenceZeroCrossings: config.audioHealthSilenceZcr,
       onBad: (stats) => {
         const detail = `broadband noise (RMS ${Math.round(stats.rms)}, ZCR ${(stats.zeroCrossings / stats.samples).toFixed(2)})`;
         console.warn(`[voice] audio monitor: ${detail}`);
@@ -645,8 +638,12 @@ export class VoiceManager implements AudioTransport {
       if (this.reconnectStrikes < 6) return; // give the library's own reconnect ~30s
       this.reconnectStrikes = 0;
       if (this.forcedRejoins >= 4) {
-        console.warn('[voice] voice link unrecoverable after repeated rejoins — leaving');
-        this.leave();
+        // Leaving the channel used to be the answer here, which is why a flaky
+        // UDP path looked like "the bot keeps leaving". A dead link is not a
+        // reason to abandon a queue: back off and keep trying. Only an explicit
+        // stop/leave tears the session down.
+        this.forcedRejoins = 0;
+        console.warn('[voice] voice link still down after repeated rejoins — backing off and retrying');
         return;
       }
       this.forcedRejoins++;
@@ -969,7 +966,7 @@ export class VoiceManager implements AudioTransport {
     (DAVE) is on — with the DAVE session established. This is what prevents audio
     from being pushed into a link whose listeners cannot decode it yet (the "only
     audible after leaving and rejoining" symptom). */
-  async waitForAudioReady(timeoutMs = 2500): Promise<boolean> {
+  async waitForAudioReady(timeoutMs = config.voiceDaveReadyTimeoutMs): Promise<boolean> {
     const conn = this.connection;
     if (!conn || conn.state.status === VoiceConnectionStatus.Destroyed) return false;
     if (conn.state.status !== VoiceConnectionStatus.Ready) {
@@ -980,17 +977,70 @@ export class VoiceManager implements AudioTransport {
       }
       if (this.connection?.state.status !== VoiceConnectionStatus.Ready) return false;
     }
-    const link = this.connection as unknown as {
-      state?: { networking?: { state?: { dave?: boolean; protocolVersion?: number } } };
-    };
     if (!this.daveEncryption) return true;
-    // E2EE is on: do not consider the link audio-ready until the DAVE session is live.
-    const settleDeadline = Date.now() + Math.min(500, timeoutMs);
-    while (Date.now() < settleDeadline) {
-      if (link.state?.networking?.state?.dave) return true;
+    // E2EE is on. @discordjs/voice only encrypts once the underlying davey
+    // session reports `ready`; until then it sends the frame as PASSTHROUGH,
+    // and DAVE-enabled clients decode those plaintext bytes as if they were
+    // ciphertext — heard as broadband noise. So the gate must wait for genuine
+    // readiness, not merely for the session object to exist.
+    const start = Date.now();
+    const deadline = start + timeoutMs;
+    // How long to wait for a DAVE session to appear at all before concluding the
+    // channel simply is not E2EE (protocol 0), where plain frames are correct.
+    const appearGraceMs = 400;
+    while (Date.now() < deadline) {
+      const dave = this.daveSessionState();
+      if (dave) {
+        // protocolVersion 0 = DAVE negotiated as off for this channel.
+        if (dave.protocolVersion === 0 || dave.ready) {
+          const waited = Date.now() - start;
+          if (waited > 500) console.log(`[voice] DAVE ready after ${waited}ms (protocol v${dave.protocolVersion})`);
+          return true;
+        }
+      } else if (Date.now() - start > appearGraceMs) {
+        // No session at all: the channel negotiated DAVE off (protocol 0), so
+        // plain frames are correct here.
+        return true;
+      }
       await new Promise((r) => setTimeout(r, 100));
     }
-    return false;
+    const pending = this.daveSessionState();
+    console.warn(
+      `[voice] DAVE session not ready after ${timeoutMs}ms (protocol v${pending?.protocolVersion ?? '?'}, ready=${pending?.ready ?? false}) — starting anyway so the track is not lost`,
+    );
+    // The link itself is Ready, so audio can still flow: @discordjs/voice sends
+    // passthrough frames until the session settles and encrypts from then on.
+    // Returning false here made play() throw, which left the track queued with
+    // no audio and no "playing" indicator — a slow MLS handshake must delay the
+    // first frames, not cancel the song.
+    return true;
+  }
+
+  /**
+   * Read live DAVE readiness out of @discordjs/voice's networking state.
+   * The wrapper exposes `protocolVersion`; the real encrypt/decrypt readiness
+   * flag lives on the inner davey session (`session.ready`).
+   */
+  private daveSessionState(): { ready: boolean; protocolVersion: number } | null {
+    const link = this.connection as unknown as {
+      state?: {
+        networking?: {
+          state?: {
+            dave?: {
+              protocolVersion?: number;
+              ready?: boolean;
+              session?: { ready?: boolean; protocolVersion?: number };
+            };
+          };
+        };
+      };
+    };
+    const dave = link.state?.networking?.state?.dave;
+    if (!dave) return null;
+    return {
+      protocolVersion: dave.protocolVersion ?? dave.session?.protocolVersion ?? 0,
+      ready: dave.session?.ready === true || dave.ready === true,
+    };
   }
 
   /** Mix a short sound effect (48 kHz stereo Int16 PCM) over the current audio. */

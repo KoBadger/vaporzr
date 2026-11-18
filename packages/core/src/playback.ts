@@ -112,6 +112,10 @@ export class PlaybackController {
   private currentStartOffsetMs = 0;
   /** Consecutive track-start failures, to avoid silently draining the queue. */
   private playFailures = 0;
+  /** Tracks skipped in a row because they could not start (backend down). */
+  private consecutiveSkips = 0;
+  /** Pending retry of a track that failed to start. */
+  private startRetryTimer: NodeJS.Timeout | null = null;
   /** True while advancing because a stream ended on its own (keeps the xfade seek). */
   private fromNaturalEnd = false;
   private spotifyProgress: NodeJS.Timeout | null = null;
@@ -524,6 +528,7 @@ export class PlaybackController {
     this.clearEndTimer();
     // Reaching here means the track actually started — clear the failure streak.
     this.playFailures = 0;
+    this.consecutiveSkips = 0;
     // A stream that was crossfaded into already skipped `currentStartOffsetMs`,
     // so its true position is positionMs + that offset. Forgetting this made the
     // next crossfade timer fire a full window late (overlaying the FOLLOWING
@@ -1161,12 +1166,31 @@ export class PlaybackController {
         this.queue.setState({ playing: false, track: undefined, positionMs: 0, durationMs: 0, source: undefined });
         return;
       }
-      // A flaky backend (e.g. no Spotify device AND no YouTube match) used to
-      // skip every track in turn, silently draining the queue. Stop instead and
-      // surface it so the user knows why the music died.
-      if (this.playFailures >= 3) {
-        this.playFailures = 0;
-        console.warn('[playback] 3 consecutive start failures — stopping instead of skipping the rest of the queue');
+      // A transient hiccup (Spotify device re-registering, a slow DAVE handshake,
+      // a yt-dlp 403) must not end a set. Retry the SAME track twice with a
+      // backoff before deciding it cannot play.
+      if (this.playFailures <= 2) {
+        const delay = this.playFailures === 1 ? 2_000 : 5_000;
+        const name = this.queue.getCurrentTrack()?.name ?? 'track';
+        console.warn(`[playback] retrying "${name}" in ${delay}ms`);
+        this.clearStartRetry();
+        this.startRetryTimer = setTimeout(() => {
+          this.startRetryTimer = null;
+          // Clear the duplicate-start marker: this IS a deliberate restart of the
+          // same track, so play()'s 4s same-uri guard must not swallow the retry.
+          this.lastPlayUri = null;
+          this.safePlay();
+        }, delay);
+        this.startRetryTimer.unref?.();
+        return;
+      }
+      // Three strikes on one track: skip it — but stop the whole queue only when
+      // every track in a row is unplayable (a dead backend, not one bad song).
+      this.playFailures = 0;
+      this.consecutiveSkips++;
+      if (this.consecutiveSkips >= 5) {
+        this.consecutiveSkips = 0;
+        console.warn('[playback] 5 consecutive tracks failed to start — stopping instead of skipping the rest');
         this.stopAll();
         this.queue.setState({ playing: false });
         if (this.onPlaybackStalled) this.onPlaybackStalled();
@@ -1174,6 +1198,13 @@ export class PlaybackController {
       }
       this.next();
     });
+  }
+
+  private clearStartRetry(): void {
+    if (this.startRetryTimer) {
+      clearTimeout(this.startRetryTimer);
+      this.startRetryTimer = null;
+    }
   }
 
   /**
@@ -2394,6 +2425,9 @@ export class PlaybackController {
     this.clearEndTimer();
     this.clearPreloadTimer();
     this.clearCrossfadeTimer();
+    this.clearStartRetry();
+    this.playFailures = 0;
+    this.consecutiveSkips = 0;
     this.pendingXfadeSeekMs = 0;
     this.currentStartOffsetMs = 0;
     this.streamCache.clear();
