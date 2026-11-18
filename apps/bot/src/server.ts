@@ -66,6 +66,7 @@ import { statsStore } from '@vaporzr/core/stats';
 import { analyticsStore } from '@vaporzr/core/analytics';
 import { amokChat, amokProviderChain } from './amokProvider.js';
 import { amokSettingsStatus, clearAmokSettings, saveAmokSettings } from './amokSettings.js';
+import { publicBackupStatus } from './backupState.js';
 import { clearStemSettings, loadStemSettings, saveStemSettings, stemSettingsStatus } from './stemSettings.js';
 import { loadMasterKey } from './masterKey.js';
 import { loadPlaybackSettings } from './playbackSettings.js';
@@ -335,6 +336,10 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
         publicBase: config.staticBaseUrl || null,
         cookieAgeDays: cookieAgeDays(),
         push: pushSubscriptionCount(),
+        // Age of the last successful off-site snapshot. There was no signal at
+        // all while the weekly job failed five weeks straight, so this is the
+        // field an uptime monitor should alert on (stale: true).
+        backup: publicBackupStatus(config.dataDir),
         // Which AI provider AMOK will reach for, and whether one is configured
         // at all. Names only — never the key or its hint.
         ai: {

@@ -1,9 +1,15 @@
 name: Backup
 
-# Weekly encrypted snapshot of the vaporzr-data volume. The archive is
-# encrypted on the VPS before it goes anywhere (the repo is public, so the
-# off-host copy must never leave in the clear), stored as a workflow artifact,
-# and kept as rotated encrypted copies on the VPS itself.
+# Secondary encrypted copy of the vaporzr-data volume, pulled by a GitHub runner
+# over SSH. The archive is encrypted on the VPS before it goes anywhere (the
+# repo is public), stored as a workflow artifact, and kept as rotated encrypted
+# copies on the VPS itself.
+#
+# This is NOT the primary backup: it needs inbound SSH from GitHub's runner IPs,
+# which fail2ban and the Hetzner firewall both tend to block (every run between
+# 2026-10-18 and 2026-11-15 died at `dial tcp …:22` with no artifact). The
+# primary path is the VPS pushing with restic — see deploy/backup-offsite.sh and
+# docs/BACKUPS.md — and /health reports its age as `backup.stale`.
 on:
   schedule:
     # Sundays 09:00 UTC (2 AM US Pacific).
