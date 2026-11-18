@@ -9461,15 +9461,27 @@ export class DiscordBot {
   private opusLine(s: Session | null | undefined): string {
     const plan = opusPlan();
     const status = s?.voice.opusStatus();
-    const channel = status?.channel ? ` · ch \`${Math.round(status.channel / 1000)}k\`` : '';
+    const channelKbps = status?.channel ? Math.round(status.channel / 1000) : null;
+    // The channel cap is the number that explains "why does it sound bad"; say
+    // so next to it instead of leaving the reader to know Discord's tiers.
+    const lowCap = channelKbps !== null && channelKbps < 64 ? ' ⚠️ below 64k' : '';
+    const channel = channelKbps !== null ? ` · ch \`${channelKbps}k\`${lowCap}` : '';
+    const tier = status?.boostTier !== null && status?.boostTier !== undefined ? ` · tier \`${status.boostTier}\`` : '';
+    const gate = s?.voice.daveGateStatus();
+    const gateLine =
+      gate && gate.opens > 0
+        ? ` · dave gate \`${gate.opens}\`${gate.maxWaitMs ? ` · wait \`${gate.maxWaitMs}ms\`` : ''}${
+            gate.overflows ? ` · \`${gate.overflows} DROPPED\`` : ''
+          }`
+        : '';
     const meter = opusTelemetry();
     const live =
       meter.frames === 0 ? '' : meter.kbps === null ? ' · `live…`' : ` · \`${Math.round(meter.kbps)}k live\``;
     if (plan) {
-      return `\`@discordjs/opus\` · \`${Math.round(plan.bitrate / 1000)}k\`${plan.fec ? ' · fec' : ''}${channel}${live}`;
+      return `\`@discordjs/opus\` · \`${Math.round(plan.bitrate / 1000)}k\`${plan.fec ? ' · fec' : ''}${channel}${tier}${gateLine}${live}`;
     }
     if (config.voiceOpusEncoder === 'off') return '`off` (wanted: raw PCM path)';
-    return `\`missing\` → \`${fallbackOpusModule()}\`${meter.frames > 0 ? ' · raw-PCM path' : ''}`;
+    return `\`missing\` → \`${fallbackOpusModule()}\`${channel}${tier}${gateLine}${meter.frames > 0 ? ' · raw-PCM path' : ''}`;
   }
 
   /** Human-readable autoplay status block shared by `/autoplay`, `/endwav`, `V@autoplay`, `V@ew`. */
