@@ -239,7 +239,12 @@ export class VoiceManager implements AudioTransport {
    * above zero means the handshake stalled long enough to drop audio — the
    * symptom that used to be hidden behind "it just sounds bad".
    */
-  private daveGateTelemetry = { opens: 0, overflows: 0, maxWaitMs: 0 };
+  private daveGateTelemetry = {
+    opens: 0,
+    overflows: 0,
+    maxWaitMs: 0,
+    lastOverflowAt: null as number | null,
+  };
   /** Active sequential volume fade-out (sequential crossfade fallback). */
   private fadeOutTimer: NodeJS.Timeout | null = null;
   /** One-shot seek (ms) applied to the next decoded stream — crossfade handoff. */
@@ -904,7 +909,12 @@ export class VoiceManager implements AudioTransport {
   }
 
   /** DAVE output-gate counters, for /health and the watchdog. */
-  daveGateStatus(): { opens: number; overflows: number; maxWaitMs: number } {
+  daveGateStatus(): {
+    opens: number;
+    overflows: number;
+    maxWaitMs: number;
+    lastOverflowAt: number | null;
+  } {
     return { ...this.daveGateTelemetry };
   }
 
@@ -1203,6 +1213,7 @@ export class VoiceManager implements AudioTransport {
       },
       onOverflow: (chunks) => {
         this.daveGateTelemetry.overflows++;
+        this.daveGateTelemetry.lastOverflowAt = Date.now();
         console.warn(
           `[voice] DAVE still not ready after ${Math.round(gate.stats().waitedMs / 1000) || '>8'}s — dropped ${chunks} buffered chunks (silence, never static)`,
         );

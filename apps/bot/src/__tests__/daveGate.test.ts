@@ -165,11 +165,13 @@ describe('DaveOutputGate', () => {
   });
 
   it('drops the backlog instead of growing without bound', () => {
-    const { gate, overflows } = makeGate({ ready: false, maxHoldBytes: 1000 });
+    const { gate, overflows, advance } = makeGate({ ready: false, maxHoldBytes: 1000 });
+    expect(gate.stats().lastOverflowAt).toBeNull();
     expect(gate.push(chunk(1))).toEqual([]);
+    advance(50);
     expect(gate.push(chunk(2))).toEqual([]); // 3840 held > 1000 -> overflow
     expect(overflows).toEqual([1]);
-    expect(gate.stats()).toMatchObject({ open: false, heldBytes: 0, overflows: 1 });
+    expect(gate.stats()).toMatchObject({ open: false, heldBytes: 0, overflows: 1, lastOverflowAt: 50 });
     expect(gate.holding).toBe(false);
   });
 });
