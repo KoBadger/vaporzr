@@ -1,0 +1,78 @@
+name: Watchdog
+
+# External liveness check. Runs on GitHub's infrastructure, so it still reports
+# when the failure is the VPS itself — a suspended invoice, a host that will not
+# boot, a wedged container — which is exactly the class of outage Uptime Kuma
+# and /health cannot see.
+#
+# Needs no account, no bucket and no card: the alert arrives as a GitHub issue
+# (and GitHub's own failure email for scheduled workflows).
+#
+# Caveat: GitHub disables scheduled workflows after ~60 days without repository
+# activity. Any commit re-enables it, and the yt-dlp refresh workflow commits on
+# a schedule, so this only matters if the whole repo goes quiet.
+
+on:
+  schedule:
+    # Every 15 minutes. GitHub's scheduler is best-effort and can drift under
+    # load; a few minutes of lateness is fine for this.
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: watchdog
+  cancel-in-progress: false
+
+env:
+  HEALTH_URL: https://www.vaporzr.app/health
+  ISSUE_TITLE: 'Watchdog: bot health check failing'
+
+jobs:
+  health:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Probe /health
+        run: |
+          set -euo pipefail
+          body=$(curl -fsS --retry 3 --retry-delay 5 --max-time 20 "$HEALTH_URL")
+          echo "$body" | jq .
+          fail() { echo "::error::$1"; exit 1; }
+
+          echo "$body" | jq -e '.ok == true' >/dev/null || fail "health is not ok"
+          echo "$body" | jq -e '.librespot == "running"' >/dev/null || fail "librespot is not running"
+          echo "$body" | jq -e '.backup.stale == false' >/dev/null || fail "off-site backup is stale (no successful push in 48h)"
+          echo "$body" | jq -e '(.backup.error // null) == null' >/dev/null || fail "the last backup run failed"
+          echo "$body" | jq -e '.youtube != "blocked"' >/dev/null || fail "YouTube is blocked for this host"
+
+      - name: Open (or bump) the alert
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          body=$(printf 'The scheduled health probe failed.\n\nRun: %s\n\n`/health`:\n\n```json\n%s\n```\n' \
+            "$RUN_URL" "$(curl -fsS --max-time 20 "$HEALTH_URL" 2>/dev/null || echo 'unreachable')")
+          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "in:title \"$ISSUE_TITLE\"" --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$ISSUE_TITLE" --body "$body"
+          fi
+
+      - name: Close the alert when it recovers
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "in:title \"$ISSUE_TITLE\"" --json number --jq '.[0].number // empty')
+          [ -n "$number" ] || exit 0
+          gh issue close "$number" --repo "$GITHUB_REPOSITORY" \
+            --comment "Health probe is green again; closing automatically."
