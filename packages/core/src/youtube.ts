@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import crypto from 'node:crypto';
 import dns from 'node:dns';
 import fs from 'node:fs';
 import net from 'node:net';
@@ -102,9 +103,6 @@ interface YtDlpMeta {
   url?: string;
 }
 
-/** Monotonic id so concurrent yt-dlp calls never share a temp cookie file. */
-let cookieCopySeq = 0;
-
 /** Writable cookie jar in the data volume. When present it overrides the
  *  (usually read-only) mounted YOUTUBE_COOKIES_PATH, so cookies can be refreshed
  *  or uploaded from Discord without remounting anything. */
@@ -180,8 +178,11 @@ function stageCookieCopy(): string | null {
   const src = activeCookiesPath();
   if (!src) return null;
   try {
-    const file = path.join(os.tmpdir(), `vz-cookies-${process.pid}-${++cookieCopySeq}.txt`);
-    fs.copyFileSync(src, file);
+    // Unpredictable name plus O_EXCL: a predictable /tmp path let another local
+    // process pre-create a symlink and have the jar written through it, or read
+    // the session it contained. 0600 keeps it private while it exists.
+    const file = path.join(os.tmpdir(), `vz-cookies-${crypto.randomBytes(12).toString('hex')}.txt`);
+    fs.writeFileSync(file, fs.readFileSync(src), { mode: 0o600, flag: 'wx' });
     return file;
   } catch {
     return null;

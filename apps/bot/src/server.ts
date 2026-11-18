@@ -67,6 +67,7 @@ import { analyticsStore } from '@vaporzr/core/analytics';
 import { amokChat, amokProviderChain } from './amokProvider.js';
 import { amokSettingsStatus, clearAmokSettings, saveAmokSettings } from './amokSettings.js';
 import { publicBackupStatus } from './backupState.js';
+import { allowedOrigin } from './cors.js';
 import { clearStemSettings, loadStemSettings, saveStemSettings, stemSettingsStatus } from './stemSettings.js';
 import { loadMasterKey } from './masterKey.js';
 import { loadPlaybackSettings } from './playbackSettings.js';
@@ -288,9 +289,14 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
     // HTML routes are dev-iterated constantly — never let browsers serve stale
     // copies (the /vendor route below overrides this with long caching).
     res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    // Same-origin pages need nothing; everyone else must be on the allowlist.
+    const corsOrigin = allowedOrigin(req.headers.origin, [config.staticBaseUrl, config.jamPublicBase]);
+    if (corsOrigin) {
+      res.setHeader('Access-Control-Allow-Origin', corsOrigin);
+      res.setHeader('Vary', 'Origin');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    }
 
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
@@ -667,7 +673,7 @@ function grantPageAccess(req: http.IncomingMessage, url: URL, res: http.ServerRe
     keyPrompt(
       res,
       key
-        ? 'That is not the current master key, and no invite matches it. Run <b>/key show</b> in Discord for the live key, or <b>/key give</b> for a link.'
+        ? 'That is not the current master key, and no invite matches it. Run /key show in Discord for the live key, or /key give for a link.'
         : 'No valid credential. Ask the operator for a panel link.',
     );
     return false;
@@ -896,17 +902,30 @@ async function readRawBody(req: http.IncomingMessage, limit = 256 * 1024): Promi
 
 async function readJsonBody(req: http.IncomingMessage, limit = 64 * 1024): Promise<unknown> {
   return new Promise((resolve) => {
-    let data = '';
-    req.on('data', (chunk) => {
-      data += chunk;
-      if (data.length > limit) {
-        req.destroy();
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    let aborted = false;
+    req.on('data', (chunk: Buffer) => {
+      if (aborted) return;
+      bytes += chunk.length;
+      if (bytes > limit) {
+        // Counting UTF-16 units let a multi-byte body slip past the cap. Stop
+        // buffering, but drain the rest instead of destroying the socket: a
+        // destroyed request never reaches the caller's error path, so the
+        // client saw a connection reset instead of a 400.
+        aborted = true;
+        chunks.length = 0;
+        req.removeAllListeners('data');
+        req.resume();
         resolve(null);
+        return;
       }
+      chunks.push(chunk);
     });
     req.on('end', () => {
+      if (aborted) return;
       try {
-        resolve(data ? JSON.parse(data) : {});
+        resolve(bytes ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {});
       } catch {
         resolve(null);
       }
@@ -1012,7 +1031,7 @@ function keyPrompt(res: http.ServerResponse, message?: string): void {
   <p>Enter the share key, or paste an invite link</p>
   <input name="key" id="key-input" placeholder="key or invite" autofocus autocomplete="off" spellcheck="false">
   <button id="key-submit">Enter</button>
-  ${message ? `<div class="err">${message}</div>` : ''}
+  ${message ? `<div class="err">${esc(message)}</div>` : ''}
   <div class="fine">The live master key is <b>/key show</b> in Discord (owner only).<br>Links from <b>/key give</b> expire, and may be used the number of times they say.</div>
 </form>
 <script>
