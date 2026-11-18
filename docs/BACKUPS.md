@@ -10,11 +10,13 @@ Two copies exist, and they must not be on the same disk:
 | Copy | Where | Kept by | Retention |
 | --- | --- | --- | --- |
 | Local archive | `/opt/backups/vaporzr-data-*.tgz` on the VPS | `deploy/backup.sh` (cron) | 7 newest |
-| Off-site snapshot | Any S3-compatible bucket (R2, B2, …) | `deploy/backup-offsite.sh` (called by the same cron) | 7 daily / 5 weekly / 6 monthly |
+| Off-site, option A | S3-compatible bucket (R2, B2, …) | `deploy/backup-offsite.sh` | 7 daily / 5 weekly / 6 monthly |
+| Off-site, option B | GitHub Release asset, encrypted | `deploy/backup-github.sh` | newest 6 |
 | Secondary | GitHub Actions artifact | `.github/workflows/backup.yml` | 90 days |
 
 The local archive is for fast restores. It is **not** a backup on its own — the
-disk that holds the volume also holds the archives.
+disk that holds the volume also holds the archives. At least one off-site target
+must be configured; `backup.sh` says so loudly when neither is.
 
 ## Why the off-site job pushes instead of pulls
 
@@ -30,34 +32,60 @@ incremental, so a nightly run uploads only what changed.
 
 ## Setup
 
-1. Create the bucket and an access key (R2: *Object Read & Write* on that bucket;
-   B2: an application key scoped to it).
+Both off-site targets are driven by the same `deploy/backup.sh` cron. Install the
+scripts once:
 
-2. On the VPS:
+```sh
+install -m 755 deploy/backup.sh         /opt/vaporzr/backup.sh
+install -m 755 deploy/backup-offsite.sh /opt/vaporzr/backup-offsite.sh   # option A
+install -m 755 deploy/backup-github.sh  /opt/vaporzr/backup-github.sh    # option B
+install -m 600 deploy/backup.env.example /etc/vaporzr/backup.env
+$EDITOR /etc/vaporzr/backup.env
+(crontab -l; echo "0 4 * * * /opt/vaporzr/backup.sh >> /var/log/vaporzr-backup.log 2>&1") | crontab -
+```
 
-   ```sh
-   install -m 755 deploy/backup-offsite.sh /opt/vaporzr/backup-offsite.sh
-   install -m 600 deploy/backup.env.example /etc/vaporzr/backup.env
-   $EDITOR /etc/vaporzr/backup.env     # RESTIC_REPOSITORY, RESTIC_PASSWORD, AWS_*
-   /opt/vaporzr/backup-offsite.sh      # first run initialises the repository
-   ```
+### Option A — restic to an S3-compatible bucket
 
-3. Add the nightly job, which does the local archive and then the off-site push:
+Best automation: incremental, deduplicated, encrypted, prunable. Create the
+bucket and an access key (R2: *Object Read & Write* on that bucket; B2: an
+application key scoped to it), then set `RESTIC_REPOSITORY`, `RESTIC_PASSWORD`
+and the `AWS_*` values. First run initialises the repository; `restic check` runs
+every night.
 
-   ```sh
-   install -m 755 deploy/backup.sh /opt/vaporzr/backup.sh
-   (crontab -l; echo "0 4 * * * /opt/vaporzr/backup.sh >> /var/log/vaporzr-backup.log 2>&1") | crontab -
-   ```
+Verify from a machine that is not the VPS:
 
-4. Confirm it is real, from a machine that is not the VPS:
+```sh
+RESTIC_REPOSITORY=... RESTIC_PASSWORD=... restic snapshots
+```
 
-   ```sh
-   RESTIC_REPOSITORY=... RESTIC_PASSWORD=... restic snapshots
-   ```
+Run `restic check --read-data` monthly, by hand or from a second cron line — it
+reads every pack, so it is the check that catches silent corruption.
 
-`restic check` runs every night. Run `restic check --read-data` monthly, by hand
-or from a second cron line — it reads every pack, so it is the check that catches
-silent corruption.
+### Option B — GitHub Release asset (no payment method)
+
+Every worthwhile S3 free tier (R2, B2) asks for a card on file even at zero spend.
+This path needs none:
+
+1. Create a **private** repo, e.g. `vaporzr-backups`. It holds only ciphertext.
+2. Create a token with write access to it (classic: `repo` scope; fine-grained:
+   *Contents → Read and write*).
+3. Set `GH_BACKUP_REPO=owner/vaporzr-backups` and `GH_BACKUP_TOKEN=…`.
+
+The job encrypts the newest local archive with `BACKUP_PASSPHRASE_FILE`
+(`/opt/vaporzr/backup-passphrase.txt` by default), uploads it to a single rolling
+release tagged `backup-rolling`, and deletes all but the newest six assets.
+Requires `curl`, `openssl`, `python3` — all present on Debian/Ubuntu.
+
+The trade against option A: no dedupe, so each run uploads a full ~260 MB blob,
+and retention is a raw asset count rather than a policy.
+
+### Heartbeat (both options)
+
+Set `BACKUP_HEALTHCHECK_URL` to a check URL from healthchecks.io (free, no card):
+the script pings it on success and `<url>/fail` on failure. A missing ping is what
+tells you the job stopped — including when the host is gone, which is exactly when
+`/health` cannot answer. Configure the check for a 24-hour period with a ~2-hour
+grace.
 
 ## The passphrase
 
@@ -67,6 +95,8 @@ backup; it is a backup that dies with its source. (The old workflow had the same
 problem with `/opt/vaporzr/backup-passphrase.txt`.)
 
 ## Restoring
+
+### From a restic bucket (option A)
 
 ```sh
 # On a fresh host, with Docker installed and the bucket credentials exported:
@@ -79,6 +109,23 @@ docker run --rm -v vaporzr-data:/data \
 # The snapshot contains /data, so copy the contents across:
 docker run --rm -v vaporzr-data:/data -v /restore:/restore:ro \
   alpine sh -c 'cp -a /restore/data/. /data/'
+```
+
+### From a GitHub release asset (option B)
+
+Needs the asset and the passphrase, nothing else:
+
+```sh
+gh release download backup-rolling --repo owner/vaporzr-backups \
+  --pattern 'vaporzr-data-*.tgz.enc' --dir .
+
+openssl enc -d -aes-256-cbc -pbkdf2 \
+  -pass file:./backup-passphrase.txt \
+  -in vaporzr-data-*.tgz.enc -out vaporzr-data.tgz
+
+docker volume create vaporzr-data
+docker run --rm -v vaporzr-data:/data -v "$PWD:/restore:ro" alpine \
+  sh -c 'tar xzf /restore/vaporzr-data.tgz -C /data'
 ```
 
 Then recreate the container with the same `--env-file`, `cookies.txt` mount and
