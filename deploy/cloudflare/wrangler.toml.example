@@ -1,0 +1,19 @@
+name = "vaporzr-monitor"
+main = "monitor-worker.mjs"
+compatibility_date = "2026-11-01"
+
+# 96 runs/day, well inside the Workers free tier (100k requests/day).
+[triggers]
+crons = ["*/15 * * * *"]
+
+[vars]
+HEALTH_URL = "https://www.vaporzr.app/health"
+# Re-alert for the same problem at most every 3 hours.
+SUPPRESS_MINUTES = "180"
+
+# Optional but recommended: remembers the last problem signature so an ongoing
+# outage alerts once (plus one recovery message) instead of every 15 minutes.
+# Create it with `wrangler kv namespace create VZR_MONITOR`, then paste the id.
+# [[kv_namespaces]]
+# binding = "STATE"
+# id = "<namespace id>"
