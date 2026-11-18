@@ -232,6 +232,8 @@ export class Bridge {
     | ((
         action: 'list' | 'save' | 'apply' | 'delete' | 'reset' | 'fill',
         name?: string,
+        /** Guild whose bank this is; omitted falls back to the primary guild. */
+        guildId?: string,
       ) => {
         ok: boolean;
         library?: Array<{ file: string; name: string; category: string }>;

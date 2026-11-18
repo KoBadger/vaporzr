@@ -1347,11 +1347,12 @@ export class DiscordBot {
       }
     };
     // The deck page's library panel: categories, the eight pads and saved setups.
-    // Layout lives once per data dir, so any guild's controller can answer. The
-    // page opens the library BEFORE a track is loaded, so fall back to a
-    // controller for the primary guild instead of refusing to list anything.
-    bridge.onSampleBank = (action, name) => {
-      const controller = this.deckControllers.values().next().value ?? this.sampleBankController();
+    // The layout lives once per data dir, so any guild's controller can LIST it —
+    // but mutations (reset/fill/save/apply/delete) must hit the caller's guild,
+    // not whichever controller happened to be created first. Fall back to the
+    // primary guild only when the request carries no guild.
+    bridge.onSampleBank = (action, name, guildId) => {
+      const controller = (guildId ? this.deckControllers.get(guildId) : undefined) ?? this.sampleBankController();
       const payload = () => ({
         library: controller ? controller.sampleLibrary() : [],
         pads: controller ? controller.samplePads() : [],

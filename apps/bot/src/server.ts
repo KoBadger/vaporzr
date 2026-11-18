@@ -2967,7 +2967,7 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
                     ? 'apply'
                     : 'delete';
         const name = url.searchParams.get('name') ?? '';
-        const out = bot.onSampleBank(action, name);
+        const out = bot.onSampleBank(action, name, url.searchParams.get('guildId') || defaultGuildId());
         res.writeHead(out.ok ? 200 : 400, {
           'Content-Type': 'application/json',
           'Cache-Control': 'no-store',
