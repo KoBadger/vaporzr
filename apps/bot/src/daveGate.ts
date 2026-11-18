@@ -35,6 +35,27 @@ export const DAVE_APPEAR_GRACE_MS = 1_500;
 /** Longest stretch of audio we are willing to buffer while waiting. */
 export const DAVE_HOLD_MAX_MS = 8_000;
 
+/** Minimum gap between DAVE recovery reconnects. */
+export const DAVE_RECONNECT_COOLDOWN_MS = 5 * 60_000;
+
+/**
+ * Whether a stalled handshake justifies asking for a new voice session.
+ *
+ * Pure so the throttle is testable: a gate that overflows repeatedly must not
+ * reconnect repeatedly, and a non-DAVE channel must never reconnect at all.
+ */
+export function shouldReconnectDave(args: {
+  encryptionOn: boolean;
+  connectionStatus: string;
+  lastReconnectAt: number;
+  now: number;
+  cooldownMs?: number;
+}): boolean {
+  if (!args.encryptionOn) return false;
+  if (args.connectionStatus === 'destroyed') return false;
+  return args.now - args.lastReconnectAt >= (args.cooldownMs ?? DAVE_RECONNECT_COOLDOWN_MS);
+}
+
 /** 48 kHz stereo s16. */
 export const DAVE_BYTES_PER_MS = 48_000 * 2 * 2;
 

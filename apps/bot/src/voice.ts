@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { config } from '@vaporzr/core/config';
-import { DaveOutputGate } from './daveGate.js';
+import { DaveOutputGate, shouldReconnectDave } from './daveGate.js';
 import { tailFadeSeconds } from '@vaporzr/core/crossfade';
 import type { AudioTransport } from '@vaporzr/core/transport';
 import { youtubeProxyHops } from '@vaporzr/core/youtube';
@@ -253,6 +253,8 @@ export class VoiceManager implements AudioTransport {
     maxWaitMs: 0,
     lastOverflowAt: null as number | null,
   };
+  /** When the voice link was last re-signalled to restart a stalled DAVE handshake. */
+  private lastDaveReconnectAt = 0;
   /** Active sequential volume fade-out (sequential crossfade fallback). */
   private fadeOutTimer: NodeJS.Timeout | null = null;
   /** One-shot seek (ms) applied to the next decoded stream — crossfade handoff. */
@@ -917,6 +919,40 @@ export class VoiceManager implements AudioTransport {
     return { ...this.daveGateTelemetry };
   }
 
+  /**
+   * Ask the voice server for a fresh session when the E2EE handshake never
+   * settles. `rejoin()` re-sends the voice-state payload, which gives Discord a
+   * reason to hand back a new voice session — and with it a new DAVE session —
+   * without destroying the player or the queue. Audio keeps arriving; the gate
+   * holds it until the new handshake finishes, so the listener hears a pause
+   * instead of static or the rest of the set in silence.
+   *
+   * At most once every five minutes: a genuinely broken handshake must not turn
+   * into a rejoin loop against Discord's voice servers.
+   */
+  private recoverDaveHandshake(): void {
+    const connection = this.connection;
+    if (!connection) return;
+    const now = Date.now();
+    const go = shouldReconnectDave({
+      encryptionOn: this.daveEncryption,
+      connectionStatus: connection.state.status,
+      lastReconnectAt: this.lastDaveReconnectAt,
+      now,
+    });
+    if (!go) return;
+    this.lastDaveReconnectAt = now;
+    try {
+      const sent = connection.rejoin();
+      console.warn(
+        `[voice] DAVE handshake stalled — ${sent ? 're-signalled' : 'could not re-signal'} the voice link ` +
+          `(state: ${connection.state.status})`,
+      );
+    } catch (err) {
+      console.warn(`[voice] DAVE reconnect failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   /** Create a fresh streaming resource. Safe to call repeatedly. */
   startStream(): void {
     if (!this.player) return;
@@ -1216,6 +1252,10 @@ export class VoiceManager implements AudioTransport {
         console.warn(
           `[voice] DAVE still not ready after ${Math.round(gate.stats().waitedMs / 1000) || '>8'}s — dropped ${chunks} buffered chunks (silence, never static)`,
         );
+        // Silence is the correct fallback for one backlog, but a handshake that
+        // never settles means the session is dead for its whole lifetime. Asking
+        // the voice server for a fresh session is the one thing that restarts it.
+        this.recoverDaveHandshake();
       },
     });
 

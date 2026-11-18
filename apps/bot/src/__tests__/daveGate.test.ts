@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { DAVE_BYTES_PER_MS, DAVE_HOLD_MAX_MS, DaveOutputGate, daveGateVerdict } from '../daveGate.js';
+import {
+  DAVE_BYTES_PER_MS,
+  DAVE_HOLD_MAX_MS,
+  DAVE_RECONNECT_COOLDOWN_MS,
+  DaveOutputGate,
+  daveGateVerdict,
+  shouldReconnectDave,
+} from '../daveGate.js';
 
 const maxHoldBytes = DAVE_HOLD_MAX_MS * DAVE_BYTES_PER_MS;
 
@@ -173,5 +180,52 @@ describe('DaveOutputGate', () => {
     expect(overflows).toEqual([1]);
     expect(gate.stats()).toMatchObject({ open: false, heldBytes: 0, overflows: 1, lastOverflowAt: 50 });
     expect(gate.holding).toBe(false);
+  });
+});
+
+describe('shouldReconnectDave', () => {
+  it('reconnects once a stalled handshake has overflowed and the cooldown has passed', () => {
+    expect(
+      shouldReconnectDave({
+        encryptionOn: true,
+        connectionStatus: 'ready',
+        lastReconnectAt: 0,
+        now: 1_000_000,
+      }),
+    ).toBe(true);
+  });
+
+  it('never reconnects inside the cooldown, however many backlogs are dropped', () => {
+    const now = 1_000_000;
+    // Same instant as the previous reconnect, and again one millisecond short of
+    // the cooldown: without this the gate would rejoin Discord in a loop.
+    expect(shouldReconnectDave({ encryptionOn: true, connectionStatus: 'ready', lastReconnectAt: now, now })).toBe(
+      false,
+    );
+    expect(
+      shouldReconnectDave({
+        encryptionOn: true,
+        connectionStatus: 'ready',
+        lastReconnectAt: now,
+        now: now + DAVE_RECONNECT_COOLDOWN_MS - 1,
+      }),
+    ).toBe(false);
+    expect(
+      shouldReconnectDave({
+        encryptionOn: true,
+        connectionStatus: 'ready',
+        lastReconnectAt: now,
+        now: now + DAVE_RECONNECT_COOLDOWN_MS,
+      }),
+    ).toBe(true);
+  });
+
+  it('does nothing on a channel that is not E2EE or a dead connection', () => {
+    expect(shouldReconnectDave({ encryptionOn: false, connectionStatus: 'ready', lastReconnectAt: 0, now: 1 })).toBe(
+      false,
+    );
+    expect(shouldReconnectDave({ encryptionOn: true, connectionStatus: 'destroyed', lastReconnectAt: 0, now: 1 })).toBe(
+      false,
+    );
   });
 });
