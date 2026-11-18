@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DAVE_HOLD_MAX_MS, DAVE_BYTES_PER_MS, daveGateVerdict } from '../daveGate.js';
+import { DAVE_BYTES_PER_MS, DAVE_HOLD_MAX_MS, DaveOutputGate, daveGateVerdict } from '../daveGate.js';
 
 const maxHoldBytes = DAVE_HOLD_MAX_MS * DAVE_BYTES_PER_MS;
 
@@ -79,5 +79,97 @@ describe('daveGateVerdict', () => {
         heldBytes: maxHoldBytes + 1,
       }),
     ).toBe('overflow');
+  });
+});
+
+describe('DaveOutputGate', () => {
+  const chunk = (n: number) => Buffer.alloc(3840, n);
+
+  function makeGate(overrides: { ready?: boolean; protocolVersion?: number; maxHoldBytes?: number } = {}) {
+    let clock = 0;
+    let session: { ready: boolean; protocolVersion: number } | null =
+      overrides.ready === undefined && overrides.protocolVersion === undefined
+        ? null
+        : { ready: overrides.ready ?? false, protocolVersion: overrides.protocolVersion ?? 1 };
+    const opened: number[] = [];
+    const overflows: number[] = [];
+    const gate = new DaveOutputGate({
+      encryptionOn: () => true,
+      session: () => session,
+      maxHoldBytes: overrides.maxHoldBytes,
+      now: () => clock,
+      onOpen: (ms) => opened.push(ms),
+      onOverflow: (n) => overflows.push(n),
+    });
+    return {
+      gate,
+      opened,
+      overflows,
+      advance: (ms: number) => {
+        clock += ms;
+      },
+      setSession: (next: { ready: boolean; protocolVersion: number } | null) => {
+        session = next;
+      },
+    };
+  }
+
+  it('releases nothing while the session is not ready', () => {
+    const { gate } = makeGate({ ready: false });
+    expect(gate.push(chunk(1))).toEqual([]);
+    expect(gate.push(chunk(2))).toEqual([]);
+    expect(gate.holding).toBe(true);
+    expect(gate.stats()).toMatchObject({ open: false, overflows: 0, heldBytes: 7680 });
+  });
+
+  it('drain() does not release a backlog that is still waiting', () => {
+    const { gate } = makeGate({ ready: false });
+    gate.push(chunk(1));
+    gate.push(chunk(2));
+    expect(gate.drain()).toEqual([]);
+    expect(gate.stats().open).toBe(false);
+  });
+
+  it('releases the backlog ahead of the new chunk once ready', () => {
+    const { gate, setSession } = makeGate({ ready: false });
+    gate.push(chunk(1));
+    gate.push(chunk(2));
+    setSession({ ready: true, protocolVersion: 1 });
+    const out = gate.push(chunk(3));
+    expect(out.map((b) => b[0])).toEqual([1, 2, 3]);
+    expect(gate.holding).toBe(false);
+    expect(gate.stats().open).toBe(true);
+  });
+
+  it('drain() releases the backlog when the session becomes ready', () => {
+    const { gate, setSession, advance } = makeGate({ ready: false });
+    gate.push(chunk(7));
+    advance(900);
+    setSession({ ready: true, protocolVersion: 1 });
+    const out = gate.drain();
+    expect(out).toHaveLength(1);
+    expect(out[0][0]).toBe(7);
+    expect(gate.stats().waitedMs).toBe(900);
+  });
+
+  it('opens when the channel is not E2EE', () => {
+    const { gate } = makeGate({ protocolVersion: 0 });
+    expect(gate.push(chunk(9))).toHaveLength(1);
+  });
+
+  it('assumes DAVE is off after the grace with no session object', () => {
+    const { gate, advance } = makeGate();
+    expect(gate.push(chunk(1))).toEqual([]);
+    advance(2_000);
+    expect(gate.push(chunk(2))).toHaveLength(2);
+  });
+
+  it('drops the backlog instead of growing without bound', () => {
+    const { gate, overflows } = makeGate({ ready: false, maxHoldBytes: 1000 });
+    expect(gate.push(chunk(1))).toEqual([]);
+    expect(gate.push(chunk(2))).toEqual([]); // 3840 held > 1000 -> overflow
+    expect(overflows).toEqual([1]);
+    expect(gate.stats()).toMatchObject({ open: false, heldBytes: 0, overflows: 1 });
+    expect(gate.holding).toBe(false);
   });
 });

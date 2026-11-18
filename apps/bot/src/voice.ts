@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { config } from '@vaporzr/core/config';
-import { daveGateVerdict, type DaveGateVerdict } from './daveGate.js';
+import { DaveOutputGate } from './daveGate.js';
 import { tailFadeSeconds } from '@vaporzr/core/crossfade';
 import type { AudioTransport } from '@vaporzr/core/transport';
 import { youtubeProxyHops } from '@vaporzr/core/youtube';
@@ -234,6 +234,12 @@ export class VoiceManager implements AudioTransport {
    * Reset whenever a connection is (re)established.
    */
   private daveConfirmedOff = false;
+  /**
+   * Cumulative DAVE gate behaviour since boot, surfaced on /health. `overflows`
+   * above zero means the handshake stalled long enough to drop audio — the
+   * symptom that used to be hidden behind "it just sounds bad".
+   */
+  private daveGateTelemetry = { opens: 0, overflows: 0, maxWaitMs: 0 };
   /** Active sequential volume fade-out (sequential crossfade fallback). */
   private fadeOutTimer: NodeJS.Timeout | null = null;
   /** One-shot seek (ms) applied to the next decoded stream — crossfade handoff. */
@@ -873,6 +879,11 @@ export class VoiceManager implements AudioTransport {
     };
   }
 
+  /** DAVE output-gate counters, for /health and the watchdog. */
+  daveGateStatus(): { opens: number; overflows: number; maxWaitMs: number } {
+    return { ...this.daveGateTelemetry };
+  }
+
   /** Create a fresh streaming resource. Safe to call repeatedly. */
   startStream(): void {
     if (!this.player) return;
@@ -1126,9 +1137,6 @@ export class VoiceManager implements AudioTransport {
   /** The audio pipeline: holds PCM until DAVE can encrypt it, mixes sound effects
    *  in, then taps the analyzer, then feeds the player. */
   private makeMixStream(): Transform {
-    const gateStart = Date.now();
-    let held: Buffer[] = [];
-    let heldBytes = 0;
     let gateTimer: NodeJS.Timeout | null = null;
 
     const finish = (chunk: Buffer): Buffer => {
@@ -1146,48 +1154,46 @@ export class VoiceManager implements AudioTransport {
       return out;
     };
 
+    // The only way audio reaches the encoder. The gate refuses to release
+    // anything until DAVE can encrypt it, so a timeout in the readiness wait
+    // can no longer turn into plaintext frames (heard as static).
+    const gate = new DaveOutputGate({
+      encryptionOn: () => this.daveEncryption && !this.daveConfirmedOff,
+      session: () => this.daveSessionState(),
+      onOpen: (waitedMs) => {
+        this.daveGateTelemetry.opens++;
+        this.daveGateTelemetry.maxWaitMs = Math.max(this.daveGateTelemetry.maxWaitMs, waitedMs);
+        if (waitedMs > 750) console.log(`[voice] DAVE gate opened after ${waitedMs}ms`);
+      },
+      onOverflow: (chunks) => {
+        this.daveGateTelemetry.overflows++;
+        console.warn(
+          `[voice] DAVE still not ready after ${Math.round(gate.stats().waitedMs / 1000) || '>8'}s — dropped ${chunks} buffered chunks (silence, never static)`,
+        );
+      },
+    });
+
     const clearGateTimer = (): void => {
       if (gateTimer) clearTimeout(gateTimer);
       gateTimer = null;
     };
 
-    const gateVerdict = (): DaveGateVerdict =>
-      daveGateVerdict({
-        encryptionOn: this.daveEncryption && !this.daveConfirmedOff,
-        session: this.daveSessionState(),
-        elapsedMs: Date.now() - gateStart,
-        heldBytes,
-      });
-
-    /** Emit everything buffered while the gate was shut, in order. */
-    const flushHeld = (): void => {
-      if (held.length === 0) return;
-      const pending = held;
-      held = [];
-      heldBytes = 0;
-      for (const buf of pending) {
+    const emit = (chunks: Buffer[]): void => {
+      for (const buf of chunks) {
         if (stream.destroyed) return;
         stream.push(finish(buf));
       }
     };
 
-    /** Poll while holding: the handshake completes asynchronously, and nothing
-     *  else will call back to flush. Never flushes unless the gate re-opens. */
+    /** Poll while holding: the handshake completes asynchronously and nothing
+     *  else calls back. Never releases anything unless the gate has opened. */
     const armGate = (): void => {
       if (gateTimer || stream.destroyed) return;
       gateTimer = setTimeout(() => {
         gateTimer = null;
         if (stream.destroyed) return;
-        const verdict = gateVerdict();
-        if (verdict === 'open') {
-          flushHeld();
-          return;
-        }
-        if (verdict === 'overflow') {
-          held = [];
-          heldBytes = 0;
-        }
-        armGate();
+        emit(gate.drain());
+        if (gate.holding) armGate();
       }, 100);
       gateTimer.unref?.();
     };
@@ -1196,28 +1202,14 @@ export class VoiceManager implements AudioTransport {
       highWaterMark: VoiceManager.STREAM_HIGH_WATER_MARK,
       transform: (chunk, _enc, cb) => {
         if (stream.writableEnded || stream.destroyed) return;
-        const verdict = gateVerdict();
-        if (verdict === 'open') {
-          clearGateTimer();
-          flushHeld();
-          cb(null, finish(chunk as Buffer));
+        const out = gate.push(chunk as Buffer);
+        if (out.length === 0) {
+          armGate();
+          cb();
           return;
         }
-        if (verdict === 'overflow') {
-          // The session is not becoming ready. Drop the backlog and keep holding:
-          // listeners get silence rather than plaintext decoded as static.
-          if (heldBytes > 0) {
-            console.warn(
-              `[voice] DAVE still not ready after ${Math.round((Date.now() - gateStart) / 1000)}s — dropping ${held.length} buffered chunks`,
-            );
-          }
-          held = [];
-          heldBytes = 0;
-        } else {
-          held.push(chunk as Buffer);
-          heldBytes += (chunk as Buffer).length;
-        }
-        armGate();
+        clearGateTimer();
+        emit(out);
         cb();
       },
     });

@@ -59,3 +59,129 @@ export function daveGateVerdict(args: {
   if (args.heldBytes > (args.maxHoldBytes ?? DAVE_HOLD_MAX_MS * DAVE_BYTES_PER_MS)) return 'overflow';
   return 'hold';
 }
+
+export interface DaveGateStats {
+  /** True once audio has actually been released for this stream. */
+  open: boolean;
+  /** Buffered bytes waiting for the handshake. */
+  heldBytes: number;
+  /** How long audio was held before the gate opened (0 while still shut). */
+  waitedMs: number;
+  /** Times the backlog had to be dropped because the handshake never settled. */
+  overflows: number;
+}
+
+/**
+ * Stateful wrapper around `daveGateVerdict`.
+ *
+ * The pure verdict is easy to satisfy; the bug that shipped was in the wiring —
+ * a caller that decided "close enough" and handed frames to the encoder anyway.
+ * Keeping the buffer here means the only way to get audio out is `push()` /
+ * `drain()`, both of which refuse to release anything while the gate is shut.
+ * Tests pin exactly that contract.
+ */
+export class DaveOutputGate {
+  private held: Buffer[] = [];
+  private heldBytes = 0;
+  private opened = false;
+  private waitedMs = 0;
+  private overflows = 0;
+  private readonly start: number;
+
+  constructor(
+    private readonly opts: {
+      encryptionOn: () => boolean;
+      session: () => DaveSessionLike | null;
+      appearGraceMs?: number;
+      maxHoldBytes?: number;
+      now?: () => number;
+      onOpen?: (waitedMs: number) => void;
+      onOverflow?: (heldChunks: number) => void;
+    },
+  ) {
+    this.start = this.now();
+  }
+
+  private now(): number {
+    return this.opts.now ? this.opts.now() : Date.now();
+  }
+
+  private verdict(): DaveGateVerdict {
+    return daveGateVerdict({
+      encryptionOn: this.opts.encryptionOn(),
+      session: this.opts.session(),
+      elapsedMs: this.now() - this.start,
+      heldBytes: this.heldBytes,
+      appearGraceMs: this.opts.appearGraceMs,
+      maxHoldBytes: this.opts.maxHoldBytes,
+    });
+  }
+
+  /** Audio is still waiting for the handshake. */
+  get holding(): boolean {
+    return this.held.length > 0;
+  }
+
+  private release(): void {
+    if (!this.opened) {
+      this.opened = true;
+      this.waitedMs = this.now() - this.start;
+      this.opts.onOpen?.(this.waitedMs);
+    }
+  }
+
+  /**
+   * Offer one chunk. Returns the chunks the encoder may send now (oldest
+   * first), or an empty array while the gate is shut — never the chunk itself.
+   */
+  push(chunk: Buffer): Buffer[] {
+    const verdict = this.verdict();
+    if (verdict === 'overflow') {
+      this.dropBacklog();
+      return [];
+    }
+    if (verdict === 'hold') {
+      this.held.push(chunk);
+      this.heldBytes += chunk.length;
+      return [];
+    }
+    this.release();
+    const out = this.held.length ? [...this.held, chunk] : [chunk];
+    this.held = [];
+    this.heldBytes = 0;
+    return out;
+  }
+
+  /** Re-check while holding (called from a timer). Same contract as `push`. */
+  drain(): Buffer[] {
+    if (this.held.length === 0) return [];
+    const verdict = this.verdict();
+    if (verdict === 'overflow') {
+      this.dropBacklog();
+      return [];
+    }
+    if (verdict === 'hold') return [];
+    this.release();
+    const out = this.held;
+    this.held = [];
+    this.heldBytes = 0;
+    return out;
+  }
+
+  private dropBacklog(): void {
+    if (this.held.length === 0) return;
+    this.overflows++;
+    this.opts.onOverflow?.(this.held.length);
+    this.held = [];
+    this.heldBytes = 0;
+  }
+
+  stats(): DaveGateStats {
+    return {
+      open: this.opened,
+      heldBytes: this.heldBytes,
+      waitedMs: this.waitedMs,
+      overflows: this.overflows,
+    };
+  }
+}
