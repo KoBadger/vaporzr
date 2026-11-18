@@ -369,6 +369,11 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
           // tier says what it should have been.
           boostTier: quality?.boostTier ?? null,
           raiseError: quality?.raiseError ?? null,
+          // DAVE output gate, cumulative since boot. `overflows` above zero means
+          // the handshake stalled long enough to drop audio (silence); it must
+          // never be non-zero while listeners report static, because static can
+          // only come from frames that bypassed this gate.
+          daveGate: audioHost?.voice.daveGateStatus() ?? null,
         },
       });
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
