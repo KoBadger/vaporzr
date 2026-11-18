@@ -1096,6 +1096,18 @@ export class VoiceManager implements AudioTransport {
     }
     // No music stream is actively flowing (idle, paused, or between tracks):
     // play the clip directly on the AudioPlayer so mic drops and SFX are heard.
+    // Except when DAVE still cannot encrypt — a standalone resource bypasses the
+    // mix-stream gate, and plaintext here is static to every listener. Hold the
+    // clip instead; it is mixed into the next stream chunk.
+    if (this.daveEncryption && !this.daveConfirmedOff) {
+      const dave = this.daveSessionState();
+      const ready = Boolean(dave && (dave.protocolVersion === 0 || dave.ready));
+      if (!ready) {
+        this.sfxBuffer = this.sfxBuffer ? Buffer.concat([this.sfxBuffer, data]) : data;
+        console.warn('[voice] sound effect held back: DAVE is not ready (it would be static)');
+        return;
+      }
+    }
     this.sfxBuffer = null;
     const standalone = Readable.from(data);
     const res = this.makeResource(standalone);
