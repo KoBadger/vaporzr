@@ -18,6 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { config } from '@vaporzr/core/config';
+import { daveGateVerdict, type DaveGateVerdict } from './daveGate.js';
 import { tailFadeSeconds } from '@vaporzr/core/crossfade';
 import type { AudioTransport } from '@vaporzr/core/transport';
 import { youtubeProxyHops } from '@vaporzr/core/youtube';
@@ -226,6 +227,13 @@ export class VoiceManager implements AudioTransport {
 
   /** Whether the current voice session uses DAVE/E2EE encryption. */
   private daveEncryption = true;
+  /**
+   * True once this connection has been shown not to be E2EE (protocol 0, or no
+   * session object at all after the grace period). Lets every later stream open
+   * the output gate immediately instead of paying the grace on each track.
+   * Reset whenever a connection is (re)established.
+   */
+  private daveConfirmedOff = false;
   /** Active sequential volume fade-out (sequential crossfade fallback). */
   private fadeOutTimer: NodeJS.Timeout | null = null;
   /** One-shot seek (ms) applied to the next decoded stream — crossfade handoff. */
@@ -436,6 +444,7 @@ export class VoiceManager implements AudioTransport {
   ): Promise<boolean> {
     this.leave();
     this.daveEncryption = true; // @discordjs/voice uses DAVE/E2EE when available
+    this.daveConfirmedOff = false;
     // Negotiate the bitrate BEFORE connecting: the encoder is built when the
     // first track starts, and a channel raised afterwards would only take effect
     // for listeners on the next track.
@@ -994,12 +1003,14 @@ export class VoiceManager implements AudioTransport {
         // protocolVersion 0 = DAVE negotiated as off for this channel.
         if (dave.protocolVersion === 0 || dave.ready) {
           const waited = Date.now() - start;
+          this.daveConfirmedOff = dave.protocolVersion === 0;
           if (waited > 500) console.log(`[voice] DAVE ready after ${waited}ms (protocol v${dave.protocolVersion})`);
           return true;
         }
       } else if (Date.now() - start > appearGraceMs) {
         // No session at all: the channel negotiated DAVE off (protocol 0), so
         // plain frames are correct here.
+        this.daveConfirmedOff = true;
         return true;
       }
       await new Promise((r) => setTimeout(r, 100));
@@ -1112,26 +1123,105 @@ export class VoiceManager implements AudioTransport {
     return out;
   }
 
-  /** The audio pipeline: mixes sound effects in, then taps the analyzer, then feeds the player. */
+  /** The audio pipeline: holds PCM until DAVE can encrypt it, mixes sound effects
+   *  in, then taps the analyzer, then feeds the player. */
   private makeMixStream(): Transform {
-    const stream = new Transform({
+    const gateStart = Date.now();
+    let held: Buffer[] = [];
+    let heldBytes = 0;
+    let gateTimer: NodeJS.Timeout | null = null;
+
+    const finish = (chunk: Buffer): Buffer => {
+      const verdict = this.audioHealth?.feed(chunk);
+      // A broadband-noise window is decode garbage from a failed source (a
+      // stalled Spotify feed, a torn-down ffmpeg), never music — left alone it
+      // reached listeners as harsh static until the watchdog recovered. Gate
+      // it to silence of the same length; the monitor still counts the bad
+      // window, so stall recovery fires exactly as before.
+      const audio = verdict === 'noise' ? Buffer.alloc(chunk.length) : chunk;
+      const out = this.mixSfx(audio);
+      this.pcmTap?.(out);
+      this.spectrumTap?.(out);
+      this.featureTap?.(out);
+      return out;
+    };
+
+    const clearGateTimer = (): void => {
+      if (gateTimer) clearTimeout(gateTimer);
+      gateTimer = null;
+    };
+
+    const gateVerdict = (): DaveGateVerdict =>
+      daveGateVerdict({
+        encryptionOn: this.daveEncryption && !this.daveConfirmedOff,
+        session: this.daveSessionState(),
+        elapsedMs: Date.now() - gateStart,
+        heldBytes,
+      });
+
+    /** Emit everything buffered while the gate was shut, in order. */
+    const flushHeld = (): void => {
+      if (held.length === 0) return;
+      const pending = held;
+      held = [];
+      heldBytes = 0;
+      for (const buf of pending) {
+        if (stream.destroyed) return;
+        stream.push(finish(buf));
+      }
+    };
+
+    /** Poll while holding: the handshake completes asynchronously, and nothing
+     *  else will call back to flush. Never flushes unless the gate re-opens. */
+    const armGate = (): void => {
+      if (gateTimer || stream.destroyed) return;
+      gateTimer = setTimeout(() => {
+        gateTimer = null;
+        if (stream.destroyed) return;
+        const verdict = gateVerdict();
+        if (verdict === 'open') {
+          flushHeld();
+          return;
+        }
+        if (verdict === 'overflow') {
+          held = [];
+          heldBytes = 0;
+        }
+        armGate();
+      }, 100);
+      gateTimer.unref?.();
+    };
+
+    const stream: Transform = new Transform({
       highWaterMark: VoiceManager.STREAM_HIGH_WATER_MARK,
       transform: (chunk, _enc, cb) => {
         if (stream.writableEnded || stream.destroyed) return;
-        const verdict = this.audioHealth?.feed(chunk as Buffer);
-        // A broadband-noise window is decode garbage from a failed source (a
-        // stalled Spotify feed, a torn-down ffmpeg), never music — left alone it
-        // reached listeners as harsh static until the watchdog recovered. Gate
-        // it to silence of the same length; the monitor still counts the bad
-        // window, so stall recovery fires exactly as before.
-        const audio = verdict === 'noise' ? Buffer.alloc((chunk as Buffer).length) : (chunk as Buffer);
-        const out = this.mixSfx(audio);
-        this.pcmTap?.(out);
-        this.spectrumTap?.(out);
-        this.featureTap?.(out);
-        cb(null, out);
+        const verdict = gateVerdict();
+        if (verdict === 'open') {
+          clearGateTimer();
+          flushHeld();
+          cb(null, finish(chunk as Buffer));
+          return;
+        }
+        if (verdict === 'overflow') {
+          // The session is not becoming ready. Drop the backlog and keep holding:
+          // listeners get silence rather than plaintext decoded as static.
+          if (heldBytes > 0) {
+            console.warn(
+              `[voice] DAVE still not ready after ${Math.round((Date.now() - gateStart) / 1000)}s — dropping ${held.length} buffered chunks`,
+            );
+          }
+          held = [];
+          heldBytes = 0;
+        } else {
+          held.push(chunk as Buffer);
+          heldBytes += (chunk as Buffer).length;
+        }
+        armGate();
+        cb();
       },
     });
+
     stream.on('drain', () => {
       this.onStreamDrain?.();
     });
