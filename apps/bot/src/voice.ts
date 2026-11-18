@@ -480,7 +480,9 @@ export class VoiceManager implements AudioTransport {
       });
 
     let connection = connect();
-    const attempts = 2;
+    // Three attempts with growing backoff: a deploy restart or a DNS blip used to
+    // exhaust two quick attempts, so the bot appeared to join and then leave.
+    const attempts = 3;
     for (let attempt = 1; ; attempt++) {
       try {
         await waitForReady(connection);
@@ -496,8 +498,9 @@ export class VoiceManager implements AudioTransport {
         } catch {
           /* ignore */
         }
+        const delay = attempt === 1 ? 1_500 : 4_000;
         await new Promise((resolve) => {
-          const t = setTimeout(resolve, 1500);
+          const t = setTimeout(resolve, delay);
           t.unref?.();
         });
         connection = connect();
@@ -806,17 +809,36 @@ export class VoiceManager implements AudioTransport {
 
     if (channel && config.voiceRaiseChannelBitrate && current < wanted) {
       const before = current;
-      try {
-        const updated = (await channel.setBitrate(wanted)) as { bitrate?: number } | undefined;
-        current = updated?.bitrate ?? wanted;
-        console.log(`[voice] channel bitrate ${Math.round(before / 1000)} -> ${Math.round(current / 1000)} kbps`);
-      } catch (err) {
+      let lastErr: unknown = null;
+      // A single transient DNS/connect blip used to lock the whole session at the
+      // channel's old cap — which on a quiet channel is 20 kbps, audibly awful.
+      // Retrying here costs a second and saves the entire session's quality.
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          const updated = (await channel.setBitrate(wanted)) as { bitrate?: number } | undefined;
+          current = updated?.bitrate ?? wanted;
+          lastErr = null;
+          console.log(`[voice] channel bitrate ${Math.round(before / 1000)} -> ${Math.round(current / 1000)} kbps`);
+          break;
+        } catch (err) {
+          lastErr = err;
+          if (attempt < 3) {
+            const delay = attempt === 1 ? 500 : 1_500;
+            console.warn(`[voice] bitrate raise attempt ${attempt} failed — retrying in ${delay}ms`);
+            await new Promise((resolve) => {
+              const t = setTimeout(resolve, delay);
+              t.unref?.();
+            });
+          }
+        }
+      }
+      if (lastErr) {
         // Missing Manage Channels is normal on a server you don't administer;
         // encoding at the channel's existing cap is the correct fallback.
-        this.raiseError = err instanceof Error ? err.message : String(err);
+        this.raiseError = lastErr instanceof Error ? lastErr.message : String(lastErr);
         console.warn(
           `[voice] could not raise channel bitrate to ${Math.round(wanted / 1000)} kbps ` +
-            `(${err instanceof Error ? err.message : String(err)}) - using the channel's current cap`,
+            `(${this.raiseError}) - using the channel's current cap of ${Math.round(current / 1000)} kbps`,
         );
       }
     }
