@@ -56,6 +56,9 @@ if [ -z "$SOURCE" ]; then
 fi
 
 API=https://api.github.com/repos/$GH_BACKUP_REPO
+# Asset uploads live on a different host than the rest of the API; posting to
+# api.github.com/releases/{id}/assets returns 404 and looks like a bad id.
+UPLOAD=https://uploads.github.com/repos/$GH_BACKUP_REPO
 NAME="$(basename "$SOURCE").enc"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -89,11 +92,11 @@ if [ -z "$RELEASE_ID" ]; then
   exit 1
 fi
 
-echo "==> uploading $NAME to $GH_BACKUP_REPO release $TAG"
+echo "==> uploading $NAME to $GH_BACKUP_REPO release $TAG ($RELEASE_ID)"
 api -X POST --connect-timeout 30 \
   -H "Content-Type: application/octet-stream" \
   --data-binary "@$TMP/$NAME" \
-  "$API/releases/$RELEASE_ID/assets?name=$NAME" >/dev/null
+  "$UPLOAD/releases/$RELEASE_ID/assets?name=$NAME" >/dev/null
 
 # Retention: newest $KEEP_ASSETS names win (names carry YYYYMMDD-HHMM).
 api "$API/releases/$RELEASE_ID/assets?per_page=100" |
