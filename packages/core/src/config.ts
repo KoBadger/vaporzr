@@ -273,8 +273,12 @@ export const config = {
    */
   audioHealthNoiseRms: Number(process.env.AUDIO_HEALTH_NOISE_RMS) || 4000,
   audioHealthNoiseZcr: Number(process.env.AUDIO_HEALTH_NOISE_ZCR) || 0.42,
-  /** How many consecutive bad windows trigger auto-skip (0 = disabled). */
-  audioHealthAutoSkipAfter: Number(process.env.AUDIO_HEALTH_AUTO_SKIP_AFTER) || 3,
+  /**
+   * Retired: this used to auto-skip after N noisy windows. Noisy PCM means the
+   * bytes are wrong, not that the source stopped, and acting on it restarted
+   * songs mid-play. Kept as a no-op key so an existing `.env` does not break.
+   */
+  audioHealthAutoSkipAfter: 0,
   /**
    * Duck the music while channel members are talking. Opt-in (off by default):
    * the receiver's speaking events can be chatty, and dropping/restoring volume

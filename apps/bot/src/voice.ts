@@ -299,8 +299,6 @@ export class VoiceManager implements AudioTransport {
   /** ~1 second of 48 kHz stereo s16 PCM so bursts don't cause stutter. */
   static readonly STREAM_HIGH_WATER_MARK = 192_000;
 
-  private audioHealthBadStreak = 0;
-
   constructor(private onVoiceChange?: (joined: boolean, channelId: string | null) => void) {
     this.audioHealth = new PcmIntegrityMonitor({
       noiseRms: config.audioHealthNoiseRms,
@@ -309,17 +307,10 @@ export class VoiceManager implements AudioTransport {
         const detail = `broadband noise (RMS ${Math.round(stats.rms)}, ZCR ${(stats.zeroCrossings / stats.samples).toFixed(2)})`;
         console.warn(`[voice] audio monitor: ${detail}`);
         this.onAudioBad?.(detail);
-        this.audioHealthBadStreak++;
-        if (config.audioHealthAutoSkipAfter > 0 && this.audioHealthBadStreak >= config.audioHealthAutoSkipAfter) {
-          console.warn(
-            `[voice] audio monitor: ${this.audioHealthBadStreak} consecutive bad windows — triggering stall recovery`,
-          );
-          this.onStallRecovery?.();
-          this.audioHealthBadStreak = 0;
-        }
-      },
-      onGood: () => {
-        this.audioHealthBadStreak = 0;
+        // Deliberately no recovery here. A noisy window means the bytes are
+        // garbage, not that the feed stopped — re-issuing the track on this
+        // signal is what made songs restart, skip and cut into the next one.
+        // A dead feed has its own detector: the no-PCM watchdog above.
       },
     });
   }

@@ -25,6 +25,23 @@ function makeWhiteNoise(durationMs: number, sampleRate = 48000, amplitude = 2000
   return buf;
 }
 
+/**
+ * Loud, decorrelated stereo: a 440 Hz left channel and a 1.5 kHz right channel.
+ * Real mixes differ between channels (panning, reverb, width), which is what the
+ * interleaved analyser used to misread as near-white noise.
+ */
+function makeStereoMusic(durationMs: number, sampleRate = 48000): Buffer {
+  const samples = Math.floor((durationMs / 1000) * sampleRate);
+  const buf = Buffer.alloc(samples * 2 * 2);
+  for (let i = 0; i < samples; i++) {
+    const l = Math.round(9000 * Math.sin((2 * Math.PI * 440 * i) / sampleRate));
+    const r = Math.round(9000 * Math.sin((2 * Math.PI * 1500 * i) / sampleRate));
+    buf.writeInt16LE(l, i * 4);
+    buf.writeInt16LE(r, i * 4 + 2);
+  }
+  return buf;
+}
+
 function makeSilence(durationMs: number, sampleRate = 48000): Buffer {
   const samples = Math.floor((durationMs / 1000) * sampleRate);
   return Buffer.alloc(samples * 2 * 2);
@@ -95,6 +112,29 @@ describe('classifyPcmWindow', () => {
   it('empty samples returns silence', () => {
     const stats: PcmWindowStats = { rms: 0, peak: 0, zeroCrossings: 0, samples: 0 };
     expect(classifyPcmWindow(stats)).toBe('silence');
+  });
+});
+
+describe('analyzePcmWindow stereo handling', () => {
+  /**
+   * Regression: zero crossings were counted across the interleaved L,R,L,R
+   * sequence. Two decorrelated channels (any real stereo mix) then cross zero
+   * almost every sample, so loud music measured ZCR 0.4–0.9 and was classified
+   * as broadband noise — gated to silence and, worse, treated as a stall, which
+   * restarted and skipped tracks mid-song. Both channels here are loud sine
+   * tones (RMS well over the 4000 threshold) but independent, which is the
+   * shape that used to fool the analyser.
+   */
+  it('counts zero crossings per channel, so decorrelated stereo music is not noise', () => {
+    const buf = makeStereoMusic(250);
+    const stats = analyzePcmWindow(buf);
+    expect(stats.rms).toBeGreaterThan(4000);
+    expect(classifyPcmWindow(stats)).toBe('good');
+    expect(stats.zeroCrossings / stats.samples).toBeLessThan(0.42);
+  });
+
+  it('still calls genuine two-channel white noise noise', () => {
+    expect(classifyPcmWindow(analyzePcmWindow(makeWhiteNoise(250)))).toBe('noise');
   });
 });
 
