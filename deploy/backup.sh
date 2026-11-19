@@ -95,15 +95,21 @@ find "$DATA" -type f -printf '%P\n' |
     { if ($0 ~ /\.(log|tmp)$/) next
       for (i = 1; i <= n; i++) if ($0 == pats[i] || index($0, pats[i] "/") == 1) next
       print }' |
-  sort >"$STATE_LIST" || true
+  LC_ALL=C sort >"$STATE_LIST" || true
 
 tar czf "$OUT/vaporzr-data-$STAMP.tgz" \
   -C "$DATA" \
   --exclude-from="$EXCLUDES" \
   .
 
-tar tzf "$OUT/vaporzr-data-$STAMP.tgz" | sed 's|^\./||' | grep -v '/$' | sort >"$ARCHIVE_LIST" || true
-comm -23 "$STATE_LIST" "$ARCHIVE_LIST" >"$MISSING" || true
+# LC_ALL=C on both sorts and on comm: `comm` compares bytes and rejects input it
+# considers unsorted, and in the default locale `sort` orders differently — the
+# first production run printed "comm: input is not in sorted order" and still
+# reported no gaps, which is a false negative in the one check that guards the
+# backup.
+tar tzf "$OUT/vaporzr-data-$STAMP.tgz" | sed 's|^\./||' | grep -v '/$' |
+  LC_ALL=C sort >"$ARCHIVE_LIST" || true
+LC_ALL=C comm -23 "$STATE_LIST" "$ARCHIVE_LIST" >"$MISSING" || true
 if [ -s "$MISSING" ]; then
   count=$(wc -l <"$MISSING")
   echo "!! backup incomplete: $count state file(s) missing from the archive:" >&2
