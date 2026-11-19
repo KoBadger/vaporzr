@@ -8,6 +8,14 @@ name: Watchdog
 # Needs no account, no bucket and no card: the alert arrives as a GitHub issue
 # (and GitHub's own failure email for scheduled workflows).
 #
+# Two kinds of issue, deliberately separate:
+#   * "Watchdog: bot health check failing" — the bot is down or a subsystem is
+#     broken. Opened, bumped and closed by the hard checks.
+#   * "Watchdog: audio quality warning" — the bot works, but something is on
+#     track to make it sound bad or lose YouTube access (low channel cap, aging
+#     cookies, dropped audio by the DAVE gate). Bumped at most every 6 hours so
+#     a long-standing warning does not become 96 comments a day.
+#
 # Caveat: GitHub disables scheduled workflows after ~60 days without repository
 # activity. Any commit re-enables it, and the yt-dlp refresh workflow commits on
 # a schedule, so this only matters if the whole repo goes quiet.
@@ -30,6 +38,13 @@ concurrency:
 env:
   HEALTH_URL: https://www.vaporzr.app/health
   ISSUE_TITLE: 'Watchdog: bot health check failing'
+  QUALITY_ISSUE_TITLE: 'Watchdog: audio quality warning'
+  # Cookies older than this are near the end of their life: YouTube sessions
+  # have been lasting ~4 weeks, and a dead cookie means no search and no
+  # playback fallback.
+  COOKIE_MAX_AGE_DAYS: 21
+  # Below Discord's own default of 64 kbps music is audibly thin.
+  MIN_CHANNEL_KBPS: 64
 
 jobs:
   health:
@@ -47,6 +62,44 @@ jobs:
           echo "$body" | jq -e '.backup.stale == false' >/dev/null || fail "off-site backup is stale (no successful push in 48h)"
           echo "$body" | jq -e '(.backup.error // null) == null' >/dev/null || fail "the last backup run failed"
           echo "$body" | jq -e '.youtube != "blocked"' >/dev/null || fail "YouTube is blocked for this host"
+
+      - name: Quality signals
+        id: quality
+        run: |
+          set -euo pipefail
+          body=$(curl -fsS --retry 3 --retry-delay 5 --max-time 20 "$HEALTH_URL")
+          cookie_age=$(echo "$body" | jq -r '.cookieAgeDays // "null"')
+          channel_kbps=$(echo "$body" | jq -r '.audio.channelKbps // "null"')
+          # Only a *recent* drop is worth a warning: the cumulative counter stays
+          # non-zero for the life of the process, so alerting on it alone would
+          # keep an issue open for days after a single hiccup.
+          recent_drop=$(echo "$body" | jq -r --argjson now "$(date +%s000)" \
+            '((.audio.daveGate.lastOverflowAt // 0) > 0) and ($now - .audio.daveGate.lastOverflowAt < 1800000)')
+
+          warnings=""
+          add() { warnings="${warnings}- $1"$'\n'; }
+
+          if [ "$cookie_age" != "null" ] && [ "$cookie_age" -ge "$COOKIE_MAX_AGE_DAYS" ]; then
+            add "**YouTube cookies are ${cookie_age} days old.** Re-export \`cookies.txt\` — once they expire, search and the playback fallback stop working."
+          fi
+          # null means no stream has started since boot, which is not a problem.
+          if [ "$channel_kbps" != "null" ] && [ "$channel_kbps" -lt "$MIN_CHANNEL_KBPS" ]; then
+            add "**Voice channel cap is ${channel_kbps} kbps.** Music will sound thin. Raise the channel to 96–128 kbps, or give the bot Manage Channels and rejoin so it raises the cap itself."
+          fi
+          if [ "$recent_drop" = "true" ]; then
+            add "**The DAVE gate dropped audio in the last 30 minutes.** The encryption handshake did not settle within 8 s, so listeners heard silence. Reconnecting the bot usually clears it; if it repeats, the \`audio.daveGate\` counters in \`/health\` say how often."
+          fi
+
+          if [ -n "$warnings" ]; then
+            echo "count=1" >> "$GITHUB_OUTPUT"
+            {
+              echo 'warnings<<WATCHDOG_EOF'
+              printf '%s' "$warnings"
+              echo 'WATCHDOG_EOF'
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "count=0" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Open (or bump) the alert
         if: failure()
@@ -76,3 +129,39 @@ jobs:
           [ -n "$number" ] || exit 0
           gh issue close "$number" --repo "$GITHUB_REPOSITORY" \
             --comment "Health probe is green again; closing automatically."
+
+      - name: Open (or bump) the quality warning
+        if: always() && steps.quality.outputs.count == '1'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WARNINGS: ${{ steps.quality.outputs.warnings }}
+        run: |
+          set -euo pipefail
+          body=$(printf '%s\n\nSignals from `%s` at %s.\n\nThis issue closes itself when the signals clear.\n' \
+            "$WARNINGS" "$HEALTH_URL" "$(date -u +'%Y-%m-%d %H:%M UTC')")
+          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "in:title \"$QUALITY_ISSUE_TITLE\"" --json number --jq '.[0].number // empty')
+          if [ -z "$number" ]; then
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$QUALITY_ISSUE_TITLE" --body "$body"
+            exit 0
+          fi
+          # Bump at most every six hours: an unfixed warning should nag, not flood.
+          updated=$(gh issue view "$number" --repo "$GITHUB_REPOSITORY" --json updatedAt --jq '.updatedAt')
+          age=$(( $(date +%s) - $(date -d "$updated" +%s) ))
+          if [ "$age" -lt 21600 ]; then
+            echo "Quality issue #$number is fresh (${age}s old); not bumping."
+            exit 0
+          fi
+          gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body "$body"
+
+      - name: Close the quality warning when it clears
+        if: always() && steps.quality.outputs.count == '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "in:title \"$QUALITY_ISSUE_TITLE\"" --json number --jq '.[0].number // empty')
+          [ -n "$number" ] || exit 0
+          gh issue close "$number" --repo "$GITHUB_REPOSITORY" \
+            --comment "All quality signals are clear again; closing automatically."

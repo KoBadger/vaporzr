@@ -69,6 +69,12 @@ export interface DaveGateStats {
   waitedMs: number;
   /** Times the backlog had to be dropped because the handshake never settled. */
   overflows: number;
+  /**
+   * Wall-clock time of the most recent drop, or null if none. The cumulative
+   * count alone keeps an old drop "true" for the life of the process, which
+   * makes it useless for alerting on a *current* problem.
+   */
+  lastOverflowAt: number | null;
 }
 
 /**
@@ -86,6 +92,7 @@ export class DaveOutputGate {
   private opened = false;
   private waitedMs = 0;
   private overflows = 0;
+  private lastOverflowAt: number | null = null;
   private readonly start: number;
 
   constructor(
@@ -171,6 +178,7 @@ export class DaveOutputGate {
   private dropBacklog(): void {
     if (this.held.length === 0) return;
     this.overflows++;
+    this.lastOverflowAt = this.now();
     this.opts.onOverflow?.(this.held.length);
     this.held = [];
     this.heldBytes = 0;
@@ -182,6 +190,7 @@ export class DaveOutputGate {
       heldBytes: this.heldBytes,
       waitedMs: this.waitedMs,
       overflows: this.overflows,
+      lastOverflowAt: this.lastOverflowAt,
     };
   }
 }

@@ -1150,6 +1150,8 @@ export class DiscordBot {
   private npMessages = new Map<string, { channelId: string; messageId: string }>();
   /** guildId -> last text channel a command ran in (mini now-playing posts there). */
   private lastTextChannel = new Map<string, string>();
+  /** Guilds already told (this process) that their channel cap is hurting audio. */
+  private qualityNoticeSent = new Set<string>();
   /** guildId -> auto-posted mini now-playing message (always-on, self-updating). */
   private miniNp = new Map<string, { channelId: string; messageId: string }>();
   /** guildId -> track uri the mini strip currently represents (for re-anchoring). */
@@ -1503,6 +1505,10 @@ export class DiscordBot {
     sessions.onSessionCreated((s) => {
       // Sessions created after boot (lazy join) must get the ears too.
       this.armWeaselEars(s);
+      // A channel the bot is not allowed to raise caps every listener's quality.
+      // The web panel already says so, but Discord users never see the panel —
+      // and "why does the music sound worse in here?" came from exactly that.
+      s.voice.setOnQualityWarning((q) => void this.postQualityWarning(s.guildId, q));
       s.queue.subscribe({
         onQueueChanged: () => this.schedulePanelRefresh(),
         onStateChanged: (st) => {
@@ -9266,6 +9272,28 @@ export class DiscordBot {
     };
   }
 
+  /** A channel the bot cannot raise caps what every listener hears. Say it once
+   *  per session, in plain numbers — "sounds bad" with no cause is the report
+   *  this exists to prevent. Only for caps under 64 kbps (Discord's default),
+   *  because a 128 kbps cap on a 384 kbps server is not worth a message. */
+  private async postQualityWarning(
+    guildId: string | null,
+    q: { channelKbps: number; ceilingKbps: number },
+  ): Promise<void> {
+    if (!guildId || q.channelKbps >= 64 || this.qualityNoticeSent.has(guildId)) return;
+    this.qualityNoticeSent.add(guildId);
+    try {
+      const channel = await this.panelShareChannel(guildId);
+      await channel?.send(
+        `⚠️ This voice channel is capped at **${q.channelKbps} kbps**, and I'm not allowed to raise it ` +
+          `(the server allows ${q.ceilingKbps} kbps). Music will sound thin until someone raises the channel ` +
+          `bitrate, or gives me **Manage Channels**.`,
+      );
+    } catch {
+      // Cosmetic: a missing permission or a deleted channel must never affect playback.
+    }
+  }
+
   /** Where a channel-less share lands: the panel's channel first (the Share
    *  button lives there), else the last text channel the bot heard from, else
    *  the welcome channel (system channel or first writable). */
@@ -9283,8 +9311,7 @@ export class DiscordBot {
     return guild ? this.welcomeChannel(guild) : null;
   }
 
-  /** 📌 Toggle the pin on a posted jam card. customId holds
-   *  `jampin:<channelId>:<messageId>` so it survives restarts. */
+  /** 📌 Toggle the pin on a posted jam card. customId holds   *  `jampin:<channelId>:<messageId>` so it survives restarts. */
   private async handleJamPin(interaction: ButtonInteraction): Promise<void> {
     const [, channelId, messageId] = interaction.customId.split(':');
     const build = (pinned: boolean): ActionRowBuilder<ButtonBuilder> =>
