@@ -9,7 +9,7 @@ Two copies exist, and they must not be on the same disk:
 
 | Copy | Where | Kept by | Retention |
 | --- | --- | --- | --- |
-| Local archive | `/opt/backups/vaporzr-data-*.tgz` on the VPS | `deploy/backup.sh` (cron) | 7 newest |
+| Local archive | `/opt/backups/vaporzr-data-*.tgz` on the VPS | `deploy/backup.sh` (cron) | 4 newest |
 | Off-site, option A | S3-compatible bucket (R2, B2, …) | `deploy/backup-offsite.sh` | 7 daily / 5 weekly / 6 monthly |
 | Off-site, option B | GitHub Release asset, encrypted | `deploy/backup-github.sh` | newest 6 |
 | Secondary | GitHub Actions artifact | `.github/workflows/backup.yml` | 90 days |
@@ -17,6 +17,32 @@ Two copies exist, and they must not be on the same disk:
 The local archive is for fast restores. It is **not** a backup on its own — the
 disk that holds the volume also holds the archives. At least one off-site target
 must be configured; `backup.sh` says so loudly when neither is.
+
+## What is and is not in the archive
+
+The exclusion list is a single file, `deploy/backup-excludes.txt`, read by both
+`backup.sh` and `restore-drill.sh`. It is deliberately short — only rebuildable
+caches:
+
+| Excluded | Why |
+| --- | --- |
+| `go-librespot/` | ~1.1 GB of Spotify audio cache, refetched on demand |
+| `video-cache/` | ~1.7 GB of YouTube fragments, refetched on demand |
+| `hf/` | ~81 MB of HuggingFace model weights (Demucs), re-downloaded when needed |
+| `tmp/`, `backup-state.json`, `backup-last-error.txt` | working files |
+
+Everything else is state someone would miss, including the two that used to be
+excluded and should not have been:
+
+- **`decks/`** — every server's custom decks. Small JSON, user-authored, and
+  impossible to reconstruct. It was silently absent from every backup until the
+  restore drill compared the archive against the live volume.
+- **`stems/`** — ~225 MB of separated vocals/instrumentals produced by Replicate
+  and paid for per run. Losing them means paying again, so they are backed up.
+
+Because stems roughly double the archive (~260 MB → ~485 MB), the local
+retention is four archives rather than seven. The off-site copy is the one that
+matters if the disk goes away, and its retention is set by the target.
 
 ## Why the off-site job pushes instead of pulls
 
@@ -36,10 +62,12 @@ Both off-site targets are driven by the same `deploy/backup.sh` cron. Install th
 scripts once:
 
 ```sh
-install -m 755 deploy/backup.sh         /opt/vaporzr/backup.sh
-install -m 755 deploy/backup-offsite.sh /opt/vaporzr/backup-offsite.sh   # option A
-install -m 755 deploy/backup-github.sh  /opt/vaporzr/backup-github.sh    # option B
-install -m 600 deploy/backup.env.example /etc/vaporzr/backup.env
+install -m 755 deploy/backup.sh            /opt/vaporzr/backup.sh
+install -m 644 deploy/backup-excludes.txt  /opt/vaporzr/backup-excludes.txt
+install -m 755 deploy/backup-offsite.sh    /opt/vaporzr/backup-offsite.sh   # option A
+install -m 755 deploy/backup-github.sh     /opt/vaporzr/backup-github.sh    # option B
+install -m 755 deploy/restore-drill.sh     /opt/vaporzr/restore-drill.sh
+install -m 600 deploy/backup.env.example   /etc/vaporzr/backup.env
 $EDITOR /etc/vaporzr/backup.env
 (crontab -l; echo "0 4 * * * /opt/vaporzr/backup.sh >> /var/log/vaporzr-backup.log 2>&1") | crontab -
 ```
@@ -131,6 +159,45 @@ docker run --rm -v vaporzr-data:/data -v "$PWD:/restore:ro" alpine \
 Then recreate the container with the same `--env-file`, `cookies.txt` mount and
 `-v vaporzr-data:/app/data` (`deploy/vps-setup.sh` does exactly this), and check
 `/health`.
+
+## The restore drill
+
+A backup nobody has restored is a belief. Run the drill monthly, and after any
+change to the exclusion list:
+
+```sh
+install -m 755 deploy/restore-drill.sh     /opt/vaporzr/restore-drill.sh
+install -m 644 deploy/backup-excludes.txt  /opt/vaporzr/backup-excludes.txt
+/opt/vaporzr/restore-drill.sh
+```
+
+It downloads the newest asset from the off-site target (so it also proves the
+token works and the upload is readable), decrypts it with the passphrase the
+nightly job uses, checks the gzip, extracts to scratch space, parses every JSON
+file, and then compares against the live volume: every live state file that
+existed when the snapshot was taken must be present in the restored tree. Nothing
+on the running bot is touched — no volume is overwritten, no second process
+connects to Discord.
+
+`RESTORE_DRILL_KEEP=1` leaves the extracted tree at `/var/tmp/restore-drill` for
+inspection.
+
+The completeness step is the one that earns its keep. Integrity checks passed
+happily while `decks/` — every server's custom decks — was missing from every
+archive; only comparing the restore against the live volume found it.
+
+Verified on 2026-11-19 against `vaporzr-data-20261119-0400.tgz.enc`
+(sha256 `63774281…625327`): decrypted, extracted 337 MB / 109 files, 58/58 JSON
+files valid. The same run reported 44 missing state files, which is how the
+`decks/` and `stems/` exclusions were found and removed.
+
+After that fix, against `vaporzr-data-20261119-0523.tgz.enc` (477 MB, sha256
+`c503ad4d…93a4a8`): restored 561 MB / 139 files, 58/58 JSON valid, and
+**138 of 138** live state files present — including `decks/` and all 30 stems.
+That is what a working backup looks like.
+
+Re-run the drill after any change to `deploy/backup-excludes.txt`. A new exclusion
+that nobody verified is exactly how `decks/` went missing in the first place.
 
 ## Watching it
 

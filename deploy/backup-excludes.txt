@@ -1,0 +1,6 @@
+go-librespot
+video-cache
+hf
+tmp
+backup-state.json
+backup-last-error.txt
