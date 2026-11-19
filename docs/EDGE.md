@@ -1,21 +1,20 @@
 # Edge: what fronts the bot, and how to stop paying for a second door
 
-## What is actually running (measured 2026-11-17)
+## What is actually running (measured 2026-11-19)
 
 ```
 Internet ──► Cloudflare (proxied DNS) ──► Caddy :443 on 46.224.80.104 ──► 127.0.0.1:4876
-Internet ──► Tailscale Funnel (vaporzr3-1.tail137f17.ts.net) ───────────► 127.0.0.1:4876
 ```
 
 - **Caddy** (`/etc/caddy/Caddyfile`) serves `vaporzr.app`, `www.vaporzr.app` and
   `vaporzr.duckdns.org`. `WEB_ACCESS` is unset, so the app accepts public hosts;
   the panel's own session/key auth is the gate.
-- **Tailscale** is used for two things: **Funnel**, which publishes the same app
-  at a `.ts.net` URL, and a tailnet-only reverse proxy for the OpenCode app on
-  `:4100`.
+- **Tailscale Funnel is retired** (2026-11-19). `tailscale funnel reset` removed
+  the public ingress; `https://vaporzr3-1.tail137f17.ts.net` no longer answers.
+  Commands below are kept for the record and for the tailnet proxy case.
 
-Funnel is a *second public door* to the same panel. It adds no reachability that
-`www.vaporzr.app` does not already have, so cancelling Tailscale costs the
+Funnel was a *second public door* to the same panel. It added no reachability
+that `www.vaporzr.app` did not already have, so cancelling Tailscale costs the
 `.ts.net` URL and the dev proxy — not access.
 
 ## Retiring Tailscale
@@ -23,7 +22,7 @@ Funnel is a *second public door* to the same panel. It adds no reachability that
 On the VPS:
 
 ```sh
-tailscale funnel reset        # stop publishing the app to the internet
+tailscale funnel reset        # done 2026-11-19: public ingress removed
 tailscale serve reset         # ALSO removes the :4100 OpenCode proxy
 tailscale down                # drop the tailnet for now (reversible)
 ```

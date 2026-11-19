@@ -74,10 +74,46 @@ on_error() {
 }
 trap on_error ERR
 
+# Self-check, prepared before the archive so a file created mid-run cannot cause
+# a false alarm. A backup that silently omits something looks exactly like a good
+# one until the day it is restored: that is how users' `decks/` went missing from
+# every archive for months. This list is every state file that is NOT excluded —
+# if the archive does not contain one of them, the run fails loudly instead of
+# uploading an incomplete snapshot over a complete one.
+STATE_LIST=$(mktemp)
+ARCHIVE_LIST=$(mktemp)
+MISSING=$(mktemp)
+trap 'rm -f "${STATE_LIST:-}" "${ARCHIVE_LIST:-}" "${MISSING:-}"' EXIT
+# Prefix matching, not a regex built from the file: the exclusion list is a list
+# of names, and a name containing a dot must not quietly become a wildcard.
+find "$DATA" -type f -printf '%P\n' |
+  awk -v excl="$EXCLUDES" '
+    BEGIN { while ((getline line < excl) > 0) {
+              gsub(/^[ \t]+|[ \t]+$/, "", line)
+              if (line == "" || substr(line, 1, 1) == "#") continue
+              n++; pats[n] = line } }
+    { if ($0 ~ /\.(log|tmp)$/) next
+      for (i = 1; i <= n; i++) if ($0 == pats[i] || index($0, pats[i] "/") == 1) next
+      print }' |
+  sort >"$STATE_LIST" || true
+
 tar czf "$OUT/vaporzr-data-$STAMP.tgz" \
   -C "$DATA" \
   --exclude-from="$EXCLUDES" \
   .
+
+tar tzf "$OUT/vaporzr-data-$STAMP.tgz" | sed 's|^\./||' | grep -v '/$' | sort >"$ARCHIVE_LIST" || true
+comm -23 "$STATE_LIST" "$ARCHIVE_LIST" >"$MISSING" || true
+if [ -s "$MISSING" ]; then
+  count=$(wc -l <"$MISSING")
+  echo "!! backup incomplete: $count state file(s) missing from the archive:" >&2
+  head -20 "$MISSING" >&2 || true
+  printf 'backup.sh: archive missing %s state file(s), first: %s\n' \
+    "$count" "$(head -1 "$MISSING")" >"$ERRFILE"
+  rm -f "$OUT/vaporzr-data-$STAMP.tgz"
+  exit 1
+fi
+echo "self-check: $(wc -l <"$ARCHIVE_LIST") files archived, no state gaps"
 
 # Rotate: keep the newest $KEEP archives.
 ls -1t "$OUT"/vaporzr-data-*.tgz 2>/dev/null | tail -n +$((KEEP + 1)) | xargs -r rm -f
