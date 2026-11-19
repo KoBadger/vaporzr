@@ -46,13 +46,19 @@ UMAMI_APP_SECRET=$(openssl rand -hex 32)
 ## Backups
 
 `deploy/backup.sh` archives the durable data volume (queues, tokens, keys,
-samples, uploads, stats) while skipping rebuildable caches, keeps seven
-archives, and is meant for a nightly cron:
+decks, samples, uploads, stats, paid-for stems) while skipping only rebuildable
+caches, keeps four archives, and is meant for a nightly cron. The exclusion list
+is `deploy/backup-excludes.txt`, shared with the restore drill:
 
 ```sh
-install -m 755 deploy/backup.sh /opt/vaporzr/backup.sh
+install -m 755 deploy/backup.sh            /opt/vaporzr/backup.sh
+install -m 644 deploy/backup-excludes.txt  /opt/vaporzr/backup-excludes.txt
 (crontab -l; echo "0 4 * * * /opt/vaporzr/backup.sh >> /var/log/vaporzr-backup.log 2>&1") | crontab -
 ```
+
+Prove it restores with `deploy/restore-drill.sh` (see `docs/BACKUPS.md`) — it
+fetches the newest off-site asset, decrypts it and checks the result against the
+live volume.
 
 ## Security
 
