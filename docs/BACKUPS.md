@@ -12,7 +12,12 @@ Two copies exist, and they must not be on the same disk:
 | Local archive | `/opt/backups/vaporzr-data-*.tgz` on the VPS | `deploy/backup.sh` (cron) | 4 newest |
 | Off-site, option A | S3-compatible bucket (R2, B2, …) | `deploy/backup-offsite.sh` | 7 daily / 5 weekly / 6 monthly |
 | Off-site, option B | GitHub Release asset, encrypted | `deploy/backup-github.sh` | newest 6 |
-| Secondary | GitHub Actions artifact | `.github/workflows/backup.yml` | 90 days |
+
+The old "Secondary" copy was a weekly GitHub Actions workflow that pulled the
+volume over SSH. GitHub's runners cannot reach port 22 on this host, so it failed
+every single run from 1 November onwards, and a permanently red job is worse than
+no job: it taught everyone to ignore the colour. It is deleted — backups now push
+out from the host, and `/health` plus the watchdog report their age.
 
 The local archive is for fast restores. It is **not** a backup on its own — the
 disk that holds the volume also holds the archives. At least one off-site target
