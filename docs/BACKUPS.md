@@ -191,6 +191,14 @@ Verified on 2026-11-19 against `vaporzr-data-20261119-0400.tgz.enc`
 files valid. The same run reported 44 missing state files, which is how the
 `decks/` and `stems/` exclusions were found and removed.
 
+After that fix, against `vaporzr-data-20261119-0523.tgz.enc` (477 MB, sha256
+`c503ad4d…93a4a8`): restored 561 MB / 139 files, 58/58 JSON valid, and
+**138 of 138** live state files present — including `decks/` and all 30 stems.
+That is what a working backup looks like.
+
+Re-run the drill after any change to `deploy/backup-excludes.txt`. A new exclusion
+that nobody verified is exactly how `decks/` went missing in the first place.
+
 ## Watching it
 
 `/health` reports:
