@@ -167,12 +167,18 @@ describe('PcmIntegrityMonitor.feed verdicts (mix-stream gate)', () => {
       onBad: () => bad++,
       onGood: () => good++,
     });
+    // One noisy window is not proof (a distorted track can look like this for
+    // 250 ms), so the first is passed through while it is still counted.
+    expect(monitor.feed(makeWhiteNoise(250))).toBe('good');
+    expect(bad).toBe(1);
+    // Two in a row is a real stall: from here the gate silences it.
     expect(monitor.feed(makeWhiteNoise(250))).toBe('noise');
+    expect(bad).toBe(2);
     expect(monitor.feed(makeSineTone(440, 250))).toBe('good');
     expect(monitor.feed(makeSilence(250))).toBe('good');
-    expect(bad).toBe(1);
-    // Every non-noise window breaks the streak, so music and silence both count
-    // as good. The gate only changes what listeners hear while it recovers.
+    // Music breaks the streak, so the next noisy window starts over as good.
+    expect(monitor.feed(makeWhiteNoise(250))).toBe('good');
+    expect(bad).toBe(3);
     expect(good).toBe(2);
   });
 });

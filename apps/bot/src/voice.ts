@@ -104,6 +104,7 @@ export class PcmIntegrityMonitor {
   private readonly onBad: (stats: PcmWindowStats, buffer: Buffer) => void;
   private readonly onGood: () => void;
   private streak = 0;
+  private noiseStreak = 0;
   private startTime = Date.now();
 
   constructor(
@@ -141,9 +142,15 @@ export class PcmIntegrityMonitor {
     const isNoise = stats.rms > this.noiseRms && stats.zeroCrossings / stats.samples > this.noiseZcr;
     this.startTime = now;
     if (isNoise) {
+      this.noiseStreak++;
       this.onBad(stats, buffer);
-      return 'noise';
+      // One noisy-looking window is not proof — a distorted or heavily limited
+      // track can look like this for 250 ms. Gate from the second consecutive
+      // window: a real stall is still silenced (and still counted for recovery),
+      // while music is never cut for one unlucky window.
+      return this.noiseStreak >= 2 ? 'noise' : 'good';
     }
+    this.noiseStreak = 0;
     // Any non-noise window (normal music, speech, or true silence) breaks the
     // streak. Firing onGood only for digital silence let isolated bad windows
     // accumulate over an entire session until a spurious auto-skip.
@@ -153,6 +160,7 @@ export class PcmIntegrityMonitor {
 
   reset(): void {
     this.streak = 0;
+    this.noiseStreak = 0;
     this.startTime = Date.now();
   }
 }
