@@ -23,9 +23,27 @@ import { tailFadeSeconds } from '@vaporzr/core/crossfade';
 import type { AudioTransport } from '@vaporzr/core/transport';
 import { youtubeProxyHops } from '@vaporzr/core/youtube';
 import { safeFetch } from '@vaporzr/core/net';
+import { ffmpegLimiter, spawnWithLimiter } from '@vaporzr/core/processLimiter';
 import { createMusicResource } from './opusStream.js';
 import { normalizeCapturePcm } from './capture.js';
 import { analyzePcmWindow, type PcmWindowStats } from './audioHealth.js';
+
+/** Spawn ffmpeg with slot acquisition and guaranteed cleanup (uses shared limiter). */
+async function spawnFfmpeg(
+  args: string[],
+  options: { windowsHide?: boolean; env?: NodeJS.ProcessEnv; stdio?: any } = {},
+): Promise<ChildProcess> {
+  return spawnWithLimiter(
+    ffmpegLimiter,
+    () =>
+      spawn(config.ffmpegPath, args, { windowsHide: true, ...options }) as ChildProcess & {
+        on: (event: string, cb: (...args: any[]) => void) => void;
+      },
+    (proc) => {
+      // Additional cleanup if needed
+    },
+  );
+}
 
 /** The slice of an opusscript decoder the Weasel ear pipeline uses. */
 interface OpusScriptLike {
@@ -971,7 +989,11 @@ export class VoiceManager implements AudioTransport {
   }
 
   /** Crossfade two source URLs into one continuous mix (ffmpeg acrossfade). */
-  playMix(urlA: string, urlB: string, opts: { crossfadeSec?: number; volume?: number; cleanup?: string[] } = {}): void {
+  async playMix(
+    urlA: string,
+    urlB: string,
+    opts: { crossfadeSec?: number; volume?: number; cleanup?: string[] } = {},
+  ): Promise<void> {
     if (!this.player) return;
     this.clearIdleTimer();
     this.stopStream();
@@ -1001,21 +1023,21 @@ export class VoiceManager implements AudioTransport {
       's16le',
       'pipe:1',
     ];
-    const proc = spawn(config.ffmpegPath, args, { windowsHide: true });
+    const proc = await spawnFfmpeg(args, { windowsHide: true });
     this.ffmpeg = proc;
     this.streamStartTime = Date.now();
     this.pausedPositionMs = 0;
     const stream = this.makeMixStream();
     this.stream = stream;
-    proc.stdout.on('data', (d) => {
+    proc.stdout?.on('data', (d) => {
       this.chunksSinceLog++;
       this.bytesSinceLog += d.length;
     });
-    proc.stderr.on('data', (d) => {
+    proc.stderr?.on('data', (d) => {
       const l = d.toString().trim();
       if (l) console.warn(`[voice] mix: ${l.slice(0, 200)}`);
     });
-    proc.stdout.pipe(stream);
+    proc.stdout?.pipe(stream);
     const resource = this.makeResource(stream);
     this.resource = resource;
     if (opts.volume !== undefined) this.volumePercent = opts.volume;
@@ -1335,7 +1357,7 @@ export class VoiceManager implements AudioTransport {
    * transparently re-resolved and retried a bounded number of times, so a
    * flaky 403 doesn't kill the track.
    */
-  playFfmpegUrl(
+  async playFfmpegUrl(
     url: string,
     opts: {
       seekMs?: number;
@@ -1346,10 +1368,10 @@ export class VoiceManager implements AudioTransport {
       /** Track length, used to schedule the tail fade-out. */
       durationMs?: number;
     } = {},
-  ): void {
+  ): Promise<void> {
     if (!this.player) {
       console.warn('[voice] not in a voice channel — cannot stream');
-      return;
+      return Promise.resolve();
     }
     this.clearIdleTimer();
     this.stopStream();
@@ -1436,19 +1458,19 @@ export class VoiceManager implements AudioTransport {
     const ffEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.toLowerCase().endsWith('_proxy')));
     if (useYtProxy) ffEnv.http_proxy = config.youtubeProxy;
     else if (useSunoProxy) ffEnv.http_proxy = config.sunoProxy;
-    const proc = spawn(config.ffmpegPath, args, { windowsHide: true, env: ffEnv });
+    const proc = await spawnFfmpeg(args, { windowsHide: true, env: ffEnv });
     this.ffmpeg = proc;
     this.streamStartTime = Date.now();
     this.pausedPositionMs = requestedSeekMs;
     const stream = this.makeMixStream();
     this.stream = stream;
-    proc.stdout.on('data', (d) => {
+    proc.stdout?.on('data', (d) => {
       this.chunksSinceLog++;
       this.bytesSinceLog += d.length;
     });
     // Surface ffmpeg's own errors (connection refused, 403, bad URL, …) — they
     // were previously swallowed and every stream looked like a generic "cut short".
-    proc.stderr.on('data', (d) => {
+    proc.stderr?.on('data', (d) => {
       const line = d.toString().trim();
       if (!line) return;
       console.warn(`[voice] ffmpeg: ${line.slice(0, 800)}`);
@@ -1466,7 +1488,7 @@ export class VoiceManager implements AudioTransport {
         proc.emit('ffmpeg-critical-error');
       }
     });
-    proc.stdout.pipe(stream);
+    proc.stdout?.pipe(stream);
     if (fetchSelf) this.fetchIntoStdin(url, proc, token, refusal);
     const resource = this.makeResource(stream);
     this.resource = resource;
@@ -1675,13 +1697,13 @@ export class VoiceManager implements AudioTransport {
     // stretched output, so native input consumed = seconds * tempo).
     if (Math.abs(tempo - 1) > 0.01) args.push('-af', `atempo=${tempo.toFixed(3)}`);
     args.push('-f', 's16le', 'pipe:1');
-    return await new Promise<Buffer | null>((resolve) => {
+    return await new Promise<Buffer | null>(async (resolve) => {
       let settled = false;
       const out: Buffer[] = [];
       let size = 0;
       let proc: ChildProcess;
       try {
-        proc = spawn(config.ffmpegPath, args, { windowsHide: true });
+        proc = await spawnFfmpeg(args, { windowsHide: true });
       } catch {
         resolve(null);
         return;

@@ -65,3 +65,6 @@ voiceapi.txt
 apps/bot/opencode/
 
 .playwright-mcp/
+
+# vitest JSON reporter artifacts
+**/.vitest/

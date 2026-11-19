@@ -117,6 +117,12 @@ export const config = {
   vibeLon: process.env.VIBE_LON ?? '',
   /** ffmpeg binary used for server-side streaming + PCM resampling. */
   ffmpegPath: process.env.FFMPEG_PATH ?? ffmpegStatic ?? 'ffmpeg',
+  /**
+   * Maximum concurrent ffmpeg processes. Prevents Windows commit-limit errors
+   * (0xc000012d) by queuing spawns when limit reached. Default: 3.
+   * Increase only if your system has ample virtual memory.
+   */
+  ffmpegMaxConcurrent: Number(process.env.FFMPEG_MAX_CONCURRENT ?? 3),
   /** Path to the librespot binary (the server-side Spotify "device"). Empty = disabled. */
   librespotPath:
     process.env.LIBRESPOT_PATH ?? path.join(__dirname, '..', '..', '..', 'vendor', 'librespot', 'librespot'),

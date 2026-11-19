@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { QueueManager } from './queue.js';
+import { ffmpegLimiter, spawnWithLimiter } from '@vaporzr/core/processLimiter';
 import { resolveYoutubeVideo, searchAndResolveYoutube, type ResolvedVideo } from '@vaporzr/core/youtube';
 import { resolveSuno, probeDuration, cachedSunoAudio, cacheSunoAudio } from '@vaporzr/core/suno';
 import { resolveSoundcloudVideo, soundcloudUriToUrl } from '@vaporzr/core/soundcloud';
@@ -30,6 +31,20 @@ import {
   SpotifyError,
   type ResolvedTrack,
 } from '@vaporzr/core/spotify';
+
+/** Spawn ffmpeg with slot acquisition and guaranteed cleanup (uses shared limiter). */
+async function spawnFfmpeg(
+  args: string[],
+  options: { windowsHide?: boolean; env?: NodeJS.ProcessEnv; stdio?: any } = {},
+): Promise<ChildProcess> {
+  return spawnWithLimiter(
+    ffmpegLimiter,
+    () =>
+      spawn(config.ffmpegPath, args, { windowsHide: true, ...options }) as ChildProcess & {
+        on: (event: string, cb: (...args: any[]) => void) => void;
+      },
+  );
+}
 
 export type SendFn = (msg: CommandMessage) => void;
 
@@ -1722,47 +1737,55 @@ export class PlaybackController {
     if (this.spotifyDeviceId) void spotifySetVolume(this.spotifyDeviceId, vol).catch(() => {});
     let ff = this.resampler;
     if (!ff) {
-      ff = spawn(config.ffmpegPath, RESAMPLE_ARGS(this.audioFxFilter()), {
+      spawnFfmpeg(RESAMPLE_ARGS(this.audioFxFilter()), {
         windowsHide: true,
         stdio: ['pipe', 'pipe', 'ignore'],
-      });
-      this.resampler = ff;
-      const fIn = ff.stdin!;
-      const fOut = ff.stdout!;
-      // ffmpeg can be killed or crash mid-stream (e.g. during a skip); without
-      // error handlers a broken-pipe write here would take down the whole bot.
-      fIn.on('error', (err) => {
-        console.warn(`[playback] resampler stdin error: ${err instanceof Error ? err.message : err}`);
-        if (this.resampler === ff) this.resampler = null;
-        this.librespot?.pauseSocket();
-      });
-      fOut.on('error', (err) => {
-        console.warn(`[playback] resampler stdout error: ${err instanceof Error ? err.message : err}`);
-        if (this.resampler === ff) this.resampler = null;
-        this.librespot?.pauseSocket();
-      });
-      fIn.on('drain', () => this.librespot?.resumeSocket());
-      fOut.on('data', (d) => {
-        const ok = this.voice.feedPcm(d);
-        if (!ok) fOut.pause();
-      });
-      ff.on('error', (err) => console.warn(`[playback] resampler error: ${err.message}`));
-      ff.on('exit', () => {
-        if (this.resampler === ff) this.resampler = null;
+      }).then((spawnedFf) => {
+        ff = spawnedFf;
+        this.resampler = ff;
+        const fIn = ff.stdin!;
+        const fOut = ff.stdout!;
+        // ffmpeg can be killed or crash mid-stream (e.g. during a skip); without
+        // error handlers a broken-pipe write here would take down the whole bot.
+        fIn.on('error', (err) => {
+          console.warn(`[playback] resampler stdin error: ${err instanceof Error ? err.message : err}`);
+          if (this.resampler === ff) this.resampler = null;
+          this.librespot?.pauseSocket();
+        });
+        fOut.on('error', (err) => {
+          console.warn(`[playback] resampler stdout error: ${err instanceof Error ? err.message : err}`);
+          if (this.resampler === ff) this.resampler = null;
+          this.librespot?.pauseSocket();
+        });
+        fIn.on('drain', () => this.librespot?.resumeSocket());
+        fOut.on('data', (d) => {
+          const ok = this.voice.feedPcm(d);
+          if (!ok) fOut.pause();
+        });
+        ff.on('error', (err) => console.warn(`[playback] resampler error: ${err.message}`));
+        ff.on('exit', () => {
+          if (this.resampler === ff) this.resampler = null;
+        });
+
+        // Set up stream drain handler now that ff is available
+        this.voice.setStreamDrain(() => {
+          if (this.resampler === ff && ff!.stdout && ff!.stdout.isPaused()) {
+            ff!.stdout.resume();
+          }
+        });
+
+        // Set up PCM handler now that ff is available
+        this.librespot!.setPcmHandler((data) => {
+          // A stale handler (resampler replaced/killed during a skip) must not write
+          // into a dead ffmpeg's stdin.
+          const currentFf = this.resampler;
+          if (currentFf !== ff) return true;
+          if (!ff) return true;
+          if (ff.stdin?.destroyed) return true;
+          return ff.stdin?.write(data) ?? true;
+        });
       });
     }
-    this.voice.setStreamDrain(() => {
-      if (this.resampler === ff && ff.stdout && ff.stdout.isPaused()) {
-        ff.stdout.resume();
-      }
-    });
-    this.librespot.setPcmHandler((data) => {
-      // A stale handler (resampler replaced/killed during a skip) must not write
-      // into a dead ffmpeg's stdin.
-      if (this.resampler !== ff) return true;
-      if (ff.stdin?.destroyed) return true;
-      return ff.stdin?.write(data) ?? true;
-    });
     this.voice.setStallRecovery(() => {
       this.librespot?.resumeSocket();
       const r = this.resampler;
@@ -2451,40 +2474,43 @@ export class PlaybackController {
 /** Read a local media file's duration via ffmpeg (killed as soon as it's known). */
 function probeLocalDuration(filePath: string): Promise<number | null> {
   return new Promise((resolve) => {
-    const proc = spawn(config.ffmpegPath, ['-hide_banner', '-i', filePath, '-f', 'null', '-'], {
+    let stderr = '';
+    spawnFfmpeg(['-hide_banner', '-i', filePath, '-f', 'null', '-'], {
       windowsHide: true,
       stdio: ['ignore', 'ignore', 'pipe'],
-    });
-    let stderr = '';
-    const done = (): void => {
-      clearTimeout(timer);
-      try {
-        proc.kill();
-      } catch {
-        /* ignore */
-      }
-    };
-    const timer = setTimeout(() => {
-      done();
-      resolve(parseDuration(stderr));
-    }, 5000);
-    timer.unref?.();
-    proc.stderr.on('data', (d) => {
-      stderr += d.toString();
-      const ms = parseDuration(stderr);
-      if (ms !== null) {
-        done();
-        resolve(ms);
-      }
-    });
-    proc.on('exit', () => {
-      clearTimeout(timer);
-      resolve(parseDuration(stderr));
-    });
-    proc.on('error', () => {
-      clearTimeout(timer);
-      resolve(null);
-    });
+    })
+      .then((proc) => {
+        const done = (): void => {
+          clearTimeout(timer);
+          try {
+            proc.kill();
+          } catch {
+            /* ignore */
+          }
+        };
+        const timer = setTimeout(() => {
+          done();
+          resolve(parseDuration(stderr));
+        }, 5000);
+        timer.unref?.();
+        proc.stderr?.on('data', (d) => {
+          stderr += d.toString();
+          const ms = parseDuration(stderr);
+          if (ms !== null) {
+            done();
+            resolve(ms);
+          }
+        });
+        proc.on('exit', () => {
+          clearTimeout(timer);
+          resolve(parseDuration(stderr));
+        });
+        proc.on('error', () => {
+          clearTimeout(timer);
+          resolve(null);
+        });
+      })
+      .catch(() => resolve(null));
   });
 }
 
