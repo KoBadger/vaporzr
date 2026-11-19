@@ -29,20 +29,38 @@ export interface PcmWindowStats {
   samples: number;
 }
 
-/** Analyse one PCM window (48 kHz stereo s16le) in-place. */
+/**
+ * Analyse one PCM window (48 kHz stereo s16le). Reads it as interleaved stereo
+ * frames, counting zero crossings per channel.
+ *
+ * Per channel, not per sample: on real music the left and right channels differ
+ * (panning, reverb, stereo width), so the interleaved L,R,L,R sequence crosses
+ * zero almost every sample — a measured ZCR of 0.4–0.9 on perfectly good music.
+ * That is why the monitor called every loud, bright track "broadband noise" and
+ * gated it to silence.
+ */
 export function analyzePcmWindow(pcm: Buffer): PcmWindowStats {
-  const samples = Math.floor(pcm.length / 2);
+  const frames = Math.floor(pcm.length / 4);
+  const samples = frames * 2;
   let sumSq = 0;
   let maxAbs = 0;
   let zeroCrossings = 0;
-  let px = 0;
-  for (let i = 0; i < samples; i++) {
-    const v = pcm.readInt16LE(i * 2);
-    const abs = Math.abs(v);
-    if (abs > maxAbs) maxAbs = abs;
-    sumSq += v * v;
-    if (i > 0 && ((px < 0 && v > 0) || (px > 0 && v < 0))) zeroCrossings += 1;
-    px = v;
+  let prevL = 0;
+  let prevR = 0;
+  for (let i = 0; i < frames; i++) {
+    const l = pcm.readInt16LE(i * 4);
+    const r = pcm.readInt16LE(i * 4 + 2);
+    const absL = Math.abs(l);
+    const absR = Math.abs(r);
+    if (absL > maxAbs) maxAbs = absL;
+    if (absR > maxAbs) maxAbs = absR;
+    sumSq += l * l + r * r;
+    if (i > 0) {
+      if ((prevL < 0 && l > 0) || (prevL > 0 && l < 0)) zeroCrossings += 1;
+      if ((prevR < 0 && r > 0) || (prevR > 0 && r < 0)) zeroCrossings += 1;
+    }
+    prevL = l;
+    prevR = r;
   }
   return {
     rms: samples ? Math.sqrt(sumSq / samples) : 0,
