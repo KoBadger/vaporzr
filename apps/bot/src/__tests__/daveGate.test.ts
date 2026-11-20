@@ -66,7 +66,7 @@ describe('daveGateVerdict', () => {
     ).toBe('hold');
   });
 
-  it('assumes DAVE is off once the grace passes with no session', () => {
+  it('holds while no session object ever appears', () => {
     expect(
       daveGateVerdict({
         encryptionOn: true,
@@ -74,7 +74,7 @@ describe('daveGateVerdict', () => {
         elapsedMs: 2_000,
         heldBytes: 0,
       }),
-    ).toBe('open');
+    ).toBe('hold');
   });
 
   it('overflows instead of buffering forever', () => {
@@ -164,11 +164,22 @@ describe('DaveOutputGate', () => {
     expect(gate.push(chunk(9))).toHaveLength(1);
   });
 
-  it('assumes DAVE is off after the grace with no session object', () => {
+  it('keeps holding when no session object ever appears', () => {
     const { gate, advance } = makeGate();
     expect(gate.push(chunk(1))).toEqual([]);
     advance(2_000);
-    expect(gate.push(chunk(2))).toHaveLength(2);
+    expect(gate.push(chunk(2))).toEqual([]);
+    advance(60_000);
+    expect(gate.push(chunk(3))).toEqual([]);
+    expect(gate.stats().open).toBe(false);
+  });
+
+  it('drops rather than sends when a session never appears', () => {
+    const { gate, advance, overflows } = makeGate({ maxHoldBytes: 1000 });
+    expect(gate.push(chunk(1))).toEqual([]);
+    advance(9_000);
+    expect(gate.push(chunk(2))).toEqual([]);
+    expect(overflows).toEqual([1]);
   });
 
   it('drops the backlog instead of growing without bound', () => {

@@ -27,8 +27,14 @@ export type DaveGateVerdict = 'open' | 'hold' | 'overflow';
 
 /**
  * How long to keep assuming a channel might still be DAVE before concluding it
- * is simply not E2EE. The session object normally appears within a few hundred
- * ms; 1.5 s covers a jittery handshake without stalling ordinary channels.
+ * is simply not E2EE.
+ *
+ * Retired: absence of a session object is **not** evidence that the channel is
+ * unencrypted. @discordjs/voice creates a DAVE session for every connection where
+ * DAVE is enabled — including channels that negotiated protocol version 0 — so a
+ * missing session means DAVE was disabled on the connection, never "plaintext is
+ * expected here". Concluding otherwise is what allowed unencrypted frames onto a
+ * DAVE channel, which listeners hear as static.
  */
 export const DAVE_APPEAR_GRACE_MS = 1_500;
 
@@ -62,21 +68,18 @@ export const DAVE_BYTES_PER_MS = 48_000 * 2 * 2;
 export function daveGateVerdict(args: {
   encryptionOn: boolean;
   session: DaveSessionLike | null;
-  /** Milliseconds since this stream started. */
+  /** Milliseconds since this stream started. Unused: kept for callers/tests. */
   elapsedMs: number;
   heldBytes: number;
-  appearGraceMs?: number;
   maxHoldBytes?: number;
 }): DaveGateVerdict {
   if (!args.encryptionOn) return 'open';
   const { session } = args;
-  if (session) {
-    // protocolVersion 0 = DAVE off for this channel: plaintext is what listeners expect.
-    if (session.protocolVersion === 0 || session.ready) return 'open';
-  } else if (args.elapsedMs >= (args.appearGraceMs ?? DAVE_APPEAR_GRACE_MS)) {
-    // No session at all after the grace period: the channel is not E2EE.
-    return 'open';
-  }
+  // Two, and only two, proven-safe cases. A missing session used to fall into a
+  // timer-based "assume the channel is not encrypted" branch, which is the path
+  // that put plaintext on a DAVE channel: the listener's client decoded it as
+  // ciphertext and got broadband static. Absence of proof is never proof here.
+  if (session && (session.protocolVersion === 0 || session.ready)) return 'open';
   if (args.heldBytes > (args.maxHoldBytes ?? DAVE_HOLD_MAX_MS * DAVE_BYTES_PER_MS)) return 'overflow';
   return 'hold';
 }
@@ -120,7 +123,6 @@ export class DaveOutputGate {
     private readonly opts: {
       encryptionOn: () => boolean;
       session: () => DaveSessionLike | null;
-      appearGraceMs?: number;
       maxHoldBytes?: number;
       now?: () => number;
       onOpen?: (waitedMs: number) => void;
@@ -140,7 +142,6 @@ export class DaveOutputGate {
       session: this.opts.session(),
       elapsedMs: this.now() - this.start,
       heldBytes: this.heldBytes,
-      appearGraceMs: this.opts.appearGraceMs,
       maxHoldBytes: this.opts.maxHoldBytes,
     });
   }
