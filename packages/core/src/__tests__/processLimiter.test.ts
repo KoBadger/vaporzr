@@ -201,4 +201,47 @@ describe('spawnWithLimiter', () => {
     // A second release would have over-admitted a spawn.
     expect(limiter.getMetrics().active).toBe(0);
   });
+
+  it('kills a hung process and frees the slot at the hard ceiling', async () => {
+    const limiter = new ProcessLimiter({ maxConcurrent: 1 });
+    const kill = vi.fn(() => true);
+    const mockProc = {
+      on: vi.fn(),
+      kill,
+    } as unknown as ChildProcess & {
+      on: (event: string, cb: (...args: any[]) => void) => void;
+      kill: (signal?: NodeJS.Signals) => boolean;
+    };
+
+    // A process that never emits exit or error would otherwise hold its slot
+    // forever and wedge the whole queue behind it.
+    await spawnWithLimiter(limiter, () => mockProc, undefined, 50);
+    await new Promise((r) => setTimeout(r, 200));
+
+    expect(kill).toHaveBeenCalledWith('SIGKILL');
+    expect(limiter.getMetrics().active).toBe(0);
+    expect(limiter.getMetrics().totalSpawned).toBe(1);
+  });
+
+  it('does not kill a process that exits before the hard ceiling', async () => {
+    const limiter = new ProcessLimiter({ maxConcurrent: 1 });
+    const handlers: Record<string, (...args: any[]) => void> = {};
+    const kill = vi.fn(() => true);
+    const mockProc = {
+      on: vi.fn((event: string, cb: (...args: any[]) => void) => {
+        handlers[event] = cb;
+      }),
+      kill,
+    } as unknown as ChildProcess & {
+      on: (event: string, cb: (...args: any[]) => void) => void;
+      kill: (signal?: NodeJS.Signals) => boolean;
+    };
+
+    await spawnWithLimiter(limiter, () => mockProc, undefined, 50);
+    handlers.exit!(0, null);
+    await new Promise((r) => setTimeout(r, 200));
+
+    expect(kill).not.toHaveBeenCalled();
+    expect(limiter.getMetrics().active).toBe(0);
+  });
 });

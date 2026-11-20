@@ -1096,9 +1096,8 @@ export class VoiceManager implements AudioTransport {
     // readiness, not merely for the session object to exist.
     const start = Date.now();
     const deadline = start + timeoutMs;
-    // How long to wait for a DAVE session to appear at all before concluding the
-    // channel simply is not E2EE (protocol 0), where plain frames are correct.
-    const appearGraceMs = 400;
+    // How long to wait for a DAVE session to appear at all before concluding it
+    // is simply not E2EE (protocol 0), where plain frames are correct.
     while (Date.now() < deadline) {
       const dave = this.daveSessionState();
       if (dave) {
@@ -1109,17 +1108,18 @@ export class VoiceManager implements AudioTransport {
           if (waited > 500) console.log(`[voice] DAVE ready after ${waited}ms (protocol v${dave.protocolVersion})`);
           return true;
         }
-      } else if (Date.now() - start > appearGraceMs) {
-        // No session at all: the channel negotiated DAVE off (protocol 0), so
-        // plain frames are correct here.
-        this.daveConfirmedOff = true;
-        return true;
       }
       await new Promise((r) => setTimeout(r, 100));
     }
     const pending = this.daveSessionState();
+    // Never mark this channel "not encrypted" because the session is missing or
+    // slow: only the server's own protocolVersion can say that. The output gate
+    // keeps holding audio until the handshake completes, so this costs silence,
+    // never static.
     console.warn(
-      `[voice] DAVE session not ready after ${timeoutMs}ms (protocol v${pending?.protocolVersion ?? '?'}, ready=${pending?.ready ?? false}) — starting anyway so the track is not lost`,
+      `[voice] DAVE session not ready after ${timeoutMs}ms (session=${
+        pending ? `v${pending.protocolVersion} ready=${pending.ready}` : 'absent'
+      }) — starting the track with the output gate closed`,
     );
     // The link itself is Ready, so audio can still flow: @discordjs/voice sends
     // passthrough frames until the session settles and encrypts from then on.
