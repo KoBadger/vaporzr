@@ -174,4 +174,5 @@ export const V_DISPATCH_ALIASES: Record<string, string> = {
   rl: 'roulette',
   amok: 'hal',
   a: 'hal',
+  h: 'hal',
 };

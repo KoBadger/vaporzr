@@ -5,10 +5,30 @@ import {
   DAVE_RECONNECT_COOLDOWN_MS,
   DaveOutputGate,
   daveGateVerdict,
+  daveSendSafe,
   shouldReconnectDave,
 } from '../daveGate.js';
 
 const maxHoldBytes = DAVE_HOLD_MAX_MS * DAVE_BYTES_PER_MS;
+
+describe('daveSendSafe (per-packet, last-step guard)', () => {
+  it('allows packets when E2EE is not in play', () => {
+    expect(daveSendSafe({ encryptionOn: false, session: null })).toBe(true);
+  });
+
+  it('allows packets only from a ready session or protocol 0', () => {
+    expect(daveSendSafe({ encryptionOn: true, session: { ready: true, protocolVersion: 1 } })).toBe(true);
+    expect(daveSendSafe({ encryptionOn: true, session: { ready: false, protocolVersion: 0 } })).toBe(true);
+  });
+
+  it('withholds packets when the session lost readiness mid-stream', () => {
+    expect(daveSendSafe({ encryptionOn: true, session: { ready: false, protocolVersion: 1 } })).toBe(false);
+  });
+
+  it('withholds packets when no session exists', () => {
+    expect(daveSendSafe({ encryptionOn: true, session: null })).toBe(false);
+  });
+});
 
 describe('daveGateVerdict', () => {
   it('opens immediately when E2EE is not in play', () => {

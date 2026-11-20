@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { config } from '@vaporzr/core/config';
-import { DaveOutputGate, shouldReconnectDave } from './daveGate.js';
+import { DaveOutputGate, daveSendSafe, shouldReconnectDave } from './daveGate.js';
 import { tailFadeSeconds } from '@vaporzr/core/crossfade';
 import type { AudioTransport } from '@vaporzr/core/transport';
 import { youtubeProxyHops } from '@vaporzr/core/youtube';
@@ -270,6 +270,9 @@ export class VoiceManager implements AudioTransport {
     overflows: 0,
     maxWaitMs: 0,
     lastOverflowAt: null as number | null,
+    /** Packets withheld at send time because the session lost readiness mid-stream. */
+    blockedPackets: 0,
+    lastBlockedAt: null as number | null,
   };
   /** When the voice link was last re-signalled to restart a stalled DAVE handshake. */
   private lastDaveReconnectAt = 0;
@@ -589,6 +592,7 @@ export class VoiceManager implements AudioTransport {
    * the library's own reconnect attempts fizzle.
    */
   private attachHandlers(connection: VoiceConnection): void {
+    this.installDaveSendGuard(connection);
     // Voice-activity ducking: the receiver's speaking map fires per user with
     // no audio decoding, so we can cheaply dip the music whenever anyone talks.
     if (!(connection as unknown as { __vzDuck?: boolean }).__vzDuck) {
@@ -933,6 +937,8 @@ export class VoiceManager implements AudioTransport {
     overflows: number;
     maxWaitMs: number;
     lastOverflowAt: number | null;
+    blockedPackets: number;
+    lastBlockedAt: number | null;
   } {
     return { ...this.daveGateTelemetry };
   }
@@ -969,6 +975,41 @@ export class VoiceManager implements AudioTransport {
     } catch (err) {
       console.warn(`[voice] DAVE reconnect failed: ${err instanceof Error ? err.message : String(err)}`);
     }
+  }
+
+  /**
+   * Last line of defence against plaintext on a DAVE channel. Wraps the
+   * connection's `prepareAudioPacket` — the single point every outgoing packet
+   * passes through — and withholds the packet whenever the live DAVE session
+   * cannot encrypt it. @discordjs/voice would otherwise ship it unencrypted,
+   * which DAVE listeners hear as static. Costs a brief dropout, never noise.
+   */
+  private installDaveSendGuard(connection: VoiceConnection): void {
+    const link = connection as unknown as {
+      __vzSendGuard?: boolean;
+      prepareAudioPacket: (packet: Buffer) => unknown;
+    };
+    if (link.__vzSendGuard) return;
+    link.__vzSendGuard = true;
+    const original = link.prepareAudioPacket.bind(connection);
+    let blocking = false;
+    link.prepareAudioPacket = (packet: Buffer): unknown => {
+      const safe = daveSendSafe({ encryptionOn: this.daveEncryption, session: this.daveSessionState() });
+      if (safe) {
+        if (blocking) {
+          blocking = false;
+          console.log('[voice] DAVE send guard released — encryption is ready again');
+        }
+        return original(packet);
+      }
+      this.daveGateTelemetry.blockedPackets++;
+      this.daveGateTelemetry.lastBlockedAt = Date.now();
+      if (!blocking) {
+        blocking = true;
+        console.warn('[voice] DAVE session not ready — withholding packets at send time (silence, never static)');
+      }
+      return undefined;
+    };
   }
 
   /** Create a fresh streaming resource. Safe to call repeatedly. */
