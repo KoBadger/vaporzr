@@ -145,3 +145,4 @@ Access: `/key give` `/key rotate` `/perms` (admin) — `/nickname` (🥚)
 - Every guild's queue persists across restarts (`apps/bot/data/queues/`), restored paused. Panel/now-playing registrations persist too (`apps/bot/data/panels.json`).
 - Set `OWNER_ID=<your Discord user id>` in `apps/bot/.env` to pin owner rank (otherwise auto-detected from the app record, with retries).
 - Docker: on Windows use `scripts/docker-build.ps1` (mirrors the repo to %TEMP% first — BuildKit cannot stream a OneDrive-backed context); on Linux/macOS `docker build -f apps/bot/Dockerfile -t vaporzr-bot .` works directly. See the Dockerfile header for caveats.
+[![boost my agents](https://app.boostmyagents.com/badge/KoBadger/vaporzr.svg)](https://app.boostmyagents.com/d/KoBadger/vaporzr)[![boost my agents](https://app.boostmyagents.com/badge/KoBadger/vaporzr.svg)](https://app.boostmyagents.com/d/KoBadger/vaporzr)
