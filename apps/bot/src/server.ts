@@ -379,7 +379,29 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
           // the handshake stalled long enough to drop audio (silence); it must
           // never be non-zero while listeners report static, because static can
           // only come from frames that bypassed this gate.
-          daveGate: audioHost?.voice.daveGateStatus() ?? null,
+          // Summed over every guild session: each has its own VoiceManager, so
+          // reading one host made the counters look dead while logs showed opens.
+          daveGate: all.reduce(
+            (acc, s) => {
+              const g = s.voice.daveGateStatus();
+              return {
+                opens: acc.opens + g.opens,
+                overflows: acc.overflows + g.overflows,
+                maxWaitMs: Math.max(acc.maxWaitMs, g.maxWaitMs),
+                lastOverflowAt: Math.max(acc.lastOverflowAt ?? 0, g.lastOverflowAt ?? 0) || null,
+                blockedPackets: acc.blockedPackets + g.blockedPackets,
+                lastBlockedAt: Math.max(acc.lastBlockedAt ?? 0, g.lastBlockedAt ?? 0) || null,
+              };
+            },
+            {
+              opens: 0,
+              overflows: 0,
+              maxWaitMs: 0,
+              lastOverflowAt: null as number | null,
+              blockedPackets: 0,
+              lastBlockedAt: null as number | null,
+            },
+          ),
         },
       });
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });

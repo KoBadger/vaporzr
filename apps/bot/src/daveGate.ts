@@ -65,6 +65,21 @@ export function shouldReconnectDave(args: {
 /** 48 kHz stereo s16. */
 export const DAVE_BYTES_PER_MS = 48_000 * 2 * 2;
 
+/**
+ * Whether one outgoing Opus packet may leave the process right now.
+ *
+ * The upstream gate only governs PCM that has not yet been encoded; audio
+ * already buffered in the encoder and player keeps flowing. A DAVE session can
+ * lose readiness mid-track (invalid MLS commit, epoch reinit, voice-session
+ * swap), and @discordjs/voice then ships the next packets as plaintext. This is
+ * the check applied at the very last step, per packet, against live state.
+ */
+export function daveSendSafe(args: { encryptionOn: boolean; session: DaveSessionLike | null }): boolean {
+  if (!args.encryptionOn) return true;
+  const { session } = args;
+  return !!session && (session.protocolVersion === 0 || session.ready);
+}
+
 export function daveGateVerdict(args: {
   encryptionOn: boolean;
   session: DaveSessionLike | null;
@@ -73,13 +88,11 @@ export function daveGateVerdict(args: {
   heldBytes: number;
   maxHoldBytes?: number;
 }): DaveGateVerdict {
-  if (!args.encryptionOn) return 'open';
-  const { session } = args;
   // Two, and only two, proven-safe cases. A missing session used to fall into a
   // timer-based "assume the channel is not encrypted" branch, which is the path
   // that put plaintext on a DAVE channel: the listener's client decoded it as
   // ciphertext and got broadband static. Absence of proof is never proof here.
-  if (session && (session.protocolVersion === 0 || session.ready)) return 'open';
+  if (daveSendSafe(args)) return 'open';
   if (args.heldBytes > (args.maxHoldBytes ?? DAVE_HOLD_MAX_MS * DAVE_BYTES_PER_MS)) return 'overflow';
   return 'hold';
 }
