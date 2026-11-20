@@ -192,13 +192,27 @@ export const ffmpegLimiter = new ProcessLimiter({
 /**
  * Wrapper function to spawn a process with automatic slot management.
  * Handles acquire/release and error cleanup.
+ *
+ * A hard per-process ceiling is installed *in addition* to the exit/error
+ * handlers. A process that never emits either event (a hung pipe, a zombie, a
+ * peer that stopped reading) would otherwise hold its slot forever: the queue
+ * behind it fills, every queued spawn times out after 30 s, and the whole bot
+ * stops being able to start a song. The ceiling kills the process and releases
+ * the slot so the limiter always makes forward progress.
  */
-export async function spawnWithLimiter<T extends { on: (event: string, cb: (...args: any[]) => void) => void }>(
-  limiter: ProcessLimiter,
-  spawnFn: () => T,
-  onSpawn?: (proc: T) => void,
-): Promise<T> {
+export async function spawnWithLimiter<
+  T extends { on: (event: string, cb: (...args: any[]) => void) => void; kill: (signal?: NodeJS.Signals) => boolean },
+>(limiter: ProcessLimiter, spawnFn: () => T, onSpawn?: (proc: T) => void, hardTimeoutMs = 30 * 60_000): Promise<T> {
   await limiter.acquire();
+
+  let released = false;
+  let hardCeiling: ReturnType<typeof setTimeout> | null = null;
+  const release = () => {
+    if (released) return;
+    released = true;
+    if (hardCeiling) clearTimeout(hardCeiling);
+    limiter.release();
+  };
 
   try {
     const proc = spawnFn();
@@ -206,14 +220,27 @@ export async function spawnWithLimiter<T extends { on: (event: string, cb: (...a
     // Auto-release on exit or error. Guarded so the pair of `error` + `exit`
     // events can never release the same slot twice — an extra release would
     // over-admit spawns and defeat the whole memory guard.
-    let released = false;
-    const release = () => {
-      if (released) return;
-      released = true;
-      limiter.release();
-    };
     proc.on('exit', release);
     proc.on('error', release);
+
+    // Hard ceiling: if the process outlives every legitimate reason to run,
+    // kill it and free the slot. The ceiling is cleared by `release`, so a
+    // healthy process never pays for a stuck neighbour.
+    hardCeiling = setTimeout(() => {
+      if (released) return;
+      console.warn(
+        `[limiter] process ran for ${hardTimeoutMs}ms without exiting — killing it to free a slot ` +
+          `(queue now ${limiter.getMetrics().queued})`,
+      );
+      try {
+        proc.kill('SIGKILL');
+      } catch {
+        /* already dead; the release below still runs */
+      }
+      // Release immediately: the slot is what we came for, and the `exit`
+      // handler is guarded by `released` so it can never double-release.
+      release();
+    }, hardTimeoutMs);
 
     if (onSpawn) {
       onSpawn(proc);
@@ -222,7 +249,7 @@ export async function spawnWithLimiter<T extends { on: (event: string, cb: (...a
     return proc;
   } catch (err) {
     // If spawn fails, release the slot immediately
-    limiter.release();
+    release();
     throw err;
   }
 }
