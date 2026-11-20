@@ -1,9 +1,24 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { config } from '@vaporzr/core/config';
+import { ffmpegLimiter, spawnWithLimiter } from '@vaporzr/core/processLimiter';
 import type { ResolvedVideo } from './youtube.js';
 import { safeFetch } from './net.js';
+
+/** Spawn ffmpeg with slot acquisition and guaranteed cleanup (uses shared limiter). */
+async function spawnFfmpeg(
+  args: string[],
+  options: { windowsHide?: boolean; env?: NodeJS.ProcessEnv; stdio?: any } = {},
+): Promise<ChildProcess> {
+  return spawnWithLimiter(
+    ffmpegLimiter,
+    () =>
+      spawn(config.ffmpegPath, args, { windowsHide: true, ...options }) as ChildProcess & {
+        on: (event: string, cb: (...args: any[]) => void) => void;
+      },
+  );
+}
 
 export class SunoError extends Error {}
 
@@ -53,29 +68,32 @@ export function probeDuration(url: string, proxy = ''): Promise<number | null> {
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.toLowerCase().endsWith('_proxy')));
   if (proxy) env.http_proxy = proxy;
   return new Promise((resolve) => {
-    const proc = spawn(config.ffmpegPath, ['-hide_banner', '-i', url], { windowsHide: true, env });
     let stderr = '';
-    proc.stderr.on('data', (d) => {
-      stderr += d.toString();
-    });
-    const timer = setTimeout(() => {
-      try {
-        proc.kill();
-      } catch {
-        /* ignore */
-      }
-    }, 15000);
-    timer.unref?.();
-    proc.on('exit', () => {
-      clearTimeout(timer);
-      const m = stderr.match(/Duration:\s*(\d+):(\d+):(\d+\.?\d*)/);
-      if (!m) return resolve(null);
-      resolve((Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3])) * 1000);
-    });
-    proc.on('error', () => {
-      clearTimeout(timer);
-      resolve(null);
-    });
+    spawnFfmpeg(['-hide_banner', '-i', url], { windowsHide: true, env })
+      .then((proc) => {
+        proc.stderr?.on('data', (d) => {
+          stderr += d.toString();
+        });
+        const timer = setTimeout(() => {
+          try {
+            proc.kill();
+          } catch {
+            /* ignore */
+          }
+        }, 15000);
+        timer.unref?.();
+        proc.on('exit', () => {
+          clearTimeout(timer);
+          const m = stderr.match(/Duration:\s*(\d+):(\d+):(\d+\.?\d*)/);
+          if (!m) return resolve(null);
+          resolve((Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3])) * 1000);
+        });
+        proc.on('error', () => {
+          clearTimeout(timer);
+          resolve(null);
+        });
+      })
+      .catch(() => resolve(null));
   });
 }
 

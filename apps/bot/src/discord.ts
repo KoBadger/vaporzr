@@ -770,10 +770,8 @@ const COMMANDS = [
     ),
   new SlashCommandBuilder()
     .setName('mood')
-    .setDescription("Tint now-playing colors + visuals from the current track's mood")
-    .addBooleanOption((o) =>
-      o.setName('enabled').setDescription('Turn mood-reactive visuals on or off').setRequired(false),
-    ),
+    .setDescription('Turn on the background mood flow: colors follow the music and the DJ keeps the mood going')
+    .addBooleanOption((o) => o.setName('enabled').setDescription('Turn the mood flow on or off').setRequired(false)),
   new SlashCommandBuilder()
     .setName('tts')
     .setDescription('Toggle spoken DJ announcements between tracks (opt-in, off by default)')
@@ -1143,6 +1141,12 @@ export class DiscordBot {
   /** guildId -> mood visuals on; moodColor tints now-playing colors from features. */
   private moodOn = new Set<string>();
   private moodColor = new Map<string, number>();
+  /** guildIds with the background mood flow on (`V@mood` bare): smart autoplay seeded by the mood. */
+  private moodFlowOn = new Set<string>();
+  /** Last typed mood words per guild — the seed for the mood flow's top-up pass. */
+  private moodSeed = new Map<string, string>();
+  /** Guilds whose mood-flow pass is mid-flight; topUpWave fires from several seams. */
+  private moodTopUpBusy = new Set<string>();
   /** Guilds with the optional TTS DJ announcements enabled (opt-in, default off). */
   private ttsAnnounced = new Map<string, string>();
   /** guildId -> panel message location. */
@@ -2954,6 +2958,72 @@ export class DiscordBot {
     this.schedulePanelRefresh();
   }
 
+  /** Turn the background mood flow on/off (bare `V@mood`). Returns the new state. */
+  private setMoodFlow(s: Session, on: boolean): boolean {
+    const gid = s.guildId;
+    if (on) {
+      this.moodFlowOn.add(gid);
+      this.moodOn.add(gid);
+      if (!this.moodSeed.has(gid)) this.moodSeed.set(gid, this.timeOfDayMood());
+      this.setAutoplayMode(s, 'smart');
+      const cur = s.queue.getCurrentTrack();
+      if (cur) void this.updateMood(s, cur);
+    } else {
+      this.moodFlowOn.delete(gid);
+      this.clearMood(gid);
+    }
+    return this.moodFlowOn.has(gid);
+  }
+
+  /** Background mood flow pass (reached from topUpWave — autoplay is always smart while the flow is on):
+   *  when the queue is low, queue a mood-seeded track. */
+  private async moodFlowTopUp(s: Session): Promise<void> {
+    if (!this.moodFlowOn.has(s.guildId)) return;
+    // The pass awaits network work, and playback/state seams can call topUpWave
+    // again while it does — two runs would queue two tracks between them.
+    if (this.moodTopUpBusy.has(s.guildId)) return;
+    this.moodTopUpBusy.add(s.guildId);
+    try {
+      await this.moodFlowTopUpInner(s);
+    } finally {
+      this.moodTopUpBusy.delete(s.guildId);
+    }
+  }
+
+  /** The pass itself: queue one mood-seeded pick when the flow has nothing ahead. */
+  private async moodFlowTopUpInner(s: Session): Promise<void> {
+    if (!EW.isAutoActive(s.endlessWave)) return;
+    const snap0 = s.queue.getSnapshot();
+    const countAhead = (q: typeof snap0): number =>
+      q.tracks.slice(q.currentIndex + 1).filter((t) => ['endless-wave', 'mood-flow', 'vibe-dj'].includes(t.addedBy))
+        .length;
+    let snap = snap0;
+    if (countAhead(snap) >= 1) return;
+    const seed = this.moodSeed.get(s.guildId) ?? this.timeOfDayMood();
+    const queued = new Set(snap.tracks.map((t) => `${t.name.toLowerCase()}|${(t.artists[0] ?? '').toLowerCase()}`));
+    const inQueue = (t: ResolvedTrack): boolean =>
+      queued.has(`${t.name.toLowerCase()}|${(t.artists[0] ?? '').toLowerCase()}`);
+    const parsed = parseVibe(seed);
+    if (vibeIsSteerable(parsed)) {
+      // Feature-steered picks via recommendations; queues + plays through vibeFromTargets.
+      await this.vibeFromTargets(s, parsed, async () => s.voice.isJoined()).catch(() => null);
+      snap = s.queue.getSnapshot();
+      if (countAhead(snap) >= 1) return;
+      // Nothing steer-able landed (no recs / nothing new) — fall through to the search path below.
+    }
+    let picks = await searchCandidates(seed, 2).catch(() => [] as ResolvedTrack[]);
+    if (picks.length === 0) picks = await searchYoutube(seed, 2).catch(() => [] as ResolvedTrack[]);
+    const fresh = picks.filter((t) => !inQueue(t));
+    const chosen = (fresh.length ? fresh : picks).slice(0, 1);
+    if (chosen.length === 0) return;
+    const newOnes = s.queue.filterNew(chosen);
+    if (newOnes.length === 0) return;
+    newOnes.forEach((t) => s.queue.enqueue(t, 'mood-flow'));
+    console.log(`[mood-flow] queued "${newOnes[0].name}" for seed "${seed}"`);
+    const st = s.queue.getState();
+    if (!st.playing && s.voice.isJoined()) void s.playback.play().catch(() => {});
+  }
+
   /** Auto-DJ: pick a set for the mood / time of day / weather, then let Endless Wave carry it. */
   private async vibeDj(s: Session, moodArg: string | undefined, ensureJoined: () => Promise<boolean>): Promise<string> {
     // Natural language first: "chill like Bonobo", "hype workout 5", "sad acoustic"…
@@ -4047,15 +4117,11 @@ export class DiscordBot {
             flags: MessageFlags.Ephemeral,
           }));
         const enabled = interaction.options.getBoolean('enabled');
-        if (enabled === true) this.moodOn.add(gid);
-        else if (enabled === false) this.clearMood(gid);
-        const on = this.moodOn.has(gid);
-        if (on) {
-          const cur = s.queue.getCurrentTrack();
-          if (cur) void this.updateMood(s, cur);
-        }
+        const s = this.sessionFor(gid);
+        const wasOn = this.moodFlowOn.has(gid);
+        const on = this.setMoodFlow(s, enabled ?? !wasOn);
         await interaction.reply({
-          content: on ? '🌈 Mood-reactive visuals **on** — colors follow the music.' : 'Mood-reactive visuals **off**.',
+          content: on ? '🌈 Mood flow **on** — keeping the mood going…' : 'Mood flow **off**.',
           flags: MessageFlags.Ephemeral,
         });
         break;
@@ -5634,16 +5700,40 @@ export class DiscordBot {
         case 'mood': {
           if (!canUse('mood')) return void (await deny());
           if (!message.guildId) return void (await message.reply('Must be used in a server.'));
-          const a = args.trim().toLowerCase();
-          if (/^(on|1|true)$/.test(a)) this.moodOn.add(message.guildId);
-          else if (/^(off|0|false)$/.test(a)) this.clearMood(message.guildId);
-          const on = this.moodOn.has(message.guildId);
-          if (on) {
-            const cur = s.queue.getCurrentTrack();
-            if (cur) void this.updateMood(s, cur);
+          const a = args.trim();
+          const wasOn = this.moodFlowOn.has(message.guildId);
+          if (/^(off|0|false|stop)$/i.test(a)) {
+            this.setMoodFlow(s, false);
+            await message.reply(
+              wasOn ? '🌙 Mood flow **off** — the music returns to normal.' : 'Mood flow is already off.',
+            );
+            break;
           }
+          if (/^(on|1|true|start)$/i.test(a)) {
+            this.setMoodFlow(s, true);
+            await message.reply(
+              wasOn
+                ? '🌈 Mood flow **already on** — keeping the mood going.'
+                : "🌈 Mood flow **on** — I'll keep the mood going.\n-# type `V@mood <mood>` for a now, or `V@mood off` to stop.",
+            );
+            break;
+          }
+          if (a) {
+            // Type-in: parse the mood words, queue mood-matched tracks now, and start the flow.
+            const reply = await this.vibeDj(s, a, () => this.ensureJoinedForMessage(message, s));
+            this.setMoodFlow(s, true);
+            this.moodSeed.set(message.guildId, a.trim());
+            await message.reply(
+              `${reply}\n🌈 Mood flow **on** — I'll keep this mood going.\n-# \`V@mood off\` to stop.`,
+            );
+            break;
+          }
+          // Bare `V@mood`: toggle the background flow.
+          this.setMoodFlow(s, !wasOn);
           await message.reply(
-            on ? '🌈 Mood-reactive visuals **on** — colors follow the music.' : 'Mood-reactive visuals **off**.',
+            wasOn
+              ? '🌙 Mood flow **off**.'
+              : "🌈 Mood flow **on** — I'll keep the mood going.\n-# type `V@mood <mood>` for a now, or `V@mood off` to stop.",
           );
           break;
         }
@@ -12682,8 +12772,7 @@ export class DiscordBot {
         return `autoplay ${mode}`;
       }
       case 'mood': {
-        if (off) this.moodOn.delete(gid);
-        else this.moodOn.add(gid);
+        this.setMoodFlow(s, !off);
         return `mood ${off ? 'off' : 'on'}`;
       }
       case 'tts': {
@@ -14033,6 +14122,7 @@ export class DiscordBot {
    *  any queue or state change re-tops the buffer. */
   private async topUpWave(s: Session): Promise<void> {
     if (!EW.isAutoActive(s.endlessWave)) return;
+    if (this.moodFlowOn.has(s.guildId)) await this.moodFlowTopUp(s);
     // Auto-upgrade basic → smart the moment an account is linked. Basic was only
     // in effect because there was no OAuth token to drive Web-API curation, so
     // once one appears (finished /login) we shouldn't stay on the lesser mode.
@@ -14405,6 +14495,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '`/endwav on|off|status` `V@ew` — Endless Wave',
       '`/ambient on|off` `V@ambient` — lo-fi intermission',
       '`/vibe [mood]` `V@vibe` — auto-DJ by mood, time or weather',
+      '`/mood` `V@mood` — background mood flow (keeps the music flowing); type `V@mood <mood>` now',
       '',
       '**What the modes do**',
       '`basic` — one related track, light and fast',
@@ -14589,7 +14680,7 @@ const HELP_CATEGORIES: Array<{ id: string; emoji: string; name: string; blurb: s
       '',
       '**🎨 Looks**',
       '`/theme` `V@th` — colour mood',
-      '`/mood on|off` `V@mood` — colours tinted by the track',
+      '`/mood on|off` `V@mood` — mood flow: colors follow the music + autoplay keeps the mood going',
       '`/sensitivity <0.5-1.5>` `V@sens` — beat reactivity',
       '`/crossfade on|off|<s>` `V@xfade` — crossfade + tail fade',
       '',

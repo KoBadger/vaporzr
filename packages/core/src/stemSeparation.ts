@@ -1,8 +1,23 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { config } from '@vaporzr/core/config';
+import { ffmpegLimiter, spawnWithLimiter } from '@vaporzr/core/processLimiter';
 import { safeFetch } from './net.js';
+
+/** Spawn ffmpeg with slot acquisition and guaranteed cleanup (uses shared limiter). */
+async function spawnFfmpeg(
+  args: string[],
+  options: { windowsHide?: boolean; env?: NodeJS.ProcessEnv; stdio?: any } = {},
+): Promise<ChildProcess> {
+  return spawnWithLimiter(
+    ffmpegLimiter,
+    () =>
+      spawn(config.ffmpegPath, args, { windowsHide: true, ...options }) as ChildProcess & {
+        on: (event: string, cb: (...args: any[]) => void) => void;
+      },
+  );
+}
 
 /**
  * Hosted stem separation via Replicate's Demucs (GPU).
@@ -161,13 +176,16 @@ async function mixStems(parts: string[], out: string): Promise<void> {
     out,
   );
   await new Promise<void>((resolve, reject) => {
-    const p = spawn(config.ffmpegPath, args, { windowsHide: true });
     let err = '';
-    p.stderr?.on('data', (d: Buffer) => {
-      err += d.toString();
-    });
-    p.on('error', reject);
-    p.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(short(err) || `ffmpeg exited ${code}`))));
+    spawnFfmpeg(args, { windowsHide: true })
+      .then((p) => {
+        p.stderr?.on('data', (d: Buffer) => {
+          err += d.toString();
+        });
+        p.on('error', reject);
+        p.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(short(err) || `ffmpeg exited ${code}`))));
+      })
+      .catch(reject);
   });
 }
 

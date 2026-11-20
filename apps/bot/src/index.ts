@@ -1,4 +1,5 @@
 import { config } from '@vaporzr/core/config';
+import { ffmpegLimiter } from '@vaporzr/core/processLimiter';
 import { SessionManager } from './session.js';
 import { PermissionsManager } from './permissions.js';
 import { startServer } from './server.js';
@@ -26,6 +27,28 @@ process.on('unhandledRejection', (reason) => {
 process.on('uncaughtException', (err) => {
   console.error('[vaporzr] uncaught exception:', err instanceof Error ? (err.stack ?? err.message) : err);
 });
+
+// Memory monitoring: log warning when heap usage is high.
+// Helps detect memory leaks or pressure before they cause issues.
+let lastMemoryWarn = 0;
+const MEMORY_WARN_THRESHOLD_MB = 500;
+const MEMORY_CHECK_INTERVAL_MS = 60_000; // Check every minute
+
+setInterval(() => {
+  const used = process.memoryUsage();
+  const heapUsedMB = Math.round(used.heapUsed / 1024 / 1024);
+  const now = Date.now();
+
+  // Only warn if above threshold AND at least 5 minutes since last warning
+  if (heapUsedMB > MEMORY_WARN_THRESHOLD_MB && now - lastMemoryWarn > 300_000) {
+    lastMemoryWarn = now;
+    const metrics = ffmpegLimiter.getMetrics();
+    console.warn(
+      `[memory] heap at ${heapUsedMB}MB ` +
+        `(ffmpeg: ${metrics.active} active, ${metrics.queued} queued, ${metrics.totalSpawned} total spawned)`,
+    );
+  }
+}, MEMORY_CHECK_INTERVAL_MS).unref();
 
 /** True when another process is already listening on config.port (single-instance guard). */
 function isPortTaken(port: number): Promise<boolean> {
@@ -93,6 +116,10 @@ async function main(): Promise<void> {
   // stays registered as the Connect device — later play commands route to it
   // instead of the fresh session (wrong track / silent stall).
   const shutdown = (): void => {
+    // Stop new ffmpeg spawns first: during the flush/stop/exit window a fresh
+    // spawn would be killed by process.exit() anyway, and the churn can trip the
+    // Windows commit limit (0xc000012d). Active streams still end by themselves.
+    ffmpegLimiter.shutdown();
     // Flush debounced queue persistence first — process.exit() below discards
     // the pending timers, so a redeploy would otherwise lose the newest changes.
     try {
