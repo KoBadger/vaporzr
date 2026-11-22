@@ -2137,6 +2137,7 @@
               <div class="mlabel">MORE</div>
               <button data-ambient="toggle">🌙 Lo-fi intermission: <span id="amb-state">off</span></button>
               <button data-voteskip="toggle">🗳 Vote-skip: <span id="vs-state">on</span></button>
+              <button data-install="1">📲 Install desktop app</button>
               <a href="/viz" target="_blank" rel="noopener">🎬 Open visualizer</a>
               <a href="/deck" target="_blank" rel="noopener">🎛️ Live decks</a>
               <a href="/listen" target="_blank" rel="noopener">Hi-fi listener</a>
@@ -4427,6 +4428,12 @@
               el['vs-state'].textContent = on ? 'on' : 'off';
               close();
             };
+          var installBtn = menu.querySelector('button[data-install]');
+          if (installBtn)
+            installBtn.onclick = function () {
+              close();
+              if (window.__vzInstallApp) window.__vzInstallApp();
+            };
           var rl = menu.querySelector('button[data-reload]');
           if (rl)
             rl.onclick = function () {
@@ -4524,14 +4531,33 @@
           window.__vzInstall = e;
           if (el['btn-install']) el['btn-install'].style.display = 'inline-block';
         });
+        /* One place that knows how to get the desktop app, used by both the
+           header button and the tools menu. Chrome/Edge on desktop install the
+           panel as a real window with a Start-menu/desktop entry that updates
+           with the site; when the browser offers no prompt (Safari/Firefox, or
+           already installed) the guidance is spelled out instead of a dead
+           button. */
+        window.__vzInstallApp = function () {
+          var p = window.__vzInstall;
+          if (p) {
+            p.prompt();
+            window.__vzInstall = null;
+            if (el['btn-install']) el['btn-install'].style.display = 'none';
+            return true;
+          }
+          var ua = navigator.userAgent || '';
+          var ios = /iPhone|iPad|iPod/i.test(ua) || (/Macintosh/i.test(ua) && 'ontouchend' in document);
+          toast(
+            'info',
+            ios
+              ? '📲 Tap Share, then "Add to Home Screen" to install Vaporzr.'
+              : '📲 Install from your browser: Chrome/Edge → ⋮ menu → "Install Vaporzr", or the install icon in the address bar.',
+          );
+          return false;
+        };
         if (el['btn-install'])
           el['btn-install'].onclick = function () {
-            var p = window.__vzInstall;
-            if (p) {
-              p.prompt();
-              window.__vzInstall = null;
-              el['btn-install'].style.display = 'none';
-            }
+            window.__vzInstallApp();
           };
         if ('serviceWorker' in navigator) {
           var hadSw = !!navigator.serviceWorker.controller;
