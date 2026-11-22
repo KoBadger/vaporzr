@@ -1477,6 +1477,7 @@
           border-radius: 12px;
         }
         #tools-btn,
+        #audio-fix-btn,
         #dj-toggle,
         #btn-share,
         #btn-key,
@@ -2114,6 +2115,7 @@
             <option value="basic">🌊 Autoplay: basic</option>
             <option value="smart">🌊 Autoplay: smart</option>
           </select>
+          <button id="audio-fix-btn" data-tip="Fix audio issues: reconnects without losing queue">🔧</button>
           <div class="menu-wrap">
             <button id="tools-btn" data-tip="Tools &amp; effects">⋯</button>
             <div id="tools-menu" class="menu">
@@ -2764,6 +2766,7 @@
           'voice',
           'dj-badge',
           'dj-toggle',
+          'audio-fix-btn',
           'sfx-status',
           'track-name',
           'track-meta',
@@ -4325,6 +4328,26 @@
           setOptimistic('dj', willEnable);
           renderDj(); // immediate UI feedback
           cmd('dj', { djEnabled: willEnable });
+        };
+        el['audio-fix-btn'].onclick = function () {
+          if (GUEST) {
+            toast('info', '👁 View-only — ask the owner to fix audio');
+            return;
+          }
+          el['audio-fix-btn'].disabled = true;
+          fetch('/api/voice/reconnect', { method: 'POST', credentials: 'same-origin' })
+            .then(function (res) {
+              if (res.ok) toast('info', '🔧 Reconnecting voice…');
+              else toast('error', 'Could not reconnect: ' + (res.status || 'error'));
+            })
+            .catch(function (err) {
+              toast('error', 'Reconnect failed: ' + ((err && err.message) || 'network error'));
+            })
+            .finally(function () {
+              setTimeout(function () {
+                el['audio-fix-btn'].disabled = false;
+              }, 2000);
+            });
         };
         el['wave-select'].onchange = function () {
           cmd('endlesswave', { mode: el['wave-select'].value });

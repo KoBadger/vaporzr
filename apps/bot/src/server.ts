@@ -2891,6 +2891,34 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
         break;
       }
 
+      case '/api/voice/reconnect': {
+        if (req.method !== 'POST') {
+          res.writeHead(405);
+          res.end();
+          return;
+        }
+        if (!hasShareAccess(req, url, 'control')) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'unauthorized' }));
+          return;
+        }
+        const bot = bridgeRef();
+        if (!bot?.onVoiceReconnect) {
+          res.writeHead(503, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'bot offline' }));
+          return;
+        }
+        try {
+          await bot.onVoiceReconnect();
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          res.end(JSON.stringify({ ok: true }));
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'reconnect failed' }));
+        }
+        break;
+      }
+
       case '/api/push/key': {
         if (controlAuthRequired() && !hasShareAccess(req, url)) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
