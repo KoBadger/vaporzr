@@ -301,6 +301,11 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') app.quit();
+    // exit(), not quit(): on Electron 33 for Windows, quit() called from this
+    // handler (the window is already gone by then) never terminates the process
+    // — the app lingers with no window until it is killed. exit() is safe here
+    // because everything worth keeping is written synchronously: saveBounds()
+    // runs on 'close', before this fires.
+    if (process.platform !== 'darwin') app.exit(0);
   });
 }

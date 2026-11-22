@@ -41,7 +41,8 @@ Tag `desktop-v0.1.0` (see [docs/RELEASES.md](../../docs/RELEASES.md)). The
 workflow downloads a checksum-pinned Electron runtime, stages it with
 `scripts/pack-desktop.mjs`, and attaches `Vaporzr-Panel-win32-x64.zip` plus its
 SHA-256 to the release. The zip is a folder, not an installer: extract it
-anywhere and run `Vaporzr Panel.exe`.
+anywhere (it unpacks into the current directory, no extra level) and run
+`Vaporzr Panel.exe`.
 
 Builds are unsigned while the project is in beta, so Windows SmartScreen warns
 on first launch.
