@@ -390,6 +390,10 @@ export interface CommandMessage {
   shuffle?: boolean;
   repeat?: boolean;
   index?: number;
+  /** Exact track to act on, for commands addressed by identity ('remove').
+   *  Queue indexes shift between the snapshot that drew a button and the tap
+   *  that sends the command, so a caller holding a URI should send that. */
+  uri?: string;
   requester?: string;
   source?: MediaSource;
   streamUrl?: string;

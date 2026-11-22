@@ -1,0 +1,24 @@
+{
+  "name": "@vaporzr/telegram",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Telegram front end for Vaporzr: a thin remote control over the bot's existing control API",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "ws": "^8.22.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/ws": "^8.5.12",
+    "tsx": "^4.19.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  }
+}

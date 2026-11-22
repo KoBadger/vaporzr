@@ -56,6 +56,9 @@ COPY packages/core ./packages/core
 COPY apps/bot ./apps/bot
 COPY apps/player ./apps/player
 COPY apps/spicetify ./apps/spicetify
+# The Telegram front end is a workspace of the same image: copying it before
+# `npm ci` is what lets the lockfile resolve it.
+COPY apps/telegram ./apps/telegram
 # Root postinstall (scripts/install-opus-prebuild.mjs stages the ABI-agnostic
 # Opus prebuild). Without this COPY the postinstall cannot resolve itself and
 # `npm ci` fails with MODULE_NOT_FOUND.
