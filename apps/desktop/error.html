@@ -33,11 +33,6 @@
         margin: 0 0 1rem;
         color: #a9adc9;
       }
-      code {
-        font-family: ui-monospace, Consolas, monospace;
-        color: #cfd3ee;
-        word-break: break-all;
-      }
       .row {
         display: flex;
         gap: 0.75rem;
@@ -53,6 +48,7 @@
         font-weight: 600;
         background: #6a5cff;
         color: #fff;
+        cursor: pointer;
       }
       a.secondary {
         background: rgba(255, 255, 255, 0.1);
@@ -67,34 +63,17 @@
         The bot may be restarting, or this machine may be offline. Playback in Discord keeps running either way — this
         window only controls it.
       </p>
-      <p><code id="url"></code></p>
-      <p id="reason"></p>
+      <p>
+        The panel URL is whatever this window was pointed at; the shell logs it on load. Reload is also on
+        <strong>Ctrl+R</strong>.
+      </p>
+      <!-- These are inert custom-scheme links, not page data. The main process
+           recognises them in `will-navigate` and substitutes the real target, so
+           this page never holds — or navigates to — a URL it read from itself. -->
       <div class="row">
-        <a class="button" id="retry" href="#">Try again</a>
-        <a class="button secondary" id="browser" href="#">Open in browser</a>
+        <a class="button" href="vaporzr-panel://retry">Try again</a>
+        <a class="button secondary" href="vaporzr-panel://browser">Open in browser</a>
       </div>
     </main>
-    <script>
-      var params = new URLSearchParams(location.search);
-      var url = params.get('url') || 'https://www.vaporzr.app/panel';
-      var reason = params.get('reason') || '';
-      document.getElementById('url').textContent = url;
-      if (reason) document.getElementById('reason').textContent = reason;
-      var retry = document.getElementById('retry');
-      retry.href = url;
-      retry.onclick = function (e) {
-        e.preventDefault();
-        location.replace(url);
-      };
-      var browser = document.getElementById('browser');
-      browser.href = url;
-      browser.onclick = function (e) {
-        e.preventDefault();
-        // Same origin as the shell's target, so the main process treats this as
-        // an in-app navigation and the link would just come straight back here.
-        // window.open is intercepted and handed to the system browser instead.
-        window.open(url, '_blank');
-      };
-    </script>
   </body>
 </html>

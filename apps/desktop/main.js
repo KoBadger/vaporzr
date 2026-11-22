@@ -93,9 +93,8 @@ function saveBounds() {
 
 function showShellError(reason) {
   if (!win || win.isDestroyed()) return;
-  win.loadFile(path.join(here, 'error.html'), {
-    query: { url: target, reason },
-  });
+  console.warn(`[desktop] panel unreachable: ${target} — ${reason}`);
+  win.loadFile(path.join(here, 'error.html'));
 }
 
 function buildMenu() {
@@ -237,8 +236,22 @@ function createWindow() {
     }
   });
 
-  // Anything that leaves the panel's origin is the user's browser's business.
+  // The error page carries no page data at all: its two buttons are fixed
+  // `vaporzr-panel://` links, and the real target is substituted here. That
+  // keeps a URL the page could tamper with out of every navigation sink.
   win.webContents.on('will-navigate', (event, url) => {
+    if (url === 'vaporzr-panel://retry') {
+      event.preventDefault();
+      void win.loadURL(target).catch((err) => {
+        showShellError(err instanceof Error ? err.message : String(err));
+      });
+      return;
+    }
+    if (url === 'vaporzr-panel://browser') {
+      event.preventDefault();
+      void shell.openExternal(target);
+      return;
+    }
     if (new URL(url).origin === targetOrigin) return;
     event.preventDefault();
     void shell.openExternal(url);
