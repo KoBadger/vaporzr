@@ -714,6 +714,11 @@ function grantPageAccess(req: http.IncomingMessage, url: URL, res: http.ServerRe
  */
 function hasRequestAccess(req: http.IncomingMessage, url: URL): boolean {
   if (!config.shareKey && !config.requestKey && !config.masterPassword) return true; // open LAN-only setup
+  // A control credential outranks a guest one: the owner driving the queue from
+  // another front end (the Telegram bot) must not be treated as an anonymous
+  // guest. Checked first so it also works when only SHARE_KEY is configured and
+  // no request key exists at all.
+  if (hasShareAccess(req, url, 'control')) return true;
   const cookie = req.headers.cookie ?? '';
   const sess = resolveSession(tokenFromCookieHeader(cookie));
   if (sess && scopeSatisfies(sess.scope, 'request')) return true;
@@ -888,7 +893,11 @@ function newPairCode(): string {
  *  It used to be one global counter, so a single busy guest starved every other
  *  guest in the room (and the counter incremented before input validation).
  */
-function requestGate(req: http.IncomingMessage): boolean {
+function requestGate(req: http.IncomingMessage, url: URL): boolean {
+  // Control traffic is the owner's own front ends, not guests: the Telegram bot
+  // shares one source IP, so a per-IP guest budget would throttle a single
+  // group's requests or, worse, let one guest spend the bot's allowance.
+  if (hasShareAccess(req, url, 'control')) return true;
   return burst(`request:${clientIp(req)}`, 8, 60_000);
 }
 
@@ -3336,7 +3345,7 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
           res.end(JSON.stringify({ error: 'forbidden' }));
           return;
         }
-        if (!requestGate(req)) {
+        if (!requestGate(req, url)) {
           res.writeHead(429, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Too many votes — try again shortly.' }));
           return;
@@ -3361,7 +3370,7 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
           res.end(JSON.stringify({ error: 'forbidden' }));
           return;
         }
-        if (!requestGate(req)) {
+        if (!requestGate(req, url)) {
           res.writeHead(429, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Too many votes — try again shortly.' }));
           return;
@@ -3458,7 +3467,7 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
           res.end(JSON.stringify({ error: 'forbidden' }));
           return;
         }
-        if (!requestGate(req)) {
+        if (!requestGate(req, url)) {
           res.writeHead(429, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Too many requests — try again shortly.' }));
           return;
@@ -3493,7 +3502,7 @@ a.ghost{background:rgba(148,163,184,.1);border:1px solid rgba(140,160,255,.22);c
           res.end(JSON.stringify({ error: 'bot offline' }));
           return;
         }
-        if (!requestGate(req)) {
+        if (!requestGate(req, url)) {
           res.writeHead(429, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Too many requests — try again shortly.' }));
           return;

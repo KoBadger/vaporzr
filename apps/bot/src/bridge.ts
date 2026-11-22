@@ -1087,9 +1087,18 @@ export class Bridge {
         );
         break;
       }
-      case 'remove':
+      case 'remove': {
+        // Prefer identity: the URI is what the caller actually asked to remove,
+        // while an index captured a moment earlier may now point at another
+        // track (or at nothing).
+        if (msg.uri) {
+          const at = s.queue.getSnapshot().tracks.findIndex((t) => t.uri === msg.uri);
+          if (at >= 0) s.removeFromQueue(at);
+          break;
+        }
         if (msg.index != null) s.removeFromQueue(msg.index);
         break;
+      }
       case 'playAt':
         if (msg.index != null) {
           const at = msg.index;

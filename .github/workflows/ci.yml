@@ -37,8 +37,8 @@ jobs:
 
       # apps/player is excluded: it typechecks against the untracked Electron fork
       # in vendor/electron-ecs, which is not available on CI runners.
-      - name: Typecheck (shared, core, bot, spicetify)
-        run: npm run typecheck -w @vaporzr/shared && npm run typecheck -w @vaporzr/core && npm run typecheck -w @vaporzr/bot && npm run typecheck -w @vaporzr/spicetify-app
+      - name: Typecheck (shared, core, bot, telegram, spicetify)
+        run: npm run typecheck -w @vaporzr/shared && npm run typecheck -w @vaporzr/core && npm run typecheck -w @vaporzr/bot && npm run typecheck -w @vaporzr/telegram && npm run typecheck -w @vaporzr/spicetify-app
 
       - name: Format check
         run: npm run format:check
@@ -58,6 +58,12 @@ jobs:
       - name: Unit tests (core)
         working-directory: packages/core
         run: npm run test:coverage
+
+      # The Telegram front end is pure text/keyboard rendering plus the privacy
+      # router, so it is pinned by unit tests rather than a live bot.
+      - name: Unit tests (telegram)
+        working-directory: apps/telegram
+        run: npm test
 
   # The bot's audio stack depends on native Opus, and newer Node ABIs have no
   # upstream prebuild. The root postinstall stages the ABI-agnostic Node 22

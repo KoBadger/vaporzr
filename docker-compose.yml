@@ -33,6 +33,34 @@ services:
     cpus: 1.0
     logging: *default-logging
 
+  # Telegram front end. Shares the one queue with the Discord bot: it is a
+  # control client, not a second player, so it can be restarted on its own.
+  #
+  #   docker compose --profile telegram up -d
+  #
+  # Credentials live in apps/telegram/.env (TELEGRAM_BOT_TOKEN, VAPORZR_KEY).
+  # On the VPS the bot publishes 127.0.0.1:4876, so run this container with
+  # `--network host` and leave VAPORZR_URL at its default; inside compose the
+  # bot is reachable as http://bot:4876.
+  telegram:
+    profiles: ['telegram']
+    image: vaporzr-bot
+    container_name: vaporzr_telegram
+    restart: unless-stopped
+    command: ['tsx', 'apps/telegram/src/main.ts']
+    depends_on:
+      - bot
+    env_file:
+      - apps/telegram/.env
+    environment:
+      VAPORZR_URL: http://bot:4876
+      TELEGRAM_STATE_PATH: /app/data/telegram-state.json
+    volumes:
+      - ./apps/telegram/data:/app/data
+    mem_limit: 256m
+    cpus: 0.5
+    logging: *default-logging
+
   visualizer:
     image: nginx:alpine
     container_name: vaporzr_visualizer
