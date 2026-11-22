@@ -1,0 +1,11 @@
+{
+  "name": "@vaporzr/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Portable desktop window for the Vaporzr control panel",
+  "type": "module",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  }
+}

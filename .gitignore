@@ -9,6 +9,7 @@ apps/player/www/bundle/
 apps/player/www/vendor/
 apps/spicetify/dist/
 apps/player/release/
+apps/desktop/release/
 
 # Vendor binaries (download separately)
 vendor/electron-ecs/
