@@ -66,9 +66,10 @@ The **Desktop release** workflow then:
 3. zips it, writes `Vaporzr-Panel-win32-x64.zip.sha256`, and uploads both
    (artifact-only on a manual run).
 
-The zip extracts to a folder containing `Vaporzr Panel.exe`. Because the window
-loads the hosted panel, a new panel release reaches existing installs without a
-new download. The panel's ⋯ menu links to
+The zip extracts straight into the folder you extract it to — no extra level of
+directories — and `Vaporzr Panel.exe` is in there. Because the window loads the
+hosted panel, a new panel release reaches existing installs without a new
+download. The panel's ⋯ menu links to
 `github.com/KoBadger/vaporzr/releases?q=desktop-v` for the current download.
 
 ## macOS and Linux

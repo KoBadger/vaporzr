@@ -51,7 +51,9 @@ jobs:
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force dist | Out-Null
           $zip = 'dist/Vaporzr-Panel-win32-x64.zip'
-          Compress-Archive -Path apps/desktop/release/Vaporzr-Panel-win32-x64 -DestinationPath $zip
+          # Compress the *contents*, not the folder, so extracting gives you
+          # "Vaporzr Panel.exe" instead of one more directory to click through.
+          Compress-Archive -Path apps/desktop/release/Vaporzr-Panel-win32-x64/* -DestinationPath $zip
           $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
           "$hash  Vaporzr-Panel-win32-x64.zip" | Out-File -FilePath "$zip.sha256" -Encoding ascii
 
