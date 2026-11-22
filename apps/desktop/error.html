@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vaporzr — not connected</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: radial-gradient(circle at 30% 20%, #1a2050, #0b1026 60%);
+        color: #e8e9f5;
+        font:
+          15px/1.6 system-ui,
+          'Segoe UI',
+          sans-serif;
+      }
+      main {
+        max-width: 34rem;
+        padding: 2rem;
+        text-align: center;
+      }
+      h1 {
+        font-size: 1.35rem;
+        margin: 0 0 0.75rem;
+      }
+      p {
+        margin: 0 0 1rem;
+        color: #a9adc9;
+      }
+      .row {
+        display: flex;
+        gap: 0.75rem;
+        justify-content: center;
+        flex-wrap: wrap;
+        margin-top: 1.5rem;
+      }
+      a.button {
+        display: inline-block;
+        padding: 0.6rem 1.1rem;
+        border-radius: 999px;
+        text-decoration: none;
+        font-weight: 600;
+        background: #6a5cff;
+        color: #fff;
+        cursor: pointer;
+      }
+      a.secondary {
+        background: rgba(255, 255, 255, 0.1);
+        color: #e8e9f5;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Can’t reach the Vaporzr panel</h1>
+      <p>
+        The bot may be restarting, or this machine may be offline. Playback in Discord keeps running either way — this
+        window only controls it.
+      </p>
+      <p>
+        The panel URL is whatever this window was pointed at; the shell logs it on load. Reload is also on
+        <strong>Ctrl+R</strong>.
+      </p>
+      <!-- These are inert custom-scheme links, not page data. The main process
+           recognises them in `will-navigate` and substitutes the real target, so
+           this page never holds — or navigates to — a URL it read from itself. -->
+      <div class="row">
+        <a class="button" href="vaporzr-panel://retry">Try again</a>
+        <a class="button secondary" href="vaporzr-panel://browser">Open in browser</a>
+      </div>
+    </main>
+  </body>
+</html>
