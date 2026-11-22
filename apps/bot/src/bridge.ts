@@ -251,6 +251,11 @@ export class Bridge {
       ) => Promise<{ ok: boolean; message?: string }>)
     | null = null;
   /**
+   * Emergency voice reconnect: cycles the connection without destroying queue/playback.
+   * Called from the panel's "Audio Fix" button when audio issues are detected.
+   */
+  onVoiceReconnect: (() => Promise<void>) | null = null;
+  /**
    * Song search for the type-ahead used by the deck page, panel, request page
    * and the Discord Activity. The bot owns the Spotify/YouTube credentials.
    */

@@ -1495,6 +1495,14 @@ export class DiscordBot {
     bridge.onShareJam = (guildId) => this.shareJamCard(guildId ?? this.client.guilds.cache.first()?.id ?? '', null);
     bridge.onShoutout = (guildId, text) =>
       this.postShoutout(guildId ?? this.client.guilds.cache.first()?.id ?? '', text);
+    // Emergency voice reconnect: triggered by the panel's "Audio Fix" button
+    bridge.onVoiceReconnect = async () => {
+      const primary = bridge.getPrimaryGuildId() ?? this.client.guilds.cache.first()?.id ?? '';
+      const s = primary ? this.sessions.get(primary) : null;
+      if (!s) throw new Error('no active session');
+      const ok = await s.voice.forceReconnect();
+      if (!ok) throw new Error('voice link is not in a channel');
+    };
     // Panel toggles Endless Wave through the same machinery as `V@ew on/off`.
     bridge.setEndlessWaveToggle((guildId, mode) => {
       void this.panelSetEndlessWave(guildId, mode).catch((err) => {

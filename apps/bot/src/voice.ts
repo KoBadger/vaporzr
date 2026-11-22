@@ -196,6 +196,10 @@ export class VoiceManager implements AudioTransport {
   private streamStartTime = 0;
   private pausedPositionMs = 0;
   private channelId: string | null = null;
+  /** Guild and adapter of the last join, so an emergency reconnect can
+   *  rebuild the link without the caller having to supply them again. */
+  private lastGuildId: string | null = null;
+  private lastAdapterCreator: DiscordGatewayAdapterCreator | null = null;
   private paused = false;
   private idleTimer: NodeJS.Timeout | null = null;
   private watchdog: NodeJS.Timeout | null = null;
@@ -488,6 +492,8 @@ export class VoiceManager implements AudioTransport {
       const connection = joinVoiceChannel({ channelId, guildId, adapterCreator, selfDeaf: false });
       this.connection = connection;
       this.channelId = channelId;
+      this.lastGuildId = guildId;
+      this.lastAdapterCreator = adapterCreator;
       return connection;
     };
     const waitForReady = (connection: VoiceConnection): Promise<void> =>
@@ -573,6 +579,33 @@ export class VoiceManager implements AudioTransport {
   /** Playback registers this to be told when a downed voice link recovers to Ready. */
   setOnVoiceReconnect(cb: (() => void) | null): void {
     this.onVoiceReconnect = cb;
+  }
+
+  /**
+   * Emergency recovery behind the panel's "Audio Fix" button.
+   *
+   * A listener reporting white noise or garbled audio cannot say which layer is
+   * at fault — a wedged DAVE handshake and a torn-down feed sound the same from
+   * the outside. Rather than guess, this rebuilds the whole send path: fresh
+   * voice session (new DAVE negotiation, new Opus encoder), then asks playback
+   * to re-issue the current track from where it was left. The queue is never
+   * touched, so the room hears a short gap, not a cleared set.
+   */
+  async forceReconnect(): Promise<boolean> {
+    const guildId = this.lastGuildId;
+    const adapter = this.lastAdapterCreator;
+    const channelId = this.channelId;
+    if (!guildId || !adapter || !channelId) {
+      console.warn('[voice] audio fix requested, but there is no channel to rejoin');
+      return false;
+    }
+    console.log(`[voice] audio fix requested — rebuilding the voice link in ${channelId}`);
+    // join() tears the old link down itself and re-negotiates from scratch.
+    const ok = await this.join(guildId, channelId, adapter);
+    // Buffered audio died with the old link; re-issue so the room is not left
+    // silent. The re-issue path is debounced, so a double-tap is harmless.
+    this.onStallRecovery?.();
+    return ok;
   }
 
   /**
