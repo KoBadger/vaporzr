@@ -56,7 +56,7 @@ import {
 import { generateDependencyReport } from '@discordjs/voice';
 import { config } from '@vaporzr/core/config';
 import { getCrossfadeMs, setCrossfadeMs } from './crossfadeStore.js';
-import { gatewayHealth, type GatewayHealth } from './gatewayHealth.js';
+import { gatewayGoneSilent, gatewayHealth, type GatewayHealth } from './gatewayHealth.js';
 import { getSponsorEnabled, setSponsorEnabled } from './sponsorStore.js';
 import {
   getRecommendations,
@@ -1308,6 +1308,8 @@ export class DiscordBot {
   private emptyContentMessages = 0;
   /** First tick at which the client was seen without READY; 0 = ready. */
   private gatewayNotReadySince = 0;
+  /** Last logged silence-warning tier (10m / 20m), reset when events flow again. */
+  private gatewaySilenceWarned = 0;
 
   constructor(
     private sessions: SessionManager,
@@ -2609,12 +2611,35 @@ export class DiscordBot {
    * login. A Discord outage costs one extra login; a silent bot costs the day.
    */
   private startGatewayWatchdog(): void {
+    // Zombie-socket guard: a dead dispatch stream keeps heartbeating, so READY
+    // and ping stay green while every command is silently dropped. That exact
+    // failure ran for two days (Nov 20-22) because nothing watched event
+    // arrival. No dispatch of ANY kind for this long means the socket is deaf;
+    // exit and let the container restart with a fresh gateway session.
+    const silenceMin = Math.min(120, Math.max(5, Number(process.env.GATEWAY_SILENCE_MIN) || 30));
+    const silenceMs = silenceMin * 60_000;
     const t = setInterval(() => {
+      const now = Date.now();
       if (this.client.isReady()) {
         this.gatewayNotReadySince = 0;
+        const last = this.lastGatewayEventAt || this.startedAt;
+        if (gatewayGoneSilent(last, now, silenceMs)) {
+          console.error(
+            `[vaporzr] gateway READY but no events for ${Math.round((now - last) / 60_000)}m — ` +
+              'zombie socket suspected; exiting so the container restarts',
+          );
+          process.exit(1);
+        }
+        const silentMs = now - last;
+        const tier = silentMs >= 20 * 60_000 ? 2 : silentMs >= 10 * 60_000 ? 1 : 0;
+        if (tier > this.gatewaySilenceWarned) {
+          this.gatewaySilenceWarned = tier;
+          console.warn(`[vaporzr] no gateway events for ${Math.round(silentMs / 60_000)}m (restart at ${silenceMin}m)`);
+        } else if (tier === 0) {
+          this.gatewaySilenceWarned = 0;
+        }
         return;
       }
-      const now = Date.now();
       if (!this.gatewayNotReadySince) {
         this.gatewayNotReadySince = now;
         return;

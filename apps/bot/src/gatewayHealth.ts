@@ -55,6 +55,16 @@ export interface GatewayHealth {
 
 const HOUR_MS = 3_600_000;
 
+/**
+ * True when no gateway dispatch has arrived for `maxSilenceMs`. A zombie socket
+ * keeps heartbeating — ws.status stays READY and ping looks fine — while every
+ * command is silently dropped. That exact failure ran for two days in Nov 2026
+ * because nothing compared event arrival against the clock.
+ */
+export function gatewayGoneSilent(lastEventAt: number, now: number, maxSilenceMs: number): boolean {
+  return lastEventAt > 0 && now - lastEventAt >= maxSilenceMs;
+}
+
 export function gatewayHealth(c: GatewayCounters, now: number = Date.now()): GatewayHealth {
   const ageSec = (at: number): number | null => (at > 0 ? Math.max(0, Math.round((now - at) / 1000)) : null);
   return {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { gatewayHealth, gatewayStatusName, type GatewayCounters } from '../gatewayHealth.js';
+import { gatewayGoneSilent, gatewayHealth, gatewayStatusName, type GatewayCounters } from '../gatewayHealth.js';
 
 const NOW = 1_800_000_000_000;
 
@@ -90,5 +90,23 @@ describe('gatewayHealth', () => {
     // every command is silently ignored and nothing else in /health changes.
     const h = gatewayHealth(counters({ messagesSeen: 40, emptyContentMessages: 3 }), NOW);
     expect(h.emptyContentMessages).toBe(3);
+  });
+});
+
+describe('gatewayGoneSilent', () => {
+  it('flags a socket with no dispatches past the silence window', () => {
+    expect(gatewayGoneSilent(NOW - 31 * 60_000, NOW, 30 * 60_000)).toBe(true);
+  });
+
+  it('does not flag recent events or the exact boundary minus one', () => {
+    expect(gatewayGoneSilent(NOW - 1_000, NOW, 30 * 60_000)).toBe(false);
+    expect(gatewayGoneSilent(NOW - 30 * 60_000 + 1, NOW, 30 * 60_000)).toBe(false);
+    expect(gatewayGoneSilent(NOW - 30 * 60_000, NOW, 30 * 60_000)).toBe(true);
+  });
+
+  it('treats 0 as never-seen rather than infinitely silent', () => {
+    // Before the first dispatch the caller substitutes boot time; a raw 0 must
+    // not trigger an exit loop on a process that has not logged in yet.
+    expect(gatewayGoneSilent(0, NOW, 30 * 60_000)).toBe(false);
   });
 });
