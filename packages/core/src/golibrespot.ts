@@ -31,6 +31,13 @@ export class GoLibrespotManager implements SpotifyBackend {
   private lastHealthyAt = 0;
   /** Last time the device API answered with a real device_id (registration). */
   private lastApiOkAt = 0;
+  /**
+   * Last fatal line go-librespot wrote before dying. The crash-loop guard used
+   * to say only "check credentials/network"; the actual cause (e.g. Spotify
+   * revoking the stored device credential: BadCredentials) was buried in
+   * stderr.log on the server and invisible to every monitor.
+   */
+  private lastError: string | null = null;
   private restarting = false;
   /** Cumulative restarts, plus a window of recent ones for the crash-loop guard. */
   private restarts = 0;
@@ -89,6 +96,8 @@ export class GoLibrespotManager implements SpotifyBackend {
     registered?: boolean;
     restarts?: number;
     lastRestartAt?: number;
+    /** Last fatal/error line go-librespot logged, cleared once it answers again. */
+    lastError?: string | null;
   } {
     return {
       name: config.librespotDeviceName,
@@ -101,6 +110,7 @@ export class GoLibrespotManager implements SpotifyBackend {
       registered: this.isRunning() && Date.now() - this.lastApiOkAt < 20_000,
       restarts: this.restarts,
       lastRestartAt: this.restartTimes.length > 0 ? this.restartTimes[this.restartTimes.length - 1] : 0,
+      lastError: this.lastError,
     };
   }
 
@@ -191,6 +201,8 @@ export class GoLibrespotManager implements SpotifyBackend {
     if (await this.pingApi()) {
       this.lastHealthyAt = Date.now();
       this.lastApiOkAt = Date.now();
+      // Recovered: a stale error would make /health lie about the current state.
+      this.lastError = null;
       return;
     }
     // Music is still flowing out of the sink — never bounce the process mid-song,
@@ -236,6 +248,37 @@ export class GoLibrespotManager implements SpotifyBackend {
     return Promise.race([probe, hardTimeout]);
   }
 
+  /**
+   * Read the tail of go-librespot's stderr log and keep the last fatal/error
+   * line, in the spirit of /health's other "say why, not just what" fields.
+   * Best-effort: the log may be missing, mid-write, or rotated.
+   */
+  private captureFatal(): void {
+    try {
+      const file = path.join(config.goLibrespotConfigDir, 'stderr.log');
+      const size = fs.statSync(file).size;
+      const start = Math.max(0, size - 8192);
+      const buf = Buffer.alloc(size - start);
+      const fd = fs.openSync(file, 'r');
+      try {
+        fs.readSync(fd, buf, 0, buf.length, start);
+      } finally {
+        fs.closeSync(fd);
+      }
+      const line = buf
+        .toString('utf8')
+        .split('\n')
+        .filter((l) => /level=(fatal|error)\b/.test(l))
+        .pop();
+      if (!line) return;
+      // go-librespot logs key=value with a quoted error; keep the reason only.
+      const quoted = /(?:error|msg)="([^"]*)"/.exec(line);
+      this.lastError = (quoted ? quoted[1] : line).slice(0, 300);
+    } catch {
+      /* no log yet — nothing to report */
+    }
+  }
+
   private async restart(): Promise<void> {
     if (this.restarting) return;
     const now = Date.now();
@@ -246,8 +289,10 @@ export class GoLibrespotManager implements SpotifyBackend {
     this.restartTimes = this.restartTimes.filter((t) => now - t < 10 * 60_000);
     if (this.restartTimes.length >= 5) {
       this.backoffUntil = now + 60_000;
+      this.captureFatal();
       console.warn(
-        `[golibrespot] ${this.restartTimes.length} restarts in 10m — backing off 60s (check credentials/network)`,
+        `[golibrespot] ${this.restartTimes.length} restarts in 10m — backing off 60s ` +
+          `(check credentials/network${this.lastError ? `: ${this.lastError}` : ''})`,
       );
       return;
     }

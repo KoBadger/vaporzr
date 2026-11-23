@@ -33,6 +33,7 @@ import { analyzer } from '@vaporzr/core/analyzer';
 import { searchAndResolveYoutube } from '@vaporzr/core/youtube';
 import type { ResolvedTrack } from '@vaporzr/core/spotify';
 import { secretEquals, keyFromCookieHeader, masterPasswordEquals } from './secretCompare.js';
+import type { GatewayHealth } from './gatewayHealth.js';
 import {
   authThrottle,
   consumeInvite,
@@ -281,6 +282,21 @@ export class Bridge {
 
   get guildCount(): number {
     return this.guildList.length;
+  }
+
+  /**
+   * Probe installed by the Discord layer so /health can describe the gateway.
+   * A setter keeps the DiscordBot out of Bridge's imports (and its constructor).
+   */
+  private gatewayProbe: (() => GatewayHealth) | null = null;
+
+  setGatewayProbe(fn: () => GatewayHealth): void {
+    this.gatewayProbe = fn;
+  }
+
+  /** Gateway snapshot for /health, or null before the Discord layer wires it up. */
+  gatewayHealth(): GatewayHealth | null {
+    return this.gatewayProbe?.() ?? null;
   }
 
   setGuildList(list: Array<{ id: string; name: string }>): void {

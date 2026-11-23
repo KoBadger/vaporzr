@@ -309,6 +309,7 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
       const guilds = bridge?.guildCount ?? 0;
       const all = sessions.all();
       const bridgeInstance: Bridge | null = bridge;
+      const librespotInfo = bridgeInstance?.librespot.getDeviceInfo();
       const librespotStatus = bridgeInstance?.librespot.isRunning() ? 'running' : 'stopped';
       // Live Spotify cooldown so an active rate-limit is visible from outside
       // instead of only surfacing per-command hours later.
@@ -327,9 +328,17 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
         ok: true,
         uptimeSec: Math.round(process.uptime()),
         guilds,
+        // `guilds` is a cache size and reads 11 on a dead socket — the 2026-11-22
+        // ten-hour silence looked perfectly healthy. This is the real liveness
+        // signal: session age, heartbeat, last dispatch, and withheld content.
+        gateway: bridgeInstance?.gatewayHealth() ?? null,
         playing: all.filter((s) => s.queue.getState().playing).length,
         sessions: all.length,
         librespot: librespotStatus,
+        // A bare 'stopped' cannot say why. The crash-loop guard fired for two
+        // days on revoked credentials with only stderr.log to show for it.
+        librespotRestarts: librespotInfo?.restarts ?? null,
+        librespotError: librespotInfo?.lastError ?? null,
         spotifyApi: spotifyApiStatus,
         spotifyCooldownSec,
         poToken: poTokenStatus,

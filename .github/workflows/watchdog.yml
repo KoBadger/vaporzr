@@ -58,6 +58,16 @@ jobs:
           fail() { echo "::error::$1"; exit 1; }
 
           echo "$body" | jq -e '.ok == true' >/dev/null || fail "health is not ok"
+          # The gateway is the bot's ears. Without this check a process stuck in
+          # login-retry, or one whose socket died, answers /health 200 with 11
+          # cached guilds and silently receives nothing — that is how 2026-11-22
+          # went deaf for hours with a green dashboard.
+          echo "$body" | jq -e '.gateway != null' >/dev/null || fail "no gateway probe in /health (stale build?)"
+          if [ "$(echo "$body" | jq -r '.uptimeSec')" -ge 300 ]; then
+            echo "$body" | jq -e '.gateway.ready == true' >/dev/null || fail "Discord gateway is not READY"
+            echo "$body" | jq -e '(.gateway.lastEventAgoSec // 0) < 900' >/dev/null || fail "no gateway event in 15 minutes"
+            echo "$body" | jq -e '(.gateway.disconnectsLastHour // 0) < 10' >/dev/null || fail "gateway is flapping (>10 disconnects in an hour)"
+          fi
           echo "$body" | jq -e '.librespot == "running"' >/dev/null || fail "librespot is not running"
           echo "$body" | jq -e '.backup.stale == false' >/dev/null || fail "off-site backup is stale (no successful push in 48h)"
           echo "$body" | jq -e '(.backup.error // null) == null' >/dev/null || fail "the last backup run failed"
