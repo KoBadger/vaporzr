@@ -56,6 +56,7 @@ import {
 import { generateDependencyReport } from '@discordjs/voice';
 import { config } from '@vaporzr/core/config';
 import { getCrossfadeMs, setCrossfadeMs } from './crossfadeStore.js';
+import { gatewayGoneSilent, gatewayHealth, type GatewayHealth } from './gatewayHealth.js';
 import { getSponsorEnabled, setSponsorEnabled } from './sponsorStore.js';
 import {
   getRecommendations,
@@ -1291,6 +1292,24 @@ export class DiscordBot {
   private startedAt = Date.now();
   /** Cumulative slash + prefix commands handled. */
   private commandsRun = 0;
+  /**
+   * Gateway liveness, exposed through /health. Cache sizes (`guilds`,
+   * `sessions`) stay healthy on a deaf socket, so they cannot answer "is the
+   * bot actually receiving events?" — see gatewayHealth.ts for the incident
+   * that made this necessary.
+   */
+  private gatewayReadyAt = 0;
+  private gatewayDisconnects = 0;
+  private gatewayDisconnectTimes: number[] = [];
+  private gatewayResumes = 0;
+  private lastGatewayEventAt = 0;
+  private messagesSeen = 0;
+  private lastMessageAt = 0;
+  private emptyContentMessages = 0;
+  /** First tick at which the client was seen without READY; 0 = ready. */
+  private gatewayNotReadySince = 0;
+  /** Last logged silence-warning tier (10m / 20m), reset when events flow again. */
+  private gatewaySilenceWarned = 0;
 
   constructor(
     private sessions: SessionManager,
@@ -2473,6 +2492,14 @@ export class DiscordBot {
     });
     // Never let a stray client error take the process down.
     this.client.on('error', (e) => console.warn('[vaporzr] client error:', e instanceof Error ? e.message : e));
+    // Any dispatch proves the socket is delivering; a wedged connection goes
+    // quiet here long before anything user-visible fails.
+    this.client.on('raw', () => {
+      this.lastGatewayEventAt = Date.now();
+    });
+    this.client.on('shardReady', () => {
+      this.gatewayReadyAt = Date.now();
+    });
     this.client.on('interactionCreate', (i) => {
       if (process.env.LOG_MESSAGES === '1') {
         const name = 'commandName' in i ? i.commandName : 'customId' in i ? i.customId : '';
@@ -2481,6 +2508,20 @@ export class DiscordBot {
       void this.onInteraction(i);
     });
     this.client.on('messageCreate', (m) => {
+      // Content-less messages from humans are the signature of a withheld
+      // Message Content intent: the prefix path then ignores every command and
+      // nothing else in /health moves. Count them so the cause is visible.
+      this.messagesSeen++;
+      this.lastMessageAt = Date.now();
+      if (!m.author?.bot && (m.content ?? '') === '') {
+        this.emptyContentMessages++;
+        if (this.emptyContentMessages === 1 || this.emptyContentMessages % 50 === 0) {
+          console.warn(
+            `[vaporzr] ${this.emptyContentMessages} message(s) arrived with empty content — ` +
+              'check the Message Content intent in the Discord developer portal',
+          );
+        }
+      }
       if (process.env.LOG_MESSAGES === '1') {
         console.log(
           `[dbg] message id=${m.id} guild=${m.guildId ?? ''} ch=${m.channelId} bot=${m.author?.bot} partial=${m.partial} content=${JSON.stringify(m.content ?? '').slice(0, 100)}`,
@@ -2509,6 +2550,11 @@ export class DiscordBot {
     const recentDisconnects: number[] = [];
     this.client.on('shardDisconnect', (event, shardId) => {
       const now = Date.now();
+      this.gatewayDisconnects++;
+      this.gatewayDisconnectTimes.push(now);
+      while (this.gatewayDisconnectTimes.length && now - this.gatewayDisconnectTimes[0] > 3_600_000) {
+        this.gatewayDisconnectTimes.shift();
+      }
       recentDisconnects.push(now);
       while (recentDisconnects.length && now - recentDisconnects[0] > 60_000) recentDisconnects.shift();
       const code = (event as { code?: number } | undefined)?.code;
@@ -2521,18 +2567,92 @@ export class DiscordBot {
         recentDisconnects.length = 0;
       }
     });
-    this.client.on('shardResume', (_shardId, replayedEvents) =>
-      console.log(`[vaporzr] gateway shard resumed (${replayedEvents} events replayed)`),
-    );
+    this.client.on('shardResume', (_shardId, replayedEvents) => {
+      this.gatewayResumes++;
+      console.log(`[vaporzr] gateway shard resumed (${replayedEvents} events replayed)`);
+    });
     // Reaction controls on the always-on now-playing strip.
     this.client.on('messageReactionAdd', (reaction, user) => {
       void this.handleReaction(reaction as MessageReaction, user as User);
     });
     // Auto-hype: beat onsets from the analyzer fire a short SFX.
     analyzer.setBeatHandler(() => this.onBeat());
+    // Install the health probe BEFORE login: a boot stuck in login-retry is
+    // exactly the state /health has to describe (READY never reached, no events).
+    this.bridge.setGatewayProbe(() => this.gatewayStatus());
+    this.startGatewayWatchdog();
     await this.loginWithRetry();
     this.startPresenceTicker();
     this.startWaveWatchdog();
+  }
+
+  /** Snapshot for /health — see gatewayHealth.ts. */
+  gatewayStatus(): GatewayHealth {
+    return gatewayHealth({
+      wsStatus: this.client.ws.status,
+      pingMs: this.client.ws.ping,
+      ready: this.client.isReady(),
+      readyAt: this.gatewayReadyAt,
+      disconnects: this.gatewayDisconnects,
+      disconnectTimes: this.gatewayDisconnectTimes,
+      resumes: this.gatewayResumes,
+      lastEventAt: this.lastGatewayEventAt,
+      messagesSeen: this.messagesSeen,
+      lastMessageAt: this.lastMessageAt,
+      emptyContentMessages: this.emptyContentMessages,
+    });
+  }
+
+  /**
+   * A client that never reaches READY — or loses it for good — is deaf while
+   * /health still answers 200, which is how the 2026-11-22 silence went
+   * unnoticed for hours. After ten minutes without READY, exit and let the
+   * container's `--restart unless-stopped` policy bring it back with a fresh
+   * login. A Discord outage costs one extra login; a silent bot costs the day.
+   */
+  private startGatewayWatchdog(): void {
+    // Zombie-socket guard: a dead dispatch stream keeps heartbeating, so READY
+    // and ping stay green while every command is silently dropped. That exact
+    // failure ran for two days (Nov 20-22) because nothing watched event
+    // arrival. No dispatch of ANY kind for this long means the socket is deaf;
+    // exit and let the container restart with a fresh gateway session.
+    const silenceMin = Math.min(120, Math.max(5, Number(process.env.GATEWAY_SILENCE_MIN) || 30));
+    const silenceMs = silenceMin * 60_000;
+    const t = setInterval(() => {
+      const now = Date.now();
+      if (this.client.isReady()) {
+        this.gatewayNotReadySince = 0;
+        const last = this.lastGatewayEventAt || this.startedAt;
+        if (gatewayGoneSilent(last, now, silenceMs)) {
+          console.error(
+            `[vaporzr] gateway READY but no events for ${Math.round((now - last) / 60_000)}m — ` +
+              'zombie socket suspected; exiting so the container restarts',
+          );
+          process.exit(1);
+        }
+        const silentMs = now - last;
+        const tier = silentMs >= 20 * 60_000 ? 2 : silentMs >= 10 * 60_000 ? 1 : 0;
+        if (tier > this.gatewaySilenceWarned) {
+          this.gatewaySilenceWarned = tier;
+          console.warn(`[vaporzr] no gateway events for ${Math.round(silentMs / 60_000)}m (restart at ${silenceMin}m)`);
+        } else if (tier === 0) {
+          this.gatewaySilenceWarned = 0;
+        }
+        return;
+      }
+      if (!this.gatewayNotReadySince) {
+        this.gatewayNotReadySince = now;
+        return;
+      }
+      const downMs = now - this.gatewayNotReadySince;
+      if (downMs < 10 * 60_000) return;
+      console.error(
+        `[vaporzr] gateway not READY for ${Math.round(downMs / 60_000)}m ` +
+          `(ws status ${this.client.ws.status}) — exiting so the container restarts`,
+      );
+      process.exit(1);
+    }, 30_000);
+    t.unref?.();
   }
 
   /** Keep the bridge's primary guild (used by desktop/browser panels) in sync. */

@@ -63,6 +63,8 @@ export interface SpotifyBackend {
     registered?: boolean;
     restarts?: number;
     lastRestartAt?: number;
+    /** Last fatal/error line the backend logged, cleared once it answers again. */
+    lastError?: string | null;
   };
   setDeviceName(name: string): void;
   start(): Promise<void>;

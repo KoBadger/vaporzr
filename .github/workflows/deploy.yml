@@ -190,6 +190,20 @@ jobs:
                 "$1"
             }
 
+            # Keep the outgoing container's logs before deleting it. `docker rm`
+            # erases the only record of what the previous build did in the hours
+            # before it was replaced — which is precisely what an incident needs
+            # (the 2026-11-22 gateway silence was unanswerable for this reason).
+            if docker inspect vaporzr >/dev/null 2>&1; then
+              LOGDIR=/opt/vaporzr/logs
+              mkdir -p "$LOGDIR"
+              PREV_TAG=$(docker inspect -f '{{.Config.Image}}' vaporzr 2>/dev/null | sed 's/.*://' || true)
+              OLDLOG="$LOGDIR/container-$(date -u +%Y%m%dT%H%M%SZ)-${PREV_TAG:-unknown}.log"
+              docker logs --tail 5000 vaporzr > "$OLDLOG" 2>&1 || true
+              echo "Archived outgoing container logs: $OLDLOG ($(wc -l < "$OLDLOG") lines)"
+              ls -1t "$LOGDIR"/container-*.log 2>/dev/null | tail -n +21 | xargs -r rm -f
+            fi
+
             docker stop vaporzr || true
             docker rm vaporzr || true
             start_container ${{ env.IMAGE }}:$SHA
@@ -198,16 +212,17 @@ jobs:
             # trimmed the bot tags but never the build cache or dangling layers,
             # which is what actually filled the volume.
             # Health gate: the container needs a few seconds to log in and bind.
-            # Require a 200 from /health within 60s, else restore the previous
-            # image and fail the run — a broken deploy is never left serving.
-            HEALTH_CMD="const h=require('http');h.get('http://127.0.0.1:'+(process.env.PORT||4876)+'/health',s=>{let b='';s.on('data',d=>b+=d);s.on('end',()=>{console.log('health:',b);process.exit(s.statusCode===200?0:1)})}).on('error',()=>process.exit(1))"
+            # Require a 200 from /health AND a READY Discord gateway within 60s:
+            # a process answering /health while its gateway never came up is
+            # deaf, and shipping that is worse than failing the deploy.
+            HEALTH_CMD="const h=require('http');h.get('http://127.0.0.1:'+(process.env.PORT||4876)+'/health',s=>{let b='';s.on('data',d=>b+=d);s.on('end',()=>{console.log('health:',b);let ok=s.statusCode===200;try{ok=ok&&JSON.parse(b).gateway?.ready===true}catch{ok=false}process.exit(ok?0:1)})}).on('error',()=>process.exit(1))"
             healthy=0
             for _ in $(seq 1 30); do
               sleep 2
               if docker exec vaporzr node -e "$HEALTH_CMD" >/dev/null 2>&1; then healthy=1; break; fi
             done
             if [ "$healthy" -ne 1 ]; then
-              echo "ERROR: /health did not answer 200 within 60s — rolling back."
+              echo "ERROR: /health did not report a READY gateway within 60s — rolling back."
               docker logs --tail 100 vaporzr || true
               docker rm -f vaporzr || true
               if [ -n "$PREV_IMAGE" ]; then
