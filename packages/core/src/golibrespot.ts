@@ -38,6 +38,15 @@ export class GoLibrespotManager implements SpotifyBackend {
    * stderr.log on the server and invisible to every monitor.
    */
   private lastError: string | null = null;
+  /**
+   * A device-auth pairing code waiting for the owner to approve at
+   * spotify.com/pair. An unpaired device has NO device_id in /status, which
+   * looks identical to a wedged dealer link to the watchdog — so without this,
+   * the watchdog restarts go-librespot every 5s and the code rotates before the
+   * owner can approve it, making pairing impossible.
+   */
+  private pairingCode: string | null = null;
+  private pairingSeenAt = 0;
   private restarting = false;
   /** Cumulative restarts, plus a window of recent ones for the crash-loop guard. */
   private restarts = 0;
@@ -98,6 +107,8 @@ export class GoLibrespotManager implements SpotifyBackend {
     lastRestartAt?: number;
     /** Last fatal/error line go-librespot logged, cleared once it answers again. */
     lastError?: string | null;
+    /** Pending Spotify device-auth code, if the device is awaiting pairing. */
+    pairingCode?: string | null;
   } {
     return {
       name: config.librespotDeviceName,
@@ -111,6 +122,7 @@ export class GoLibrespotManager implements SpotifyBackend {
       restarts: this.restarts,
       lastRestartAt: this.restartTimes.length > 0 ? this.restartTimes[this.restartTimes.length - 1] : 0,
       lastError: this.lastError,
+      pairingCode: this.pairingCode,
     };
   }
 
@@ -203,6 +215,8 @@ export class GoLibrespotManager implements SpotifyBackend {
       this.lastApiOkAt = Date.now();
       // Recovered: a stale error would make /health lie about the current state.
       this.lastError = null;
+      // A device_id means auth completed — any pairing code is now void.
+      this.pairingCode = null;
       return;
     }
     // Music is still flowing out of the sink — never bounce the process mid-song,
@@ -212,11 +226,45 @@ export class GoLibrespotManager implements SpotifyBackend {
       this.lastHealthyAt = Date.now();
       return;
     }
+    // A device-auth code is waiting for the owner to approve at spotify.com/pair.
+    // An unpaired device has no device_id, so pingApi() above is false by design
+    // — restarting here would discard the code and rotate it forever. Hold the
+    // daemon (and its code) steady for a generous approval window instead.
+    this.capturePairing();
+    if (this.pairingCode && Date.now() - this.pairingSeenAt < 15 * 60_000) {
+      this.lastHealthyAt = Date.now();
+      return;
+    }
     // API unresponsive AND silent — the dealer link is likely wedged. Wait out a
     // short grace period (transient blips) before bouncing the process.
     if (Date.now() - this.lastHealthyAt > 5_000) {
       console.warn('[golibrespot] device API unresponsive and idle (dealer link lost?) — restarting to re-register');
       await this.restart();
+    }
+  }
+
+  /** Pull the device-auth code out of stderr.log so the owner can be told. */
+  private capturePairing(): void {
+    try {
+      const file = path.join(config.goLibrespotConfigDir, 'stderr.log');
+      const size = fs.statSync(file).size;
+      const start = Math.max(0, size - 8192);
+      const buf = Buffer.alloc(size - start);
+      const fd = fs.openSync(file, 'r');
+      try {
+        fs.readSync(fd, buf, 0, buf.length, start);
+      } finally {
+        fs.closeSync(fd);
+      }
+      const m = /pair\?code=([A-Z0-9]{6})\b/.exec(buf.toString('utf8'));
+      if (!m) return;
+      const code = m[1];
+      if (code !== this.pairingCode) {
+        this.pairingCode = code;
+        this.pairingSeenAt = Date.now();
+      }
+    } catch {
+      /* no log yet — nothing to pair */
     }
   }
 

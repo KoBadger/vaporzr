@@ -339,6 +339,8 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
         // days on revoked credentials with only stderr.log to show for it.
         librespotRestarts: librespotInfo?.restarts ?? null,
         librespotError: librespotInfo?.lastError ?? null,
+        // When Spotify needs a re-pair, the code is here — no SSH required.
+        librespotPairingCode: librespotInfo?.pairingCode ?? null,
         spotifyApi: spotifyApiStatus,
         spotifyCooldownSec,
         poToken: poTokenStatus,

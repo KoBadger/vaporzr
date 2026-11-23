@@ -65,6 +65,8 @@ export interface SpotifyBackend {
     lastRestartAt?: number;
     /** Last fatal/error line the backend logged, cleared once it answers again. */
     lastError?: string | null;
+    /** Pending Spotify device-auth code, if the device is awaiting pairing. */
+    pairingCode?: string | null;
   };
   setDeviceName(name: string): void;
   start(): Promise<void>;
