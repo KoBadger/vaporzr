@@ -499,8 +499,10 @@ export class VoiceManager implements AudioTransport {
     const waitForReady = (connection: VoiceConnection): Promise<void> =>
       new Promise((resolve, reject) => {
         // Discord's voice gateway can be slow when the machine's DNS/network is
-        // flaky, so give it a generous window and retry once below.
-        const timer = setTimeout(() => reject(new Error('Timed out joining the voice channel.')), 20_000);
+        // flaky. A brief connect blip used to burn all three attempts in ~60s
+        // and make the bot leave the channel, so give each attempt a generous
+        // window and back off further between them below.
+        const timer = setTimeout(() => reject(new Error('Timed out joining the voice channel.')), 30_000);
         timer.unref?.();
         connection.once(VoiceConnectionStatus.Ready, () => {
           clearTimeout(timer);
@@ -513,16 +515,31 @@ export class VoiceManager implements AudioTransport {
       });
 
     let connection = connect();
-    // Three attempts with growing backoff: a deploy restart or a DNS blip used to
-    // exhaust two quick attempts, so the bot appeared to join and then leave.
-    const attempts = 3;
+    // Keep trying across a transient Discord connect blip instead of giving up
+    // and leaving the channel. Five attempts with growing backoff ride out the
+    // ~1-2 min timeouts seen on datacenter links; the reconnect supervisor (armed
+    // on success) keeps a flaky link alive afterwards. Only a genuinely dead
+    // endpoint should ever surface a failure to the caller.
+    const attempts = 5;
     for (let attempt = 1; ; attempt++) {
       try {
         await waitForReady(connection);
         break;
       } catch (err) {
         if (attempt >= attempts) {
-          this.leave();
+          // Do NOT leave here: a transient blip must not look like "the bot
+          // joined then left". Keep the last connection so the reconnect
+          // supervisor can drive further recovery while the queue stays intact.
+          console.warn(
+            `[voice] voice link never reached Ready after ${attempts} attempts ` +
+              `(${err instanceof Error ? err.message : err}) — keeping the session for recovery`,
+          );
+          this.voiceLinkDown = true;
+          // Wire the player + handlers even on this path so the supervisor's
+          // forced rejoins can actually put audio on the connection once the
+          // link recovers — otherwise recovery reaches Ready but stays silent.
+          this.wireConnection(connection);
+          this.armReconnectSupervisor(guildId, channelId, adapterCreator);
           throw err;
         }
         console.warn(`[voice] join attempt ${attempt} failed (${err instanceof Error ? err.message : err}) — retrying`);
@@ -531,7 +548,7 @@ export class VoiceManager implements AudioTransport {
         } catch {
           /* ignore */
         }
-        const delay = attempt === 1 ? 1_500 : 4_000;
+        const delay = attempt === 1 ? 2_000 : attempt === 2 ? 5_000 : 10_000;
         await new Promise((resolve) => {
           const t = setTimeout(resolve, delay);
           t.unref?.();
@@ -540,32 +557,7 @@ export class VoiceManager implements AudioTransport {
       }
     }
 
-    this.player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Pause } });
-    connection.subscribe(this.player);
-    this.attachHandlers(connection);
-    this.player.on('error', (e) => {
-      // A killed ffmpeg's tail packet can still hit the player after a
-      // skip/stop. If the errored resource is not the current one, the
-      // transition already replaced it — log nothing and, crucially, do NOT
-      // stopStream() (that would tear down the NEW stream).
-      const res = (e as { resource?: AudioResource | null }).resource;
-      if (res && res !== this.resource) return;
-      if (/write after end/.test(e.message)) return; // expected mid-teardown
-      console.error('[voice] player error:', e.message);
-      this.stopStream();
-    });
-    this.player.on('stateChange', (oldState, newState) => {
-      // Only clear our stream/resource pointers when the resource that actually
-      // ended is the one we started (a stale Idle from a stopped resource must
-      // not clobber the pointers of a newer stream).
-      if (newState.status === AudioPlayerStatus.Idle) {
-        const endedResource = (oldState as { resource?: AudioResource | undefined }).resource;
-        if (endedResource === this.resource) {
-          this.stream = null;
-          this.resource = null;
-        }
-      }
-    });
+    this.wireConnection(connection);
 
     this.onVoiceChange?.(true, channelId);
     console.log(`[voice] joined voice channel ${channelId}`);
@@ -574,6 +566,44 @@ export class VoiceManager implements AudioTransport {
     await this.waitForAudioReady();
     this.armReconnectSupervisor(guildId, channelId, adapterCreator);
     return true;
+  }
+
+  /**
+   * Subscribe the player to a voice connection and install its handlers.
+   * Shared by the success path and the "never reached Ready" recovery path so a
+   * connection kept alive for recovery is fully wired to produce audio once the
+   * link comes back — a recovered-but-silent connection is indistinguishable
+   * from a dead one to everyone in the channel.
+   */
+  private wireConnection(connection: VoiceConnection): void {
+    if (!this.player) {
+      this.player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Pause } });
+      this.player.on('error', (e) => {
+        // A killed ffmpeg's tail packet can still hit the player after a
+        // skip/stop. If the errored resource is not the current one, the
+        // transition already replaced it — log nothing and, crucially, do NOT
+        // stopStream() (that would tear down the NEW stream).
+        const res = (e as { resource?: AudioResource | null }).resource;
+        if (res && res !== this.resource) return;
+        if (/write after end/.test(e.message)) return; // expected mid-teardown
+        console.error('[voice] player error:', e.message);
+        this.stopStream();
+      });
+      this.player.on('stateChange', (oldState, newState) => {
+        // Only clear our stream/resource pointers when the resource that actually
+        // ended is the one we started (a stale Idle from a stopped resource must
+        // not clobber the pointers of a newer stream).
+        if (newState.status === AudioPlayerStatus.Idle) {
+          const endedResource = (oldState as { resource?: AudioResource | undefined }).resource;
+          if (endedResource === this.resource) {
+            this.stream = null;
+            this.resource = null;
+          }
+        }
+      });
+    }
+    connection.subscribe(this.player);
+    this.attachHandlers(connection);
   }
 
   /** Playback registers this to be told when a downed voice link recovers to Ready. */
@@ -873,21 +903,30 @@ export class VoiceManager implements AudioTransport {
       let lastErr: unknown = null;
       // A single transient DNS/connect blip used to lock the whole session at the
       // channel's old cap — which on a quiet channel is 20 kbps, audibly awful.
-      // Retrying here costs a second and saves the entire session's quality.
-      for (let attempt = 1; attempt <= 3; attempt++) {
+      // Retry, but BOUND each attempt: discord.js REST uses undici's 10s connect
+      // timeout, so three unanswered attempts used to stall the join for ~30s
+      // before the voice connection even started ("joined late"). A raise is
+      // best-effort quality — never let it hold the channel hostage.
+      for (let attempt = 1; attempt <= 2; attempt++) {
         try {
-          const updated = (await channel.setBitrate(wanted)) as { bitrate?: number } | undefined;
+          const pending = channel.setBitrate(wanted) as Promise<{ bitrate?: number } | undefined>;
+          pending.catch(() => {}); // a late rejection after the race must not be unhandled
+          const updated = await Promise.race([
+            pending,
+            new Promise<never>((_, reject) => {
+              const t = setTimeout(() => reject(new Error('bitrate negotiation timed out')), 4_000);
+              t.unref?.();
+            }),
+          ]);
           current = updated?.bitrate ?? wanted;
           lastErr = null;
           console.log(`[voice] channel bitrate ${Math.round(before / 1000)} -> ${Math.round(current / 1000)} kbps`);
           break;
         } catch (err) {
           lastErr = err;
-          if (attempt < 3) {
-            const delay = attempt === 1 ? 500 : 1_500;
-            console.warn(`[voice] bitrate raise attempt ${attempt} failed — retrying in ${delay}ms`);
+          if (attempt < 2) {
             await new Promise((resolve) => {
-              const t = setTimeout(resolve, delay);
+              const t = setTimeout(resolve, 500);
               t.unref?.();
             });
           }
