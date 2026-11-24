@@ -1608,8 +1608,8 @@ export class DiscordBot {
         })();
       };
       // Playback stopped because several tracks in a row couldn't start.
-      s.playback.onPlaybackStalled = () => {
-        void this.notifyPlaybackStalled(s.guildId);
+      s.playback.onPlaybackStalled = (detail) => {
+        void this.notifyPlaybackStalled(s.guildId, detail);
       };
       // A stream was refused before its first byte — say why instead of letting
       // the queue skip to the next track as if the song had ended.
@@ -8088,7 +8088,7 @@ export class DiscordBot {
   }
 
   /** Playback halted because consecutive tracks couldn't start (backend issue). */
-  private async notifyPlaybackStalled(guildId: string): Promise<void> {
+  private async notifyPlaybackStalled(guildId: string, detail?: string): Promise<void> {
     // Only the opted-in now-playing channel (see /npchannel) — never an
     // arbitrary channel the bot merely saw a command in.
     const channelId = this.perms.getNpChannel(guildId);
@@ -8101,7 +8101,8 @@ export class DiscordBot {
           new EmbedBuilder()
             .setColor(this.themeColor())
             .setDescription(
-              "⚠️ **Playback stopped** — several tracks in a row couldn't start (Spotify device unavailable / no YouTube match). The queue is intact; try `V@p` again or re-link Spotify.",
+              detail ??
+                "⚠️ **Playback stopped** — several tracks in a row couldn't start (Spotify device unavailable / no YouTube match). The queue is intact; try `V@p` again or re-link Spotify.",
             ),
         ],
       });
@@ -9310,7 +9311,7 @@ export class DiscordBot {
       return {
         ok: false,
         error:
-          "⚠️ Sharing needs `JAM_PUBLIC_BASE` set to this bot's public URL (e.g. https://vaporzr.duckdns.org) — then restart.",
+          "⚠️ Sharing needs `JAM_PUBLIC_BASE` set to this bot's public URL (e.g. https://vaporzr.app) — then restart.",
       };
     }
     const target = channel ?? (await this.panelShareChannel(guildId));

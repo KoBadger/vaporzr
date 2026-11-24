@@ -241,7 +241,7 @@ describe('tailnet-only access', () => {
 
   it('is off by default for any host', () => {
     config.webAccess = 'public';
-    expect(webAccessAllowed('vaporzr.duckdns.org')).toBe(true);
+    expect(webAccessAllowed('vaporzr.app')).toBe(true);
   });
 
   it('allows loopback, CGNAT and MagicDNS names only', () => {
@@ -250,7 +250,7 @@ describe('tailnet-only access', () => {
     expect(webAccessAllowed('127.0.0.1:4876')).toBe(true);
     expect(webAccessAllowed('100.108.250.70')).toBe(true);
     expect(webAccessAllowed('vaporzr-bot.tail137f17.ts.net')).toBe(true);
-    expect(webAccessAllowed('vaporzr.duckdns.org')).toBe(false);
+    expect(webAccessAllowed('vaporzr.app')).toBe(false);
     expect(webAccessAllowed('8.8.8.8')).toBe(false);
     expect(webAccessAllowed(undefined)).toBe(false);
   });
