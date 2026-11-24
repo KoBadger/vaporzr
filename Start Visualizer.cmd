@@ -14,7 +14,7 @@ echo   Leave this black window open while you use it.
 echo   Closing this window stops the visualizer.
 echo.
 
-npm --prefix apps/player run broadcast -- --ws=wss://vaporzr.duckdns.org/ws
+npm --prefix apps/player run broadcast -- --ws=wss://vaporzr.app/ws
 
 echo.
 echo   The visualizer has stopped.

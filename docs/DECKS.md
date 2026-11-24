@@ -5,7 +5,7 @@ and are summed into the single Opus stream that goes to your voice channel, so
 listeners hear the mix exactly as you build it. Cues, loops, EQ, beat-lock and
 recording all happen on the bot — nothing is rendered offline.
 
-Open it at **`/deck`** on your panel host (e.g. `https://vaporzr.duckdns.org/deck`).
+Open it at **`/deck`** on your panel host (e.g. `https://vaporzr.app/deck`).
 It needs **control** scope (the same key as `/panel`) and the `deck` permission,
 which defaults to **mod**.
 

@@ -1,9 +1,9 @@
 # Moving Vaporzr to vaporzr.app
 
-Today the bot is served as `https://vaporzr.duckdns.org`:
+Today the bot is served as `https://vaporzr.app`:
 
 ```
-browser / Discord  →  Cloudflare (duckdns is DNS-only)  →  Caddy :443 on the VPS  →  127.0.0.1:4876 (the bot)
+browser / Discord  →  Cloudflare (proxied)  →  Caddy :443 on the VPS  →  127.0.0.1:4876 (the bot)
 ```
 
 The `vaporzr.app` zone is already live in Cloudflare (`irma.ns.cloudflare.com`,
@@ -47,7 +47,7 @@ curl -sI https://vaporzr.app/health
 
 ```caddy
 # Vaporzr — public HTTPS endpoint.
-vaporzr.duckdns.org, vaporzr.app, www.vaporzr.app {
+vaporzr.app, www.vaporzr.app {
 	bind 46.224.80.104
 	encode gzip
 	reverse_proxy 127.0.0.1:4876
@@ -59,9 +59,6 @@ caddy validate --config /etc/caddy/Caddyfile
 systemctl reload caddy
 journalctl -u caddy -n 30 --no-pager   # "certificate obtained successfully"
 ```
-
-Keep the duckdns name in the block during the changeover; drop it once the new
-name is confirmed working.
 
 ## 3. The bot's public origin
 
@@ -109,7 +106,7 @@ These are the links a server owner checks before adding a bot they don't know.
 
 ## Rollback
 
-Revert the two env vars to the duckdns host and recreate the container; DNS and
+Revert the two env vars to the previous host and recreate the container; DNS and
 Caddy can stay as they are. Nothing else in the stack depends on the name.
 
 ---

@@ -4298,6 +4298,9 @@
 
         /* ---------- controls ---------- */
         el['btn-play'].onclick = function () {
+          // A toggle already waiting on state:update must not fire again — a
+          // double click used to send pause then play, leaving the track at 0s.
+          if (cmdInflight.has('toggle')) return;
           // Optimistic toggle
           var willPlay = !(state && state.playing);
           setOptimistic('playing', willPlay);
@@ -4607,6 +4610,7 @@
           };
         if (el['mini-play'])
           el['mini-play'].onclick = function () {
+            if (cmdInflight.has('toggle')) return;
             cmd('toggle');
           };
         if (el['mini-next'])
@@ -5493,6 +5497,7 @@
             case ' ':
             case 'k':
               e.preventDefault();
+              if (cmdInflight.has('toggle')) break;
               cmd('toggle');
               break;
             case 'ArrowLeft':
