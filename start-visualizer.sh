@@ -7,7 +7,7 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT" || exit 1
-WS="${VAPORZR_WS:-wss://vaporzr.duckdns.org/ws}"
+WS="${VAPORZR_WS:-wss://vaporzr.app/ws}"
 
 cat <<'BANNER'
 

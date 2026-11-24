@@ -6,9 +6,9 @@
 Internet ──► Cloudflare (proxied DNS) ──► Caddy :443 on 46.224.80.104 ──► 127.0.0.1:4876
 ```
 
-- **Caddy** (`/etc/caddy/Caddyfile`) serves `vaporzr.app`, `www.vaporzr.app` and
-  `vaporzr.duckdns.org`. `WEB_ACCESS` is unset, so the app accepts public hosts;
-  the panel's own session/key auth is the gate.
+- **Caddy** (`/etc/caddy/Caddyfile`) serves `vaporzr.app` and `www.vaporzr.app`.
+  `WEB_ACCESS` is unset, so the app accepts public hosts; the panel's own
+  session/key auth is the gate.
 - **Tailscale Funnel is retired** (2026-11-19). `tailscale funnel reset` removed
   the public ingress; `https://vaporzr3-1.tail137f17.ts.net` no longer answers.
   Commands below are kept for the record and for the tailnet proxy case.

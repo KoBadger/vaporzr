@@ -157,6 +157,11 @@ export class PlaybackController {
   private lastPlayUri: string | null = null;
   private lastPlayStartedAt = 0;
   private currentUri: string | null = null;
+  /** Repeat-loop breaker: uri + count of consecutive replays that produced
+   *  almost no audio. A dead stream used to be able to replay itself forever,
+   *  which the panel showed as a track stuck looping at 0–1s. */
+  private fastReplayUri: string | null = null;
+  private fastReplayCount = 0;
   /** Device we last successfully issued Spotify commands to (librespot). */
   private spotifyDeviceId?: string;
   /** Once Spotify reports an app-quota 429, avoid repeating the command for a
@@ -395,8 +400,10 @@ export class PlaybackController {
   private naturalAdvance = false;
   /** Callback fired when the queue runs dry (last track ended, nothing to advance). */
   onQueueEnd: (() => void) | null = null;
-  /** Callback fired when playback stops because several tracks in a row failed to start. */
-  onPlaybackStalled: (() => void) | null = null;
+  /** Callback fired when playback stops because several tracks in a row failed
+   *  to start, or because a repeat loop was abandoned. Optional detail lets the
+   *  notice say which. */
+  onPlaybackStalled: ((detail?: string) => void) | null = null;
   /** Callback fired when a stream is refused before its first byte (the CDN
    *  answered 401/403). Distinct from a stall: the queue and the bot are fine —
    *  the media session is not authorized (stale YouTube cookies / PO token). */
@@ -828,7 +835,7 @@ export class PlaybackController {
         `${metaS > 0 && elapsedS < metaS - 45 ? ' ← CUT SHORT' : ''}`,
     );
     if (state.repeat) {
-      this.replayCurrent();
+      this.replayCurrent(elapsedS * 1000, current.durationMs ?? 0);
       return;
     }
     this.naturalAdvance = true;
@@ -837,11 +844,44 @@ export class PlaybackController {
     if (this.onTrackEnd) this.onTrackEnd(ended);
   }
 
-  /** Replay the current track from the top (repeat mode). */
-  private replayCurrent(): void {
-    const cur = this.queue.getCurrentTrack();
+  /** Replay the current track from the top (repeat mode). A stream that dies
+   *  right after starting must not replay itself forever: after three
+   *  near-empty replays, stop repeating and report it instead of looping at 0s. */
+  private replayCurrent(elapsedMs = 0, durationMs = 0): void {
+    const cur = this.playingTrack() ?? this.queue.getCurrentTrack();
     if (!cur) {
       this.next();
+      return;
+    }
+    // "Near-empty" = it ended within a few seconds of starting, well before a
+    // normal track could. Genuinely short tracks (jingles, samples) are exempt.
+    const nearEmpty = elapsedMs < 5_000 && durationMs > 10_000;
+    if (nearEmpty) {
+      if (this.fastReplayUri === cur.uri) this.fastReplayCount++;
+      else {
+        this.fastReplayUri = cur.uri;
+        this.fastReplayCount = 1;
+      }
+    } else {
+      this.fastReplayUri = null;
+      this.fastReplayCount = 0;
+    }
+    if (this.fastReplayCount >= 3) {
+      console.warn(
+        `[playback] "${cur.name}" ended within ${Math.round(elapsedMs / 1000)}s ${this.fastReplayCount} times — stopping the repeat loop`,
+      );
+      this.fastReplayUri = null;
+      this.fastReplayCount = 0;
+      this.clearEndTimer();
+      this.stopPositionTracker();
+      this.queue.setState({ repeat: false, playing: false, positionMs: 0 });
+      this.voice.stopStream();
+      this.sendVisualizer({ type: 'cmd', command: 'stop' });
+      this.onPlaybackStalled?.(
+        `⚠️ **Playback stopped** — **${cur.name}** kept ending before it produced any audio (bad stream or unavailable source). Repeat was switched off; try \`V@p\` again or re-link the source.`,
+      );
+      // Reserve the last failed track.
+      this.queue.setState({ track: cur });
       return;
     }
     this.queue.setState({ positionMs: 0 });
@@ -942,8 +982,9 @@ export class PlaybackController {
       if (this.spotifyFallback) {
         this.spotifyFallback = false;
       }
-      if (this.queue.getState().repeat && this.queue.getCurrentTrack()) {
-        this.replayCurrent();
+      const repeatTrack = this.queue.getCurrentTrack();
+      if (this.queue.getState().repeat && repeatTrack) {
+        this.replayCurrent(Date.now() - this.lastPlayStartedAt, repeatTrack.durationMs ?? 0);
         return;
       }
       this.naturalAdvance = true;
@@ -2345,6 +2386,29 @@ export class PlaybackController {
       if (state.track) this.scheduleEnd(state.durationMs, state.positionMs);
       this.schedulePreload(state.durationMs, state.positionMs);
       this.voice.setExpectingPcm(true);
+      this.voice.resume();
+      return;
+    }
+    // No Spotify device handle (a 404 re-register, a librespot restart or the
+    // YouTube fallback can drop it). The old code fell through to
+    // voice.resume() and returned, unpausing an empty pipe: play/pause from the
+    // panel looked dead and stayed silent. Resolve a device and start the
+    // selected track instead.
+    const idle = this.queue.getState();
+    if (idle.track) {
+      console.log(`[playback] resume without a Spotify device — restarting "${idle.track.name}"`);
+      // Put the cursor back on the playing track so play() doesn't start the
+      // track after it when the cursor has drifted.
+      this.resyncCursorToPlaying();
+      // Bypass the duplicate-start guard: the failed start is exactly why we
+      // are here, and it may have been under 4s ago.
+      this.lastPlayUri = null;
+      try {
+        await this.play();
+        return;
+      } catch (err) {
+        console.warn(`[playback] resume restart failed: ${err instanceof Error ? err.message : err}`);
+      }
     }
     this.voice.resume();
   }

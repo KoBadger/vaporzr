@@ -88,7 +88,7 @@ export const config = {
   genericMediaMaxMinutes: Number(process.env.GENERIC_MEDIA_MAX_MINUTES ?? 120) || 0,
   /**
    * Public base URL for the jam join link and its QR code, e.g.
-   * https://vaporzr.duckdns.org. The bot binds to loopback behind a reverse
+   * https://vaporzr.app. The bot binds to loopback behind a reverse
    * proxy, so it cannot derive a reachable address for a guest's phone — the
    * tunnel address (127.0.0.1) only works on the machine holding the tunnel.
    * When empty the clients fall back to their own origin, which is correct for

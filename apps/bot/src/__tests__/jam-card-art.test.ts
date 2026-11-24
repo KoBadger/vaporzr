@@ -107,7 +107,7 @@ describe('jam card art', () => {
   });
 
   it('keeps a long join URL scannable too: the module scale shrinks but never below 2', () => {
-    const long = `https://vaporzr.duckdns.org/jam?key=${'k'.repeat(64)}`;
+    const long = `https://vaporzr.app/jam?key=${'k'.repeat(64)}`;
     const art = renderJamCardRgba(long);
     expect(art.qr.scale).toBeGreaterThanOrEqual(2);
     const qrPx = (art.qr.modules + art.qr.quiet * 2) * art.qr.scale;
