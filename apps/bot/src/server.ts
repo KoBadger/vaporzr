@@ -391,7 +391,16 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
           // the stale-epoch static class cannot occur. When `enabled: true`,
           // `reinitializing` / `privacyCode` are the only outward sign of a
           // desync that still encrypts and therefore still sounds like static.
-          daveSession: audioHost?.voice.daveSessionStatus() ?? null,
+          // Never let one diagnostic field take the health endpoint down: a
+          // throw here used to escape to the process-wide exception handler,
+          // which left the /health socket open (a hang, not a 500).
+          daveSession: (() => {
+            try {
+              return audioHost?.voice.daveSessionStatus() ?? null;
+            } catch {
+              return null;
+            }
+          })(),
           // DAVE output gate, cumulative since boot. `overflows` above zero means
           // the handshake stalled long enough to drop audio (silence); it must
           // never be non-zero while listeners report static, because static can
