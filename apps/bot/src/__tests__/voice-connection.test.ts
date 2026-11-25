@@ -113,4 +113,17 @@ describe('VoiceManager.daveSessionStatus (live E2EE telemetry)', () => {
     raw.daveConfirmedOff = false;
     expect(v.daveSessionStatus().enabled).toBe(true);
   });
+
+  it('does not throw — and so does not hang /health — when the bot is not in voice', () => {
+    // Regression from the first /health telemetry build: daveSessionState()
+    // dereferenced a null connection. The throw escaped to the process-wide
+    // uncaughtException handler *after* the /health socket opened, so the
+    // endpoint hung (no bytes) instead of answering.
+    const v = new VoiceManager();
+    (v as unknown as Record<string, unknown>).connection = null;
+    const s = v.daveSessionStatus();
+    expect(s.protocolVersion).toBeNull();
+    expect(s.ready).toBeNull();
+    expect(s.enabled).toBe(false);
+  });
 });

@@ -1278,6 +1278,12 @@ export class VoiceManager implements AudioTransport {
     privacyCode: boolean;
     lastTransitionId: number | null;
   } | null {
+    // /health calls this for a guild session that may not be in a voice
+    // channel at all, so `connection` can be null. Dereferencing it threw, and
+    // the process-wide uncaughtException handler swallowed the throw *after*
+    // the /health socket was opened — the endpoint then hung instead of
+    // answering. No connection means no session; say so.
+    if (!this.connection) return null;
     const link = this.connection as unknown as {
       state?: {
         networking?: {
