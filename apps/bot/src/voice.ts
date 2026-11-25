@@ -255,8 +255,15 @@ export class VoiceManager implements AudioTransport {
   /** Warn once, not per track, when the native encoder is missing. */
   private opusFallbackWarned = false;
 
-  /** Whether the current voice session uses DAVE/E2EE encryption. */
-  private daveEncryption = true;
+  /**
+   * Whether the current voice session uses DAVE/E2EE encryption.
+   *
+   * Off by default (`VOICE_DAVE=1` opts back in). See `config.voiceDaveEnabled`
+   * for why: a stale-but-`ready` MLS epoch encrypts with a key listeners do not
+   * share, which is heard as broadband static and is invisible to every local
+   * check. Forcing protocol version 0 makes plaintext correct for every client.
+   */
+  private daveEncryption = config.voiceDaveEnabled;
   /**
    * True once this connection has been shown not to be E2EE (protocol 0, or no
    * session object at all after the grace period). Lets every later stream open
@@ -482,14 +489,20 @@ export class VoiceManager implements AudioTransport {
     channel?: VoiceChannelTarget,
   ): Promise<boolean> {
     this.leave();
-    this.daveEncryption = true; // @discordjs/voice uses DAVE/E2EE when available
+    this.daveEncryption = config.voiceDaveEnabled;
     this.daveConfirmedOff = false;
     // Negotiate the bitrate BEFORE connecting: the encoder is built when the
     // first track starts, and a channel raised afterwards would only take effect
     // for listeners on the next track.
     await this.resolveChannelBitrate(channel);
     const connect = (): VoiceConnection => {
-      const connection = joinVoiceChannel({ channelId, guildId, adapterCreator, selfDeaf: false });
+      const connection = joinVoiceChannel({
+        channelId,
+        guildId,
+        adapterCreator,
+        selfDeaf: false,
+        daveEncryption: config.voiceDaveEnabled,
+      });
       this.connection = connection;
       this.channelId = channelId;
       this.lastGuildId = guildId;
@@ -764,7 +777,13 @@ export class VoiceManager implements AudioTransport {
       } catch {
         /* ignore */
       }
-      const conn = joinVoiceChannel({ channelId, guildId, adapterCreator, selfDeaf: false });
+      const conn = joinVoiceChannel({
+        channelId,
+        guildId,
+        adapterCreator,
+        selfDeaf: false,
+        daveEncryption: config.voiceDaveEnabled,
+      });
       this.connection = conn;
       this.channelId = channelId;
       this.attachHandlers(conn);
@@ -1246,8 +1265,19 @@ export class VoiceManager implements AudioTransport {
    * Read live DAVE readiness out of @discordjs/voice's networking state.
    * The wrapper exposes `protocolVersion`; the real encrypt/decrypt readiness
    * flag lives on the inner davey session (`session.ready`).
+   *
+   * `reinitializing`, `voicePrivacyCode` and `lastTransitionId` are included so
+   * a stale-epoch desync — the one failure the send guard cannot see, because
+   * `ready` stays true while the group key is out of date — is visible from
+   * /health instead of only audible as static.
    */
-  private daveSessionState(): { ready: boolean; protocolVersion: number } | null {
+  private daveSessionState(): {
+    ready: boolean;
+    protocolVersion: number;
+    reinitializing: boolean;
+    privacyCode: boolean;
+    lastTransitionId: number | null;
+  } | null {
     const link = this.connection as unknown as {
       state?: {
         networking?: {
@@ -1255,6 +1285,9 @@ export class VoiceManager implements AudioTransport {
             dave?: {
               protocolVersion?: number;
               ready?: boolean;
+              reinitializing?: boolean;
+              voicePrivacyCode?: string | null;
+              lastTransitionId?: number;
               session?: { ready?: boolean; protocolVersion?: number };
             };
           };
@@ -1266,6 +1299,37 @@ export class VoiceManager implements AudioTransport {
     return {
       protocolVersion: dave.protocolVersion ?? dave.session?.protocolVersion ?? 0,
       ready: dave.session?.ready === true || dave.ready === true,
+      reinitializing: dave.reinitializing === true,
+      privacyCode: typeof dave.voicePrivacyCode === 'string' && dave.voicePrivacyCode.length > 0,
+      lastTransitionId: typeof dave.lastTransitionId === 'number' ? dave.lastTransitionId : null,
+    };
+  }
+
+  /**
+   * Live DAVE session snapshot for /health.
+   *
+   * `enabled` is whether this manager believes the link is E2EE; the rest is the
+   * actual negotiated session. A `ready: true` with `reinitializing: true`, or a
+   * `protocolVersion: 1` with `privacyCode: false`, is the shape of a desync
+   * that still encrypts (and so still sounds like static) — the reason this is
+   * exposed rather than inferred.
+   */
+  daveSessionStatus(): {
+    enabled: boolean;
+    protocolVersion: number | null;
+    ready: boolean | null;
+    reinitializing: boolean | null;
+    privacyCode: boolean | null;
+    lastTransitionId: number | null;
+  } {
+    const dave = this.daveSessionState();
+    return {
+      enabled: this.daveEncryption && !this.daveConfirmedOff,
+      protocolVersion: dave?.protocolVersion ?? null,
+      ready: dave?.ready ?? null,
+      reinitializing: dave?.reinitializing ?? null,
+      privacyCode: dave?.privacyCode ?? null,
+      lastTransitionId: dave?.lastTransitionId ?? null,
     };
   }
 
