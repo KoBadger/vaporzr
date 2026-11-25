@@ -386,6 +386,12 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
           // tier says what it should have been.
           boostTier: quality?.boostTier ?? null,
           raiseError: quality?.raiseError ?? null,
+          // Live E2EE negotiation. `enabled: false` means the bot advertises
+          // protocol version 0, so plaintext is correct for every client and
+          // the stale-epoch static class cannot occur. When `enabled: true`,
+          // `reinitializing` / `privacyCode` are the only outward sign of a
+          // desync that still encrypts and therefore still sounds like static.
+          daveSession: audioHost?.voice.daveSessionStatus() ?? null,
           // DAVE output gate, cumulative since boot. `overflows` above zero means
           // the handshake stalled long enough to drop audio (silence); it must
           // never be non-zero while listeners report static, because static can

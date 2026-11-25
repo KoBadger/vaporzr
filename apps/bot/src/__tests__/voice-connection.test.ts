@@ -69,3 +69,48 @@ describe('VoiceManager.waitForAudioReady (the DAVE white-noise gate)', () => {
     expect(await v.waitForAudioReady(900)).toBe(true);
   });
 });
+
+describe('VoiceManager.daveSessionStatus (live E2EE telemetry)', () => {
+  it('surfaces the stale-epoch shape that still encrypts and still sounds like static', () => {
+    // `ready` true while the group is reinitialising (or the privacy code is
+    // gone) is the one desync the send guard cannot see. /health must show it.
+    const v = voiceWithDave({
+      protocolVersion: 1,
+      session: { ready: true },
+      reinitializing: true,
+      voicePrivacyCode: null,
+      lastTransitionId: 7,
+    });
+    const s = v.daveSessionStatus();
+    expect(s.protocolVersion).toBe(1);
+    expect(s.ready).toBe(true);
+    expect(s.reinitializing).toBe(true);
+    expect(s.privacyCode).toBe(false);
+    expect(s.lastTransitionId).toBe(7);
+  });
+
+  it('reports a negotiated-off (protocol 0) channel as healthy plaintext', () => {
+    const v = voiceWithDave({ protocolVersion: 0, session: { ready: false }, voicePrivacyCode: 'abc' });
+    const s = v.daveSessionStatus();
+    expect(s.protocolVersion).toBe(0);
+    expect(s.privacyCode).toBe(true);
+  });
+
+  it('returns nulls when the link has no DAVE session at all', () => {
+    const v = voiceWithDave(undefined);
+    const s = v.daveSessionStatus();
+    expect(s.protocolVersion).toBeNull();
+    expect(s.ready).toBeNull();
+    expect(s.reinitializing).toBeNull();
+  });
+
+  it('reports whether this manager believes the link is encrypted', () => {
+    const v = voiceWithDave({ protocolVersion: 0 });
+    const raw = v as unknown as Record<string, unknown>;
+    raw.daveEncryption = false;
+    expect(v.daveSessionStatus().enabled).toBe(false);
+    raw.daveEncryption = true;
+    raw.daveConfirmedOff = false;
+    expect(v.daveSessionStatus().enabled).toBe(true);
+  });
+});

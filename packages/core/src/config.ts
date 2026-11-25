@@ -269,6 +269,19 @@ export const config = {
    * still failing loudly if the link is genuinely dead.
    */
   voiceDaveReadyTimeoutMs: Number(process.env.VOICE_DAVE_READY_TIMEOUT_MS) || 10_000,
+  /**
+   * Enable DAVE/E2EE on the bot's voice connection.
+   *
+   * Off by default. E2EE buys a bot that plays public music nothing, and its
+   * MLS handshake is the source of every "white noise" incident: a session can
+   * report `ready` while its epoch is stale, and the bot then encrypts with a
+   * key the listeners do not share — heard as broadband static that no local
+   * check can detect (the send guard only sees `ready`, and `ready` is true).
+   * With DAVE off the bot advertises protocol version 0, the channel negotiates
+   * to plaintext, and every client decodes it correctly. Set `VOICE_DAVE=1` to
+   * opt back in.
+   */
+  voiceDaveEnabled: process.env.VOICE_DAVE === '1' || process.env.VOICE_DAVE === 'true',
   /** Opt-in true crossfade (overlap) for decoded tracks; off by default. */
   crossfadeOverlap: process.env.CROSSFADE_OVERLAP === '1' || process.env.CROSSFADE_OVERLAP === 'true',
 
