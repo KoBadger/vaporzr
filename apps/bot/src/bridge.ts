@@ -794,7 +794,22 @@ export class Bridge {
         });
         break;
       case 'cmd':
-        if (!this.mayRunCommand(socket, msg.command) && !this.guestMaySend(msg)) return;
+        // A refused command used to `return` with no reply at all, which is
+        // indistinguishable from a dead button: no toast, no queue movement,
+        // and nothing in the log. Say why, to the client that asked.
+        if (!this.mayRunCommand(socket, msg.command) && !this.guestMaySend(msg)) {
+          const scope = this.scopeOf(socket);
+          console.log(`[bridge] dropped "${msg.command}" from a ${scope} link`);
+          this.sendToSocket(socket, {
+            type: 'panel:notice',
+            level: 'error',
+            text:
+              scope === 'dj'
+                ? 'This DJ link is playback-only — ask the owner for a full control link.'
+                : 'This link is view-only — controls need the control key.',
+          });
+          return;
+        }
         if (!this.allowCommand(socket)) return;
         this.handlePanelCommand(socket, msg, this.clientGuildId(socket));
         break;
@@ -836,7 +851,22 @@ export class Bridge {
         break;
       }
       case 'cmd':
-        if (!this.mayRunCommand(socket, msg.command) && !this.guestMaySend(msg)) return;
+        // A refused command used to `return` with no reply at all, which is
+        // indistinguishable from a dead button: no toast, no queue movement,
+        // and nothing in the log. Say why, to the client that asked.
+        if (!this.mayRunCommand(socket, msg.command) && !this.guestMaySend(msg)) {
+          const scope = this.scopeOf(socket);
+          console.log(`[bridge] dropped "${msg.command}" from a ${scope} link`);
+          this.sendToSocket(socket, {
+            type: 'panel:notice',
+            level: 'error',
+            text:
+              scope === 'dj'
+                ? 'This DJ link is playback-only — ask the owner for a full control link.'
+                : 'This link is view-only — controls need the control key.',
+          });
+          return;
+        }
         if (!this.allowCommand(socket)) return;
         this.handlePanelCommand(socket, msg, this.clientGuildId(socket));
         break;
@@ -932,6 +962,10 @@ export class Bridge {
     // the panel's play button do nothing while claiming success.
     if (v.isConnectionReady()) return true;
     if (!this.onEnsureJoined) return false;
+    // A join is not instant: the voice link has to open, handshake and (now that
+    // DAVE is required again) finish its MLS setup. Saying so immediately is the
+    // difference between "the button is dead" and "it is working on it".
+    this.notice('info', 'Joining voice…');
     try {
       await this.onEnsureJoined(guildId);
     } catch (err) {
@@ -988,6 +1022,10 @@ export class Bridge {
         }
         break;
       case 'pause':
+        if (!s.queue.getState().track) {
+          this.notice('info', 'Nothing is playing.');
+          break;
+        }
         s.playback.pause();
         break;
       case 'resume':
@@ -1003,13 +1041,21 @@ export class Bridge {
         })();
         break;
       case 'next':
+        if (!s.queue.getState().track) {
+          this.notice('info', 'Nothing is playing.');
+          break;
+        }
         s.playback.next();
         break;
       case 'previous':
+        if (!s.queue.getState().track) {
+          this.notice('info', 'Nothing is playing.');
+          break;
+        }
         s.playback.previous();
         break;
       case 'seek':
-        if (msg.positionMs != null) s.playback.seek(msg.positionMs);
+        if (msg.positionMs != null && s.queue.getState().track) s.playback.seek(msg.positionMs);
         break;
       case 'shoutout': {
         const text = String(msg.query ?? '')
