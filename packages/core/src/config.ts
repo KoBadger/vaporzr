@@ -272,16 +272,19 @@ export const config = {
   /**
    * Enable DAVE/E2EE on the bot's voice connection.
    *
-   * Off by default. E2EE buys a bot that plays public music nothing, and its
-   * MLS handshake is the source of every "white noise" incident: a session can
-   * report `ready` while its epoch is stale, and the bot then encrypts with a
-   * key the listeners do not share — heard as broadband static that no local
-   * check can detect (the send guard only sees `ready`, and `ready` is true).
-   * With DAVE off the bot advertises protocol version 0, the channel negotiates
-   * to plaintext, and every client decodes it correctly. Set `VOICE_DAVE=1` to
-   * opt back in.
+   * On by default, and it has to be: Discord enforced E2EE on all non-stage
+   * voice calls on 2026-03-01. A client that advertises
+   * `max_dave_protocol_version: 0` (what `daveEncryption: false` sends) is
+   * closed by the voice gateway with code **4017 "E2EE/DAVE protocol required"**
+   * before op 2 Ready — so the bot never gets a UDP endpoint, never reaches
+   * Ready, and every join attempt just times out. Turning DAVE off cannot make
+   * the bot plaintext any more; it makes the bot unable to join at all.
+   *
+   * `VOICE_DAVE=0` is still honoured for local experiments against a mock voice
+   * gateway, but the join path now fails fast and says why instead of burning
+   * five 30-second attempts.
    */
-  voiceDaveEnabled: process.env.VOICE_DAVE === '1' || process.env.VOICE_DAVE === 'true',
+  voiceDaveEnabled: !(process.env.VOICE_DAVE === '0' || process.env.VOICE_DAVE === 'false'),
   /** Opt-in true crossfade (overlap) for decoded tracks; off by default. */
   crossfadeOverlap: process.env.CROSSFADE_OVERLAP === '1' || process.env.CROSSFADE_OVERLAP === 'true',
 

@@ -386,17 +386,31 @@ export function startServer(sessions: SessionManager, perms: PermissionsManager)
           // tier says what it should have been.
           boostTier: quality?.boostTier ?? null,
           raiseError: quality?.raiseError ?? null,
-          // Live E2EE negotiation. `enabled: false` means the bot advertises
-          // protocol version 0, so plaintext is correct for every client and
-          // the stale-epoch static class cannot occur. When `enabled: true`,
-          // `reinitializing` / `privacyCode` are the only outward sign of a
-          // desync that still encrypts and therefore still sounds like static.
+          // Live E2EE negotiation. DAVE is mandatory since 2026-03-01 (the voice
+          // gateway closes a protocol-0 Identify with 4017), so `enabled: false`
+          // means the link cannot join at all — not that it went plaintext.
+          // When `enabled: true`, `reinitializing` / `privacyCode` are the only
+          // outward sign of a desync that still encrypts and therefore still
+          // sounds like static.
           // Never let one diagnostic field take the health endpoint down: a
           // throw here used to escape to the process-wide exception handler,
           // which left the /health socket open (a hang, not a 500).
           daveSession: (() => {
             try {
               return audioHost?.voice.daveSessionStatus() ?? null;
+            } catch {
+              return null;
+            }
+          })(),
+          // Voice-link state and the last few lifecycle events. A join that
+          // never reaches Ready used to be invisible from outside the host:
+          // @discordjs/voice turns the voice socket's close code into a silent
+          // Signalling→Connecting retry loop, so the only symptom was "it
+          // joined, then left, then timed out". `lastCloseCode` names the
+          // reason (4017 = E2EE required, 4006 = bad session, 4014 = kicked).
+          voiceLink: (() => {
+            try {
+              return audioHost?.voice.voiceDiagnostics() ?? null;
             } catch {
               return null;
             }
