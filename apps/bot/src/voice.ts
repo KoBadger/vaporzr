@@ -104,6 +104,17 @@ const MEDIA_REQUEST_TIMEOUT_MS = 15_000;
 const MEDIA_IO_TIMEOUT_US = 20_000_000;
 
 /**
+ * What the voice gateway's close code 4017 means.
+ *
+ * Discord made E2EE/DAVE mandatory for all non-stage voice calls on
+ * 2026-03-01: a client whose Identify advertises `max_dave_protocol_version: 0`
+ * (what `daveEncryption: false` sends) is closed with 4017 before op 2 Ready,
+ * so the link never gets a UDP endpoint and can never reach Ready.
+ */
+const VOICE_DAVE_REQUIRED =
+  'Discord now requires end-to-end encryption (DAVE) on voice calls, and the bot is connecting with it disabled (VOICE_DAVE=0). Unset VOICE_DAVE to join.';
+
+/**
  * Joins a Discord voice channel and streams raw PCM (48 kHz, stereo, Int16)
  * forwarded from the local loopback capture. The bot shows up as a normal
  * VC member and is the audio source for everyone in the channel.
@@ -258,10 +269,10 @@ export class VoiceManager implements AudioTransport {
   /**
    * Whether the current voice session uses DAVE/E2EE encryption.
    *
-   * Off by default (`VOICE_DAVE=1` opts back in). See `config.voiceDaveEnabled`
-   * for why: a stale-but-`ready` MLS epoch encrypts with a key listeners do not
-   * share, which is heard as broadband static and is invisible to every local
-   * check. Forcing protocol version 0 makes plaintext correct for every client.
+   * On by default and effectively mandatory: Discord closes a voice socket that
+   * advertises `max_dave_protocol_version: 0` (what `daveEncryption: false`
+   * sends) with code 4017 "E2EE/DAVE protocol required", so the link never
+   * reaches Ready. See `config.voiceDaveEnabled`.
    */
   private daveEncryption = config.voiceDaveEnabled;
   /**
@@ -287,6 +298,19 @@ export class VoiceManager implements AudioTransport {
   };
   /** When the voice link was last re-signalled to restart a stalled DAVE handshake. */
   private lastDaveReconnectAt = 0;
+  /**
+   * Last few voice-link lifecycle events, newest last, surfaced on /health.
+   *
+   * A failed join used to be completely opaque from outside the host: the
+   * voice socket can be closed by Discord with a code (4017 = E2EE required,
+   * 4006 = session invalid, 4014 = kicked) that `@discordjs/voice` swallows
+   * into a silent Signalling→Connecting loop, so the only visible symptom was
+   * "it joined, then left, then timed out". Recording the codes here means the
+   * next incident is diagnosable from `/health` alone.
+   */
+  private voiceLog: { at: number; event: string }[] = [];
+  /** Close code of the most recent voice socket close, for fail-fast decisions. */
+  private lastVoiceCloseCode: number | null = null;
   /** Active sequential volume fade-out (sequential crossfade fallback). */
   private fadeOutTimer: NodeJS.Timeout | null = null;
   /** One-shot seek (ms) applied to the next decoded stream — crossfade handoff. */
@@ -491,6 +515,7 @@ export class VoiceManager implements AudioTransport {
     this.leave();
     this.daveEncryption = config.voiceDaveEnabled;
     this.daveConfirmedOff = false;
+    this.lastVoiceCloseCode = null;
     // Negotiate the bitrate BEFORE connecting: the encoder is built when the
     // first track starts, and a channel raised afterwards would only take effect
     // for listeners on the next track.
@@ -507,6 +532,7 @@ export class VoiceManager implements AudioTransport {
       this.channelId = channelId;
       this.lastGuildId = guildId;
       this.lastAdapterCreator = adapterCreator;
+      this.watchVoiceLink(connection);
       return connection;
     };
     const waitForReady = (connection: VoiceConnection): Promise<void> =>
@@ -515,7 +541,13 @@ export class VoiceManager implements AudioTransport {
         // flaky. A brief connect blip used to burn all three attempts in ~60s
         // and make the bot leave the channel, so give each attempt a generous
         // window and back off further between them below.
-        const timer = setTimeout(() => reject(new Error('Timed out joining the voice channel.')), 30_000);
+        const timer = setTimeout(() => {
+          // Name the state we were stuck in. A socket closed with 4017 never
+          // reaches Disconnected — @discordjs/voice quietly re-signals — so
+          // without this the timeout is the only trace and says nothing.
+          const close = this.lastVoiceCloseCode === null ? '' : `, last close ${this.lastVoiceCloseCode}`;
+          reject(new Error(`Timed out joining the voice channel (stuck in "${connection.state.status}"${close}).`));
+        }, 30_000);
         timer.unref?.();
         connection.once(VoiceConnectionStatus.Ready, () => {
           clearTimeout(timer);
@@ -523,7 +555,12 @@ export class VoiceManager implements AudioTransport {
         });
         connection.once(VoiceConnectionStatus.Disconnected, () => {
           clearTimeout(timer);
-          reject(new Error('Voice connection disconnected.'));
+          const code = this.lastVoiceCloseCode;
+          reject(
+            new Error(
+              code === 4017 ? VOICE_DAVE_REQUIRED : `Voice connection disconnected${code ? ` (${code})` : ''}.`,
+            ),
+          );
         });
       });
 
@@ -539,12 +576,15 @@ export class VoiceManager implements AudioTransport {
         await waitForReady(connection);
         break;
       } catch (err) {
-        if (attempt >= attempts) {
+        // 4017 is a policy rejection, not a blip: retrying just makes the user
+        // wait three more minutes for the same answer.
+        const fatal = this.lastVoiceCloseCode === 4017;
+        if (attempt >= attempts || fatal) {
           // Do NOT leave here: a transient blip must not look like "the bot
           // joined then left". Keep the last connection so the reconnect
           // supervisor can drive further recovery while the queue stays intact.
           console.warn(
-            `[voice] voice link never reached Ready after ${attempts} attempts ` +
+            `[voice] voice link never reached Ready after ${attempt} attempt(s) ` +
               `(${err instanceof Error ? err.message : err}) — keeping the session for recovery`,
           );
           this.voiceLinkDown = true;
@@ -1336,6 +1376,67 @@ export class VoiceManager implements AudioTransport {
       reinitializing: dave?.reinitializing ?? null,
       privacyCode: dave?.privacyCode ?? null,
       lastTransitionId: dave?.lastTransitionId ?? null,
+    };
+  }
+
+  /**
+   * Record voice-link lifecycle events for `/health`.
+   *
+   * `@discordjs/voice` hides the interesting part of a failed join: the voice
+   * socket's close code (4017 E2EE required, 4006 bad session, 4014 kicked) is
+   * turned into a silent Signalling→Connecting retry loop, so all the caller
+   * ever sees is a timeout. Keeping the last few events (and the last close
+   * code) makes the next incident readable from outside the host.
+   */
+  private noteVoiceEvent(event: string): void {
+    this.voiceLog.push({ at: Date.now(), event });
+    if (this.voiceLog.length > 24) this.voiceLog.shift();
+  }
+
+  /** Watch a freshly created connection's state and voice-socket close codes. */
+  private watchVoiceLink(connection: VoiceConnection): void {
+    connection.on('stateChange', (oldState, newState) => {
+      if (oldState.status === newState.status) return;
+      const close =
+        newState.status === VoiceConnectionStatus.Disconnected &&
+        'closeCode' in newState &&
+        typeof newState.closeCode === 'number'
+          ? ` (close ${newState.closeCode})`
+          : '';
+      this.noteVoiceEvent(`${oldState.status} -> ${newState.status}${close}`);
+    });
+    try {
+      // The networking object is replaced on every re-signal, so this catches
+      // the close codes of the initial attempt — which is the one that matters
+      // for a policy rejection like 4017.
+      const networking = (
+        connection as unknown as { state?: { networking?: { on?: (e: string, f: (code: number) => void) => void } } }
+      ).state?.networking;
+      networking?.on?.('close', (code: number) => {
+        this.lastVoiceCloseCode = code;
+        const hint = code === 4017 ? ' E2EE/DAVE required' : code === 4006 ? ' session invalid' : '';
+        this.noteVoiceEvent(`voice socket closed (${code}${hint})`);
+      });
+    } catch {
+      /* internal shape changed — diagnostics are best-effort, never fatal */
+    }
+  }
+
+  /** Voice-link diagnostics for /health: current state plus recent events. */
+  voiceDiagnostics(): {
+    status: string | null;
+    networkingCode: number | null;
+    lastCloseCode: number | null;
+    log: { at: number; event: string }[];
+  } {
+    const connection = this.connection;
+    const networking = (connection as unknown as { state?: { networking?: { state?: { code?: unknown } } } } | null)
+      ?.state?.networking?.state;
+    return {
+      status: connection?.state.status ?? null,
+      networkingCode: typeof networking?.code === 'number' ? networking.code : null,
+      lastCloseCode: this.lastVoiceCloseCode,
+      log: this.voiceLog.slice(-12),
     };
   }
 

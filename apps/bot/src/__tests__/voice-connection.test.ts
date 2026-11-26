@@ -124,6 +124,34 @@ describe('VoiceManager.daveSessionStatus (live E2EE telemetry)', () => {
     const s = v.daveSessionStatus();
     expect(s.protocolVersion).toBeNull();
     expect(s.ready).toBeNull();
-    expect(s.enabled).toBe(false);
+    // DAVE is on by default and must stay on: Discord rejects protocol 0 with
+    // close code 4017, so "enabled: false" means "cannot join", not "plaintext".
+    expect(s.enabled).toBe(true);
+  });
+});
+
+describe('VoiceManager.voiceDiagnostics (why a join never reached Ready)', () => {
+  it('reports no link and an empty log before the first join', () => {
+    const v = new VoiceManager();
+    const d = v.voiceDiagnostics();
+    expect(d.status).toBeNull();
+    expect(d.networkingCode).toBeNull();
+    expect(d.lastCloseCode).toBeNull();
+    expect(d.log).toEqual([]);
+  });
+
+  it('surfaces the close code the library hides in a Signalling retry loop', () => {
+    // 4017 never reaches Disconnected — @discordjs/voice re-signals instead — so
+    // without the recorded code the only symptom is a 30s timeout.
+    const v = new VoiceManager();
+    const raw = v as unknown as Record<string, unknown>;
+    raw.lastVoiceCloseCode = 4017;
+    raw.voiceLog = [{ at: 1, event: 'voice socket closed (4017 E2EE/DAVE required)' }];
+    raw.connection = { state: { status: 'signalling', networking: { state: { code: 1 } } } };
+    const d = v.voiceDiagnostics();
+    expect(d.status).toBe('signalling');
+    expect(d.networkingCode).toBe(1);
+    expect(d.lastCloseCode).toBe(4017);
+    expect(d.log.at(-1)?.event).toContain('E2EE/DAVE required');
   });
 });
